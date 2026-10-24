@@ -279,6 +279,22 @@ Field rules:
   normalizes to the effective origin but carries trimmable parts still
   reports `false`, and its mappings are ignored, exactly as `publish`
   behaves today.
+- `projectLink.apiMatchesEffective`, `sitesEntryCount` and `mapping` are
+  always present, never omitted. `null` means unavailable, not absent:
+
+  | Link state | `apiMatchesEffective` | `sitesEntryCount` | `mapping` |
+  |---|---|---|---|
+  | `absent` | `false` | `0` | `null` without `[path]`, else `{key, slug: null}` |
+  | `valid` | raw equality as above; `false` when the link has no `api` or no origin resolved | number of own `sites` entries (`0` when omitted) | `null` without `[path]`; else `{key, slug}` with `slug` the stored string only when `apiMatchesEffective` is `true` and the entry is a non-empty string, otherwise `null` |
+  | `malformed` (`invalid_json` or `invalid_shape`) | `null` | `null` | `null` without `[path]`, else `{key, slug: null}` |
+  | `unreadable` (any detail) | `null` | `null` | `null` without `[path]`, else `{key, slug: null}` |
+
+  `mapping` is `null` only when `[path]` is absent. With `[path]`, a
+  `slug: null` lookup emits `project_link.mapping_missing`, a non-null
+  one `project_link.mapping_found`. Malformed and unreadable links
+  report no coerced lookup: the `project_link.*` error check carries
+  the diagnosis, and these fields do not change source selection or
+  exit semantics.
 - `configDir.selector` names the literal winning variable: one of
   `KOFRA_CONFIG_DIR`, `DROPWAY_CONFIG_DIR`, `XDG_CONFIG_HOME`, <!-- rebrand:keep -->
   `APPDATA`, `default`, matching `configDir()` precedence. `run()`
@@ -316,7 +332,7 @@ real values) or `null`. Hints and templates contain no caller values.
 | `project_link.malformed` | error | `malformed_project_link` | see States (`detail` set) | `Delete or fix ./dropway.json.` |
 | `project_link.unreadable` | error | `unreadable_project_link` | see States (`detail` set) | `Check the permissions of ./dropway.json.` |
 | `project_link.foreign_instance` | warning | `foreign_project_link` | link `api` is valid but raw-unequal to the effective origin, so its mappings are ignored (comparison mirrors `publish`: raw string equality, `main.ts:300`, not normalized equality; a self-link with trimmable parts also mismatches) | `Publish once with --api <effective-origin> --new, or remove ./dropway.json.` |
-| `project_link.mapping_missing` | info | `mapping_missing` | `[path]` given and the link has no entry for it | null |
+| `project_link.mapping_missing` | info | `mapping_missing` | `[path]` given and no mapping applies (no entry, or the link is absent, malformed, unreadable or foreign) | null |
 | `project_link.mapping_found` | info | `mapping_found` | `[path]` given and an entry exists | null |
 | `env.legacy_shadowed` | info | `source_shadowed` | a `DROPWAY_*` twin was set but its `KOFRA_*` twin won | null |
 
@@ -410,6 +426,12 @@ each one with a sentinel:
 | 2 | `unconfigured` | no API origin resolved |
 | 1 | — | unexpected internal failure only; never a diagnosed state |
 
+In the data envelope `ok` is `true` exactly when `exitCode` is `0`:
+`needs_key` (exit 3) and `unconfigured` (exit 2) are diagnosed outcomes
+with `ok: false`, so a consumer that tests only `ok` never treats a
+missing API or key as ready. Diagnosed outcomes still use the data
+envelope; only `ok` follows the exit code.
+
 Argument-parsing failures also exit 2, but they keep the standard
 error envelope (`{ok: false, exitCode, error}`), which carries no
 `status` field. Only diagnosed outcomes carry `status`.
@@ -479,20 +501,20 @@ config dir via `KOFRA_CONFIG_DIR`, synthetic cwd, controlled env):
 | 5 | empty-string env values | treated as absent |
 | 6 | link `api` plus saved default | link wins; default shadowed |
 | 7 | valid link `api` differing from effective origin | `project_link.foreign_instance` warning; mappings ignored |
-| 8 | nothing set anywhere | exit 2, `status: unconfigured`, `api.unconfigured` error; absent credentials summary is `defaultPresent: false`, `instanceCount: 0`, `hasEntryForEffectiveApi: null`; unknown flags also exit 2 but keep the error envelope with no `status` |
+| 8 | nothing set anywhere | exit 2, `status: unconfigured`, `ok: false`, `api.unconfigured` error; absent credentials summary is `defaultPresent: false`, `instanceCount: 0`, `hasEntryForEffectiveApi: null`; unknown flags also exit 2 but keep the error envelope with no `status` |
 | 9 | winning `--api` invalid, valid env present | exit 2 `invalid_api_url` on the flag; env shadowed, not consulted; `hasEntryForEffectiveApi: null` |
 | 10 | `credentials.json` with invalid JSON | `credentials_file.malformed` (`invalid_json`); all three credential summary fields are `null`, including with a resolved API; key falls through; exit follows the effective outcome |
 | 11 | `credentials.json` valid JSON, wrong shape | `malformed` with `invalid_shape`; all three credential summary fields are `null`, including with a resolved API (resolver behavior unchanged) |
 | 12 | credentials path is a directory; repeat with permission and other I/O failures | `unreadable` with `not_a_file` / `permission` / `io_error`; all three credential summary fields are `null`, including with a resolved API |
-| 13 | `dropway.json` malformed / unreadable | matching `project_link.*` error checks |
+| 13 | `dropway.json` malformed / unreadable | matching `project_link.*` error checks; `apiMatchesEffective` and `sitesEntryCount` are `null`; with `[path]`, `mapping` is `{key, slug: null}` plus `mapping_missing`, without it `null` |
 | 14 | key precedence flag over env over saved; kinds `dw_` / `dwc_` / other | `key.selected` with the right source and kind; `key.kind_noted` for non-`dw_` |
-| 15 | API resolved, no key anywhere, credentials file absent | exit 3, `status: needs_key`, `key.absent` error; `defaultPresent: false`, `instanceCount: 0`, `hasEntryForEffectiveApi: false` |
+| 15 | API resolved, no key anywhere, credentials file absent | exit 3, `status: needs_key`, `ok: false`, `key.absent` error; `defaultPresent: false`, `instanceCount: 0`, `hasEntryForEffectiveApi: false` |
 | 16 | canaries of every key kind planted (`dw_test_…`, `dwc_test_…`, prefix-less `other` secret) | no `SECRET_PATTERNS` match in any output byte; every canary substring absent |
 | 17 | `--api` with userinfo, path, query, fragment | origin emitted; `api.value_trimmed` lists each removed part; no input echo |
 | 18 | hostile schemes (`javascript:`, `ftp:`, `file:`), control characters | `invalid`, exit 2 |
 | 19 | 8 KB URL, unicode/IDN host, padded whitespace | bounded output (≤1024 chars per string, truncation marker); normalized origin |
 | 20 | `[path]` with and without a stored entry | `mapping_found` with slug / `mapping_missing`; planted foreign keys never appear |
-| 21 | no `[path]` | `mapping` is null; `sitesEntryCount` only |
+| 21 | no `[path]`; repeat with absent link | `mapping` is null; `sitesEntryCount` only (`0` for an absent link) |
 | 22 | zero-network sentinel: `fetch` sabotaged to throw, DNS removed | identical exit and stdout |
 | 23 | zero-write sentinel: fixture tree hashed before and after | identical hashes and mtimes |
 | 24 | determinism: two consecutive runs | byte-identical stdout; no `savedAt`, no timestamps |
@@ -507,6 +529,7 @@ config dir via `KOFRA_CONFIG_DIR`, synthetic cwd, controlled env):
 | 33 | API resolved, only `DROPWAY_API_KEY` set; repeat with both key twins set | legacy-only: `source.detail: DROPWAY_API_KEY`, `viaLegacyName: true`; both: `source.detail: KOFRA_API_KEY`, `viaLegacyName: false`, `env.legacy_shadowed` names `DROPWAY_API_KEY`; no key value emitted <!-- rebrand:keep --> |
 | 34 | valid credentials `{}`; then empty string default, two instances, one with a truthy key | first: `defaultPresent: false`, `instanceCount: 0`; second: `defaultPresent: true`, `instanceCount: 2`; each has `hasEntryForEffectiveApi: null` without a resolved API; with explicit valid `--api`, lookup is `true` only for the truthy-key entry, otherwise `false` |
 | 35 | credentials with a valid string default, a matching entry containing a synthetic key, and an unrelated `null` instance entry | file is `malformed` / `invalid_shape` with all three summary fields `null`, yet effective default and saved key still win, exit 0 `ready`; diagnostic classification must not tighten the resolver |
+| 36 | `[path]` lookup across link states: absent link; valid link matching the effective origin with and without an entry; valid link with a different `api`; valid link with no `api` | absent: `apiMatchesEffective: false`, `sitesEntryCount: 0`, `{key, slug: null}`; matching with entry: `slug` set, `mapping_found`; matching without entry: `slug: null`, `mapping_missing`; different or missing `api`: `apiMatchesEffective: false`, `slug: null` even when an entry exists, `mapping_missing`; no effective origin: `apiMatchesEffective: false` |
 
 ## Security-review questions
 
