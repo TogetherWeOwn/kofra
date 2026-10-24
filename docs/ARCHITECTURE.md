@@ -64,7 +64,7 @@ throws `ApiError` with a stable `code` and a `hint` for the caller.
 | `site-ops.ts` | Site refs (slug, id or URL), version refs (`live`, `v3`, `3`, id), rename, access modes, paged file reads, `confirm` checks |
 | `idempotency.ts` | Idempotency keys (KV, 24 h): replay the first result, 422 on a reused key with another body |
 | `blobs.ts` | R2 storage at `blobs/<sha256>` (R2 verifies the hash on write), edge cache |
-| `live.ts` | `live:<slug>` manifest in KV (D1 fallback, per-isolate 5 s cache) |
+| `live.ts` | `live:<slug>` manifest in KV (D1 fallback, per-isolate 5 s cache); v3 filename maps are prototype-less so legal names like `__proto__` survive |
 | `cleanup.ts` | Hourly cron: expire anonymous sites, purge deleted sites, drop stale uploads, delete orphan blobs |
 | `events.ts` | Runs hooks and metering after the response (never throws) |
 | `transfers.ts` | Sender-owned deliveries: create/read/update/revoke, revision fencing and permanent slug reservations |

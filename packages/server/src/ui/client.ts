@@ -1685,13 +1685,15 @@ export function dropwayClient() {
     }
 
     function buildTree(files) {
-      var root = { dirs: {}, files: [] };
+      // Prototype-less directory maps: legal names like __proto__ or toString are own data, never methods.
+      var root = { dirs: Object.create(null), files: [] };
       files.forEach(function (f) {
         var parts = f.path.split("/");
         var node = root;
         for (var i = 0; i < parts.length - 1; i++) {
-          node.dirs[parts[i]] = node.dirs[parts[i]] || { dirs: {}, files: [] };
-          node = node.dirs[parts[i]];
+          var seg = parts[i];
+          if (!Object.hasOwn(node.dirs, seg)) node.dirs[seg] = { dirs: Object.create(null), files: [] };
+          node = node.dirs[seg];
         }
         node.files.push(f);
       });
