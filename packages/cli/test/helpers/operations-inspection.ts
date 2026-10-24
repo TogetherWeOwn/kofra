@@ -15,6 +15,7 @@ export const tokenSentinels = [
   "dw_operations_acceptance_saved_not_a_real_key",
   "dw_operations_acceptance_env_not_a_real_key",
   "operations_acceptance_bootstrap_not_a_real_key",
+  "dw_operations_acceptance_flag_not_a_real_key",
 ] as const;
 export type Wire = { method: string; url: string; headers: Record<string, string>; body: string; allowed?: boolean };
 export type Ran = { code: number | null; stdout: string; stderr: string; json: any; wire: Wire[] };
@@ -62,7 +63,9 @@ export async function runCli(box: Sandbox, origin: string, args: string[], optio
     ...(options.defaultApi === false ? {} : { KOFRA_API: origin }),
     ...options.env, OPERATIONS_TEST_ORIGIN: origin, OPERATIONS_TEST_WIRE: wireFile };
   const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", guard, options.entry ?? join(cliRoot, "bin/dropway.mjs"), ...args],
+    // Run the same black-box contract against a test bundle (including mutation checks).
+    const child = spawn(process.execPath, ["--import", guard,
+      options.entry ?? process.env.OPERATIONS_TEST_CLI_ENTRY ?? join(cliRoot, "bin/dropway.mjs"), ...args],
       { cwd: box.cwd, env, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = ""; let stderr = "";
     const timeout = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("CLI timed out; non-TTY discovery must never prompt")); }, 12_000);

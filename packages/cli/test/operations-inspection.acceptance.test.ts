@@ -107,6 +107,95 @@ describe("native operations inspection: controlled catalog", () => {
     oneCatalogGet(result);
   });
 
+  it("accepts a bare catalog array without changing its order or optional metadata", async () => {
+    reply = () => Response.json(catalog);
+    const result = await cli(["operations", "--json"]);
+    expect(jsonSuccess(result).operations).toEqual(compact);
+    oneCatalogGet(result);
+  });
+
+  it("preserves extension fields and cli metadata instead of stripping unknown properties", async () => {
+    reply = () => Response.json({ operations: [{
+      id: "extension_preview", method: "PATCH", path: "/api/v1/extension/preview", scopes: ["sites:write"],
+      inputSchema: { type: "object", "x-extension-input": true },
+      cli: { command: ["extension", "preview"], "x-extension-cli": { mode: "inspect" } },
+      "x-extension-metadata": { label: "custom operation", flags: ["preview"] },
+    }] });
+    const listed = await cli(["operations", "--json"]);
+    expect(jsonSuccess(listed).operations).toEqual([{
+      id: "extension_preview", method: "PATCH", path: "/api/v1/extension/preview", scopes: ["sites:write"],
+      cli: { command: ["extension", "preview"], "x-extension-cli": { mode: "inspect" } },
+      "x-extension-metadata": { label: "custom operation", flags: ["preview"] },
+    }]);
+    const detail = await cli(["operations", "extension_preview", "--schema", "--json"]);
+    expect(jsonSuccess(detail).operation).toEqual({
+      id: "extension_preview", method: "PATCH", path: "/api/v1/extension/preview", scopes: ["sites:write"],
+      inputSchema: { type: "object", "x-extension-input": true },
+      cli: { command: ["extension", "preview"], "x-extension-cli": { mode: "inspect" } },
+      "x-extension-metadata": { label: "custom operation", flags: ["preview"] },
+    });
+    expect(listed.wire).toHaveLength(1);
+    expect(detail.wire).toHaveLength(1);
+  });
+
+  it.each([
+    { label: "null root", body: null },
+    { label: "missing operations array", body: {} },
+    { label: "string root", body: "not a catalog" },
+    { label: "unshaped bare row", body: [{ foo: 1 }] },
+    { label: "null wrapped row", body: { operations: [null] } },
+    { label: "string operations", body: { operations: "x" } },
+  ])("refuses malformed catalog: $label", async ({ body }) => {
+    reply = () => Response.json(body);
+    const result = await cli(["operations", "--json"]);
+    expect(jsonError(result, 1)).toMatchObject({ code: "invalid_catalog", hint: expect.stringMatching(/instance|--api|KOFRA_API/i) });
+    expect(result.stdout + result.stderr).not.toMatch(/undefined|TypeError/);
+    oneCatalogGet(result);
+  });
+
+  it.each([
+    { field: "id", label: "missing", value: undefined },
+    { field: "id", label: "number", value: 7 },
+    { field: "id", label: "null", value: null },
+    { field: "method", label: "missing", value: undefined },
+    { field: "method", label: "number", value: 7 },
+    { field: "method", label: "array", value: ["DELETE"] },
+    { field: "path", label: "missing", value: undefined },
+    { field: "path", label: "number", value: 7 },
+    { field: "path", label: "null", value: null },
+    { field: "scopes", label: "missing", value: undefined },
+    { field: "scopes", label: "null", value: null },
+    { field: "scopes", label: "string", value: "sites:delete" },
+    { field: "scopes", label: "non-string member", value: ["sites:delete", 7] },
+    { field: "inputSchema", label: "missing", value: undefined },
+    { field: "inputSchema", label: "null", value: null },
+    { field: "inputSchema", label: "array", value: [] },
+    { field: "inputSchema", label: "string", value: "object" },
+    { field: "inputSchema", label: "boolean", value: true },
+    { field: "cli", label: "null", value: null },
+    { field: "cli", label: "string", value: "fixture retire" },
+    { field: "cli", label: "array", value: [] },
+    { field: "cli", label: "missing command", value: {} },
+    { field: "cli", label: "string command", value: { command: "fixture retire" } },
+    { field: "cli", label: "non-string command member", value: { command: ["fixture", 7] } },
+    { field: "cli", label: "string positional", value: { command: ["fixture", "retire"], positional: "slug" } },
+    { field: "cli", label: "non-string positional member", value: { command: ["fixture", "retire"], positional: [7] } },
+  ])("refuses malformed row field $field: $label even when schema output is omitted", async ({ field, value }) => {
+    reply = () => Response.json({ operations: [catalog[1], { ...catalog[0], [field]: value }] });
+    const result = await cli(["operations", "--json"]);
+    expect(jsonError(result, 1)).toMatchObject({ code: "invalid_catalog", hint: expect.stringMatching(/instance|--api|KOFRA_API/i) });
+    expect(result.stdout + result.stderr).not.toMatch(/undefined|TypeError/);
+    oneCatalogGet(result);
+  });
+
+  it.each([false, true])("treats an explicit empty ID as not found, not list or missing ID (schema=%s)", async schema => {
+    const result = await cli(["operations", "", ...(schema ? ["--schema"] : []), "--json"]);
+    expect(jsonError(result, 4)).toMatchObject({ code: "operation_not_found", hint: expect.stringMatching(/(?:kofra\s+)?operations/) });
+    expect(result.json).not.toHaveProperty("operations");
+    expect(result.json).not.toHaveProperty("operation");
+    oneCatalogGet(result);
+  });
+
   it.each(["missing_operation", "fixture_re", "FIXTURE_RETIRE", "fixture retire"])(
     "refuses non-exact ID %s with a stable operation error and list remediation", async id => {
       const box = await sandbox(root);
@@ -205,6 +294,39 @@ describe("native operations inspection: controlled catalog", () => {
     expect(jsonSuccess(modern).operations).toEqual(compact);
   });
 
+  describe.each(["saved", "env", "env with --api", "--key"])("credential-free discovery with %s credentials", source => {
+    it.each([
+      { label: "list success", id: [], status: 200 },
+      { label: "destructive ID success", id: ["fixture_retire"], status: 200 },
+      { label: "list refusal", id: [], status: 401 },
+      { label: "destructive ID refusal", id: ["fixture_retire"], status: 401 },
+    ])("never sends Authorization on $label", async ({ id, status }) => {
+      const box = await sandbox(root);
+      const flags: string[] = [];
+      const env: Record<string, string> = {};
+      if (source === "saved") await savedInstance(box, server.origin, tokenSentinels[0]);
+      if (source === "env" || source === "env with --api") env.KOFRA_API_KEY = tokenSentinels[1];
+      if (source === "env with --api") {
+        env.KOFRA_API = "http://127.0.0.1:1";
+        flags.push("--api", server.origin);
+      }
+      if (source === "--key") flags.push("--key", tokenSentinels[3]);
+      if (status === 401) reply = () => Response.json({ error: {
+        code: "fixture_catalog_refused", message: "Public catalog refused.", hint: "Check the configured instance's discovery endpoint.",
+      } }, { status });
+      const result = await runCli(box, server.origin, ["operations", ...id, ...flags, "--json"],
+        { defaultApi: source !== "saved", env });
+      oneCatalogGet(result);
+      // Check both the transport guard and the actual server, on EVERY request.
+      for (const request of [...result.wire, ...server.requests]) {
+        expect(request.headers, "public catalog discovery must not attach configured credentials").not.toHaveProperty("authorization");
+      }
+      if (status === 401) expect(jsonError(result, 3)).toMatchObject({ code: "fixture_catalog_refused", status: 401 });
+      else if (id.length) expect(jsonSuccess(result).operation).toEqual(compact[0]);
+      else expect(jsonSuccess(result).operations).toEqual(compact);
+    });
+  });
+
   it("never prints configured tokens or changes credentials on success or refusal", async () => {
     const box = await sandbox(root);
     await savedInstance(box, server.origin, tokenSentinels[0]);
@@ -238,6 +360,21 @@ describe("native operations inspection: controlled catalog", () => {
       expect(result.stdout).not.toContain(schemaMarker);
       expect(result.stdout.length).toBeLessThan(2000);
     }
+  });
+
+  it("shows required scopes and CLI command paths beside each human list operation", async () => {
+    const result = await cli(["operations"]);
+    expect(result.code, result.stdout + result.stderr).toBe(0);
+    const retire = result.stdout.split("\n").find(line => line.includes("fixture_retire"));
+    const read = result.stdout.split("\n").find(line => /\bfixture_read\b/.test(line));
+    expect(retire).toBeDefined();
+    expect(read).toBeDefined();
+    for (const value of ["DELETE", "/api/v1/fixture/sites/:slug", "sites:delete", "fixture retire"]) expect(retire).toContain(value);
+    for (const value of ["POST", "/api/v1/fixture/read", "sites:read", "sites:write", "extension read"]) expect(read).toContain(value);
+    expect(result.stdout).not.toContain(schemaMarker);
+    expect(result.stdout).not.toContain("inputSchema");
+    expect(result.stdout.length).toBeLessThan(2000);
+    oneCatalogGet(result);
   });
 
   it.each([["help", "operations"], ["operations", "--help"]])("provides offline command help for %j", async (...args) => {
