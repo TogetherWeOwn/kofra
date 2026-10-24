@@ -5,6 +5,7 @@
  * The generic "ignored" code deliberately does not require new matcher provenance.
  * Refusal metadata uses error.details.omissions; legacy result fields stay intact.
  */
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -253,6 +254,37 @@ describe("publish omission inventory: additive command-level goldens", () => {
     ]);
     const preview = await dry();
     expect(preview.json.files).toEqual(mixedManifest);
+  });
+});
+
+describe("special files and human-readable output", () => {
+  const fifo = process.platform === "win32" ? it.skip : it;
+
+  fifo("records FIFOs, and links to them, as special_file without opening them", async () => {
+    await tree({ "index.html": "ok" });
+    execFileSync("mkfifo", [join(cwd, "pipe")]);
+    await symlink(join(cwd, "pipe"), join(cwd, "pipe-alias"));
+    const r = await dry();
+    expect(r.code).toBe(0);
+    expect(r.json.files).toEqual([manifestFile("index.html", "ok")]);
+    expect(r.json.omissions).toEqual([{ path: "pipe", reason: "special_file" }, { path: "pipe-alias", reason: "special_file" }]);
+  });
+
+  it("names every non-ignored omission in the human dry-run summary", async () => {
+    await mixed();
+    const r = await command(["publish", ".", "--dry-run"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("Would publish 4 files");
+    expect(r.stdout).toContain("Ignored: .dropwayignore, .env, .git/, assets/app.js.map, drafts/");
+    expect(r.stdout).toContain("Omitted: broken (broken link), dropway.json (explicitly excluded), linked-dir (symlinked folder)");
+    expect(r.stdout).not.toContain(work);
+  });
+
+  fifo("labels special files in the human dry-run summary", async () => {
+    await tree({ "index.html": "ok" });
+    execFileSync("mkfifo", [join(cwd, "pipe")]);
+    const r = await command(["publish", ".", "--dry-run"]);
+    expect(r.stdout).toContain("Omitted: pipe (not a regular file)");
   });
 });
 

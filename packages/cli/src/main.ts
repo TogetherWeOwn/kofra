@@ -350,7 +350,7 @@ server policy, quotas or limits, and it is not the server's dry run.`,
           { dryRun: true, path: target, files: collected.files.map((f) => ({ path: f.path, size: f.size, sha256: f.sha256 })), totalBytes: collected.totalBytes, ignored: collected.ignored, omissions: collected.omissions },
           () => {
             const extras = collected.omissions.filter((o) => o.reason !== "ignored");
-            const label = (reason: string) => (reason === "excluded" ? "explicitly excluded" : reason === "symlink_directory" ? "symlinked folder" : "broken link");
+            const label = (reason: string) => (reason === "excluded" ? "explicitly excluded" : reason === "symlink_directory" ? "symlinked folder" : reason === "special_file" ? "not a regular file" : "broken link");
             return [
               ...collected.files.map((f) => `${f.path}  ${formatBytes(f.size)}`),
               `Would publish ${plural(collected.files.length, "file")} (${formatBytes(collected.totalBytes)}).${collected.ignored.length ? ` Ignored: ${collected.ignored.join(", ")}` : ""}${extras.length ? ` Omitted: ${extras.map((o) => `${o.path} (${label(o.reason)})`).join(", ")}` : ""}`,

@@ -25,7 +25,7 @@ export interface CollectOptions {
 }
 
 /** Why one relative path was left out of the publish payload. Stable wire values. */
-export type OmissionReason = "ignored" | "excluded" | "symlink_directory" | "broken_symlink";
+export type OmissionReason = "ignored" | "excluded" | "symlink_directory" | "broken_symlink" | "special_file";
 
 export interface Omission {
   /** Relative POSIX path as walked (directories carry a trailing slash). */
@@ -89,6 +89,7 @@ async function walk(root: string, matcher: IgnoreMatcher, exclude: Set<string>, 
     }
     if (isDir) await walk(root, matcher, exclude, out, ignored, links, omissions, rel);
     else if (isFile) out.push({ abs, rel });
+    else omissions.push({ path: rel, reason: "special_file" }); // FIFO, socket or device (or a link to one)
   }
 }
 

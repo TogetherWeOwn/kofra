@@ -62,7 +62,8 @@ tokens, Kofra keys) stop the publish with exit code 2 unless you pass `--allow-s
 `--dry-run --json` explains every skipped path in an `omissions` array (`{path, reason}`, sorted by
 relative path; pruned directories appear once): `ignored` (built-in or `.dropwayignore` rules),
 `excluded` (explicitly excluded, e.g. the `./dropway.json` project link), `symlink_directory`
-(directory links are never followed), and `broken_symlink`. An offline agent check, needing no URL
+(directory links are never followed), `broken_symlink`, and `special_file` (FIFOs, sockets and
+devices are never published). An offline agent check, needing no URL
 or key:
 
 ```sh
