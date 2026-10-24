@@ -643,6 +643,30 @@ The owner API key is saved like \`kofra login\` (the full key is printed only wi
   },
 };
 
+interface CatalogOperation extends Record<string, unknown> {
+  id: string;
+  method: string;
+  path: string;
+  scopes: string[];
+  inputSchema: Record<string, unknown>;
+  cli?: { command: string[]; positional?: string[] };
+}
+
+/** Validate the public catalog's fields without dropping extension metadata. */
+function isCatalogOperation(value: unknown): value is CatalogOperation {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  const strings = (v: unknown): v is string[] => Array.isArray(v) && v.every((s) => typeof s === "string");
+  const cli = row.cli as Record<string, unknown> | undefined;
+  return typeof row.id === "string" && row.id.length > 0
+    && typeof row.method === "string" && row.method.length > 0
+    && typeof row.path === "string" && row.path.length > 0
+    && strings(row.scopes)
+    && row.inputSchema !== null && typeof row.inputSchema === "object" && !Array.isArray(row.inputSchema)
+    && (cli === undefined || (cli !== null && typeof cli === "object" && !Array.isArray(cli)
+      && strings(cli.command) && (cli.positional === undefined || strings(cli.positional))));
+}
+
 /** The catalog row without its input schema; every other field stays exactly as the server sent it. */
 function stripInputSchema(row: Record<string, unknown>): Record<string, unknown> {
   const compact: Record<string, unknown> = {};
@@ -687,13 +711,13 @@ Examples:
     const [id, extra] = p.positionals;
     if (extra !== undefined) throw new UsageError(`Too many arguments. Usage: ${this.usage}`);
     const withSchema = bool(p, "schema") === true;
-    if (withSchema && !id) throw new UsageError(`--schema needs an operation id. Usage: ${this.usage}`);
+    if (withSchema && id === undefined) throw new UsageError(`--schema needs an operation id. Usage: ${this.usage}`);
     const inst = await resolveInstance(p, io);
     // The catalog is public metadata: discover it without a credential.
     const client = makeClient(io, inst.api, null);
     const { data } = await client.get<unknown>("/operations");
-    const rows = (Array.isArray(data) ? data : (data as { operations?: unknown }).operations) as Record<string, unknown>[] | undefined;
-    if (!Array.isArray(rows) || rows.some((r) => !r || typeof r !== "object")) {
+    const rows = Array.isArray(data) ? data : (data as { operations?: unknown } | null)?.operations;
+    if (!Array.isArray(rows) || !rows.every(isCatalogOperation)) {
       throw new CliError({
         code: "invalid_catalog",
         message: `The instance answered ${inst.api}/api/v1/operations with an unexpected shape.`,
@@ -701,13 +725,13 @@ Examples:
         exitCode: EXIT.error,
       });
     }
-    if (!id) {
+    if (id === undefined) {
       const operations = rows.map(stripInputSchema);
       out.result({ operations }, () => {
         if (!operations.length) return "No operations: the instance answered with an empty catalog.";
         return table(
-          rows.map((r) => [String(r.id), String(r.method), String(r.path)]),
-          ["OPERATION", "METHOD", "PATH"],
+          rows.map((r) => [r.id, r.method, r.path, r.scopes.join(" ") || "(none)", r.cli ? `kofra ${r.cli.command.join(" ")}` : "-"]),
+          ["OPERATION", "METHOD", "PATH", "SCOPES", "CLI"],
         );
       });
       return EXIT.ok;
