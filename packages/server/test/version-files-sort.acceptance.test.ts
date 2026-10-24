@@ -13,10 +13,12 @@
  *   headers (button in th), a toolbar (selects/buttons), or both. Any shape is
  *   accepted; the tests discover controls by data-sort-field, th scope, and
  *   accessible names containing the field word plus "sort" (or header context).
- * - The active sort is exposed truthfully: aria-sort="ascending|descending" on the
- *   field's th (preferred, and required of header-driven sorts), or an equally
- *   explicit native state (field select value plus a direction select/button whose
- *   label/value names ascending/descending, Asc/Desc, or up/down arrows).
+ * - The active sort is exposed truthfully: exactly one sortable th carries
+ *   aria-sort="ascending|descending" when headers exist; native toolbar values
+ *   cannot substitute for a missing header state. The independent toolbar cases
+ *   pin both select change handlers and their synchronization with those headers.
+ *   Toolbar-only discovery retains equally explicit native state (field select
+ *   plus a direction select/button naming ascending/descending, Asc/Desc or arrows).
  * - Default is deterministic Path ascending, exposed as above.
  * - First activation of an inactive field sorts ascending; activating the active
  *   field toggles direction.
@@ -927,6 +929,9 @@ function createSorter(m: Mounted): Sorter {
     if (sorted.length > 1) {
       throw new Error(`Untruthful sort state: ${sorted.length} headers carry aria-sort; exactly one may.`);
     }
+    if (headers.length > 0 && sorted.length === 0) {
+      throw new Error("Untruthful sort state: sortable headers exist but none carries active aria-sort; toolbar state cannot substitute.");
+    }
     if (sorted.length === 1) {
       const th = sorted[0]!;
       const header = headers.find((h) => h.th === th);
@@ -1127,6 +1132,69 @@ function setSelectToDirection(select: FakeElement, direction: SortDirection): vo
   select.value = match.value;
 }
 
+// Direct select drivers never choose a header, even when both surfaces exist.
+function toolbarSelects(m: Mounted): { field: FakeElement; direction: FakeElement } {
+  const toolbar = discoverToolbar(m.filesSection);
+  return {
+    field: must(toolbar.fieldSelect, "toolbar field select"),
+    direction: must(toolbar.directionSelect, "toolbar direction select"),
+  };
+}
+
+async function changeToolbarField(m: Mounted, field: SortField): Promise<void> {
+  const select = toolbarSelects(m).field;
+  setSelectToField(select, field);
+  m.fireChange(select);
+  await m.settled();
+}
+
+async function changeToolbarDirection(m: Mounted, direction: SortDirection): Promise<void> {
+  const select = toolbarSelects(m).direction;
+  setSelectToDirection(select, direction);
+  m.fireChange(select);
+  await m.settled();
+}
+
+function assertSynchronizedSort(m: Mounted, field: SortField, direction: SortDirection): void {
+  const headers = discoverHeaders(m.filesSection);
+  expect(headers.map((header) => header.field).sort(), "sortable headers for every field").toEqual(["kind", "path", "size"]);
+  const active = must(headers.find((header) => header.field === field), `active ${field} header`);
+  const activeHeaders = m.filesSection.querySelectorAll("th").filter((th) =>
+    th.getAttribute("aria-sort") === "ascending" || th.getAttribute("aria-sort") === "descending",
+  );
+  expect(activeHeaders.length, "exactly one header exposes active aria-sort, independently of toolbar values").toBe(1);
+  expect(activeHeaders[0] === active.th, `aria-sort belongs to the ${field} header`).toBe(true);
+  expect(active.th.getAttribute("aria-sort"), `${field} header direction`).toBe(direction);
+  for (const header of headers) {
+    if (header !== active) {
+      expect([null, "none"], `inactive ${header.field} header does not claim ordering`).toContain(header.th.getAttribute("aria-sort"));
+    }
+  }
+  const selects = toolbarSelects(m);
+  expect(matchFieldOption(selects.field, selects.field.value), "toolbar field tracks header state").toBe(field);
+  expect(matchDirectionOption(selects.direction, selects.direction.value), "toolbar direction tracks header state").toBe(direction);
+  expect(createSorter(m).state(), "header-driven state does not fall back to native selects").toEqual({ field, direction });
+}
+
+// Hand-checked full-path orders, including the 10-byte and 100-byte ties.
+const TOOLBAR_ORDERS: Array<{ field: SortField; ascending: string[]; descending: string[] }> = [
+  {
+    field: "path",
+    ascending: ["a/index.html", "assets/app.js", "assets/logo.svg", "data/table.csv", "docs/README.md", "docs/guide.md", "index.html"],
+    descending: ["index.html", "docs/guide.md", "docs/README.md", "data/table.csv", "assets/logo.svg", "assets/app.js", "a/index.html"],
+  },
+  {
+    field: "kind",
+    ascending: ["assets/app.js", "data/table.csv", "a/index.html", "index.html", "docs/README.md", "docs/guide.md", "assets/logo.svg"],
+    descending: ["assets/logo.svg", "docs/README.md", "docs/guide.md", "a/index.html", "index.html", "data/table.csv", "assets/app.js"],
+  },
+  {
+    field: "size",
+    ascending: ["docs/README.md", "assets/logo.svg", "assets/app.js", "docs/guide.md", "a/index.html", "data/table.csv", "index.html"],
+    descending: ["data/table.csv", "index.html", "a/index.html", "assets/app.js", "docs/guide.md", "assets/logo.svg", "docs/README.md"],
+  },
+];
+
 // ---------------------------------------------------------------------------
 // Row reading and association assertions
 // ---------------------------------------------------------------------------
@@ -1273,6 +1341,86 @@ describe("version-files sorting controls", () => {
     expect(sorter.state()).toEqual({ field: "size", direction: "descending" });
     await sorter.setSort("kind", "ascending");
     expect(sorter.state()).toEqual({ field: "kind", direction: "ascending" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Independent toolbar interactions and header accessibility (no native fallback)
+// ---------------------------------------------------------------------------
+
+describe("version-files toolbar sorting and header aria-sort", () => {
+  it("exposes exactly one correct active header at default and after each header interaction", async () => {
+    const m = await mount({ liveFiles: ASCII_FILES });
+    const callsBefore = [...m.calls];
+    const writesBefore = [...m.storageWrites];
+    assertSynchronizedSort(m, "path", "ascending");
+    for (const orders of TOOLBAR_ORDERS) {
+      const header = must(discoverHeaders(m.filesSection).find((h) => h.field === orders.field), `${orders.field} header`);
+      // Path starts active, so its first click descends; inactive fields start ascending.
+      const directions: SortDirection[] = orders.field === "path" ? ["descending", "ascending"] : ["ascending", "descending"];
+      for (const direction of directions) {
+        m.click(header.activator);
+        await m.settled();
+        expect(m.visiblePaths()).toEqual(orders[direction]);
+        assertSynchronizedSort(m, orders.field, direction);
+      }
+    }
+    expect(m.calls, "header sorting performs no requests").toEqual(callsBefore);
+    expect(m.storageWrites, "header sorting writes no preferences").toEqual(writesBefore);
+  });
+
+  it.each(TOOLBAR_ORDERS)("sorts $field through toolbar change events in both directions, including ties", async (orders) => {
+    const m = await mount({ liveFiles: ASCII_FILES });
+    const callsBefore = [...m.calls];
+    const writesBefore = [...m.storageWrites];
+    // Start on a different header descending: a no-op field handler must not pass.
+    const previousField = orders.field === "size" ? "kind" : "size";
+    await createSorter(m).setSort(previousField, "descending");
+    assertSynchronizedSort(m, previousField, "descending");
+    await changeToolbarField(m, orders.field);
+    expect(m.visiblePaths(), "field change itself sorts ascending").toEqual(orders.ascending);
+    assertSynchronizedSort(m, orders.field, "ascending");
+    for (const direction of ["descending", "ascending", "descending"] as const) {
+      await changeToolbarDirection(m, direction);
+      expect(m.visiblePaths(), `toolbar ${orders.field} ${direction}`).toEqual(orders[direction]);
+      assertSynchronizedSort(m, orders.field, direction);
+      assertRowsMatchFixtures(m, ASCII_FILES, true);
+      expect(m.calls, "toolbar sorts request no metadata or content").toEqual(callsBefore);
+      expect(m.storageWrites, "toolbar sorts persist no preferences").toEqual(writesBefore);
+    }
+    // Header activation after toolbar changes must use that same active sort state.
+    const header = must(discoverHeaders(m.filesSection).find((h) => h.field === orders.field), `${orders.field} header`);
+    m.click(header.activator);
+    await m.settled();
+    expect(m.visiblePaths()).toEqual(orders.ascending);
+    assertSynchronizedSort(m, orders.field, "ascending");
+    expect(m.calls).toEqual(callsBefore);
+    expect(m.storageWrites).toEqual(writesBefore);
+  });
+
+  it.each(TOOLBAR_ORDERS)("retains an active filter during $field toolbar changes without requests or storage writes", async (orders) => {
+    const m = await mount({ liveFiles: ASCII_FILES });
+    const callsBefore = [...m.calls];
+    const writesBefore = [...m.storageWrites];
+    m.setFilter("assets");
+    await m.settled();
+    await changeToolbarField(m, orders.field);
+    for (const direction of ["ascending", "descending"] as const) {
+      await changeToolbarDirection(m, direction);
+      const assetsFirst = orders.field === "size" ? direction === "descending" : direction === "ascending";
+      expect(m.visiblePaths()).toEqual(assetsFirst ? ["assets/app.js", "assets/logo.svg"] : ["assets/logo.svg", "assets/app.js"]);
+      expect(m.filterInput.value, "toolbar changes preserve the query").toBe("assets");
+      expect(m.rows().filter(isHidden).length, "nonmatching rows remain hidden").toBe(5);
+      assertSynchronizedSort(m, orders.field, direction);
+      expect(m.calls).toEqual(callsBefore);
+      expect(m.storageWrites).toEqual(writesBefore);
+    }
+    m.setFilter("");
+    await m.settled();
+    expect(m.visiblePaths(), "clearing the filter retains toolbar ordering").toEqual(orders.descending);
+    assertSynchronizedSort(m, orders.field, "descending");
+    expect(m.calls).toEqual(callsBefore);
+    expect(m.storageWrites).toEqual(writesBefore);
   });
 });
 
@@ -1552,6 +1700,20 @@ describe("version-files sort keyboard, viewport and read-only invariants", () =>
       const visible = sorter.controls(field).filter((el) => !hiddenByNarrow(el) && !isHidden(el));
       expect(visible.length, `${field} has a sort control outside .dw-hide-sm (mode: ${sorter.mode})`).toBeGreaterThan(0);
     }
+    // Structural narrow-screen check, not a CSS/layout claim: interact only with
+    // selects that remain outside the hidden Kind column, never its header.
+    const selects = toolbarSelects(m);
+    for (const select of [selects.field, selects.direction]) {
+      expect(hiddenByNarrow(select) || isHidden(select), "toolbar select remains available outside .dw-hide-sm").toBe(false);
+      expect(ancestorHas(select, (el) => el.tag === "th"), "narrow-screen driver does not use a header").toBe(false);
+    }
+    const kindOrders = must(TOOLBAR_ORDERS.find((orders) => orders.field === "kind"), "Kind orders");
+    await changeToolbarField(m, "kind");
+    expect(m.visiblePaths()).toEqual(kindOrders.ascending);
+    assertSynchronizedSort(m, "kind", "ascending");
+    await changeToolbarDirection(m, "descending");
+    expect(m.visiblePaths()).toEqual(kindOrders.descending);
+    assertSynchronizedSort(m, "kind", "descending");
   });
 
   it("uses native focusable controls with visible focus and existing tokens", async () => {
