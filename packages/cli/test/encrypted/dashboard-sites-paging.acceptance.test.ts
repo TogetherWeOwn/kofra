@@ -206,14 +206,10 @@ async function loaded(f: Fixture, expected: string[]) {
 async function terminal(f: Fixture) {
   expect(await more(f).isVisible().catch(() => false) && await more(f).isEnabled().catch(() => false), "no usable Load more after the final or already-consumed cursor").toBe(false);
 }
-async function counts(f: Fixture, loadedCount: number, matchedCount: number) {
-  const text = await f.page.locator("#dw-sites-count").innerText();
-  const numbers = text.match(/\d+/g)?.map(Number) ?? [];
-  expect(numbers, "show the number of unique loaded sites").toContain(loadedCount);
-  if (await search(f).inputValue()) {
-    expect(numbers, "also show the current matched/visible count").toContain(matchedCount);
-    expect(text).toMatch(/match|shown|showing|visible|of/i);
-  }
+async function counts(f: Fixture, expected: string) {
+  // Break: swapping matched/loaded quantities, counting hidden rows as matches,
+  // or claiming a complete total while a next page is still available.
+  await expect.poll(() => f.page.locator("#dw-sites-count").innerText()).toBe(expected);
 }
 async function feedback(f: Fixture) {
   const text = await f.page.locator("#dw-main").innerText();
@@ -230,18 +226,22 @@ describe("Sites dashboard: filtering a bounded loaded subset", () => {
       pageOf([site("needle-last", null), site("cloud", "Cloud")], null),
     ]);
     await loaded(f, ["needle-path", "orchard"]);
+    await counts(f, "2 sites+.");
     await search(f).fill("needle");
     await loaded(f, ["needle-path"]);
+    await counts(f, "1 match of 2 loaded sites+.");
     await more(f).click();
     await loaded(f, ["needle-path", "page-two"]);
+    await counts(f, "2 matches of 4 loaded sites+.");
     expect(f.wire.map(request => request.cursor)).toEqual([null, cursorA]);
     await more(f).click();
     await loaded(f, ["needle-path", "page-two", "needle-last"]);
     expect(f.wire.map(request => request.cursor)).toEqual([null, cursorA, cursorB]);
-    await counts(f, 6, 3);
+    await counts(f, "3 matches of 6 loaded sites.");
     await terminal(f);
     await search(f).fill("");
     await loaded(f, ["needle-path", "orchard", "page-two", "stone", "needle-last", "cloud"]);
+    await counts(f, "6 sites.");
     expect(f.wire).toHaveLength(3);
   });
 
@@ -262,7 +262,7 @@ describe("Sites dashboard: filtering a bounded loaded subset", () => {
     await loaded(f, ["orchard-start", "late"]);
     expect(await search(f).inputValue()).toBe("orchard");
     expect(await search(f).evaluate((el: any) => el === el.ownerDocument.activeElement)).toBe(true);
-    await counts(f, 4, 2);
+    await counts(f, "2 matches of 4 loaded sites+.");
     expect(f.wire.map(request => request.cursor)).toEqual([null, cursorA]);
   });
 
@@ -281,14 +281,29 @@ describe("Sites dashboard: filtering a bounded loaded subset", () => {
   });
 
   it("distinguishes zero local matches from zero loaded sites and still offers the next page", async () => {
-    const f = await open([pageOf([site("first", "First")], cursorA)]);
+    const f = await open([
+      pageOf([site("first", "First")], cursorA),
+      pageOf([], null),
+    ]);
     await loaded(f, ["first"]);
+    await counts(f, "1 site+.");
     await search(f).fill("not-loaded-yet");
     await loaded(f, []);
-    await counts(f, 1, 0);
+    await counts(f, "0 matches of 1 loaded site+.");
     await settled(f);
     expect(f.wire).toHaveLength(1);
     expect(await more(f).isEnabled(), "a local zero-match result must still allow the next bounded page").toBe(true);
+    await more(f).click();
+    await counts(f, "0 matches of 1 loaded site.");
+    await loaded(f, []);
+    await terminal(f);
+    await search(f).fill("");
+    await loaded(f, ["first"]);
+    await counts(f, "1 site.");
+    await search(f).fill("FIRST");
+    await loaded(f, ["first"]);
+    await counts(f, "1 match of 1 loaded site.");
+    expect(f.wire.map(request => request.cursor)).toEqual([null, cursorA]);
   });
 });
 
@@ -337,7 +352,7 @@ describe("Sites dashboard: cursor and stable-identity integrity", () => {
     await expect.poll(() => f.wire.length).toBe(3);
     await settled(f);
     expect(await slugs(f, false)).toEqual(["zebra", "alpha", "middle", "last"]);
-    await counts(f, 4, 4);
+    await counts(f, "4 sites.");
     await terminal(f);
   });
 
@@ -371,7 +386,7 @@ describe("Sites dashboard: cursor and stable-identity integrity", () => {
     await more(f).click();
     await loaded(f, ["zebra", "alpha"]);
     await terminal(f);
-    await counts(f, 2, 2);
+    await counts(f, "2 sites.");
     for (const slug of ["zebra", "alpha"]) {
       expect(await f.page.locator(`#dw-sites a[href="/dashboard/sites/${slug}"]`).count()).toBe(1);
       expect(await f.page.locator(`#dw-sites a[href="${origin}/s/${slug}/"]`).count(), "use the server's share URL").toBeGreaterThan(0);
@@ -399,7 +414,7 @@ describe("Sites dashboard: non-destructive failure and accessible retry", () => 
     await loaded(f, ["needle-first"]);
     expect(await search(f).inputValue()).toBe("needle");
     await feedback(f);
-    await counts(f, 2, 1);
+    await counts(f, "1 match of 2 loaded sites+.");
     const retry = f.page.getByRole("button", { name: /retry|try again|load more/i }).first();
     expect(await retry.isEnabled(), "failure must leave an explicit non-busy retry").toBe(true);
     expect(await retry.getAttribute("aria-busy")).not.toBe("true");
@@ -409,7 +424,7 @@ describe("Sites dashboard: non-destructive failure and accessible retry", () => 
     await f.page.keyboard.press("Enter");
     await loaded(f, ["needle-first", "needle-retry"]);
     expect(f.wire.map(request => request.cursor)).toEqual([null, cursorA, cursorA]);
-    await counts(f, 4, 2);
+    await counts(f, "2 matches of 4 loaded sites+.");
     expect(await f.page.locator("#dw-main").innerText(), "clear stale failure feedback after success").not.toMatch(/this page could not be loaded/i);
     await more(f).click();
     await loaded(f, ["needle-first", "needle-retry", "needle-last"]);
@@ -435,16 +450,46 @@ describe("Sites dashboard: non-destructive failure and accessible retry", () => 
     expect(f.wire.map(request => request.cursor), "failed cursors may only retry on explicit user action").toEqual([null, cursorA]);
   });
 
-  it("distinguishes an empty successful first page from a failed first page", async () => {
+  // Break: a first-page error disables retry because no table has been shown yet.
+  it("distinguishes an empty first page from a failed first page and supports explicit keyboard retry", async () => {
     const empty = await open([pageOf([], null)]);
     await expect.poll(() => empty.page.locator("#dw-sites").innerText()).toMatch(/no sites|no .*sites|publish.*first|nothing.*yet/i);
+    await loaded(empty, []);
     await terminal(empty);
     expect(await empty.page.locator("#dw-main").innerText()).not.toMatch(/could not|failed|unable|unavailable/i);
-    const failed = await open([unavailable()]);
+    expect(empty.wire.map(request => request.cursor)).toEqual([null]);
+    const failed = await open([
+      unavailable(),
+      pageOf([site("recovered-first", "First"), site("recovered-second", "Second")], cursorA),
+      pageOf([site("recovered-last", "Last")], null),
+    ], true);
     await expect.poll(() => failed.page.locator("#dw-main").innerText()).toMatch(/could not|failed|unable|unavailable/i);
+    await feedback(failed);
     expect(await failed.page.locator("#dw-sites").innerText()).not.toMatch(/no sites yet|publish your first/i);
+    const retry = failed.page.getByRole("button", { name: /retry|try again|load more/i }).first();
+    expect(await retry.isVisible(), "show a retry even before the first successful page").toBe(true);
+    expect(await retry.isEnabled(), "a failed first page must leave an operable retry").toBe(true);
+    expect(await retry.getAttribute("aria-busy")).not.toBe("true");
+    await failed.page.clock.fastForward(60_000);
     await settled(failed);
-    expect(failed.wire).toHaveLength(1);
+    expect(failed.wire.map(request => request.cursor), "do not automatically retry the failed first page").toEqual([null]);
+    await retry.focus();
+    await failed.page.keyboard.press("Enter");
+    await loaded(failed, ["recovered-first", "recovered-second"]);
+    expect(await slugs(failed, false)).toEqual(["recovered-first", "recovered-second"]);
+    expect(failed.wire.map(request => request.cursor), "retry the initial request without a cursor").toEqual([null, null]);
+    await counts(failed, "2 sites+.");
+    expect(await failed.page.locator("#dw-main").innerText(), "clear stale first-page failure feedback after success").not.toMatch(/this page could not be loaded|retry this page/i);
+    expect(await more(failed).isEnabled()).toBe(true);
+    expect(await more(failed).getAttribute("aria-busy")).not.toBe("true");
+    await more(failed).click();
+    await loaded(failed, ["recovered-first", "recovered-second", "recovered-last"]);
+    expect(await slugs(failed, false)).toEqual(["recovered-first", "recovered-second", "recovered-last"]);
+    await counts(failed, "3 sites.");
+    await terminal(failed);
+    await failed.page.clock.fastForward(60_000);
+    await settled(failed);
+    expect(failed.wire.map(request => request.cursor)).toEqual([null, null, cursorA]);
   });
 
   // Break: replacing/removing the focused control, or mouse-only activation.
