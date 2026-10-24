@@ -333,7 +333,7 @@ real values) or `null`. Hints and templates contain no caller values.
 | `project_link.unreadable` | error | `unreadable_project_link` | see States (`detail` set) | `Check the permissions of ./dropway.json.` |
 | `project_link.foreign_instance` | warning | `foreign_project_link` | link `api` is valid but raw-unequal to the effective origin, so its mappings are ignored (comparison mirrors `publish`: raw string equality, `main.ts:300`, not normalized equality; a self-link with trimmable parts also mismatches) | `Publish once with --api <effective-origin> --new, or remove ./dropway.json.` |
 | `project_link.mapping_missing` | info | `mapping_missing` | `[path]` given and no mapping applies (no entry, or the link is absent, malformed, unreadable or foreign) | null |
-| `project_link.mapping_found` | info | `mapping_found` | `[path]` given and an entry exists | null |
+| `project_link.mapping_found` | info | `mapping_found` | `[path]` given and an applicable entry produces a non-null slug | null |
 | `env.legacy_shadowed` | info | `source_shadowed` | a `DROPWAY_*` twin was set but its `KOFRA_*` twin won | null |
 
 Severity notes:
