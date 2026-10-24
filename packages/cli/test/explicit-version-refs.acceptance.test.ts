@@ -267,6 +267,20 @@ describe("explicit read errors and segment safety", () => {
       directRequests(r, "v1");
     });
 
+    it.each(["", ".", ".."])(
+      `${command} locally refuses empty or dot-segment ref %j before version or file reads`, async (ref) => {
+        const r = await cli(args(ref));
+        expect(r.code, r.stdout + r.stderr).toBe(2);
+        const body = machine(r);
+        expect(body).toMatchObject({ ok: false, exitCode: 2, error: {
+          code: "invalid_version_ref", hint: expect.any(String),
+        } });
+        expect(body.error.hint.trim().length).toBeGreaterThan(0);
+        expect(r.seen.filter((request) => request.path !== `/api/v1/sites/${SITE}`),
+          "invalid refs must not request a version, bounded list, files or any other endpoint").toEqual([]);
+      },
+    );
+
     it.each(["../other", "ver/a?b#c", "ver%2Felsewhere", "https://other.example/v1", "..", "", "bad\nref"])(
       `${command} rejects or safely encodes unusual ref %j without changing the endpoint`, async (ref) => {
         const r = await cli(args(ref));
