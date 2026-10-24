@@ -313,7 +313,7 @@ running the same command again updates that site.`,
       const client = makeClient(io, inst!.api, token);
       out.progress(`Uploading ${target} (${formatBytes(st.size)})...`);
       const bytes = new Uint8Array(await readFile(resolve(io.cwd, target)));
-      result = await publishZip(client, bytes, { site, ...settings });
+      result = await publishZip(client, bytes, { site, ...settings, baseVersionId: str(p, "base") });
       out.progress(null);
     } else {
       out.progress("Reading files...");
