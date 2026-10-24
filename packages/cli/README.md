@@ -23,7 +23,7 @@ Zero runtime dependencies. Node.js 20 or newer.
 | `publish <path>` | Publish a folder, a single file or a `.zip`. Creates a site, or updates one with `--site <name>` |
 | `list` | Your sites (`--all` for every page) |
 | `site <name>` | One site: URL, live version, settings |
-| `files <name>` | Files of the live version (or `--version live|v3|3|<id>`, read directly) with their URLs |
+| `files <name>` | Files of the live version (or `--version <ref>` with `live`, `v3`, `3` or a version id, read directly) with their URLs |
 | `versions <name>` | Newest 500 versions, newest first, live marked — or `versions <name> <ref>` to inspect one directly |
 | `restore <name> [v3]` | Make an older version live again. Without a version: the one before the live version. Alias `rollback` |
 | `delete <name> --yes` | Delete a site. `--version v3` deletes one non-live version instead |
