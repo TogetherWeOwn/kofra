@@ -5,6 +5,8 @@ import { emit, meter } from "./events";
 import { dropLive } from "./live";
 import { convertRedirectsStatements, insertTombstone, purgeExpiredHolds } from "./slug-holds";
 import { cleanupTransfers } from "./transfer-cleanup";
+import { assertSiteDeletionState, siteDeletionStateChanged } from "./atomic-write";
+import type { SiteRow } from "./sites";
 
 const HOUR = 3600_000;
 const DAY = 24 * HOUR;
@@ -33,18 +35,25 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
 
   // 1. Expire anonymous sites.
   const { results: expired } = await db
-    .prepare("SELECT id, slug, tenant_id, slug_chosen FROM sites WHERE mode = 'site' AND expires_at IS NOT NULL AND expires_at < ? AND deleted_at IS NULL LIMIT 200")
+    .prepare("SELECT * FROM sites WHERE mode = 'site' AND expires_at IS NOT NULL AND expires_at < ? AND deleted_at IS NULL LIMIT 200")
     .bind(now)
-    .all<{ id: string; slug: string; tenant_id: string | null; slug_chosen: number }>();
+    .all<SiteRow>();
   for (const s of expired) {
     const holdUntil = now + (s.slug_chosen === 1 ? dc.config.slugHolds.chosenMs : dc.config.slugHolds.generatedMs);
-    await db.batch([
-      db
-        .prepare("UPDATE sites SET deleted_at = ?, deleted_slug = slug, slug = ?, claim_token_hash = NULL WHERE id = ? AND deleted_at IS NULL")
-        .bind(now, `~deleted~${s.id}`, s.id),
-      insertTombstone(dc, { slug: s.slug, tenantId: s.tenant_id, siteId: s.id, chosen: s.slug_chosen === 1, holdUntil, reason: "expired", createdAt: now, deletedAt: now }),
-      ...convertRedirectsStatements(dc, { siteId: s.id, tenantId: s.tenant_id, reason: "expired", now, deletedAt: now }),
-    ]);
+    try {
+      await db.batch([
+        assertSiteDeletionState(dc, s),
+        db
+          .prepare("UPDATE sites SET deleted_at = ?, deleted_slug = slug, slug = ?, claim_token_hash = NULL WHERE id = ? AND deleted_at IS NULL")
+          .bind(now, `~deleted~${s.id}`, s.id),
+        insertTombstone(dc, { slug: s.slug, tenantId: s.tenant_id, siteId: s.id, chosen: s.slug_chosen === 1, holdUntil, reason: "expired", createdAt: now, deletedAt: now }),
+        ...convertRedirectsStatements(dc, { siteId: s.id, tenantId: s.tenant_id, reason: "expired", now, deletedAt: now }),
+      ]);
+    } catch (error) {
+      // A changed row is reconsidered from fresh state on the next cron run.
+      if (siteDeletionStateChanged(error)) continue;
+      throw error;
+    }
     await dropLive(dc, s.slug);
     emit(dc, "onDelete", { site: { id: s.id, slug: s.slug, tenantId: s.tenant_id, url: siteUrl(dc, s.slug) }, principal: null, reason: "expired", at: now });
     meter(dc, { type: "site_deleted", tenantId: s.tenant_id, siteId: s.id, at: now });

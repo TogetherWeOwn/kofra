@@ -135,7 +135,7 @@ export const SITE_OPERATIONS = [
     toolset: "sites",
     scopes: ["sites:write"],
     description:
-      "Give a site a new slug, which changes its URL. The old URL answers 308 to the new URL (path and query kept) until redirectUntil, so links you already shared keep working.",
+      "Give a site a new slug, which changes its URL. An ordinary site's old URL answers 308 to the new URL (path and query kept) until redirectUntil. Transfers keep permanent sender reservations without a redirect (redirectUntil is null).",
     input: fromSchema({
       type: "object",
       properties: {
@@ -155,7 +155,7 @@ export const SITE_OPERATIONS = [
           oldSlug: { type: "string" },
           slug: { type: "string" },
           url: { type: "string" },
-          redirectUntil: { type: ["string", "null"], description: "Until when the old URL 308s to the new one (ISO 8601); null when nothing was renamed." },
+          redirectUntil: { type: ["string", "null"], description: "Until when the old URL 308s to the new one (ISO 8601); null for a no-op or transfer rename." },
           site: SITE_OUT,
           warnings: LIST,
         },
@@ -173,7 +173,7 @@ export const SITE_OPERATIONS = [
         url: siteUrl(dw, out.site.slug),
         redirectUntil,
         site: await siteOut(dw, out.site),
-        warnings: out.renamed
+        warnings: out.renamed && redirectUntil !== null
           ? [
               {
                 code: "old_url_redirects",
@@ -245,7 +245,7 @@ export const SITE_OPERATIONS = [
     toolset: "sites",
     scopes: ["admin"],
     description:
-      "Operator action: release a freed site name before its hold ends (for trademark disputes), with a required reason that is kept as the audit record. The name becomes free at once. Set confirm to the slug.",
+      "Release your tenant's freed site name before its hold ends, using an unrestricted admin key and a required reason kept as the audit record. The name becomes free at once. Set confirm to the slug. Cross-tenant disputes and ownerless holds require the instance operator's audited database procedure; tenant admin keys cannot release them.",
     input: fromSchema({
       type: "object",
       properties: {

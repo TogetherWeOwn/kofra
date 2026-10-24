@@ -1,5 +1,5 @@
 import type { DropwayContext } from "../context";
-import { badRequest, conflict, notFound, type ApiError } from "../errors";
+import { badRequest, conflict, forbidden, notFound, type ApiError } from "../errors";
 import { newId } from "../lib/crypto";
 import { looksLikeSlug } from "../lib/slug";
 import { requireMember, type Principal } from "../principal";
@@ -14,8 +14,9 @@ import { requireMember, type Principal } from "../principal";
  * - Delete and expiry tombstone the freed name (plus every old name still
  *   redirecting to the site): only the holding tenant may reclaim it before
  *   the hold ends; everyone else gets 409 slug_reserved.
- * - An operator (admin scope) may release a hold early with a reason; the
- *   released tombstone row is the audit trail.
+ * - An unrestricted tenant admin may release their tenant's hold early with a
+ *   reason; cross-tenant/ownerless releases need the instance operator's audited
+ *   database procedure. Released tombstone rows are the audit trail.
  *
  * The 0004 triggers refuse cross-tenant acquisition inside the write batch,
  * so races cannot hijack a held name; the SELECT pre-checks below exist only
@@ -71,8 +72,8 @@ export function convertRedirectsStatements(
       `INSERT INTO slug_tombstones (id, slug, tenant_id, site_id, chosen, hold_until, reason, created_at)
        SELECT lower(hex(randomblob(16))), slug, ?, site_id, chosen,
          CASE WHEN chosen <> 0 THEN ? ELSE ? END, ?, ?
-       FROM slug_redirects WHERE site_id = ? AND ${landed}`,
-    ).bind(input.tenantId, chosenUntil, generatedUntil, input.reason, input.now, input.siteId, input.siteId, input.deletedAt),
+       FROM slug_redirects WHERE site_id = ? AND hold_until > ? AND ${landed}`,
+    ).bind(input.tenantId, chosenUntil, generatedUntil, input.reason, input.now, input.siteId, input.now, input.siteId, input.deletedAt),
     dc.env.DB.prepare(`DELETE FROM slug_redirects WHERE site_id = ? AND ${landed}`).bind(input.siteId, input.siteId, input.deletedAt),
   ];
 }
@@ -193,12 +194,17 @@ export async function purgeExpiredHolds(dc: DropwayContext, now: number): Promis
 }
 
 /**
- * Operator action: release a hold before it ends (trademark disputes). The
- * stamped tombstone rows are the audit trail; when only a redirect existed, a
- * released tombstone row is written for it.
+ * Release a hold owned by the caller's tenant, with an unrestricted admin key.
+ * Tenant-grantable scopes never confer cross-tenant or ownerless release rights.
+ * Stamped tombstone rows are the audit trail; a redirect-only release writes one.
  */
 export async function releaseSlug(dc: DropwayContext, p: Principal, slugInput: unknown, reasonInput: unknown) {
   const operator = requireMember(p, "admin");
+  const denied = () => forbidden(
+    "This key cannot release the held name.",
+    "Use an unrestricted admin key of the holding tenant. For ownerless holds or cross-tenant disputes, contact the instance operator for an audited database release.",
+  );
+  if (operator.siteId !== null) throw denied();
   const slug = typeof slugInput === "string" ? slugInput.trim().toLowerCase() : "";
   if (!looksLikeSlug(slug)) throw badRequest("invalid_slug", `"${String(slugInput)}" is not a site name.`, "Release the held name exactly as freed (3-63 chars: lowercase letters, digits, single hyphens).");
   if (typeof reasonInput !== "string" || !reasonInput.trim()) {
@@ -207,33 +213,45 @@ export async function releaseSlug(dc: DropwayContext, p: Principal, slugInput: u
   // Reasons over 255 characters are cut on a code-point boundary (R-54 rule).
   const reason = [...reasonInput.trim()].slice(0, 255).join("");
   const now = Date.now();
-  const held = await dc.env.DB.prepare(
-    `SELECT (SELECT COUNT(*) FROM slug_redirects WHERE slug = ? AND hold_until > ?) AS redirects,
-            (SELECT COUNT(*) FROM slug_tombstones WHERE slug = ? AND released_at IS NULL AND hold_until > ?) AS holds`,
-  )
-    .bind(slug, now, slug, now)
-    .first<{ redirects: number; holds: number }>();
-  if (!held || (held.redirects === 0 && held.holds === 0)) {
+  // Tenant APIs can grant admin, not instance-wide operator authority. Check
+  // every active hold (including redirect ownership) again INSIDE the batch.
+  const owners = `SELECT tenant_id FROM slug_tombstones WHERE slug = ? AND released_at IS NULL AND hold_until > ?
+    UNION ALL SELECT s.tenant_id FROM slug_redirects r LEFT JOIN sites s ON s.id = r.site_id WHERE r.slug = ? AND r.hold_until > ?`;
+  const ownerBinds = [slug, now, slug, now, operator.tenantId];
+  const foreign = `EXISTS (SELECT 1 FROM (${owners}) WHERE tenant_id IS NOT ?)`;
+  const held = await dc.env.DB.prepare(`SELECT COUNT(*) AS count, MAX(tenant_id IS NOT ?) AS denied FROM (${owners})`)
+    .bind(operator.tenantId, slug, now, slug, now)
+    .first<{ count: number; denied: number | null }>();
+  if (held?.denied) throw denied();
+  if (!held?.count) {
     throw notFound("slug_not_held", `No hold on "${slug}" to release.`, "Held names are freed names waiting out their hold; live, expired and never-used names need no release.");
   }
-  // One batch: the audit row for a redirect-only release is stamped at INSERT
-  // (so the UPDATE below skips it), conditioned on the pre-batch state.
-  const auditId = newId("hold");
-  const [, dropped, stamped] = await dc.env.DB.batch([
-    dc.env.DB.prepare(
-      `INSERT INTO slug_tombstones (id, slug, tenant_id, site_id, chosen, hold_until, reason, created_at, released_at, release_reason, released_by)
-       SELECT ?, ?, NULL, ?, 0, ?, 'rename', ?, ?, ?, ?
-       WHERE EXISTS (SELECT 1 FROM slug_redirects WHERE slug = ?)
-         AND NOT EXISTS (SELECT 1 FROM slug_tombstones WHERE slug = ? AND released_at IS NULL)`,
-    ).bind(auditId, slug, `released:${slug}`, now, now, now, reason, operator.memberId, slug, slug),
-    dc.env.DB.prepare("DELETE FROM slug_redirects WHERE slug = ?").bind(slug),
-    dc.env.DB.prepare("UPDATE slug_tombstones SET released_at = ?, release_reason = ?, released_by = ? WHERE slug = ? AND released_at IS NULL").bind(
-      now,
-      reason,
-      operator.memberId,
-      slug,
-    ),
-  ]);
+  // Audit and release are atomic; even a changed redirect owner cannot pass
+  // the transaction fence or be touched by a tenant's release statements.
+  let results: D1Result[];
+  try {
+    results = await dc.env.DB.batch([
+      dc.env.DB.prepare(`SELECT CASE WHEN ${foreign}
+        THEN json_extract('{}', 'dropway_release_forbidden') ELSE 1 END`).bind(...ownerBinds),
+      dc.env.DB.prepare(
+        `INSERT INTO slug_tombstones (id, slug, tenant_id, site_id, chosen, hold_until, reason, created_at, released_at, release_reason, released_by)
+         SELECT ?, r.slug, s.tenant_id, r.site_id, r.chosen, r.hold_until, 'rename', ?, ?, ?, ?
+         FROM slug_redirects r JOIN sites s ON s.id = r.site_id
+         WHERE r.slug = ? AND r.hold_until > ? AND s.tenant_id IS ?
+           AND NOT EXISTS (SELECT 1 FROM slug_tombstones WHERE slug = ? AND released_at IS NULL AND hold_until > ?)`,
+      ).bind(newId("hold"), now, now, reason, operator.memberId, slug, now, operator.tenantId, slug, now),
+      dc.env.DB.prepare(`DELETE FROM slug_redirects WHERE slug = ? AND hold_until > ?
+        AND EXISTS (SELECT 1 FROM sites WHERE id = slug_redirects.site_id AND tenant_id IS ?)`)
+        .bind(slug, now, operator.tenantId),
+      dc.env.DB.prepare(`UPDATE slug_tombstones SET released_at = ?, release_reason = ?, released_by = ?
+        WHERE slug = ? AND released_at IS NULL AND hold_until > ? AND tenant_id IS ?`)
+        .bind(now, reason, operator.memberId, slug, now, operator.tenantId),
+    ]);
+  } catch (error) {
+    if (String(error).includes("JSON path") && String(error).includes("dropway_release_forbidden")) throw denied();
+    throw error;
+  }
+  const [, , dropped, stamped] = results;
   const redirectsReleased = Number(dropped?.meta.changes ?? 0);
   const holdsReleased = Number(stamped?.meta.changes ?? 0);
   if (redirectsReleased === 0 && holdsReleased === 0) {

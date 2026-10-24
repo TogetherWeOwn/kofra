@@ -9,7 +9,7 @@ import { dropLive, refreshLive } from "./live";
 import { emit, meter } from "./events";
 import { requireCapability, requireQuota, quotaExceeded } from "./policy";
 import { getUsage, incrementalBytes, PROJECTED_STORAGE_SQL, usageStatements } from "./usage";
-import { atomicWrite, siteSlugError } from "./atomic-write";
+import { assertSiteDeletionState, atomicWrite, siteDeletionStateChanged, siteSlugError } from "./atomic-write";
 import { checkNameAvailable, convertRedirectsStatements, insertTombstone, reclaimTombstone } from "./slug-holds";
 
 export interface SiteRow {
@@ -389,14 +389,22 @@ export async function deleteSite(dc: DropwayContext, p: Principal, slug: string)
         insertTombstone(dc, { slug: site.slug, tenantId: site.tenant_id, siteId: site.id, chosen: site.slug_chosen === 1, holdUntil, reason: "delete", createdAt: now, deletedAt: now }),
         ...convertRedirectsStatements(dc, { siteId: site.id, tenantId: site.tenant_id, reason: "delete", now, deletedAt: now }),
       ];
-  const [deleted] = await dc.env.DB.batch([
-    dc.env.DB.prepare(`UPDATE sites SET deleted_at = ?, deleted_slug = slug, slug = ?, claim_token_hash = NULL
-      WHERE id = ? AND deleted_at IS NULL
-        AND NOT EXISTS (SELECT 1 FROM transfers WHERE site_id = sites.id AND legal_hold <> 0)`)
-      .bind(now, `~deleted~${site.id}`, site.id),
-    ...holdStatements,
-    ...usageStatements(dc, site.tenant_id),
-  ]);
+  let results: D1Result[];
+  try {
+    results = await dc.env.DB.batch([
+      assertSiteDeletionState(dc, site),
+      dc.env.DB.prepare(`UPDATE sites SET deleted_at = ?, deleted_slug = slug, slug = ?, claim_token_hash = NULL
+        WHERE id = ? AND deleted_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM transfers WHERE site_id = sites.id AND legal_hold <> 0)`)
+        .bind(now, `~deleted~${site.id}`, site.id),
+      ...holdStatements,
+      ...usageStatements(dc, site.tenant_id),
+    ]);
+  } catch (error) {
+    if (siteDeletionStateChanged(error)) throw conflict("site_changed", "The site changed while preparing its deletion.", "Reload the site and retry deleting its current name.");
+    throw error;
+  }
+  const [, deleted] = results;
   if (!deleted?.meta.changes) throw conflict("transfer_conflict", "This delivery is held or no longer available.", "Release the hold before deleting it; revocation remains available.");
   await dropLive(dc, site.slug);
   emit(dc, "onDelete", { site: { id: site.id, slug: site.slug, tenantId: site.tenant_id, url: siteUrl(dc, site.slug) }, principal: p, reason: "api", at: now });

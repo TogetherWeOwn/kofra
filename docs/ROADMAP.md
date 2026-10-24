@@ -674,8 +674,12 @@ planned there — coordinate with the R-50 card). Depends: none.
   chosen names for 12 months, generated names for 90 days (config). Another tenant creating or
   renaming to a held name gets 409 `slug_reserved`; the same tenant may reclaim it. Database triggers
   refuse cross-tenant acquisition inside the write batch, so races cannot hijack a held name.
-- A hold ends early only by operator release (`release_slug`, admin scope) with a required reason and
-  confirm; the released rows are the audit trail. Anonymous expiries tombstone with no owner, so only
-  an operator release frees them early.
+- A hold ends early only with a reason and audit record. `release_slug` requires an unrestricted
+  admin key of the holding tenant plus confirm; tenant admins cannot release foreign or ownerless
+  holds. Cross-tenant trademark disputes and anonymous expiries use the instance operator's audited
+  database procedure in `docs/SELF_HOST.md`, never tenant-grantable API authority.
+- Delete/expiry assert the selected site's identity, name, ownership and expiry inside the batch;
+  stale API deletes return 409 `site_changed`, and cleanup skips changed rows until its next run.
+  Expired aliases are removed, not converted into fresh holds.
 - A deleted version's `<slug>--v<N>` answers 410 in both modes, never another site's bytes; a
   renamed-away version address 308s to the new name. Live version previews stay R-13's to serve.
