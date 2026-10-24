@@ -164,7 +164,7 @@ pass extra viewers in `createDropway({ viewers })`; they run first.
 | `/dashboard/publish` | Drag-and-drop publish: folder, files or a zip |
 | `/dashboard/keys` | Create and revoke scoped API keys |
 | `/dashboard/settings` | Account, members, instance configuration, `uiSlots.settingsSections` |
-| `/v/:slug/*path` (`/view/...` redirects) | File browser: tree, view tabs, and the file in a sandboxed iframe on the sites origin |
+| `/v/:slug/*path` (`/view/...` redirects) | File browser: tree, view tabs, and the file in a sandboxed iframe on the sites origin. The tree combines a case-insensitive path filter with the manifest file kind (All by default); the count covers loaded files only, matching ancestors stay discoverable, and Clear restores All plus an empty path filter without changing the displayed file |
 
 Pages are server-rendered shells. One first-party script,
 `/__dropway/ui/app-<hash>.js`, fills in data from the public REST API, using the

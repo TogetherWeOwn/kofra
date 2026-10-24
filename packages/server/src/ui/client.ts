@@ -1758,22 +1758,79 @@ export function dropwayClient() {
     }
     var smallSite = manifest.files.length <= 40;
     var filter = h("input", { class: "dw-input", type: "search", placeholder: "Filter files", "aria-label": "Filter files" });
-    var treeBox = h("div", { class: "dw-treebox" }, renderNode(buildTree(manifest.files), "", 0));
-    filter.addEventListener("input", function () {
-      var q = filter.value.trim().toLowerCase();
-      $$("a[data-path]", treeBox).forEach(function (a) {
-        a.parentNode.hidden = q && a.getAttribute("data-path").toLowerCase().indexOf(q) < 0;
-      });
-      if (q) $$("details", treeBox).forEach(function (x) { x.open = true; });
+    // Display names for the manifest's server-derived kinds (mirrors KIND_LABELS
+    // in @dropway/core). This labels values; it never classifies files itself.
+    var KIND_LABELS = {
+      html: "HTML page", markdown: "Markdown", image: "Image", svg: "SVG image", pdf: "PDF document",
+      video: "Video", audio: "Audio", json: "JSON", csv: "Table", code: "Code", text: "Text",
+      notebook: "Jupyter notebook", model3d: "3D model", font: "Font", archive: "Archive",
+      wasm: "WebAssembly", binary: "Binary file",
+    };
+    function kindLabel(kind) {
+      if (KIND_LABELS[kind]) return KIND_LABELS[kind];
+      var words = String(kind).replace(/[_-]+/g, " ").trim();
+      return words ? words.charAt(0).toUpperCase() + words.slice(1) : String(kind);
+    }
+    var kinds = [];
+    manifest.files.forEach(function (f) {
+      if (f && f.kind && kinds.indexOf(f.kind) < 0) kinds.push(f.kind);
     });
+    kinds.sort();
+    var kindOptions = [h("option", { value: "", text: "All" })];
+    kinds.forEach(function (k) {
+      kindOptions.push(h("option", { value: k, text: kindLabel(k) }));
+    });
+    var kindSel = h("select", { id: "dw-kind", class: "dw-select", "aria-label": "File kind" }, kindOptions);
+    var reset = h("button", { type: "button", class: "dw-btn small", text: "Clear" });
+    var matchCount = h("span", { class: "dw-small dw-muted", role: "status", text: "" });
+    var emptyNote = h("div", { class: "dw-tree-note", text: "", hidden: true });
+    var treeBox = h("div", { class: "dw-treebox" }, renderNode(buildTree(manifest.files), "", 0));
+    function applyFilter() {
+      var q = filter.value.trim().toLowerCase();
+      var kind = kindSel.value;
+      var filtering = !!(q || kind);
+      var total = manifest.files.length;
+      var matching = 0;
+      $$("a[data-path]", treeBox).forEach(function (a) {
+        var show = (!q || a.getAttribute("data-path").toLowerCase().indexOf(q) >= 0) && (!kind || a.getAttribute("data-kind") === kind);
+        a.parentNode.hidden = !show;
+        if (show) matching++;
+      });
+      // Innermost branches first, so each parent sees its children's settled state.
+      $$("details", treeBox).reverse().forEach(function (x) {
+        var hasMatch = $$("a[data-path]", x).some(function (a) {
+          return !a.parentNode.hidden;
+        });
+        x.parentNode.hidden = filtering && !hasMatch;
+        if (filtering && hasMatch) x.open = true;
+      });
+      matchCount.textContent = matching + " of " + plural(total, "file");
+      emptyNote.hidden = matching > 0;
+      emptyNote.textContent = total === 0 ? "No files in this version" : "No matching files";
+    }
+    filter.addEventListener("input", applyFilter);
+    kindSel.addEventListener("change", applyFilter);
+    reset.addEventListener("click", function () {
+      filter.value = "";
+      kindSel.value = "";
+      applyFilter();
+    });
+    applyFilter();
     clear(tree);
     add(
       tree,
       h("div", { class: "dw-tree-head" }, h("a", { class: "dw-title", href: "/dashboard/sites/" + encodeURIComponent(slug), text: slug }), h("span", { class: "dw-small dw-muted", text: manifest.version ? "v" + manifest.version.number + " · " + plural(manifest.files.length, "file") : "No live version" })),
       filter,
+      h("label", { class: "dw-label", for: "dw-kind", text: "File kind" }),
+      kindSel,
+      h("div", { class: "dw-row" }, reset, matchCount),
+      emptyNote,
       treeBox,
     );
     go(current, mode, false);
+    // Push entries carry {p, mode}; record the same for the loaded entry so
+    // Back restores the prior file and view mode instead of losing the mode.
+    history.replaceState({ p: current, mode: mode }, "");
     var cur = $("a[aria-current]", tree);
     if (cur) cur.scrollIntoView({ block: "nearest" });
   };
