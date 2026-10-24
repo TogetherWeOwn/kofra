@@ -296,10 +296,28 @@ export interface ConnectSection {
   snippets: ConnectSnippet[];
 }
 
+/** Client-specific JSON shared by the home page and both /connect formats. */
+export function mcpJsonSnippets(origin: string): ConnectSnippet[] {
+  const url = `${origin}/mcp`;
+  return [
+    {
+      title: "Cursor (.cursor/mcp.json or ~/.cursor/mcp.json)",
+      code: JSON.stringify({ mcpServers: { kofra: { url, headers: { Authorization: "Bearer ${env:KOFRA_API_KEY}" } } } }, null, 2),
+    },
+    {
+      title: "VS Code (.vscode/mcp.json)",
+      code: JSON.stringify({
+        inputs: [{ type: "promptString", id: "kofra-key", description: "Kofra API key", password: true }],
+        servers: { kofra: { type: "http", url, headers: { Authorization: "Bearer ${input:kofra-key}" } } },
+      }, null, 2),
+    },
+  ];
+}
+
 /**
  * One source of truth for the /connect page and /connect.md: the same sections
  * render as HTML (app.ts) and as Markdown (connectMarkdown) so they cannot drift.
- * Every command uses the instance's own origin and `$KOFRA_API_KEY`.
+ * Commands use the instance's own origin and `$KOFRA_API_KEY`; VS Code prompts for the key.
  */
 export function connectSections(origin: string): ConnectSection[] {
   const mcp = `${origin}/mcp`;
@@ -316,13 +334,10 @@ export function connectSections(origin: string): ConnectSection[] {
           title: "Codex (~/.codex/config.toml)",
           code: `[mcp_servers.kofra]\nurl = "${mcp}"\nbearer_token_env_var = "KOFRA_API_KEY"`,
         },
-        {
-          title: "Cursor, VS Code and other clients",
-          code: JSON.stringify({ mcpServers: { kofra: { type: "http", url: mcp, headers: { Authorization: "Bearer ${KOFRA_API_KEY}" } } } }, null, 2),
-        },
+        ...mcpJsonSnippets(origin),
         {
           title: "Any MCP client (add-mcp)",
-          code: `npx add-mcp ${mcp}`,
+          code: `npx add-mcp ${mcp} --header "Authorization: Bearer $KOFRA_API_KEY"`,
         },
       ],
     },
