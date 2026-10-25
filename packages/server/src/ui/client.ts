@@ -1533,7 +1533,9 @@ export function dropwayClient() {
     var live = versions.filter(function (v) {
       return v.live;
     })[0];
-    if (live) showFiles(live);
+    var requestedVersion = new URL(location.href).searchParams.get("version");
+    var selected = requestedVersion ? versions.filter(function (v) { return v.id === requestedVersion; })[0] : live;
+    if (selected) showFiles(selected);
     else filesSection.hidden = true;
   };
 

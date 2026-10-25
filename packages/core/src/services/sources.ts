@@ -12,6 +12,8 @@ import { createDeploy, finalizeDeploy, parseDeployOptions, versionConflict, type
 import { discardNewSite, findSite, getVersion, serializeSite, serializeVersion, type SiteRow, type VersionRow } from "./sites";
 import { resolvePublishTarget } from "./publish";
 import { getSiteByRef, resolveSiteSlug, resolveVersionRef } from "./site-ops";
+import { createUploadToken, PENDING_VERSION_TTL_MS } from "./upload-tokens";
+export { PENDING_VERSION_TTL_MS } from "./upload-tokens";
 
 /**
  * File sources for agents (SPEC 9.2 FileInput): each file names exactly one of
@@ -50,13 +52,11 @@ export interface ResolvedFile {
 /** Inline caps per file (SPEC 9.2). Bigger files: url sources, or sha256 + upload links. */
 export const INLINE_UTF8_MAX_BYTES = 1024 * 1024;
 export const INLINE_BASE64_MAX_BYTES = 256 * 1024;
-export const URL_FETCH_MAX_BYTES = 25 * 1024 * 1024;
+export const URL_FETCH_MAX_BYTES = 100 * 1024 * 1024;
 export const URL_FETCH_TIMEOUT_MS = 30_000;
 export const URL_FETCH_MAX_REDIRECTS = 3;
 /** Each URL source is one subrequest; Workers allow 50 per request on the free plan. */
 export const MAX_URL_SOURCES = 20;
-/** Pending versions are removed by the hourly cleanup after this long. */
-export const PENDING_VERSION_TTL_MS = 3600_000;
 
 type FieldProblem = { field: string; problem: string };
 
@@ -257,6 +257,8 @@ export async function resolveFileInputs(
     | { kind: "copy"; path: string; from: { site?: string; version?: string; path?: string }; contentType?: string };
   const plans: Plan[] = [];
   let urlCount = 0;
+  let inlineUtf8Bytes = 0;
+  let inlineBase64Bytes = 0;
 
   inputs.forEach((raw, i) => {
     const f = `${field}[${i}]`;
@@ -265,9 +267,10 @@ export async function resolveFileInputs(
       return;
     }
     const r = raw as Record<string, unknown>;
+    const rawPath = stringField(r.path ?? "", `${field}.${i}.path`);
     let path: string;
     try {
-      path = normaliseFilePath(String(r.path ?? ""));
+      path = normaliseFilePath(rawPath);
     } catch (e) {
       problems.push({ field: `${f}.path`, problem: (e as ApiError).message });
       return;
@@ -275,7 +278,7 @@ export async function resolveFileInputs(
     if (path.startsWith("__dropway/")) problems.push({ field: `${f}.path`, problem: "paths under __dropway/ are reserved" });
     if (seen.has(path)) problems.push({ field: `${f}.path`, problem: `"${path}" appears more than once` });
     seen.add(path);
-    const contentType = typeof r.contentType === "string" && r.contentType ? r.contentType : undefined;
+    const contentType = r.contentType == null ? undefined : stringField(r.contentType, `${field}.${i}.contentType`);
     const sources = (["content", "url", "sha256", "copyFrom"] as const).filter((k) => r[k] !== undefined && r[k] !== null);
     if (sources.length !== 1) {
       problems.push({ field: f, problem: sources.length ? `has ${sources.join(" and ")}; give exactly one source` : "needs one source: content, url, sha256 or copyFrom" });
@@ -289,11 +292,13 @@ export async function resolveFileInputs(
       const bytes = enc === "base64" ? decodeBase64(r.content) : new TextEncoder().encode(r.content);
       if (!bytes) return void problems.push({ field: `${f}.content`, problem: "is not valid base64" });
       const cap = enc === "base64" ? INLINE_BASE64_MAX_BYTES : INLINE_UTF8_MAX_BYTES;
-      if (bytes.length > cap) {
+      if (enc === "base64") inlineBase64Bytes += bytes.length;
+      else inlineUtf8Bytes += bytes.length;
+      if (bytes.length > cap || inlineUtf8Bytes > 4 * INLINE_UTF8_MAX_BYTES || inlineBase64Bytes > 4 * INLINE_BASE64_MAX_BYTES) {
         throw tooLarge(
           "inline_too_large",
-          `"${path}" is ${bytes.length} bytes; inline ${enc} content is limited to ${cap} bytes per file.`,
-          "Use a url source the server can fetch, or send sha256 + size and PUT the bytes to the returned upload link (or use the CLI: npx kofra publish <dir>).",
+          `Inline ${enc} content exceeds ${cap} bytes per file or ${4 * cap} bytes per call.`,
+          "Use the CLI (npx kofra publish <dir>), a url source, or sha256 + size with the returned upload links.",
           { path, size: bytes.length, limit: cap },
         );
       }
@@ -357,7 +362,7 @@ export async function resolveFileInputs(
       if (plan.kind === "inline") {
         out[i] = { path: plan.path, size: plan.bytes.length, sha256: await sha256Hex(plan.bytes), contentType: normaliseContentType(plan.contentType, plan.path), bytes: plan.bytes, source: "inline" };
       } else if (plan.kind === "url") {
-        const got = await fetchUrlSource(plan.url, { headers: plan.headers, maxBytes: Math.min(opts.lim.maxFileBytes, URL_FETCH_MAX_BYTES), fetcher: opts.fetcher });
+        const got = await fetchUrlSource(plan.url, { headers: plan.headers, maxBytes: Math.min(opts.lim.maxFileBytes, dc.config.urlFetchMaxBytes), fetcher: opts.fetcher });
         fetchedBytes += got.bytes.length;
         if (fetchedBytes > opts.lim.oneShotMaxBytes) {
           throw tooLarge("request_too_large", `URL sources in one call may total ${opts.lim.oneShotMaxBytes} bytes.`, "Split the files across several update_site_files calls.", { limit: opts.lim.oneShotMaxBytes });
@@ -414,7 +419,8 @@ export interface UploadItem {
 
 const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
-function uploadItemsFor(dc: DropwayContext, entries: Array<{ path: string; sha256: string; size: number; contentType: string }>, missing: Iterable<string>): UploadItem[] {
+async function uploadItemsFor(dc: DropwayContext, version: VersionRow, entries: Array<{ path: string; sha256: string; size: number; contentType: string }>, missing: Iterable<string>): Promise<UploadItem[]> {
+  const authorization = `Bearer ${await createUploadToken(dc, version)}`;
   const bySha = new Map<string, Array<{ path: string; size: number; contentType: string }>>();
   for (const e of entries) bySha.set(e.sha256, [...(bySha.get(e.sha256) ?? []), e]);
   const origin = appOrigin(dc);
@@ -431,8 +437,8 @@ function uploadItemsFor(dc: DropwayContext, entries: Array<{ path: string; sha25
       size: es[0]!.size,
       method: "PUT",
       url,
-      headers: { "Content-Type": ct },
-      curl: `curl -fsS -X PUT ${shellQuote(url)} -H "Authorization: Bearer $KOFRA_API_KEY" -H ${shellQuote(`Content-Type: ${ct}`)} --data-binary @${shellQuote(es[0]!.path)}`,
+      headers: { "Content-Type": ct, Authorization: authorization },
+      curl: `curl -fsS -X PUT ${shellQuote(url)} -H ${shellQuote(`Authorization: ${authorization}`)} -H ${shellQuote(`Content-Type: ${ct}`)} --data-binary @${shellQuote(es[0]!.path)}`,
     });
   }
   return items;
@@ -509,7 +515,7 @@ async function completeVersion(
     upload = {
       versionId: version.id,
       expiresAt: new Date(version.created_at + PENDING_VERSION_TTL_MS).toISOString(),
-      items: uploadItemsFor(dc, manifest, pendingShas),
+      items: await uploadItemsFor(dc, version, manifest, pendingShas),
       finalize,
     };
     next.push(finalize);
@@ -518,9 +524,11 @@ async function completeVersion(
   }
   return {
     status,
+    unchanged: status === "unchanged",
     url: siteUrl(dc, fresh.slug),
+    versionUrl: `${appOrigin(dc)}/dashboard/sites/${encodeURIComponent(fresh.slug)}?version=${encodeURIComponent(version!.id)}`,
     slug: fresh.slug,
-    site: serializeSite(dc, fresh, live),
+    site: { id: fresh.id, ...serializeSite(dc, fresh, live) },
     version: versionOut,
     files: {
       total: files.length,
@@ -541,6 +549,8 @@ export interface PublishSourcesInput {
   files: unknown;
   /** Existing site to replace (slug, id or URL), or the slug for a new site. Omit for a generated name. */
   site?: unknown;
+  /** Legacy REST JSON alias for a site slug. */
+  slug?: unknown;
   title?: unknown;
   description?: unknown;
   spa?: unknown;
@@ -564,7 +574,8 @@ export interface PublishSourcesInput {
 export async function publishSources(dc: DropwayContext, p: Principal, input: PublishSourcesInput) {
   const metadata = parseDeployOptions({ message: input.message, baseVersionId: input.baseVersionId });
   const tenantId = p.kind === "member" ? p.tenantId : null;
-  const slug = input.site === undefined || input.site === null || input.site === "" ? null : await resolveSiteSlug(dc, input.site);
+  const siteRef = input.site ?? (input.slug == null ? undefined : stringField(input.slug, "slug"));
+  const slug = siteRef === undefined || siteRef === null || siteRef === "" ? null : await resolveSiteSlug(dc, siteRef);
   // Resolve sources before creating anything, so a bad URL never leaves an empty site behind.
   let existing: SiteRow | null = null;
   if (p.kind === "claim") existing = await dc.env.DB.prepare("SELECT * FROM sites WHERE id = ? AND deleted_at IS NULL").bind(p.siteId).first<SiteRow>();
@@ -595,6 +606,10 @@ export async function publishSources(dc: DropwayContext, p: Principal, input: Pu
     created: target.created,
     ...(target.claimToken
       ? {
+          // Retain the original JSON publish credential fields during the v2 transition.
+          claimToken: target.claimToken,
+          claimUrl: `${appOrigin(dc)}/claim?slug=${site.slug}#token=${target.claimToken}`,
+          expiresAt: site.expires_at ? new Date(site.expires_at).toISOString() : null,
           claim: {
             url: `${appOrigin(dc)}/claim?slug=${site.slug}#token=${target.claimToken}`,
             token: target.claimToken,
@@ -739,7 +754,7 @@ export async function finalizeVersionByRef(dc: DropwayContext, p: Principal, sit
       replayed: result.replayed,
       url: siteUrl(dc, fresh.slug),
       slug: fresh.slug,
-      site: serializeSite(dc, fresh, live),
+      site: { id: fresh.id, ...serializeSite(dc, fresh, live) },
       version: serializeVersion(result.version, fresh.current_version_id),
       warnings: result.warnings,
       next: [] as NextStep[],
@@ -750,7 +765,7 @@ export async function finalizeVersionByRef(dc: DropwayContext, p: Principal, sit
       const { results } = await dc.env.DB.prepare("SELECT path, sha256, size, content_type FROM version_files WHERE version_id = ?")
         .bind(version.id)
         .all<{ path: string; sha256: string; size: number; content_type: string }>();
-      const items = uploadItemsFor(dc, results.map((r) => ({ path: r.path, sha256: r.sha256, size: r.size, contentType: r.content_type })), missing);
+      const items = await uploadItemsFor(dc, version, results.map((r) => ({ path: r.path, sha256: r.sha256, size: r.size, contentType: r.content_type })), missing);
       throw new ApiError(409, "missing_blobs", e.message, "PUT the raw bytes of each item in details.uploads to its url (same Authorization header), then call finalize_version again.", {
         missing: [...missing],
         uploads: items,

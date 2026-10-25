@@ -94,12 +94,12 @@ What Kofra is not:
 |---|---|---|---|
 | PUB-01 | One-call publish `POST /api/v1/publish`: multipart (`-F path=@file`), a `.zip` body, one raw file, or JSON with inline files. Creates a site or, with `?slug=`/`site`, replaces all files of an existing one | P0 | Done |
 | PUB-02 | Manifest publish: send `{path, size, sha256, contentType?}` for every file; the server answers with only the hashes it still needs; upload those; finalize atomically | P0 | Done (as `/deploys`; renamed `/versions` in R-05) |
-| PUB-03 | File sources in JSON and MCP, one per file: `content` (utf8), `content`+`encoding:"base64"` (small binaries), `url` (server fetches it, SSRF-guarded), `sha256`+`size` (already stored), `copyFrom` (another site, version or path) | P0 | R-04 |
-| PUB-04 | Upload links: the response lists `PUT <app>/api/v1/blobs/<sha256>` targets with a ready `curl` line and a short-lived upload token scoped to the pending version. One egress host; no R2 credentials needed | P0 | R-04 |
+| PUB-03 | File sources in JSON and MCP, one per file: `content` (utf8), `content`+`encoding:"base64"` (small binaries), `url` (server fetches it, SSRF-guarded), `sha256`+`size` (already stored), `copyFrom` (another site, version or path) | P0 | Implemented (R-04); deployment verification pending |
+| PUB-04 | Upload links: the response lists `PUT <app>/api/v1/blobs/<sha256>` targets with a ready `curl` line and a short-lived upload token scoped to the pending version. One egress host; no R2 credentials needed | P0 | Implemented for JSON/MCP file sources (R-04); deployment verification pending |
 | PUB-05 | Byte-identical republish returns `status: "unchanged"` and mints no version; settings in the same call still apply | P0 | Done |
 | PUB-06 | Stale-write protection: `baseVersionId` returns `409 version_conflict` naming the live version, who published it and when | P0 | Done |
 | PUB-07 | Partial update `PATCH /api/v1/sites/{site}/files` (`update_site_files`): write, delete and move paths relative to a base version; everything else carries over by hash | P0 | R-05 |
-| PUB-08 | `Idempotency-Key` on every create (24 h); finalize, restore and delete are idempotent | P0 | Partial (finalize replay done); R-04 |
+| PUB-08 | `Idempotency-Key` on every create (24 h); finalize, restore and delete are idempotent | P0 | JSON publish and registered keyed writes use atomic D1 replay; legacy raw/multipart/ZIP publishing is not keyed. Finalize replay done |
 | PUB-09 | Client attribution: `X-Kofra-Client: <harness>/<detail>` header or MCP `clientInfo`, stored per version | P0 | Done (header); MCP in R-06 |
 | PUB-10 | Version message (like a commit message, up to 200 chars) | P0 | Done |
 | PUB-11 | Pending versions expire after 1 hour; finalizing with missing bytes returns `409 missing_blobs` with fresh upload links | P0 | Partial (expiry done); R-05 |
@@ -163,7 +163,7 @@ Full matrix in section 10.
 | ID-02 | Members with roles `owner`, `admin`, `member` | P1 | Done (REST); tools R-25; dashboard R-22 |
 | ID-03 | Scoped API keys: named, scopes, optional single-site restriction, optional path prefix, optional expiry, last-used time; shown once, stored as SHA-256; 50 per member | P0 | Done (new scopes R-17; path prefix R-32) |
 | ID-04 | Claim tokens (`dwc_`) for anonymous sites | P0 | Done |
-| ID-05 | Upload tokens (`dwu_`) scoped to one pending version | P0 | R-04 |
+| ID-05 | Upload tokens (`dwu_`) scoped to one pending version | P0 | Implemented (R-04), HMAC and live manifest/expiry checks; deployment verification pending |
 | ID-06 | Dashboard sign-in: one-time login links minted by the owner, an agent or the CLI; email codes when an email binding exists; optional Cloudflare Access identity; revocable sessions | P1 | R-21 |
 | ID-07 | OAuth 2.1 for MCP and the CLI (Client ID Metadata Documents, Dynamic Client Registration for older clients, PKCE loopback, device code for headless machines), step-up scopes | P1 | R-24 |
 | ID-08 | Audit log of every write (who, what, when, from which client) | P2 | R-38 |
@@ -718,7 +718,7 @@ run before core viewers. Section 10 lists core viewers.
 
 ### 6.9 Testing kit and contract (R-01 done, R-18 remaining)
 
-- `@dropway/server` exports `EXTENSION_API_VERSION = 3`; extension API changes update that value and
+- `@dropway/server` exports `EXTENSION_API_VERSION = 4`; extension API changes update that value and
   the Extension API section in `CHANGELOG.md`.
 - `test/extension-contract.test.ts` builds `createDropway()` with fake adapters and exercises every
   existing point: identity and scopes, policy limits and refusals, all five metering event kinds,
@@ -765,19 +765,19 @@ Never edit an applied migration. Each file below is one roadmap item's migration
 in merge order.
 
 ```sql
--- 0002_publish_v2.sql (R-04, R-05, R-17)
+-- 0005_publish_idempotency.sql (R-04; 0002-0004 already contain other features)
 CREATE TABLE idempotency_keys (
-  scope            TEXT NOT NULL,          -- "k:<api key id>" | "m:<member id>" | "ip:<ip hash>"
-  key              TEXT NOT NULL,
-  request_hash     TEXT NOT NULL,          -- SHA-256 of method, path and canonical body
-  status           TEXT NOT NULL CHECK (status IN ('in_progress', 'done')),
-  response_status  INTEGER,
-  response_json    TEXT,
-  created_at       INTEGER NOT NULL,
-  expires_at       INTEGER NOT NULL,       -- created_at + 24 h
-  PRIMARY KEY (scope, key)
-) WITHOUT ROWID;
-CREATE INDEX idempotency_expires ON idempotency_keys(expires_at);
+  key_hash TEXT PRIMARY KEY,               -- hash of authorization identity, operation and key
+  input_hash TEXT NOT NULL,                -- canonical JSON request hash
+  owner_token TEXT NOT NULL,               -- fences completion/failure to the claim owner
+  state TEXT NOT NULL CHECK (state IN ('pending', 'done')),
+  result_json TEXT,
+  expires_at INTEGER NOT NULL              -- 24-hour key lifetime
+);
+CREATE INDEX idempotency_keys_expires ON idempotency_keys(expires_at);
+
+-- Remaining schema sketch below belongs to later roadmap items (R-05/R-17).
+-- It is not part of migration 0005.
 
 ALTER TABLE versions ADD COLUMN config_json TEXT;               -- parsed _redirects, _headers, .dropway/*.json
 ALTER TABLE versions ADD COLUMN warnings_json TEXT;

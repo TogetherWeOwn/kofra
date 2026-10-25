@@ -76,6 +76,7 @@ export const ERROR_CODES: Readonly<Record<string, ErrorCode>> = {
   slug_taken: { status: 409, retryable: false, hint: "Pick another slug, or omit it when creating a site to get a generated name." },
   version_conflict: { status: 409, retryable: false, hint: "Call get_site, reconcile the change, and retry using its live version ID as baseVersionId." },
   version_is_live: { status: 409, retryable: false, hint: "Restore or publish another version before deleting this one." },
+  upload_expired: { status: 410, retryable: false, hint: "Publish again for fresh upload links; stored files are reused." },
   length_required: { status: 411, retryable: false, hint: "Send Content-Length and raw file bytes, without multipart or chunked encoding." },
   file_too_large: { status: 413, retryable: false, hint: "Compress or split the file to fit the per-file limit; for a fetch cap, use SHA-256/size and an upload link." },
   inline_too_large: { status: 413, retryable: false, hint: "Use a URL source or SHA-256/size with an upload link; local directories can use the CLI." },

@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Publish v2
+
+- REST JSON publishing now uses the same flat file sources as MCP: content,
+  public HTTPS URLs, SHA-256/size and copyFrom. Results carry status, an owner
+  dashboard versionUrl, file counters, warnings and next calls. Multipart, ZIP
+  and raw-body responses remain compatible; JSON retains slug, unchanged and
+  anonymous claimToken aliases.
+- Missing bytes get ready curl commands and HMAC-signed dwu_ upload capabilities
+  scoped to one pending version for one hour. They cannot read files, publish
+  or finalize versions, and stop working after the version is finalized/deleted.
+- D1 atomically claims authorization-scoped idempotency keys for JSON publishing
+  and existing keyed operations: replay equal input, reject changed input with
+  422 and concurrent duplicates with retryable 409. Migration 0005 adds the
+  records; interrupted calls with an unknown outcome retain their claim until
+  the 24-hour expiry rather than risking a duplicate side effect.
+- Enforce decoded inline caps per file/call (UTF-8: 1/4 MiB; base64: 256 KiB/1 MiB)
+  with CLI/upload-links remediation. URL_FETCH_MAX_BYTES configures URL sources
+  (default 100 MiB; file and one-shot caps still apply). The MCP wire cap is 8 MiB
+  so requests just above the decoded inline budget get actionable tool errors.
+- Bump EXTENSION_API_VERSION to 4: Principal adds an upload-only variant
+  (versionId, expiresAt in epoch milliseconds, ip), and DropwayConfig adds
+  urlFetchMaxBytes. Custom identity/policy adapters must keep upload principals
+  restricted to blob uploads. Existing member/claim permissions are unchanged.
+
 ### Error envelope v2
 
 - Add retryable, retryAfterSeconds, docs and structured next calls to ApiError,

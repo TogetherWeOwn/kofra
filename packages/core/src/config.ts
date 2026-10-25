@@ -91,6 +91,8 @@ export interface DropwayConfig {
   /** false (open source): exactly one tenant, created by POST /api/v1/setup. */
   multiTenant: boolean;
   anonymous: AnonymousConfig;
+  /** Maximum bytes downloaded for a URL file source. */
+  urlFetchMaxBytes: number;
   /** Default caps for API-key publishes. */
   limits: Limits;
   /** Admin-set resource quotas. null means unlimited, zero refuses new resources. */
@@ -132,6 +134,7 @@ export interface DropwayVars extends Partial<Record<`QUOTA_${Uppercase<QuotaKey>
   MAX_FILES?: string;
   MAX_SITE_BYTES?: string;
   ONESHOT_MAX_BYTES?: string;
+  URL_FETCH_MAX_BYTES?: string;
   SLUG_REDIRECT_DAYS?: string;
   SLUG_HOLD_CHOSEN_DAYS?: string;
   SLUG_HOLD_GENERATED_DAYS?: string;
@@ -234,6 +237,7 @@ export function resolveConfig(vars: DropwayVars, overrides: ConfigOverrides = {}
   };
   return {
     instanceName: overrides.instanceName ?? (vars.INSTANCE_NAME?.trim() || "Kofra"),
+    urlFetchMaxBytes: overrides.urlFetchMaxBytes ?? num(vars.URL_FETCH_MAX_BYTES, 100 * MB),
     appOrigin,
     legacyAppOrigins,
     legacyDeprecatedAt: overrides.legacyDeprecatedAt ?? unixSeconds(vars.LEGACY_DEPRECATED_AT),

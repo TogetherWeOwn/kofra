@@ -1,4 +1,4 @@
-import { HTTP_MANIFEST_ENTRY, HTTP_DEPLOY, HTTP_PUBLISH_RESULT } from "./http-schemas";
+import { HTTP_MANIFEST_ENTRY, HTTP_DEPLOY, HTTP_PUBLISH_RESULT, HTTP_FILE_INPUT, HTTP_AGENT_PUBLISH_RESULT } from "./http-schemas";
 import type { Context } from "hono";
 import {
   appOrigin,
@@ -17,6 +17,10 @@ import {
   notFound,
   parsePublishRequest,
   publishFiles,
+  publishSources,
+  idempotencyScope,
+  validateIdempotencyKey,
+  withIdempotency,
   readBlob,
   recoverOwnerKey,
   setupInstance,
@@ -178,25 +182,14 @@ export const HTTP_OPERATIONS = [
     scopes: ["sites:write"],
     summary: "Publish files in one call and get a live URL",
     description:
-      'Accepts multipart/form-data (field name = file path, e.g. -F "assets/app.js=@dist/assets/app.js"; or field `files[]` with filenames; a single .zip is unpacked), application/json ({"files":[{"path","content","encoding?":"base64"}]}), a .zip body, or one raw file body named by ?path= or X-Kofra-Path. Settings and `slug` may be sent as form fields, JSON fields or query parameters. With an existing `slug` you own, publishes a new version of it. Byte-identical content returns unchanged:true. The MCP tool publish_site also accepts url, sha256 and copyFrom file sources.',
+      'Accepts multipart/form-data (field name = file path, e.g. -F "assets/app.js=@dist/assets/app.js"; or field `files[]` with filenames; a single .zip is unpacked), application/json ({"files":[{"path","content","encoding?":"base64"}]}), a .zip body, or one raw file body named by ?path= or X-Kofra-Path. Settings and `slug` may be sent as form fields, JSON fields or query parameters. With an existing `slug` you own, publishes a new version of it. Byte-identical content returns unchanged:true. JSON uses the same flat content, url, sha256+size and copyFrom sources as MCP publish_site, and returns PublishResult with versionUrl, counters and upload capabilities. Idempotency-Key replays JSON requests. Multipart, ZIP and raw bodies retain their original response shape.',
     input: fromSchema({
       type: "object",
       required: ["files"],
       properties: {
-        slug: { type: "string" },
-        files: {
-          type: "array",
-          items: {
-            type: "object",
-            required: ["path", "content"],
-            properties: {
-              path: { type: "string" },
-              content: { type: "string" },
-              encoding: { enum: ["utf8", "base64"] },
-              contentType: { type: "string" },
-            },
-          },
-        },
+        slug: { type: "string", description: "Legacy alias for site." },
+        site: { type: "string", description: "Existing site ref or new slug." },
+        files: { type: "array", items: HTTP_FILE_INPUT },
         message: { type: "string" },
         baseVersionId: { type: "string" },
         title: { type: ["string", "null"], maxLength: 200 },
@@ -220,24 +213,37 @@ export const HTTP_OPERATIONS = [
         path: { type: "string" },
       },
     }),
-    output: fromSchema(HTTP_PUBLISH_RESULT),
+    output: fromSchema({ oneOf: [HTTP_AGENT_PUBLISH_RESULT, HTTP_PUBLISH_RESULT] }),
     annotations: WRITE,
     mcp: {
       exclude: "Multipart, zip and raw publishing; models use publish_site with file sources.",
     },
     http: {
-      statuses: [200, 201],
+      statuses: [200, 201, 202],
       policyId: "publish_site",
       parseInput: async (c) => {
         const dw = D(c);
         const p = P(c);
         if (p.kind === "anonymous" && !dw.config.anonymous.enabled) throw anonymousDisabled();
         const lim = await dw.adapters.policy.limits(p, { siteId: null, tenantId: p.kind === "member" ? p.tenantId : null }, dw);
-        return parsePublishRequest(dw, c.req.raw, lim.oneShotMaxBytes);
+        if (c.req.header("content-type")?.toLowerCase().startsWith("application/json")) {
+          const body = await readJson(c, lim.oneShotMaxBytes);
+          return { format: "sources" as const, body };
+        }
+        return { format: "upload" as const, input: await parsePublishRequest(dw, c.req.raw, lim.oneShotMaxBytes) };
       },
-      handler: async (c, input: Awaited<ReturnType<typeof parsePublishRequest>>) => {
-        const out = await publishFiles(D(c), P(c), input, { client: clientOf(c) });
-        return c.json(out, out.created ? 201 : 200);
+      handler: async (c, parsed: { format: "sources"; body: Record<string, unknown> } | { format: "upload"; input: Awaited<ReturnType<typeof parsePublishRequest>> }) => {
+        if (parsed.format === "upload") {
+          const out = await publishFiles(D(c), P(c), parsed.input, { client: clientOf(c) });
+          return c.json(out, out.created ? 201 : 200);
+        }
+        const body = parsed.body;
+        const query = Object.fromEntries(new URL(c.req.url).searchParams);
+        const input = { ...query, ...body };
+        const { result, replayed } = await withIdempotency(D(c), {
+          scope: idempotencyScope(P(c)), operation: "rest:publish_site", key: validateIdempotencyKey(c.req.header("idempotency-key")), input,
+        }, () => publishSources(D(c), P(c), { ...input, site: input.site, files: input.files, source: "api", client: clientOf(c) }));
+        return c.json(replayed ? { ...result, replayed: true } : result, result.status === "awaiting_upload" ? 202 : result.created ? 201 : 200);
       },
       contentTypes: ["multipart/form-data", "application/json", "application/zip", "application/octet-stream"],
     },
