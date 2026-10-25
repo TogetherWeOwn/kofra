@@ -783,7 +783,11 @@ export function dropwayClient() {
       var found = await filesFromDrop(e.dataTransfer);
       // A newer selection arrived (or a publish started) while enumerating:
       // the stale result must not replace the displayed selection.
-      if (ticket !== state.seq || state.busy) return;
+      if (state.busy) {
+        busyNotice();
+        return;
+      }
+      if (ticket !== state.seq) return;
       setItems(found.items, found.errors);
     });
     dirInput.addEventListener("change", function () {
@@ -839,6 +843,7 @@ export function dropwayClient() {
 
     async function run() {
       if (state.busy || !state.items.length || state.errors.length) return;
+      state.seq++;
       state.busy = true;
       publishBtn.disabled = true;
       setDestinationDisabled(true);
