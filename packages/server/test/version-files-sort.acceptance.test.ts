@@ -486,19 +486,6 @@ function versionFixture(id: string, number: number, live: boolean, fileCount: nu
   };
 }
 
-/** Mirror of the dashboard's bytes() formatter for size-cell assertions. */
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
-}
-
 function encodePath(p: string): string {
   return p
     .split("/")
@@ -601,6 +588,7 @@ function must<T>(v: T | null | undefined, what: string): T {
 interface Mounted {
   doc: FakeDocument;
   calls: FetchCall[];
+  clipboardWrites: string[];
   storageWrites: StorageWrite[];
   filesSection: FakeElement;
   filterInput: FakeElement;
@@ -660,6 +648,7 @@ async function mount(opts: MountOptions): Promise<Mounted> {
   session.map.set("dropway.key", "dw_test_key");
 
   const calls: FetchCall[] = [];
+  const clipboardWrites: string[] = [];
   const jsonResponse = (data: unknown, status = 200) => ({
     ok: status >= 200 && status < 300,
     status,
@@ -679,8 +668,11 @@ async function mount(opts: MountOptions): Promise<Mounted> {
       return jsonResponse({ bytes: "test-bytes" });
     }
     if (path === `${base}/files`) {
-      const files = query.includes("version=") ? (historicalFiles ?? []) : liveFiles;
-      return jsonResponse({ version: versions[0], files, total: files.length, nextCursor: null });
+      const versionId = new URLSearchParams(query).get("version") ?? "v-live";
+      const version = versions.find((v) => v.id === versionId);
+      if (!version) return jsonResponse({ error: { code: "not_found", message: "Unknown version", hint: "Select a fixture version." } }, 404);
+      const files = versionId === "v-live" ? liveFiles : historicalFiles!;
+      return jsonResponse({ version, files, total: files.length, nextCursor: null });
     }
     if (path === `${base}/versions`) return jsonResponse({ versions });
     if (path === base) return jsonResponse({ site: siteFixture(slug) });
@@ -702,7 +694,7 @@ async function mount(opts: MountOptions): Promise<Mounted> {
     sessionStorage: session,
     location: locationStub,
     history: { pushState(_a: unknown, _b: string, _c: string): void {} },
-    navigator: {},
+    navigator: { clipboard: { writeText: async (text: string) => { clipboardWrites.push(text); } } },
     fetch: fetchMock,
     Headers,
     URL: SandboxURL,
@@ -746,6 +738,7 @@ async function mount(opts: MountOptions): Promise<Mounted> {
   return {
     doc,
     calls,
+    clipboardWrites,
     storageWrites,
     filesSection,
     filterInput,
@@ -1214,7 +1207,7 @@ function readRow(tr: FakeElement): RowView {
   const pathCell = must(tds[0], "path cell");
   const kindCell = must(tds[1], "kind cell");
   const sizeCell = must(tds[2], "size cell");
-  const actions = must(tds[3], "actions cell");
+  const actions = must(tr.querySelector(".act") ?? tds[tds.length - 1], "actions cell");
   const pathLink = pathCell.querySelector("a");
   const open = actions.querySelector("a[target=_blank]");
   const downloadButton = actions.querySelectorAll("button").find((b) => b.textContent.trim() === "Download") ?? null;
@@ -1237,7 +1230,10 @@ function assertRowsMatchFixtures(m: Mounted, fixtures: ManifestFile[], live: boo
   for (const v of views) {
     const f = must(byPath.get(v.path), `fixture for row ${JSON.stringify(v.path)}`);
     expect(v.kind, `kind for ${v.path}`).toBe(f.kind);
-    expect(v.sizeText, `size text for ${v.path}`).toBe(formatBytes(f.size));
+    // textContent concatenates an optional secondary size without its visual spacing.
+    const exactBytes = /^(\d{1,3}(?:,\d{3})+|\d+) bytes?(?=$|[^a-z])/i.exec(v.sizeText);
+    expect(exactBytes, `exact byte count for ${v.path}: ${JSON.stringify(v.sizeText)}`).not.toBeNull();
+    expect(Number(exactBytes![1]!.replace(/,/g, "")), `manifest bytes for ${v.path}`).toBe(f.size);
     if (live) {
       expect(v.pathLinkHref, `path link for ${v.path}`).toBe(`/v/${slug}/${encodePath(f.path)}`);
       expect(v.openHref, `Open href for ${v.path}`).toBe(f.url);
@@ -1261,6 +1257,32 @@ describe("version-files panel harness controls", () => {
   it("renders every manifest entry with its path, kind, size and live targets", async () => {
     const m = await mount({ liveFiles: ASCII_FILES });
     assertRowsMatchFixtures(m, ASCII_FILES, true);
+  });
+
+  it("renders exact bytes even when a human-readable size would round adjacent values together", async () => {
+    const files = [manifestFile("a.bin", "binary", 1024), manifestFile("b.bin", "binary", 1025)];
+    const m = await mount({ liveFiles: files });
+    assertRowsMatchFixtures(m, files, true);
+    await createSorter(m).setSort("size", "descending");
+    expect(m.visiblePaths()).toEqual(["b.bin", "a.bin"]);
+    assertRowsMatchFixtures(m, files, true);
+  });
+
+  it("pins metadata requests to the selected immutable version for both live and historical rows", async () => {
+    const m = await mount({ liveFiles: ASCII_FILES, historicalFiles: HISTORICAL_FILES });
+    const metadataVersionIds = () => m.calls
+      .map((call) => new URL(call.url, "https://test/"))
+      .filter((url) => url.pathname === "/api/v1/sites/test-site/files")
+      .map((url) => url.searchParams.get("version"));
+    expect(metadataVersionIds()).toEqual(["v-live"]);
+    const filesButtons = m.doc.querySelectorAll("button").filter((b) => b.textContent.trim() === "Files");
+    m.click(filesButtons[1]!);
+    await m.waitFor(() => m.visiblePaths().length === HISTORICAL_FILES.length, "historical rows");
+    assertRowsMatchFixtures(m, HISTORICAL_FILES, false);
+    m.click(filesButtons[0]!);
+    await m.waitFor(() => m.visiblePaths().length === ASCII_FILES.length, "live rows again");
+    assertRowsMatchFixtures(m, ASCII_FILES, true);
+    expect(metadataVersionIds()).toEqual(["v-live", "v-old", "v-live"]);
   });
 
   it("filters by path without issuing new requests", async () => {
@@ -1553,6 +1575,41 @@ describe("version-files field orderings", () => {
 // ---------------------------------------------------------------------------
 
 describe("version-files sort identity and composition", () => {
+  it("keeps each full checksum and Copy action associated with its row across sorts and version switches", async () => {
+    const liveFiles = ASCII_FILES.map((f, i) => ({ ...f, sha256: (i + 1).toString(16).repeat(64) }));
+    const historicalFiles = HISTORICAL_FILES.map((f, i) => ({ ...f, sha256: (i + 10).toString(16).repeat(64) }));
+    const m = await mount({ liveFiles, historicalFiles });
+    const filesButtons = m.doc.querySelectorAll("button").filter((b) => b.textContent.trim() === "Files");
+    for (const [button, fixtures, live] of [
+      [filesButtons[0]!, liveFiles, true],
+      [filesButtons[1]!, historicalFiles, false],
+      [filesButtons[0]!, liveFiles, true],
+    ] as const) {
+      m.click(button);
+      await m.waitFor(() => m.visiblePaths().length === fixtures.length, "selected manifest rows");
+      const sorter = createSorter(m);
+      for (const field of ["path", "kind", "size"] as const) {
+        for (const direction of ["ascending", "descending"] as const) {
+          await sorter.setSort(field, direction);
+          assertRowsMatchFixtures(m, fixtures, live);
+          const callsBefore = [...m.calls];
+          const writesBefore = [...m.storageWrites];
+          for (const row of m.visibleRows().map(readRow)) {
+            const fixture = must(fixtures.find((f) => f.path === row.path), `fixture for ${row.path}`);
+            expect(row.tr.textContent, `full SHA-256 for ${row.path}`).toContain(fixture.sha256);
+            const copy = must(row.tr.querySelectorAll("button").find((b) => /copy.*(?:sha.?256|checksum)/i.test(accessibleName(b))), `checksum Copy for ${row.path}`);
+            const copiedBefore = m.clipboardWrites.length;
+            m.click(copy);
+            await m.settled();
+            expect(m.clipboardWrites.slice(copiedBefore), `copied SHA-256 for ${row.path}`).toEqual([fixture.sha256]);
+          }
+          expect(m.calls, "sorting and copying use loaded metadata only").toEqual(callsBefore);
+          expect(m.storageWrites, "sorting and copying write no preferences").toEqual(writesBefore);
+        }
+      }
+    }
+  });
+
   it("never mutates the source manifest array or its entries", async () => {
     const files = ASCII_FILES.map((f) => ({ ...f }));
     const before = JSON.stringify(files);
