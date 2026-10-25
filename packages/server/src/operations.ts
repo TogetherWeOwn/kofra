@@ -161,6 +161,10 @@ export function requireOperationScopes(principal: Principal, scopes: readonly Sc
 }
 
 function authorizeOperation(op: OperationDefinition, ctx: OperationContext): void {
+  if (ctx.principal.kind === "upload") {
+    if (op.id === "upload_blob") return;
+    throw new ApiError(403, "forbidden", "Upload tokens only authorize blob uploads.", "Use an API key for this operation.");
+  }
   if (op.bootstrap) {
     if (ctx.principal.kind !== "bootstrap") {
       throw new ApiError(403, "bootstrap_key_required", "This operation needs the bootstrap key.", "Send Authorization: Bearer <ADMIN_BOOTSTRAP_KEY> for setup or recovery only.");

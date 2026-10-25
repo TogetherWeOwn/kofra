@@ -34,7 +34,7 @@ export const FILE_INPUT: Schema = {
       description: 'The file itself: text (encoding "utf8", up to 1 MB) or base64 bytes (encoding "base64", up to 256 KB). For bigger or binary files prefer url or sha256.',
     },
     encoding: { type: "string", enum: ["utf8", "base64"], description: 'How content is encoded. Default "utf8".' },
-    url: { type: "string", description: "A public https URL the server downloads (up to 25 MB, 3 redirects). Best for files that are already online." },
+    url: { type: "string", description: "Public https URL to download. URL_FETCH_MAX_BYTES (default 100 MiB), 30 s, 3 redirects; file/request caps also apply." },
     headers: { type: "object", additionalProperties: { type: "string" }, description: "Request headers for the url download, e.g. Authorization. Used once, never stored." },
     sha256: {
       type: "string",
@@ -88,6 +88,7 @@ export const PUBLISH_OUT: Schema = {
     status: { type: "string", enum: ["live", "unchanged", "awaiting_upload"] },
     url: { type: "string", description: "Live URL. Share it exactly as returned." },
     slug: { type: "string" },
+    versionUrl: { type: "string", description: "Owner dashboard link pinned by version id." },
     site: SITE_OUT,
     version: { type: ["object", "null"] },
     files: { type: "object" },

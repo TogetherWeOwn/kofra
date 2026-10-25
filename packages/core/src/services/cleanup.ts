@@ -26,7 +26,8 @@ export interface CleanupReport {
  * 2. purge rows of sites deleted more than an hour ago (tombstones survive);
  * 3. drop pending deploys older than a day;
  * 4. delete blobs no version references any more (older than a day);
- * 5. purge expired, unreleased name holds (released rows are the audit trail).
+ * 5. purge expired, unreleased name holds (released rows are the audit trail);
+ * 6. purge expired idempotency records, oldest first.
  * Each step is bounded so one run stays well inside Worker limits.
  */
 export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<CleanupReport> {
@@ -119,8 +120,17 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
       report.deletedBlobs++;
     }
   }
-  if (report.expiredSites || report.purgedSites || report.abandonedDeploys || report.deletedBlobs || purgedHolds.tombstones || purgedHolds.redirects) {
-    console.log(JSON.stringify({ event: "cleanup", ...report, purgedHolds }));
+  // 6. One statement selects and deletes against current expiry, so a reclaimed
+  // key cannot be removed using a stale snapshot of its previous owner.
+  const purgedKeys = await db.prepare(
+    `DELETE FROM idempotency_keys WHERE expires_at <= ? AND key_hash IN (
+      SELECT key_hash FROM idempotency_keys WHERE expires_at <= ?
+      ORDER BY expires_at, key_hash LIMIT 500
+    )`,
+  ).bind(now, now).run();
+  const purgedIdempotencyKeys = Number(purgedKeys.meta.changes ?? 0);
+  if (report.expiredSites || report.purgedSites || report.abandonedDeploys || report.deletedBlobs || purgedHolds.tombstones || purgedHolds.redirects || purgedIdempotencyKeys) {
+    console.log(JSON.stringify({ event: "cleanup", ...report, purgedHolds, purgedIdempotencyKeys }));
   }
   return report;
 }

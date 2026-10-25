@@ -154,7 +154,7 @@ function validationFields(errors: OutputUnit[], schema: Schema, lookup: ReturnTy
     }
     return missing.length ? missing : [field];
   });
-  const wrappers = new Set(["properties", "additionalProperties", "items", "prefixItems", "dependentSchemas", "dependencies", "$ref", "$recursiveRef"]);
+  const wrappers = new Set(["properties", "additionalProperties", "items", "prefixItems", "dependentSchemas", "dependencies", "$ref", "$recursiveRef", "false"]);
   const result = new Map<string, { path: string; message: string }>();
   for (const field of fields) {
     if (wrappers.has(field.keyword) && fields.some((other) => other.path.length > field.path.length && field.path.every((part, i) => part === other.path[i]))) continue;
@@ -234,7 +234,10 @@ function buildServer(compiled: CompiledTool[], ctx: { dw: DropwayContext; princi
           const parsed = validate(rawArgs ?? {});
           if (!parsed.valid) {
             throw new ApiError(400, "invalid_request", `Invalid input for ${def.name}.`, "Correct the listed fields and retry.", {
-              fields: validationFields(parsed.errors, schema, lookup, rawArgs ?? {}),
+              fields: validationFields(parsed.errors, schema, lookup, rawArgs ?? {}).map((problem) =>
+                def.name === "publish_site" || def.name === "update_site_files"
+                  ? { ...problem, field: problem.path.replace(/\.(\d+)(?=\.|$)/g, "[$1]") }
+                  : problem),
             });
           }
           const args = { ...((rawArgs ?? {}) as Record<string, unknown>) };
@@ -311,6 +314,8 @@ export function createMcpEndpoint(options: McpEndpointOptions = {}): McpHandlerF
       const appHost = new URL(appOrigin(dw)).hostname;
       const handlerOptions = {
         route: "/mcp",
+        // Leave room for JSON framing above the 4 MiB decoded inline budget.
+        maxRequestBodySize: 8 * 1024 * 1024,
         corsOptions: CORS,
         allowedOriginHostnames: options.allowedOriginHostnames ?? [...localhostAllowedOrigins(), appHost],
         onerror: (e: Error) => console.error(JSON.stringify({ event: "mcp_transport_error", requestId, error: String(e) })),
