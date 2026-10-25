@@ -165,16 +165,19 @@ export const VERSION_OPERATIONS = [
       }),
       responseType: "application/zip",
       handler: async (c) => {
-        const out = await exportVersionZip(D(c), P(c), c.req.param("slug")!, c.req.param("version")!);
+        const version = c.req.param("version")!.trim();
+        const out = await exportVersionZip(D(c), P(c), c.req.param("slug")!, version);
         const headers = {
           "Content-Type": "application/zip",
           "Content-Disposition": `attachment; filename="${out.filename}"`,
-          "Cache-Control": "private, max-age=31536000, immutable",
+          "Cache-Control": version === "" || version.toLowerCase() === "live"
+            ? "private, no-cache"
+            : "private, max-age=31536000, immutable",
           "X-Content-Type-Options": "nosniff",
           "X-Kofra-Version": out.versionId,
         };
         if (c.req.method === "HEAD") return c.body(null, 200, headers);
-        return new Response(out.stream, { status: 200, headers });
+        return c.body(out.stream, 200, headers);
       },
     },
     examples: [{ input: { site: "bright-otter-x7k2", version: "live" }, output: "Hello" }],

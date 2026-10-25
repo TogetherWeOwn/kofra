@@ -177,7 +177,7 @@ function zipStream(dc: DropwayContext, entries: ZipEntry[]): ReadableStream<Uint
       controller.close();
       finished = true;
     },
-  });
+  }, { highWaterMark: 0 });
 }
 
 const fileByFileHint = (slug: string, versionId: string) =>
