@@ -29,6 +29,8 @@ Extension adapters can add codes and override guidance without changing built-in
 | `deploy_not_found` | 404 | false | Start a deploy with POST /api/v1/sites/:slug/deploys, or use a returned deploy ID. |
 | `duplicate_path` | 400 | false | Give each file a unique normalized path; remove duplicate entries. |
 | `empty_body` | 400 | false | Send files as multipart, JSON, a .zip, or one raw file. |
+| `export_too_large` | 413 | false | Download file by file with list_files and read_file. |
+| `export_too_many_files` | 413 | false | Download file by file with list_files and read_file. |
 | `feature_unavailable` | 501 | false | Use a supported alternative; for access modes, use password instead of private or restricted. |
 | `fetch_blocked` | 422 | false | Use a public absolute HTTPS URL, or provide bytes inline or by upload instead. |
 | `fetch_failed` | 422 | false | Check public reachability and credentials, use the final URL, or send bytes another way. |

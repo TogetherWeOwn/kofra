@@ -108,6 +108,8 @@ export const ERROR_CODES: Readonly<Record<string, ErrorCode>> = {
   transfer_gone: { status: 410, retryable: false, hint: "Ask the sender for a new delivery." },
   transfer_unlock_unavailable: { status: 503, retryable: true, hint: "Retry later." },
   invalid_transfer_range: { status: 416, retryable: false, hint: "Request one satisfiable byte range." },
+  export_too_many_files: { status: 413, retryable: false, hint: "Download file by file with list_files and read_file." },
+  export_too_large: { status: 413, retryable: false, hint: "Download file by file with list_files and read_file." },
 };
 
 /** Shared by the checked-in Markdown generator and the instance's /docs/errors.md. */
