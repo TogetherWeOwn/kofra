@@ -1044,7 +1044,7 @@ export const CORE_API_OPERATIONS = [
     summary: "Delete a site",
     toolset: "core",
     scopes: ["sites:delete"],
-    description: "Delete a site and all its versions. Its URL stops working at once and the slug becomes free. Set confirm to the site's slug.",
+    description: "Delete a site and all its versions. Its URL stops working at once and the name is held for your tenant: only you may reclaim it before the hold ends. Set confirm to the site's slug.",
     input: fromSchema({
       type: "object",
       properties: { site: SITE_REF, confirm: CONFIRM_SLUG },

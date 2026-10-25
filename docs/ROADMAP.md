@@ -662,3 +662,24 @@ Delivers: new. Depends: R-36.
   counts per /64; IPv4-mapped and IPv4-compatible IPv6 forms share the IPv4 bucket.
 - If the counter is unavailable, these limits refuse (fail closed). `OPTIONS` and unknown paths spend
   nothing. 429 answers carry `RateLimit` and `Retry-After`.
+
+### R-59 Link permanence: hold freed names, 308 old names (2 days)
+Delivers: rename permanence (the rename-redirect part of R-50's scope; the 308 here replaces the 307
+planned there — coordinate with the R-50 card). Depends: none.
+- Rename: the old slug stays bound to the same site and answers 308 to the new name, path and query
+  kept, in path mode and subdomain mode, until `redirectUntil` (12 months by default, config).
+  `rename_site` returns `oldSlug` and `redirectUntil`. Chains resolve through the current name, so
+  a->b->c redirects a and b to c. Renaming back to your own old name works and flips the redirect.
+- Delete and expiry tombstone the freed name (plus every old name still redirecting to the site):
+  chosen names for 12 months, generated names for 90 days (config). Another tenant creating or
+  renaming to a held name gets 409 `slug_reserved`; the same tenant may reclaim it. Database triggers
+  refuse cross-tenant acquisition inside the write batch, so races cannot hijack a held name.
+- A hold ends early only with a reason and audit record. `release_slug` requires an unrestricted
+  admin key of the holding tenant plus confirm; tenant admins cannot release foreign or ownerless
+  holds. Cross-tenant trademark disputes and anonymous expiries use the instance operator's audited
+  database procedure in `docs/SELF_HOST.md`, never tenant-grantable API authority.
+- Delete/expiry assert the selected site's identity, name, ownership and expiry inside the batch;
+  stale API deletes return 409 `site_changed`, and cleanup skips changed rows until its next run.
+  Expired aliases are removed, not converted into fresh holds.
+- A deleted version's `<slug>--v<N>` answers 410 in both modes, never another site's bytes; a
+  renamed-away version address 308s to the new name. Live version previews stay R-13's to serve.

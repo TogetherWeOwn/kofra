@@ -34,6 +34,18 @@ export interface AnonymousConfig {
 
 export type SitesMode = "path" | "subdomain";
 
+/**
+ * How long freed site names are held (R-59 link permanence). A renamed site's
+ * old name 308s to the new name for `renameMs`; a deleted or expired name is
+ * tombstoned for `chosenMs` (explicitly chosen) or `generatedMs` (generated),
+ * during which only the holding tenant may reclaim it.
+ */
+export interface SlugHolds {
+  renameMs: number;
+  chosenMs: number;
+  generatedMs: number;
+}
+
 export interface DropwayConfig {
   /** Shown in pages and API responses. */
   instanceName: string;
@@ -89,12 +101,15 @@ export interface DropwayConfig {
   signingSecret: string;
   /** KV edge-cache TTL for live site manifests, seconds (KV minimum is 30). */
   liveCacheTtlSeconds: number;
+  /** How long freed site names are held (R-59). */
+  slugHolds: SlugHolds;
 }
 
-export type ConfigOverrides = Partial<Omit<DropwayConfig, "anonymous" | "limits" | "quotas">> & {
+export type ConfigOverrides = Partial<Omit<DropwayConfig, "anonymous" | "limits" | "quotas" | "slugHolds">> & {
   anonymous?: Partial<Omit<AnonymousConfig, "limits">> & { limits?: Partial<Limits> };
   limits?: Partial<Limits>;
   quotas?: Partial<Quotas>;
+  slugHolds?: Partial<SlugHolds>;
 };
 
 /** Worker vars and secrets read by resolveConfig. All optional strings. */
@@ -117,6 +132,9 @@ export interface DropwayVars extends Partial<Record<`QUOTA_${Uppercase<QuotaKey>
   MAX_FILES?: string;
   MAX_SITE_BYTES?: string;
   ONESHOT_MAX_BYTES?: string;
+  SLUG_REDIRECT_DAYS?: string;
+  SLUG_HOLD_CHOSEN_DAYS?: string;
+  SLUG_HOLD_GENERATED_DAYS?: string;
   ADMIN_BOOTSTRAP_KEY?: string;
   SIGNING_SECRET?: string;
   TRANSFER_MAX_EXPIRY_DAYS?: string;
@@ -208,6 +226,12 @@ export function resolveConfig(vars: DropwayVars, overrides: ConfigOverrides = {}
     },
   };
   const adminBootstrapKey = overrides.adminBootstrapKey !== undefined ? overrides.adminBootstrapKey : vars.ADMIN_BOOTSTRAP_KEY?.trim() || null;
+  const slugHolds: SlugHolds = {
+    renameMs: num(vars.SLUG_REDIRECT_DAYS, 365) * 86400_000,
+    chosenMs: num(vars.SLUG_HOLD_CHOSEN_DAYS, 365) * 86400_000,
+    generatedMs: num(vars.SLUG_HOLD_GENERATED_DAYS, 90) * 86400_000,
+    ...overrides.slugHolds,
+  };
   return {
     instanceName: overrides.instanceName ?? (vars.INSTANCE_NAME?.trim() || "Kofra"),
     appOrigin,
@@ -233,5 +257,6 @@ export function resolveConfig(vars: DropwayVars, overrides: ConfigOverrides = {}
     adminBootstrapKey,
     signingSecret: overrides.signingSecret ?? (vars.SIGNING_SECRET?.trim() || adminBootstrapKey || "dropway-insecure-dev-secret"),
     liveCacheTtlSeconds: Math.max(30, overrides.liveCacheTtlSeconds ?? 30),
+    slugHolds,
   };
 }
