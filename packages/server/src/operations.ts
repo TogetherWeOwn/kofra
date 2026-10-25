@@ -272,6 +272,15 @@ async function requestInput(c: Context<DropwayEnv>, op: OperationDefinition, inp
   return { ...query, ...body, ...path };
 }
 
+/** Merged query/body/path input without schema validation, for `http.parseInput`
+ * endpoints whose handlers parse the wire format themselves (field collectors,
+ * legacy coercions). Policy checks still run on the returned input. */
+export async function rawRequestInput(c: Context<DropwayEnv>): Promise<Record<string, unknown>> {
+  const body = ["GET", "HEAD"].includes(c.req.method) ? {} : await readJson(c);
+  // The URL names the resource; a body cannot select a different one.
+  return { ...c.req.query(), ...body, ...c.req.param() };
+}
+
 export function installOperationRoutes(api: Hono<DropwayEnv>, operations: readonly OperationDefinition[]) {
   const routes = new Set<string>();
   for (const op of operations) {

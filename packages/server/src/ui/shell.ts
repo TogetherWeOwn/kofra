@@ -196,6 +196,11 @@ label.dw-label{display:block;font-size:.85rem;font-weight:600;margin:0 0 .3rem}
 .dw-section>header .dw-input[type=search]{width:16rem;max-width:100%}
 .dw-table .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .dw-table .act{text-align:right;white-space:nowrap}
+.dw-th-sort{background:none;border:0;padding:0;font:inherit;color:inherit;text-transform:inherit;letter-spacing:inherit;cursor:pointer;display:inline-flex;align-items:center;gap:.25rem}
+.dw-th-sort:hover span:first-child{text-decoration:underline}
+.dw-th-sort span[aria-hidden]{color:var(--accent)}
+.dw-sort{display:inline-flex;align-items:center;gap:.5rem}
+.dw-sort .dw-select{width:auto}
 .dw-scroll{overflow-x:auto}
 .dw-badge{display:inline-block;padding:.1rem .45rem;border-radius:999px;font-size:.72rem;font-weight:600;border:1px solid var(--line);color:var(--muted);white-space:nowrap;vertical-align:middle}
 .dw-badge.live{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,transparent)}

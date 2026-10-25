@@ -3,6 +3,7 @@ import { appOrigin, siteUrl } from "../context";
 import { ApiError, badRequest, conflict, forbidden, notFound, rateLimited, unauthorized } from "../errors";
 import { hashPassword, newId, newSecret, sha256Hex } from "../lib/crypto";
 import { generateSlug, validateSlug } from "../lib/slug";
+import { stringField } from "../lib/input";
 import { hasScope, type Principal, type Scope } from "../principal";
 import { CLAIM_TOKEN_PREFIX } from "./identity";
 import { dropLive, refreshLive } from "./live";
@@ -148,8 +149,8 @@ function boolField(v: unknown, name: string): boolean | undefined {
 /** Parse the settings fields shared by create, publish and PATCH. */
 export function parseSettings(body: Record<string, unknown>): SiteSettingsInput {
   const out: SiteSettingsInput = {};
-  if ("title" in body) out.title = body.title == null ? null : String(body.title).slice(0, 200);
-  if ("description" in body) out.description = body.description == null ? null : String(body.description).slice(0, 2000);
+  if ("title" in body) out.title = body.title == null ? null : stringField(body.title, "title").slice(0, 200);
+  if ("description" in body) out.description = body.description == null ? null : stringField(body.description, "description").slice(0, 2000);
   const spa = boolField(body.spa, "spa");
   if (spa !== undefined) out.spa = spa;
   const md = boolField(body.renderMarkdown, "renderMarkdown");
@@ -159,7 +160,7 @@ export function parseSettings(body: Record<string, unknown>): SiteSettingsInput 
   if ("password" in body) {
     if (body.password === null || body.password === "") out.password = null;
     else {
-      const pw = String(body.password);
+      const pw = stringField(body.password, "password");
       if (pw.length < 4 || pw.length > 200) throw badRequest("invalid_password", "Passwords must be 4-200 characters.");
       out.password = pw;
     }

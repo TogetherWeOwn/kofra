@@ -1005,7 +1005,7 @@ export function dropwayClient() {
     if (!v) badges.push(h("span", { class: "dw-badge", text: "Empty" }));
     return h(
       "tr",
-      { "data-search": [s.slug, s.title || "", s.description || ""].join(" ").toLowerCase() },
+      { "data-search": [s.slug, s.title || ""].join(" ").toLowerCase() },
       h(
         "td",
         {},
@@ -1036,7 +1036,7 @@ export function dropwayClient() {
     renderAccount();
     var root = d.getElementById("dw-sites");
     var count = d.getElementById("dw-sites-count");
-    var search = h("input", { class: "dw-input", type: "search", placeholder: "Filter by name or title", "aria-label": "Filter sites" });
+    var search = h("input", { class: "dw-input", type: "search", placeholder: "Filter loaded sites by name or title", "aria-label": "Filter loaded sites" });
     var tbody = h("tbody");
     var more = h("button", { type: "button", class: "dw-btn", text: "Load more", hidden: true });
     var table = h(
@@ -1050,47 +1050,128 @@ export function dropwayClient() {
       ),
     );
     var body = h("div", {}, skeleton(4));
+    var errorWrap = h("div", {});
+    var moreWrap = h("div", { class: "dw-pad", style: "text-align:center", hidden: true }, more);
     clear(root);
-    add(root, h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "All sites" }), search), body, h("div", { class: "dw-pad", style: "text-align:center", hidden: true }, more)));
+    add(root, h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "All sites" }), search), body, errorWrap, moreWrap));
     var cursor = null;
     var loaded = 0;
+    var seenSlugs = [];
+    var consumedCursors = [];
+    var loading = false;
+    var hasMore = true;
+    var tableShown = false;
+    function currentQuery() {
+      return search.value.trim().toLowerCase();
+    }
+    function updateCounts() {
+      if (!count || !tableShown) return;
+      var q = currentQuery();
+      var visible = 0;
+      $$("tr[data-search]", tbody).forEach(function (tr) {
+        if (!tr.hidden) visible++;
+      });
+      if (q) {
+        count.textContent = plural(visible, "match", "matches") + " of " + plural(loaded, "loaded site", "loaded sites") + (hasMore ? "+" : "") + ".";
+      } else {
+        count.textContent = plural(loaded, "site") + (hasMore ? "+" : "") + ".";
+      }
+    }
+    function applyFilter() {
+      var q = currentQuery();
+      $$("tr[data-search]", tbody).forEach(function (tr) {
+        var hay = tr.getAttribute("data-search") || "";
+        tr.hidden = !!(q && hay.indexOf(q) < 0);
+      });
+      updateCounts();
+    }
+    function syncMore() {
+      moreWrap.hidden = !hasMore;
+      more.hidden = !hasMore;
+      more.disabled = !hasMore;
+      if (more.getAttribute("aria-busy")) more.removeAttribute("aria-busy");
+      if (more.textContent !== "Load more") more.textContent = "Load more";
+    }
+    function emptySites() {
+      return h(
+        "div",
+        { class: "dw-empty", role: "status" },
+        h("h3", { text: "No sites yet" }),
+        h("p", { text: "Publish a folder from this browser, or let an agent publish with the API, CLI or MCP." }),
+        h("a", { class: "dw-btn primary", href: "/dashboard/publish", text: "Publish a folder" }),
+      );
+    }
     async function load() {
+      if (loading) return;
+      if (!hasMore) return;
+      loading = true;
+      var focusedBefore = d.activeElement === more;
+      more.disabled = true;
+      more.setAttribute("aria-busy", "true");
+      more.textContent = "Loading…";
+      var requestCursor = cursor;
       try {
-        var res = await api("/sites?limit=100" + (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""));
-        if (!loaded) clear(body);
-        if (!loaded && !res.sites.length) {
-          add(
-            body,
-            h(
-              "div",
-              { class: "dw-empty", role: "status" },
-              h("h3", { text: "No sites yet" }),
-              h("p", { text: "Publish a folder from this browser, or let an agent publish with the API, CLI or MCP." }),
-              h("a", { class: "dw-btn primary", href: "/dashboard/publish", text: "Publish a folder" }),
-            ),
-          );
+        var res = await api("/sites?limit=100" + (requestCursor ? "&cursor=" + encodeURIComponent(requestCursor) : ""));
+        if (consumedCursors.indexOf(requestCursor) < 0) consumedCursors.push(requestCursor);
+        clear(errorWrap);
+        if (!tableShown && !loaded && !res.sites.length) {
+          clear(body);
+          add(body, emptySites());
           if (count) count.textContent = "No sites yet.";
+          var firstNext = res.nextCursor;
+          if (firstNext && consumedCursors.indexOf(firstNext) < 0) {
+            cursor = firstNext;
+            hasMore = true;
+          } else {
+            cursor = null;
+            hasMore = false;
+          }
+          syncMore();
           return;
         }
-        if (!loaded) add(body, table);
+        if (!tableShown) {
+          clear(body);
+          add(body, table);
+          tableShown = true;
+        }
         res.sites.forEach(function (s) {
+          if (seenSlugs.indexOf(s.slug) >= 0) return;
+          seenSlugs.push(s.slug);
           tbody.appendChild(siteRow(s));
         });
-        loaded += res.sites.length;
-        if (count) count.textContent = plural(loaded, "site") + (res.nextCursor ? "+" : "") + ".";
-        cursor = res.nextCursor;
-        more.parentNode.hidden = !cursor;
-        more.hidden = !cursor;
+        loaded = seenSlugs.length;
+        var next = res.nextCursor;
+        if (!next || consumedCursors.indexOf(next) >= 0) {
+          cursor = null;
+          hasMore = false;
+        } else {
+          cursor = next;
+          hasMore = true;
+        }
+        applyFilter();
+        syncMore();
       } catch (e) {
-        clear(body);
-        add(body, h("div", { class: "dw-pad" }, errorBox(e, "Could not load sites")));
+        clear(errorWrap);
+        add(errorWrap, h("div", { class: "dw-pad" }, errorBox(e, "Could not load sites"), h("p", { class: "dw-small", text: "Use Load more to retry this page." })));
+        if (!tableShown && !loaded) {
+          clear(body);
+          if (count) count.textContent = "Could not load sites.";
+        }
+        cursor = requestCursor;
+        hasMore = true;
+        syncMore();
+        more.disabled = false;
+      } finally {
+        loading = false;
+        if (focusedBefore && hasMore && (d.activeElement === d.body || d.activeElement === null)) {
+          try {
+            more.focus();
+          } catch (focusErr) {}
+        }
       }
     }
     search.addEventListener("input", function () {
-      var q = search.value.trim().toLowerCase();
-      $$("tr[data-search]", tbody).forEach(function (tr) {
-        tr.hidden = q && tr.getAttribute("data-search").indexOf(q) < 0;
-      });
+      applyFilter();
     });
     more.addEventListener("click", load);
     load();
@@ -1224,57 +1305,158 @@ export function dropwayClient() {
       var mv = (data && data.version) || { id: v.id, number: v.number, live: v.live };
       var rows = (data && data.files) || [];
       var filter = h("input", { class: "dw-input", type: "search", placeholder: "Filter files", "aria-label": "Filter files" });
+      if (!rows.length) {
+        clear(filesSection);
+        add(
+          filesSection,
+          h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", text: "0 files" }), filter)),
+          h("div", { class: "dw-empty" }, h("h3", { text: "No files in this version" }), h("p", { class: "dw-small", text: "This version has an empty manifest." })),
+        );
+        return;
+      }
       var copyStatus = h("p", { class: "dw-pad dw-small", style: "margin:0", role: "status", text: "" });
       var tb = h("tbody");
-      rows.forEach(function (f) {
-        tb.appendChild(
+      // Rows keep their own closures (checksum and download targets, links);
+      // sorting only reorders these nodes and never mutates the manifest rows.
+      var items = rows.map(function (f) {
+        var tr = h(
+          "tr",
+          { "data-search": f.path.toLowerCase() },
+          h("td", { class: "dw-mono" }, mv.live ? h("a", { href: "/v/" + encodeURIComponent(slug) + "/" + encodePath(f.path), text: f.path }) : h("span", { text: f.path })),
+          h("td", { class: "dw-hide-sm" }, h("span", { class: "dw-badge", text: f.kind })),
+          h("td", { class: "num dw-small" }, h("span", { text: exactBytes(f.size) }), f.size >= 1024 ? h("span", { class: "dw-sub", text: bytes(f.size) }) : null),
+          h("td", {}, h("code", { class: "dw-mono dw-digest", text: f.sha256 })),
           h(
-            "tr",
-            { "data-search": f.path.toLowerCase() },
-            h("td", { class: "dw-mono" }, mv.live ? h("a", { href: "/v/" + encodeURIComponent(slug) + "/" + encodePath(f.path), text: f.path }) : h("span", { text: f.path })),
-            h("td", { class: "dw-hide-sm" }, h("span", { class: "dw-badge", text: f.kind })),
-            h("td", { class: "num dw-small" }, h("span", { text: exactBytes(f.size) }), f.size >= 1024 ? h("span", { class: "dw-sub", text: bytes(f.size) }) : null),
-            h("td", {}, h("code", { class: "dw-mono dw-digest", text: f.sha256 })),
-            h(
-              "td",
-              { class: "act" },
-              mv.live ? h("a", { class: "dw-btn small", href: f.url, target: "_blank", rel: "noopener", text: "Open" }) : null,
-              " ",
-              h("button", {
-                type: "button",
-                class: "dw-btn small",
-                text: "Copy SHA-256",
-                "aria-label": "Copy SHA-256 for " + f.path,
-                onclick: function (ev) {
-                  var btn = ev.currentTarget;
-                  copyText(f.sha256, btn).then(function (ok) {
-                    copyStatus.textContent = ok
-                      ? "Copied SHA-256 for " + f.path + "."
-                      : "Copy failed for " + f.path + ". Select the checksum and copy it yourself.";
-                  });
-                },
-              }),
-              " ",
-              h("button", { type: "button", class: "dw-btn small", text: "Download", onclick: function (ev) { downloadFile(slug, f.path, mv.live ? null : mv.id, ev.currentTarget); } }),
-            ),
+            "td",
+            { class: "act" },
+            mv.live ? h("a", { class: "dw-btn small", href: f.url, target: "_blank", rel: "noopener", text: "Open" }) : null,
+            " ",
+            h("button", {
+              type: "button",
+              class: "dw-btn small",
+              text: "Copy SHA-256",
+              "aria-label": "Copy SHA-256 for " + f.path,
+              onclick: function (ev) {
+                var btn = ev.currentTarget;
+                copyText(f.sha256, btn).then(function (ok) {
+                  copyStatus.textContent = ok
+                    ? "Copied SHA-256 for " + f.path + "."
+                    : "Copy failed for " + f.path + ". Select the checksum and copy it yourself.";
+                });
+              },
+            }),
+            " ",
+            h("button", { type: "button", class: "dw-btn small", text: "Download", onclick: function (ev) { downloadFile(slug, f.path, mv.live ? null : mv.id, ev.currentTarget); } }),
           ),
         );
+        tb.appendChild(tr);
+        return { file: f, row: tr };
       });
-      filter.addEventListener("input", function () {
+      // Client-side ordering of the already-loaded manifest: no requests, no
+      // storage, no endpoint. Default is deterministic Path ascending.
+      var sortField = "path";
+      var sortDir = "ascending";
+      var headCells = {};
+      var fieldSelect = null;
+      var dirSelect = null;
+      function cmpText(a, b) {
+        return a < b ? -1 : a > b ? 1 : 0;
+      }
+      function compareFiles(a, b) {
+        var primary = sortField === "size" ? a.size - b.size : cmpText(sortField === "kind" ? a.kind : a.path, sortField === "kind" ? b.kind : b.path);
+        if (primary !== 0) return sortDir === "ascending" ? primary : -primary;
+        if (sortField === "path") return 0;
+        return cmpText(a.path, b.path);
+      }
+      function applyFilter() {
         var q = filter.value.trim().toLowerCase();
-        $$("tr[data-search]", tb).forEach(function (tr) {
-          tr.hidden = q && tr.getAttribute("data-search").indexOf(q) < 0;
+        items.forEach(function (it) {
+          it.row.hidden = q && it.row.getAttribute("data-search").indexOf(q) < 0;
         });
+      }
+      function applySort() {
+        items
+          .slice()
+          .sort(function (x, y) {
+            return compareFiles(x.file, y.file);
+          })
+          .forEach(function (it) {
+            tb.appendChild(it.row);
+          });
+        ["path", "kind", "size"].forEach(function (field) {
+          var hc = headCells[field];
+          if (!hc) return;
+          if (field === sortField) {
+            hc.th.setAttribute("aria-sort", sortDir);
+            hc.arrow.textContent = sortDir === "ascending" ? " ▲" : " ▼";
+            hc.btn.setAttribute("aria-label", "Sort by " + field + ", " + sortDir + " (activate to sort " + (sortDir === "ascending" ? "descending" : "ascending") + ")");
+          } else {
+            hc.th.removeAttribute("aria-sort");
+            hc.arrow.textContent = "";
+            hc.btn.setAttribute("aria-label", "Sort by " + field);
+          }
+        });
+        if (fieldSelect) fieldSelect.value = sortField;
+        if (dirSelect) dirSelect.value = sortDir;
+        applyFilter();
+      }
+      function sortTh(field, label, cls) {
+        var arrow = h("span", { "aria-hidden": "true" });
+        var btn = h(
+          "button",
+          {
+            type: "button",
+            class: "dw-th-sort",
+            "aria-label": "Sort by " + field,
+            onclick: function () {
+              if (sortField === field) sortDir = sortDir === "ascending" ? "descending" : "ascending";
+              else {
+                sortField = field;
+                sortDir = "ascending";
+              }
+              applySort();
+            },
+          },
+          h("span", { text: label }),
+          arrow,
+        );
+        var th = h("th", { scope: "col", class: cls || null, "data-sort-field": field }, btn);
+        headCells[field] = { th: th, btn: btn, arrow: arrow };
+        return th;
+      }
+      function sortOption(value, label) {
+        var o = h("option", { text: label });
+        o.value = value;
+        o.setAttribute("value", value);
+        return o;
+      }
+      // Toolbar mirror of the header sorts: every field stays sortable on narrow
+      // screens, where the Kind column (and its header control) is hidden.
+      fieldSelect = h("select", { class: "dw-select", "aria-label": "Sort files by" }, sortOption("path", "Path"), sortOption("kind", "Kind"), sortOption("size", "Size"));
+      fieldSelect.value = sortField;
+      fieldSelect.addEventListener("change", function () {
+        sortField = fieldSelect.value;
+        sortDir = "ascending";
+        applySort();
       });
+      dirSelect = h("select", { class: "dw-select", "aria-label": "Sort direction" }, sortOption("ascending", "Ascending"), sortOption("descending", "Descending"));
+      dirSelect.value = sortDir;
+      dirSelect.addEventListener("change", function () {
+        sortDir = dirSelect.value;
+        applySort();
+      });
+      var sortBar = h("label", { class: "dw-sort" }, h("span", { class: "dw-small dw-muted", text: "Sort" }), fieldSelect, dirSelect);
+      filter.addEventListener("input", applyFilter);
       clear(filesSection);
       add(
         filesSection,
-        h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", text: plural(rows.length, "file") }), filter)),
+        h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", text: plural(rows.length, "file") }), sortBar, filter)),
         h("p", { class: "dw-pad dw-small dw-muted", style: "margin:0", text: "SHA-256 manifest checksums for the selected version (v" + mv.number + ", " + mv.id + "). A checksum is not proof of authenticity, provenance, safe content, or independent verification, and does not show the current live download matches — compare it against a trusted source you already have." }),
-        h("div", { class: "dw-scroll" }, h("table", { class: "dw-table" }, h("thead", {}, h("tr", {}, h("th", { text: "Path" }), h("th", { class: "dw-hide-sm", text: "Kind" }), h("th", { class: "num", text: "Size" }), h("th", { text: "SHA-256" }), h("th", {}))), tb)),
+        h("div", { class: "dw-scroll" }, h("table", { class: "dw-table" }, h("thead", {}, h("tr", {}, sortTh("path", "Path"), sortTh("kind", "Kind", "dw-hide-sm"), sortTh("size", "Size", "num"), h("th", { scope: "col", text: "SHA-256" }), h("th", { scope: "col" }))), tb)),
         copyStatus,
         mv.live ? null : h("p", { class: "dw-pad dw-small dw-muted", style: "margin:0", text: "Older versions are not served publicly. Restore this version to view it on the site, or download single files." }),
       );
+      applySort();
     }
 
     var s = site.settings;
@@ -1719,13 +1901,15 @@ export function dropwayClient() {
     }
 
     function buildTree(files) {
-      var root = { dirs: {}, files: [] };
+      // Prototype-less directory maps: legal names like __proto__ or toString are own data, never methods.
+      var root = { dirs: Object.create(null), files: [] };
       files.forEach(function (f) {
         var parts = f.path.split("/");
         var node = root;
         for (var i = 0; i < parts.length - 1; i++) {
-          node.dirs[parts[i]] = node.dirs[parts[i]] || { dirs: {}, files: [] };
-          node = node.dirs[parts[i]];
+          var seg = parts[i];
+          if (!Object.hasOwn(node.dirs, seg)) node.dirs[seg] = { dirs: Object.create(null), files: [] };
+          node = node.dirs[seg];
         }
         node.files.push(f);
       });
@@ -1790,22 +1974,79 @@ export function dropwayClient() {
     }
     var smallSite = manifest.files.length <= 40;
     var filter = h("input", { class: "dw-input", type: "search", placeholder: "Filter files", "aria-label": "Filter files" });
-    var treeBox = h("div", { class: "dw-treebox" }, renderNode(buildTree(manifest.files), "", 0));
-    filter.addEventListener("input", function () {
-      var q = filter.value.trim().toLowerCase();
-      $$("a[data-path]", treeBox).forEach(function (a) {
-        a.parentNode.hidden = q && a.getAttribute("data-path").toLowerCase().indexOf(q) < 0;
-      });
-      if (q) $$("details", treeBox).forEach(function (x) { x.open = true; });
+    // Display names for the manifest's server-derived kinds (mirrors KIND_LABELS
+    // in @dropway/core). This labels values; it never classifies files itself.
+    var KIND_LABELS = {
+      html: "HTML page", markdown: "Markdown", image: "Image", svg: "SVG image", pdf: "PDF document",
+      video: "Video", audio: "Audio", json: "JSON", csv: "Table", code: "Code", text: "Text",
+      notebook: "Jupyter notebook", model3d: "3D model", font: "Font", archive: "Archive",
+      wasm: "WebAssembly", binary: "Binary file",
+    };
+    function kindLabel(kind) {
+      if (KIND_LABELS[kind]) return KIND_LABELS[kind];
+      var words = String(kind).replace(/[_-]+/g, " ").trim();
+      return words ? words.charAt(0).toUpperCase() + words.slice(1) : String(kind);
+    }
+    var kinds = [];
+    manifest.files.forEach(function (f) {
+      if (f && f.kind && kinds.indexOf(f.kind) < 0) kinds.push(f.kind);
     });
+    kinds.sort();
+    var kindOptions = [h("option", { value: "", text: "All" })];
+    kinds.forEach(function (k) {
+      kindOptions.push(h("option", { value: k, text: kindLabel(k) }));
+    });
+    var kindSel = h("select", { id: "dw-kind", class: "dw-select", "aria-label": "File kind" }, kindOptions);
+    var reset = h("button", { type: "button", class: "dw-btn small", text: "Clear" });
+    var matchCount = h("span", { class: "dw-small dw-muted", role: "status", text: "" });
+    var emptyNote = h("div", { class: "dw-tree-note", text: "", hidden: true });
+    var treeBox = h("div", { class: "dw-treebox" }, renderNode(buildTree(manifest.files), "", 0));
+    function applyFilter() {
+      var q = filter.value.trim().toLowerCase();
+      var kind = kindSel.value;
+      var filtering = !!(q || kind);
+      var total = manifest.files.length;
+      var matching = 0;
+      $$("a[data-path]", treeBox).forEach(function (a) {
+        var show = (!q || a.getAttribute("data-path").toLowerCase().indexOf(q) >= 0) && (!kind || a.getAttribute("data-kind") === kind);
+        a.parentNode.hidden = !show;
+        if (show) matching++;
+      });
+      // Innermost branches first, so each parent sees its children's settled state.
+      $$("details", treeBox).reverse().forEach(function (x) {
+        var hasMatch = $$("a[data-path]", x).some(function (a) {
+          return !a.parentNode.hidden;
+        });
+        x.parentNode.hidden = filtering && !hasMatch;
+        if (filtering && hasMatch) x.open = true;
+      });
+      matchCount.textContent = matching + " of " + plural(total, "file");
+      emptyNote.hidden = matching > 0;
+      emptyNote.textContent = total === 0 ? "No files in this version" : "No matching files";
+    }
+    filter.addEventListener("input", applyFilter);
+    kindSel.addEventListener("change", applyFilter);
+    reset.addEventListener("click", function () {
+      filter.value = "";
+      kindSel.value = "";
+      applyFilter();
+    });
+    applyFilter();
     clear(tree);
     add(
       tree,
       h("div", { class: "dw-tree-head" }, h("a", { class: "dw-title", href: "/dashboard/sites/" + encodeURIComponent(slug), text: slug }), h("span", { class: "dw-small dw-muted", text: manifest.version ? "v" + manifest.version.number + " · " + plural(manifest.files.length, "file") : "No live version" })),
       filter,
+      h("label", { class: "dw-label", for: "dw-kind", text: "File kind" }),
+      kindSel,
+      h("div", { class: "dw-row" }, reset, matchCount),
+      emptyNote,
       treeBox,
     );
     go(current, mode, false);
+    // Push entries carry {p, mode}; record the same for the loaded entry so
+    // Back restores the prior file and view mode instead of losing the mode.
+    history.replaceState({ p: current, mode: mode }, "");
     var cur = $("a[aria-current]", tree);
     if (cur) cur.scrollIntoView({ block: "nearest" });
   };
