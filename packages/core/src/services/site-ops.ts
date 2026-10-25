@@ -11,6 +11,7 @@ import { getFile } from "./deploys";
 import { dropLive, refreshLive } from "./live";
 import { getSiteFor, parseSettings, updateSite, type SiteRow, type VersionRow } from "./sites";
 import { atomicWrite, siteSlugError } from "./atomic-write";
+import { checkNameAvailable, collapseOwnRedirect, insertRedirect, reclaimTombstone } from "./slug-holds";
 
 /**
  * Site and version lookups that accept what agents naturally have in hand
@@ -92,24 +93,44 @@ export function requireConfirm(confirm: unknown, expected: string, what = "the s
   }
 }
 
-/** Give a site a new slug. Its live URL changes at once; the old URL stops working. */
+/**
+ * Give a site a new slug. Its live URL changes at once; the old URL 308s to
+ * the new one (path and query kept) until the rename hold ends.
+ */
 export async function renameSite(dc: DropwayContext, p: Principal, ref: unknown, newSlug: unknown) {
   if (p.kind !== "member") throw unauthorized("Renaming a site needs an API key.");
   const site = await getSiteByRef(dc, p, ref, "sites:write");
   if (typeof newSlug !== "string") throw badRequest("invalid_slug", "newSlug must be a string.");
   const wanted = validateSlug(newSlug);
-  if (wanted === site.slug) return { renamed: false, site, oldSlug: site.slug };
+  if (wanted === site.slug) return { renamed: false, site, oldSlug: site.slug, redirectUntil: null as number | null };
+  await checkNameAvailable(dc, wanted, site.tenant_id, site.id);
   const extension = await dc.adapters.policy.siteNameMutation?.(p, {
     operation: "rename", siteId: site.id, tenantId: site.tenant_id, slug: wanted, previousSlug: site.slug,
   }, dc);
+  const now = Date.now();
+  const holdUntil = now + dc.config.slugHolds.renameMs;
   const fence = "id = ? AND tenant_id IS ? AND slug = ? AND deleted_at IS NULL";
+  // Transfers keep their permanent sender-owned reservations (XFR-04): no
+  // time-boxed redirect, so the original sender can reuse the old name.
+  const holdStatements = site.mode === "transfer"
+    ? []
+    : [
+        // Rename-back collapses the site's own redirect row for the new name;
+        // active redirects of other sites still refuse via the trigger.
+        collapseOwnRedirect(dc, wanted, site.id),
+        ...insertRedirect(dc, { slug: site.slug, siteId: site.id, chosen: site.slug_chosen === 1, holdUntil, createdAt: now }),
+      ];
   await atomicWrite(dc, [
+    // Reclaim the tenant's own hold on the new name, if any, before the
+    // UPDATE fires the hold triggers.
+    ...(site.tenant_id !== null ? [reclaimTombstone(dc, wanted, site.tenant_id)] : []),
     // CASE is lazy: the deliberately invalid, tagged JSON path aborts a stale
     // attempt INSIDE the transaction, including when the row was hard-deleted.
     dc.env.DB.prepare(`SELECT CASE WHEN EXISTS (SELECT 1 FROM sites WHERE ${fence})
       THEN 1 ELSE json_extract('{}', 'dropway_site_changed') END`).bind(site.id, site.tenant_id, site.slug),
-    dc.env.DB.prepare(`UPDATE sites SET slug = ?, updated_at = ? WHERE ${fence}`)
-      .bind(wanted, Date.now(), site.id, site.tenant_id, site.slug),
+    dc.env.DB.prepare(`UPDATE sites SET slug = ?, slug_chosen = 1, updated_at = ? WHERE ${fence}`)
+      .bind(wanted, now, site.id, site.tenant_id, site.slug),
+    ...holdStatements,
   ], extension, (error) => {
     if (String(error).includes("JSON path") && String(error).includes("dropway_site_changed")) {
       return conflict("site_changed", "The site changed while preparing its rename.", "Reload the site and retry.");
@@ -119,7 +140,7 @@ export async function renameSite(dc: DropwayContext, p: Principal, ref: unknown,
   await dropLive(dc, site.slug);
   await refreshLive(dc, site.id);
   const fresh = (await dc.env.DB.prepare("SELECT * FROM sites WHERE id = ?").bind(site.id).first<SiteRow>())!;
-  return { renamed: true, site: fresh, oldSlug: site.slug };
+  return { renamed: true, site: fresh, oldSlug: site.slug, redirectUntil: site.mode === "transfer" ? null : holdUntil };
 }
 
 export type AccessMode = "public" | "password" | "restricted" | "private";

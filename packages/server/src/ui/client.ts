@@ -1315,6 +1315,8 @@ export function dropwayClient() {
         return;
       }
       var copyStatus = h("p", { class: "dw-pad dw-small", style: "margin:0", role: "status", text: "" });
+      var copyReq = 0;
+      var copyTimer = null;
       var tb = h("tbody");
       // Rows keep their own closures (checksum and download targets, links);
       // sorting only reorders these nodes and never mutates the manifest rows.
@@ -1338,10 +1340,18 @@ export function dropwayClient() {
               "aria-label": "Copy SHA-256 for " + f.path,
               onclick: function (ev) {
                 var btn = ev.currentTarget;
+                var attempt = ++copyReq;
+                clearTimeout(copyTimer);
+                copyStatus.textContent = "";
                 copyText(f.sha256, btn).then(function (ok) {
-                  copyStatus.textContent = ok
-                    ? "Copied SHA-256 for " + f.path + "."
-                    : "Copy failed for " + f.path + ". Select the checksum and copy it yourself.";
+                  if (attempt !== copyReq || my !== filesReq) return;
+                  // A separate task makes identical results observable again.
+                  copyTimer = setTimeout(function () {
+                    if (attempt !== copyReq || my !== filesReq) return;
+                    copyStatus.textContent = ok
+                      ? "Copied SHA-256 for " + f.path + "."
+                      : "Copy failed for " + f.path + ". Select the checksum and copy it yourself.";
+                  }, 0);
                 });
               },
             }),

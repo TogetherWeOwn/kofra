@@ -205,7 +205,6 @@ ${visibleTools.map((t) => `- \`${t.name}\`: ${firstSentence(t.description)}`).jo
 `;
 }
 
-
 /** /llms-full.txt: the complete agent reference. */
 export function llmsFullTxt(origin: string, config: DropwayConfig, tools: readonly McpToolDefinition[], registry?: readonly OperationDefinition[], availableTools?: ReadonlySet<string>): string {
   const visibleTools = tools.filter((tool) => availableTools ? availableTools.has(tool.name) : toolEnabled(tool, config));
