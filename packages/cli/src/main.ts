@@ -813,6 +813,25 @@ interface KeyItem {
   revoked: boolean;
 }
 
+/** Validate a key record's shape without judging its values or dropping extension fields. */
+function isKeyItem(value: unknown): value is KeyItem {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  const text = (v: unknown): v is string => typeof v === "string";
+  const nullableText = (v: unknown): v is string | null => v === null || typeof v === "string";
+  return text(row.id)
+    && nullableText(row.name)
+    && text(row.prefix)
+    && text(row.memberId)
+    && Array.isArray(row.scopes) && row.scopes.every((s) => typeof s === "string")
+    && nullableText(row.siteId)
+    && (row.current === undefined || typeof row.current === "boolean")
+    && nullableText(row.createdAt)
+    && nullableText(row.lastUsedAt)
+    && nullableText(row.expiresAt)
+    && typeof row.revoked === "boolean";
+}
+
 const keysCmd: Command = {
   summary: "List your API keys (safe metadata only, never the secrets)",
   usage: "kofra keys ls [--all] [--json]",
@@ -837,8 +856,18 @@ command, e.g.: kofra api POST /keys --data '{"name":"ci"}'`,
     if (rest.length > 0) throw new UsageError(`Unexpected argument "${rest[0]}". Usage: ${this.usage}`);
     const inst = await resolveInstance(p, io);
     const client = makeClient(io, inst.api, requireKey(inst, "Listing keys"));
-    const { data } = await client.get<{ keys: KeyItem[] }>(bool(p, "all") === true ? "/keys?all=true" : "/keys");
-    const keys = data.keys;
+    const { data } = await client.get<unknown>(bool(p, "all") === true ? "/keys?all=true" : "/keys");
+    const keys = data !== null && typeof data === "object" && !Array.isArray(data)
+      ? (data as { keys?: unknown }).keys
+      : undefined;
+    if (!Array.isArray(keys) || !keys.every(isKeyItem)) {
+      throw new CliError({
+        code: "invalid_key_list",
+        message: `The instance answered ${inst.api}/api/v1/keys with an unexpected shape.`,
+        hint: "Is this a Kofra instance? Check --api / KOFRA_API (use the origin, without /api/v1).",
+        exitCode: EXIT.error,
+      });
+    }
     out.result({ keys }, () => {
       if (!keys.length) return "No API keys.";
       // Escape data before table layout so names cannot control the terminal or forge rows.
