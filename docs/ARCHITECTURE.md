@@ -202,7 +202,9 @@ single `.zip` goes to `POST /api/v1/publish` instead. `.git/`, `node_modules/`,
   hashes, request hashes, an owner fence and the first result. D1 arbitrates
   concurrent claims; failed operations release only their own pending claim.
   Unknown outcomes fail closed until the 24-hour key expiry, rather than stealing
-  a live or interrupted operation's claim.
+  a live or interrupted operation's claim. Anonymous JSON publishing uses an
+  IP-scoped key (no replay when the IP is unavailable), so clients must choose
+  unpredictable keys and not share them with others behind the same network.
 
 Never edit an applied migration; add `000N_*.sql`. Extensions keep their own
 tables in their own migrations or their own D1 database.

@@ -10,6 +10,7 @@ import {
   createDeploy,
   parseDeployOptions,
   getFile,
+  getSiteByRef,
   getSiteFor,
   isHtml,
   isTextual,
@@ -489,7 +490,7 @@ export const HTTP_OPERATIONS = [
       responseType: "application/octet-stream",
       handler: async (c) => {
         const dw = D(c);
-        const site = await getSiteFor(dw, P(c), c.req.param("slug")!);
+        const site = await getSiteByRef(dw, P(c), c.req.param("slug")!);
         const path = normaliseFilePath(c.req.param("path")!);
         const versionId = c.req.query("version") ?? site.current_version_id;
         const file = await getFile(dw, site, path, versionId);

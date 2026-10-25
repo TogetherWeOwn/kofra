@@ -145,10 +145,11 @@ export async function fetchUrlSource(
   const doFetch = opts.fetcher ?? fetch;
   const signal = AbortSignal.timeout(opts.timeoutMs ?? URL_FETCH_TIMEOUT_MS);
   let current = assertPublicHttpsUrl(url);
+  let headers = opts.headers;
   for (let hop = 0; ; hop++) {
     let res: Response;
     try {
-      res = await doFetch(current.href, { headers: { "User-Agent": "Kofra-Fetch/1 (+https://github.com/TogetherWeOwn/dropway)", ...opts.headers }, redirect: "manual", signal });
+      res = await doFetch(current.href, { headers: { "User-Agent": "Kofra-Fetch/1 (+https://github.com/TogetherWeOwn/dropway)", ...headers }, redirect: "manual", signal });
     } catch (e) {
       const timedOut = signal.aborted;
       throw new ApiError(422, "fetch_failed", `Could not fetch ${current.href}: ${timedOut ? "timed out" : String((e as Error)?.message ?? e)}.`, "Check the URL is reachable from the public internet, or send the bytes another way.", {
@@ -159,7 +160,10 @@ export async function fetchUrlSource(
     if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
       await res.body?.cancel().catch(() => {});
       if (hop >= URL_FETCH_MAX_REDIRECTS) throw new ApiError(422, "fetch_failed", `Too many redirects fetching ${url}.`, `Use the final URL (at most ${URL_FETCH_MAX_REDIRECTS} redirects are followed).`);
-      current = assertPublicHttpsUrl(new URL(res.headers.get("location")!, current).href);
+      const next = assertPublicHttpsUrl(new URL(res.headers.get("location")!, current).href);
+      // Caller headers belong to the original origin, even if a later hop returns.
+      if (next.origin !== current.origin) headers = undefined;
+      current = next;
       continue;
     }
     if (!res.ok) {

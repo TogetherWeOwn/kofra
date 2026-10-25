@@ -1096,6 +1096,9 @@ are sampled, not written one by one. Reads use the SQL API when the operator set
 - Pagination: `?limit=` (1-200, default 50) and `?cursor=`; responses carry `nextCursor`.
 - `Idempotency-Key` header on every POST that creates something (24 h; same key + different body =
   `422 idempotency_key_reused`; still running = `409 idempotency_in_progress`, retryable).
+  Anonymous JSON publishing scopes replay by client IP, operation and key; use an unpredictable UUID
+  per logical operation and reuse it only on retry. IP scoping is not authentication: clients sharing
+  a network must not share keys. Without a client IP, anonymous replay is disabled.
 - `X-Kofra-Client: <harness>/<detail>` (attribution). `X-Request-Id` on every response.
 - Rate limits (R-36): `RateLimit-Policy` and `RateLimit` headers (IETF draft format), `Retry-After` on 429/503.
 - URLs in responses: `url` (live), `versionUrl` (exact version), per file `url`, `viewUrl`, `rawUrl`,
@@ -1152,7 +1155,7 @@ Codes are stable forever.
 
 | Method | Path | Tool | Scope | Pri | Status |
 |---|---|---|---|---|---|
-| POST | `/api/v1/publish` | `publish_site` | `sites:write`, or none when anonymous is on | P0 | Partial (multipart, zip, raw, inline done; other sources R-04) |
+| POST | `/api/v1/publish` | `publish_site` | `sites:write`, or none when anonymous is on | P0 | Implemented: JSON file sources and keyed replay; legacy multipart, zip and raw remain compatible and unkeyed. Deployment verification pending |
 | PATCH | `/api/v1/sites/{site}/files` | `update_site_files` | `sites:write` | P0 | R-05 |
 | GET | `/api/v1/sites/{site}/files` | `list_files` | `sites:read` | P0 | Done |
 | GET, HEAD | `/api/v1/sites/{site}/files/{path}` | `read_file` | `sites:read` | P0 | Done (`as=markdown`, ranges in R-25/R-34) |
@@ -1656,8 +1659,10 @@ grant more than they hold. Keys can be limited to one site and, for drives, a pa
 - **IPs.** Only salted hashes (`SIGNING_SECRET`) are stored. Analytics visitors are daily salted hashes.
 - **SSRF.** URL sources, proxy routes and webhooks fetch `https` only, refuse private, loopback,
   link-local and Cloudflare-internal addresses, follow at most 3 redirects (re-checking each), time out at
-  30 s, and cap bodies (100 MB for sources, 10 MB for proxy bodies). The Worker uses the
-  `global_fetch_strictly_public` compatibility flag when OAuth CIMD is enabled.
+  30 s, and cap bodies (100 MB for sources, 10 MB for proxy bodies). URL-source caller headers survive
+  same-origin redirects only; every caller header is permanently dropped after crossing an origin.
+  The Worker always uses `global_fetch_strictly_public`; embedding deployments must retain that
+  network boundary, including when OAuth CIMD is disabled.
 - **Secrets in content.** The CLI refuses to upload files matching high-signal secret patterns (private
   key blocks, `AKIA...`, `ghp_`, `sk-`, `xox`, `dw_`) unless `--allow-secrets`; the server returns
   `possible_secret` warnings and suggests `delete_version`.
@@ -1778,7 +1783,7 @@ Workspaces 24, Variables 3, Billing 4, Support 1.
 | here.now feature (operations) | Kofra equivalent | Pri | Status |
 |---|---|---|---|
 | 3-step publish: create, PUT to presigned R2, finalize (Sites) | Manifest publish + upload links + `finalize_version`; plus one-call publish and inline/URL sources | P0 | Done / R-04 |
-| Presigned R2 upload URLs | Upload links on the app origin (one egress host, no R2 keys) | P0 | R-04 |
+| Presigned R2 upload URLs | Upload links on the app origin (one egress host, no R2 keys) | P0 | Implemented with version-scoped upload capabilities (R-04); deployment verification pending |
 | Incremental deploys by sha256, `skipped[]` | Missing-hash negotiation, per-tenant dedupe | P0 | Done |
 | Refresh upload URLs | `missing_blobs` returns fresh links; `get_version` lists what is missing | P0 | R-05 |
 | Idempotent finalize (`replayed`) | `already_live` | P0 | Done |

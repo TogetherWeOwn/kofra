@@ -16,7 +16,12 @@
   and existing keyed operations: replay equal input, reject changed input with
   422 and concurrent duplicates with retryable 409. Migration 0005 adds the
   records; interrupted calls with an unknown outcome retain their claim until
-  the 24-hour expiry rather than risking a duplicate side effect.
+  the 24-hour expiry rather than risking a duplicate side effect. Anonymous JSON
+  publishing replays the first claim credential within its client-IP/key scope;
+  without a client IP replay is disabled. Use unpredictable keys, not shared names.
+- URL sources retain caller headers on same-origin redirects only, permanently
+  dropping all caller headers after a cross-origin hop. Raw file reads accept
+  site ids as well as slugs, including when authenticated by a claim token.
 - Enforce decoded inline caps per file/call (UTF-8: 1/4 MiB; base64: 256 KiB/1 MiB)
   with CLI/upload-links remediation. URL_FETCH_MAX_BYTES configures URL sources
   (default 100 MiB; file and one-shot caps still apply). The MCP wire cap is 8 MiB

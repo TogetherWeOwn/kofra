@@ -46,6 +46,8 @@ export function idempotencyScope(p: Principal): string | null {
     return `m:v2:${JSON.stringify([p.tenantId, p.memberId, p.keyId, p.siteId, p.role, [...new Set(p.scopes)].sort(), p.via])}`;
   }
   if (p.kind === "claim") return `c:${p.siteId}`;
+  // Without a real client IP, never share anonymous claim credentials globally.
+  if (p.kind === "anonymous" && p.ip && p.ip !== "0.0.0.0") return `a:${p.ip}`;
   return null;
 }
 
