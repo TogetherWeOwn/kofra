@@ -3,11 +3,12 @@ import type { DropwayContext } from "../context";
 import { appOrigin, siteUrl } from "../context";
 import { ApiError, badRequest, forbidden, tooLarge } from "../errors";
 import { sha256Hex } from "../lib/crypto";
+import { stringField } from "../lib/input";
 import { contentTypeFor, normaliseContentType } from "../lib/mime";
 import { normaliseFilePath, stripCommonRoot } from "../lib/paths";
 import type { Principal } from "../principal";
 import { blobScope, putVerifiedBlob } from "./blobs";
-import { createDeploy, finalizeDeploy, precheckManifest } from "./deploys";
+import { createDeploy, finalizeDeploy, parseDeployOptions, precheckManifest } from "./deploys";
 import { createSite, discardNewSite, findSite, getSiteFor, parseSettings, serializeSite, updateSite, type SiteRow, type VersionRow } from "./sites";
 
 /** A file held in memory for one-shot publishing. */
@@ -82,11 +83,12 @@ export async function parsePublishRequest(dc: DropwayContext, req: Request, maxB
     if (!Array.isArray(body.files)) {
       throw badRequest("files_required", "JSON publish needs a files array.", 'Send {"files":[{"path":"index.html","content":"<h1>Hi</h1>"}]} (add "encoding":"base64" for binary).');
     }
-    for (const raw of body.files as Array<Record<string, unknown>>) {
-      const path = normaliseFilePath(String(raw?.path ?? ""));
+    for (const [index, raw] of (body.files as Array<Record<string, unknown>>).entries()) {
+      const path = normaliseFilePath(stringField(raw?.path ?? "", `files.${index}.path`));
       if (typeof raw.content !== "string") throw badRequest("invalid_file", `files[].content for "${path}" must be a string.`, 'Use "encoding":"base64" for binary content.');
       const bytes = raw.encoding === "base64" ? base64ToBytes(raw.content, path) : new TextEncoder().encode(raw.content);
-      files.push({ path, bytes, contentType: normaliseContentType(raw.contentType as string | undefined, path) });
+      const contentType = raw.contentType == null ? undefined : stringField(raw.contentType, `files.${index}.contentType`);
+      files.push({ path, bytes, contentType: normaliseContentType(contentType, path) });
     }
   } else {
     const bytes = new Uint8Array(await req.arrayBuffer());
@@ -168,7 +170,7 @@ function unzipFiles(bytes: Uint8Array, maxBytes: number): InlineFile[] {
  */
 export async function resolvePublishTarget(dc: DropwayContext, p: Principal, fields: Record<string, unknown>, manifest?: unknown) {
   const settings = parseSettings(fields);
-  const slug = fields.slug ? String(fields.slug).trim().toLowerCase() : null;
+  const slug = fields.slug ? stringField(fields.slug, "slug").trim().toLowerCase() : null;
   if (p.kind === "claim") {
     const row = await dc.env.DB.prepare("SELECT slug FROM sites WHERE id = ? AND deleted_at IS NULL").bind(p.siteId).first<{ slug: string }>();
     if (!row) throw forbidden("The site for this claim token no longer exists.");
@@ -194,6 +196,8 @@ export async function resolvePublishTarget(dc: DropwayContext, p: Principal, fie
  * (deduplicated), record a version and make it live.
  */
 export async function publishFiles(dc: DropwayContext, p: Principal, input: PublishInput, opts: { client?: string | null } = {}) {
+  const metadata = parseDeployOptions({ message: input.fields.message, baseVersionId: input.fields.baseVersionId });
+  input = { ...input, fields: { ...input.fields, ...metadata } };
   const hashed = await Promise.all(input.files.map(async (f) => ({ ...f, sha256: await sha256Hex(f.bytes) })));
   const manifest = hashed.map((f) => ({ path: f.path, size: f.bytes.length, sha256: f.sha256, contentType: f.contentType }));
   const target = await resolvePublishTarget(dc, p, input.fields, manifest);

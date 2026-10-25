@@ -13,7 +13,7 @@ import { linkKey, linkPath, readCredentials, readLink, removeCredentials, saveCr
 import { collectFiles } from "./files.ts";
 import { encryptFiles } from "./encrypt.ts";
 import { withLegacyEnv } from "./legacy-brand.ts";
-import { formatBytes, plural, shortTime, table } from "./output.ts";
+import { formatBytes, plural, shellQuote, shortTime, table } from "./output.ts";
 import { publish, publishZip, waitForVersion, type ProgressEvent, type PublishResult, type VersionInfo } from "./publish.ts";
 import { VERSION } from "./version.ts";
 
@@ -313,7 +313,7 @@ running the same command again updates that site.`,
       const client = makeClient(io, inst!.api, token);
       out.progress(`Uploading ${target} (${formatBytes(st.size)})...`);
       const bytes = new Uint8Array(await readFile(resolve(io.cwd, target)));
-      result = await publishZip(client, bytes, { site, ...settings });
+      result = await publishZip(client, bytes, { site, ...settings, baseVersionId: str(p, "base") });
       out.progress(null);
     } else {
       out.progress("Reading files...");
@@ -469,6 +469,98 @@ const filesCmd: Command = {
     out.result({ version: data.version, files: data.files }, () =>
       data.files.length ? table(data.files.map((f) => [f.path, formatBytes(f.size), f.contentType, f.url]), ["PATH", "SIZE", "TYPE", "URL"]) : "No files.",
     );
+    return EXIT.ok;
+  },
+};
+
+interface ReadFilePage {
+  path: string;
+  versionId: string;
+  contentType: string;
+  kind: string;
+  size: number;
+  sha256: string;
+  encoding: string;
+  offset: number;
+  length: number;
+  truncated: boolean;
+  nextOffset: number | null;
+  content: string;
+  url: string;
+  rawUrl: string;
+}
+
+const readFileCmd: Command = {
+  summary: "Read one file's content (one bounded page)",
+  usage: "kofra read-file <site> <path> [--version <v>] [--offset <n>] [--length <n>] [--encoding auto|text|base64]",
+  flags: {
+    version: { kind: "string" },
+    offset: { kind: "string" },
+    length: { kind: "string" },
+    encoding: { kind: "string" },
+  },
+  details: `One bounded page per call (default 64 KiB, up to 1 MiB with --length).
+The version ("live", "v3", "3" or an id) is passed straight to
+GET /api/v1/read-file (operation read_file; MCP tool read_file): no
+version listing and no auto-fetch of the whole file.
+
+With --json, stdout is exactly the API page (path, versionId,
+contentType, size, sha256, encoding, offset, length, truncated,
+nextOffset, content, url, rawUrl). Without --json, stdout carries only
+the page content byte-for-byte (no added newline; base64 stays base64,
+so redirection is safe) and the page metadata goes to stderr, so
+pipes get clean content and truncation is never silent (shown even with
+--quiet).
+
+Examples:
+  kofra read-file my-site index.html
+  kofra read-file my-site image.png --encoding base64 > image.b64
+  kofra read-file my-site big.txt --length 65536 --json
+  kofra read-file my-site big.txt --offset 65536 --length 65536`,
+  async run(p, io, out) {
+    if (p.positionals.length > 2) throw new UsageError(`Too many arguments. Usage: ${this.usage}`);
+    const slug = positional(p, 0, "site", this.usage);
+    const filePath = positional(p, 1, "path", this.usage);
+    const version = str(p, "version");
+    const encoding = str(p, "encoding");
+    if (encoding !== undefined && encoding !== "auto" && encoding !== "text" && encoding !== "base64") {
+      throw new UsageError("--encoding must be auto, text or base64.");
+    }
+    const offsetRaw = str(p, "offset");
+    let offset: number | undefined;
+    if (offsetRaw !== undefined) {
+      if (offsetRaw.trim() === "") throw new UsageError("--offset must be a whole number 0 or greater.");
+      const n = Number(offsetRaw);
+      if (!Number.isSafeInteger(n) || n < 0) throw new UsageError("--offset must be a whole number 0 or greater.");
+      offset = n;
+    }
+    const length = int(p, "length", 1, 1048576);
+    const inst = await resolveInstance(p, io);
+    const client = makeClient(io, inst.api, requireKey(inst));
+    const q = new URLSearchParams({ site: slug, path: filePath });
+    if (version !== undefined) q.set("version", version);
+    if (offset !== undefined) q.set("offset", String(offset));
+    if (length !== undefined) q.set("length", String(length));
+    if (encoding !== undefined) q.set("encoding", encoding);
+    const { data } = await client.get<ReadFilePage>(`/read-file?${q}`);
+    if (out.json) {
+      out.result(data as unknown as Record<string, unknown>, () => data.content);
+    } else {
+      // Human output is the content byte-for-byte: no added newline, so
+      // redirection stays safe and base64 can be decoded as-is.
+      io.stdout(data.content);
+      const end = data.offset + data.length;
+      const range = data.size === 0 ? "empty file" : `bytes ${data.offset}-${Math.max(data.offset, end - 1)} of ${data.size}`;
+      let line = `${data.path} — ${formatBytes(data.size)} (${data.contentType}), encoding ${data.encoding}, version ${data.versionId}, ${range}. SHA-256: ${data.sha256}`;
+      if (data.truncated && data.nextOffset !== null) {
+        const cont = [`kofra read-file ${shellQuote(slug)} ${shellQuote(data.path)}`, `--offset ${data.nextOffset}`];
+        if (version !== undefined) cont.push(`--version ${shellQuote(version)}`);
+        if (length !== undefined) cont.push(`--length ${length}`);
+        if (encoding !== undefined) cont.push(`--encoding ${encoding}`);
+        line += `\nTruncated: continue with: ${cont.join(" ")}`;
+      }
+      io.stderr(`${line}\n`);
+    }
     return EXIT.ok;
   },
 };
@@ -707,6 +799,113 @@ command, e.g.: kofra api POST /keys --data '{"name":"ci"}'`,
   },
 };
 
+interface CatalogOperation extends Record<string, unknown> {
+  id: string;
+  method: string;
+  path: string;
+  scopes: string[];
+  inputSchema: Record<string, unknown>;
+  cli?: { command: string[]; positional?: string[] };
+}
+
+/** Validate the public catalog's fields without dropping extension metadata. */
+function isCatalogOperation(value: unknown): value is CatalogOperation {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  const strings = (v: unknown): v is string[] => Array.isArray(v) && v.every((s) => typeof s === "string");
+  const cli = row.cli as Record<string, unknown> | undefined;
+  return typeof row.id === "string" && row.id.length > 0
+    && typeof row.method === "string" && row.method.length > 0
+    && typeof row.path === "string" && row.path.length > 0
+    && strings(row.scopes)
+    && row.inputSchema !== null && typeof row.inputSchema === "object" && !Array.isArray(row.inputSchema)
+    && (cli === undefined || (cli !== null && typeof cli === "object" && !Array.isArray(cli)
+      && strings(cli.command) && (cli.positional === undefined || strings(cli.positional))));
+}
+
+/** The catalog row without its input schema; every other field stays exactly as the server sent it. */
+function stripInputSchema(row: Record<string, unknown>): Record<string, unknown> {
+  const compact: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(row)) if (key !== "inputSchema") compact[key] = value;
+  return compact;
+}
+
+function operationDetail(row: Record<string, unknown>, withSchema: boolean): string {
+  const scopes = Array.isArray(row.scopes) ? row.scopes.map(String) : [];
+  const cli = row.cli as { command?: unknown; positional?: unknown } | undefined;
+  const lines = [
+    String(row.id),
+    `  ${String(row.method)} ${String(row.path)}`,
+    `  Scopes: ${scopes.length ? scopes.join(" ") : "(none)"}`,
+  ];
+  if (cli && Array.isArray(cli.command)) {
+    const positionals = Array.isArray(cli.positional) ? cli.positional.map((name) => `<${String(name)}>`).join(" ") : "";
+    lines.push(`  CLI: kofra ${cli.command.map(String).join(" ")}${positionals ? ` ${positionals}` : ""}`);
+  }
+  if (withSchema) lines.push(`  Input schema:\n${JSON.stringify(row.inputSchema ?? {}, null, 2)}`);
+  return lines.join("\n");
+}
+
+const operationsCmd: Command = {
+  summary: "List API operations, or inspect one, without running anything",
+  usage: "kofra operations [operationId] [--schema] [--json]",
+  flags: { schema: { kind: "boolean" } },
+  details: `Reads the instance's public operation catalog (GET /api/v1/operations): the
+operation ids, methods, paths, required scopes and CLI paths. Nothing is
+executed, so inspecting an advertised DELETE is safe. No API key is needed
+and none is sent.
+
+With an exact operation id, shows that one row instead of the list. Input
+schemas are omitted by default; add --schema (with an id) to include the
+row's unchanged inputSchema.
+
+Examples:
+  kofra operations --json
+  kofra operations list_versions --json
+  kofra operations create_site --schema --json`,
+  async run(p, io, out) {
+    const [id, extra] = p.positionals;
+    if (extra !== undefined) throw new UsageError(`Too many arguments. Usage: ${this.usage}`);
+    const withSchema = bool(p, "schema") === true;
+    if (withSchema && id === undefined) throw new UsageError(`--schema needs an operation id. Usage: ${this.usage}`);
+    const inst = await resolveInstance(p, io);
+    // The catalog is public metadata: discover it without a credential.
+    const client = makeClient(io, inst.api, null);
+    const { data } = await client.get<unknown>("/operations");
+    const rows = Array.isArray(data) ? data : (data as { operations?: unknown } | null)?.operations;
+    if (!Array.isArray(rows) || !rows.every(isCatalogOperation)) {
+      throw new CliError({
+        code: "invalid_catalog",
+        message: `The instance answered ${inst.api}/api/v1/operations with an unexpected shape.`,
+        hint: "Is this a Kofra instance? Check --api / KOFRA_API (use the origin, without /api/v1).",
+        exitCode: EXIT.error,
+      });
+    }
+    if (id === undefined) {
+      const operations = rows.map(stripInputSchema);
+      out.result({ operations }, () => {
+        if (!operations.length) return "No operations: the instance answered with an empty catalog.";
+        return table(
+          rows.map((r) => [r.id, r.method, r.path, r.scopes.join(" ") || "(none)", r.cli ? `kofra ${r.cli.command.join(" ")}` : "-"]),
+          ["OPERATION", "METHOD", "PATH", "SCOPES", "CLI"],
+        );
+      });
+      return EXIT.ok;
+    }
+    const found = rows.find((r) => r.id === id);
+    if (!found) {
+      throw new CliError({
+        code: "operation_not_found",
+        message: `No operation "${id}".`,
+        hint: "List available operations with: kofra operations --json",
+        exitCode: EXIT.notFound,
+      });
+    }
+    out.result({ operation: withSchema ? found : stripInputSchema(found) }, () => operationDetail(found, withSchema));
+    return EXIT.ok;
+  },
+};
+
 const apiCmd: Command = {
   summary: "Call any REST endpoint (escape hatch)",
   usage: "kofra api <operationId | [METHOD] path> [--data <json> | --data @file.json | --data -]",
@@ -775,6 +974,7 @@ const COMMANDS: Record<string, Command> = {
   list: listCmd,
   site: siteCmd,
   files: filesCmd,
+  "read-file": readFileCmd,
   versions: versionsCmd,
   restore: restoreCmd,
   delete: deleteCmd,
@@ -784,6 +984,7 @@ const COMMANDS: Record<string, Command> = {
   logout: logoutCmd,
   setup: setupCmd,
   api: apiCmd,
+  operations: operationsCmd,
 };
 
 const ALIASES: Record<string, string> = {

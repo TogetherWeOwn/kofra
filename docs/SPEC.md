@@ -97,7 +97,7 @@ What Kofra is not:
 | PUB-03 | File sources in JSON and MCP, one per file: `content` (utf8), `content`+`encoding:"base64"` (small binaries), `url` (server fetches it, SSRF-guarded), `sha256`+`size` (already stored), `copyFrom` (another site, version or path) | P0 | R-04 |
 | PUB-04 | Upload links: the response lists `PUT <app>/api/v1/blobs/<sha256>` targets with a ready `curl` line and a short-lived upload token scoped to the pending version. One egress host; no R2 credentials needed | P0 | R-04 |
 | PUB-05 | Byte-identical republish returns `status: "unchanged"` and mints no version; settings in the same call still apply | P0 | Done |
-| PUB-06 | Stale-write protection: `baseVersionId` returns `409 version_conflict` naming the live version, who published it and when | P0 | Done (richer details in R-03) |
+| PUB-06 | Stale-write protection: `baseVersionId` returns `409 version_conflict` naming the live version, who published it and when | P0 | Done |
 | PUB-07 | Partial update `PATCH /api/v1/sites/{site}/files` (`update_site_files`): write, delete and move paths relative to a base version; everything else carries over by hash | P0 | R-05 |
 | PUB-08 | `Idempotency-Key` on every create (24 h); finalize, restore and delete are idempotent | P0 | Partial (finalize replay done); R-04 |
 | PUB-09 | Client attribution: `X-Kofra-Client: <harness>/<detail>` header or MCP `clientInfo`, stored per version | P0 | Done (header); MCP in R-06 |
@@ -201,6 +201,7 @@ Full matrix in section 10.
 | ORG-03 | Titles and descriptions: caller value, then HTML metadata, then Workers AI when bound (switchable off) | P1 | R-19 |
 | ORG-04 | QR code per site in the dashboard and viewer bar | P1 | R-22 |
 | ORG-05 | Opt-in public gallery of the instance's public sites with a JSON feed | P2 | R-50 |
+| ORG-06 | Dashboard version files: sort the loaded manifest by path, kind or exact byte size, ascending/descending, composed with the path filter; client-side only, default Path ascending | P1 | Done |
 
 ### 4.9 Agent surfaces (AX)
 
@@ -212,7 +213,7 @@ Full matrix in section 10.
 | AX-04 | CLI `npx kofra`: `publish --json --wait`, management commands, exit codes, `kofra api` escape hatch | P0 | R-09, R-10 |
 | AX-05 | Local stdio MCP (`npx kofra mcp`) with local-path sources | P1 | R-26 |
 | AX-06 | Discovery: `llms.txt` v2, a skill templated with the instance's own URLs, `/.well-known/agent-skills/index.json`, `/.well-known/api-catalog`, `/connect` | P0 | Partial (`llms.txt`, OpenAPI); R-11 |
-| AX-07 | Error envelope with `code`, `hint`, `retryable`, `retryAfterSeconds`, `docs`, `next`, `details.fields` | P0 | Partial; R-03 |
+| AX-07 | Error envelope with `code`, `hint`, `retryable`, `retryAfterSeconds`, `docs`, `next`, `details.fields` | P0 | Done (manifest and schema validation; legacy service validators retain stable codes) |
 | AX-08 | `whoami` reports principal, instance, capabilities, limits and usage | P0 | R-17 policy/usage done; extended instance metadata in R-06 |
 | AX-09 | `check_site`: broken links, missing assets, path-mode traps, optional screenshot | P1 | R-20 |
 | AX-10 | `call_api` (any operation by method and path) and `search_docs` | P1 | R-25 |
@@ -1117,8 +1118,17 @@ are sampled, not written one by one. Reads use the SQL API when the operator set
 }
 ```
 
-`code`, `message`, `hint` and `details` exist today; `retryable`, `retryAfterSeconds`, `docs`, `next` and
-`details.fields` (every invalid field at once) arrive in R-03. Codes are stable forever.
+R-03 adds `retryable`, `retryAfterSeconds`, `docs` and `next` while preserving the existing fields.
+Manifest and operation-schema validation collect bad fields in `details.fields`; source validation
+also uses this collection. MCP field paths use dots for identifier/numeric segments and JSON-quoted
+brackets for other property names: literal `a.b` is `["a.b"]`, distinct from nested `a.b`;
+`items.0["x/y"]` identifies a literal slash in a key. Missing required/dependency keys use the
+same notation. Legacy semantic service validators retain their stable error codes.
+Version conflicts include `liveVersionId`, `liveVersionNumber`, `liveVersionClient` and
+`liveVersionAt` (publication time in epoch milliseconds). HTTP 429/503 always send `Retry-After`,
+matching the envelope delay (one second when omitted). `/docs/errors` and `/docs/errors.md` are
+generated from `packages/core/src/error-codes.ts`; `npm run errors:sync` updates the repository copy.
+Codes are stable forever.
 
 ### 8.2 Endpoints
 
@@ -1717,7 +1727,7 @@ The link alone is not an operational reporting channel.
    one-line setup for each agent. The `curl` path keeps working.
 4. **Connect agents.** `/connect` shows: `claude mcp add --transport http kofra <app>/mcp --header
    "Authorization: Bearer $KOFRA_API_KEY"`, Codex, Cursor, `npx add-mcp <app>/mcp`,
-   `npx skills add <app> -g`, and `npx kofra login --url <app>`.
+   `npx skills add <app> -g`, and `npx kofra login --api <app>`.
 
 ### 12.2 What the button cannot do, and the fallback
 

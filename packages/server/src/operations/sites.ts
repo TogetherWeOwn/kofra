@@ -2,7 +2,7 @@ import { HTTP_SITE, HTTP_MANIFEST_ENTRY, HTTP_DEPLOY } from "./http-schemas";
 import { accessModeOf, appOrigin, createSite, describeSite, parseSettings, renameSite, siteUrl, createSiteWithDeploy, serializeSite } from "@dropway/core";
 import { SETTINGS_INPUT, SITE_OUT, SITE_REF, obj } from "../mcp/schemas";
 import { readJson } from "../routes/api";
-import { defineOperation } from "../operations";
+import { defineOperation, rawRequestInput } from "../operations";
 import { fromSchema, LIST, WRITE, CREATE, siteOut, str, settingsFrom, P, D, clientOf } from "./shared";
 
 export const SITE_OPERATIONS = [
@@ -42,6 +42,9 @@ export const SITE_OPERATIONS = [
     },
     http: {
       statuses: [201],
+      // The handler coerces legacy settings itself; schema validation would
+      // reject those before it runs.
+      parseInput: (c) => rawRequestInput(c),
       input: fromSchema({
         type: "object",
         properties: {
