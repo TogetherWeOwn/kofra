@@ -257,6 +257,38 @@ export const PAGE_PATHS: Json = {
       responses: { "200": { description: "Markdown", content: { "text/markdown": { schema: { type: "string" } } } } },
     }),
   },
+  "/connect": {
+    get: page("connect_page", "Copy-paste agent setup per client (HTML)", {
+      tags: ["agents"],
+      security: [],
+      "x-mcp-exclude": "discovery document",
+      responses: { "200": { description: "HTML", content: { "text/html": { schema: { type: "string" } } } } },
+    }),
+  },
+  "/connect.md": {
+    get: page("connect_markdown", "Copy-paste agent setup per client (Markdown)", {
+      tags: ["agents"],
+      security: [],
+      "x-mcp-exclude": "discovery document",
+      responses: { "200": { description: "Markdown", content: { "text/markdown": { schema: { type: "string" } } } } },
+    }),
+  },
+  "/robots.txt": {
+    get: page("robots_txt", "App crawler policy", {
+      tags: ["agents"],
+      security: [],
+      "x-mcp-exclude": "discovery document",
+      responses: { "200": { description: "Plain text", content: { "text/plain": { schema: { type: "string" } } } } },
+    }),
+  },
+  "/.well-known/api-catalog": {
+    get: page("api_catalog", "RFC 9727 linkset to this instance's OpenAPI, docs and MCP endpoint", {
+      tags: ["agents"],
+      security: [],
+      "x-mcp-exclude": "discovery document",
+      responses: { "200": { description: "OK", content: { "application/linkset+json": { schema: { type: "object" } } } } },
+    }),
+  },
   "/.well-known/agent-skills/index.json": {
     get: page("agent_skills_index", "Agent Skills discovery index (v0.2.0) for `npx skills add <origin>`", {
       tags: ["agents"],

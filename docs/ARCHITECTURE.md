@@ -38,7 +38,7 @@ packages/server           @dropway/server: createDropway() Hono app factory
   src/mcp/                Remote MCP server (/mcp): endpoint (index.ts), core tools (tools.ts), schemas
   src/app.ts              App-origin routes: home (./ui), /openapi.json, discovery routes, /claim, /mcp
   src/openapi.ts          OpenAPI 3.1 document for every route (operationId = MCP tool name)
-  src/discovery.ts        /llms.txt, /llms-full.txt, /skill.md, /.well-known/agent-skills (generated)
+  src/discovery.ts        /llms.txt, /llms-full.txt, /skill.md, /connect(.md), /.well-known/*, /robots.txt (generated)
   src/extensions.ts       Types for routes, MCP tools, UI slots, createDropway options
 packages/cli              `kofra` CLI (npm package "kofra", Node 20+, zero runtime dependencies)
 skills/kofra/SKILL.md   Agent Skill (`npx skills add TogetherWeOwn/dropway`); generated, `npm run skill:sync`
@@ -85,8 +85,8 @@ fetch(request)
        site      -> serveSite()       (packages/server/src/serve.ts)
        redirect  -> 301/307           (trailing slash, other origin, Referer fallback)
        app       -> Hono app: /api/v1/* (identity adapter resolves the principal),
-                    /, /openapi.json, /llms.txt, /llms-full.txt, /skill.md,
-                    /.well-known/agent-skills/*, /claim, /mcp, UI pages
+                    /, /openapi.json, /llms.txt, /llms-full.txt, /skill.md, /connect(.md),
+                    /.well-known/*, /robots.txt, /claim, /mcp, UI pages
 ```
 
 ### Where sites are served (config `SITES_MODE`)

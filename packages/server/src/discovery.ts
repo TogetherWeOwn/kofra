@@ -12,6 +12,9 @@ import type { OperationDefinition } from "./operations";
  *   /skill.md         Agent Skill (SKILL.md) with this instance's URLs filled in
  *   /.well-known/agent-skills/index.json  discovery index v0.2.0 (npx skills add <origin>)
  *   /.well-known/skills/index.json        legacy index v0.1.0
+ *   /connect, /connect.md                 copy-paste setup per agent client (HTML, Markdown)
+ *   /.well-known/api-catalog               RFC 9727 linkset to the OpenAPI, docs and MCP endpoint
+ *   /robots.txt                           app crawler policy (discovery docs are crawlable, app shells are not)
  *
  * The repository copy at skills/kofra/SKILL.md is skillMarkdown(null): a test keeps it in sync.
  */
@@ -257,4 +260,116 @@ ${visibleTools.map(toolBlock).join("\n\n")}
 ## Agent Skill
 
 ${skillMarkdown({ origin, instanceName: config.instanceName, anonymousPublish: config.anonymous.enabled, exampleSiteUrl: siteUrl({ config, requestUrl: new URL(origin) }, "bright-otter-x7k2") })}`;
+}
+
+// ---------------------------------------------------------------- /connect
+
+export interface ConnectSnippet {
+  /** Short label rendered above the command, e.g. "Claude Code". */
+  title: string;
+  /** The exact text to copy-paste. */
+  code: string;
+}
+
+export interface ConnectSection {
+  title: string;
+  intro: string;
+  snippets: ConnectSnippet[];
+}
+
+/** Client-specific JSON shared by the home page and both /connect formats. */
+export function mcpJsonSnippets(origin: string): ConnectSnippet[] {
+  const url = `${origin}/mcp`;
+  return [
+    {
+      title: "Cursor (.cursor/mcp.json or ~/.cursor/mcp.json)",
+      code: JSON.stringify({ mcpServers: { kofra: { url, headers: { Authorization: "Bearer ${env:KOFRA_API_KEY}" } } } }, null, 2),
+    },
+    {
+      title: "VS Code (.vscode/mcp.json)",
+      code: JSON.stringify({
+        inputs: [{ type: "promptString", id: "kofra-key", description: "Kofra API key", password: true }],
+        servers: { kofra: { type: "http", url, headers: { Authorization: "Bearer ${input:kofra-key}" } } },
+      }, null, 2),
+    },
+  ];
+}
+
+/**
+ * One source of truth for the /connect page and /connect.md: the same sections
+ * render as HTML (app.ts) and as Markdown (connectMarkdown) so they cannot drift.
+ * Commands use the instance's own origin and `$KOFRA_API_KEY`; VS Code prompts for the key.
+ */
+export function connectSections(origin: string): ConnectSection[] {
+  const mcp = `${origin}/mcp`;
+  return [
+    {
+      title: "MCP (recommended)",
+      intro: "One API key (`$KOFRA_API_KEY`, starts with `dw_`) unlocks every tool. Reads and writes go through the same permissions as the REST API.",
+      snippets: [
+        {
+          title: "Claude Code",
+          code: `claude mcp add --transport http kofra ${mcp} --header "Authorization: Bearer $KOFRA_API_KEY"`,
+        },
+        {
+          title: "Codex (~/.codex/config.toml)",
+          code: `[mcp_servers.kofra]\nurl = "${mcp}"\nbearer_token_env_var = "KOFRA_API_KEY"`,
+        },
+        ...mcpJsonSnippets(origin),
+        {
+          title: "Any MCP client (add-mcp)",
+          code: `npx add-mcp ${mcp} --header "Authorization: Bearer $KOFRA_API_KEY"`,
+        },
+      ],
+    },
+    {
+      title: "Agent Skill",
+      intro: "Teaches the agent to publish, change, check and roll back on this instance, with its URLs filled in.",
+      snippets: [{ title: "Install globally", code: `npx skills add ${origin} -g` }],
+    },
+    {
+      title: "CLI",
+      intro: "Hashes locally and uploads only files the server does not have yet.",
+      snippets: [{ title: "Sign in, then publish", code: `npx kofra login --api ${origin}\nnpx kofra publish ./dist` }],
+    },
+    {
+      title: "REST",
+      intro: "Works everywhere curl does. The full reference is llms-full.txt; every operation is in openapi.json.",
+      snippets: [
+        {
+          title: "Publish a page",
+          code: `curl ${origin}/api/v1/publish -H "Authorization: Bearer $KOFRA_API_KEY" -F "index.html=@index.html"`,
+        },
+      ],
+    },
+  ];
+}
+
+/** /connect.md: the same setup lines as the /connect page, as Markdown. */
+export function connectMarkdown(origin: string, instanceName: string): string {
+  const sections = connectSections(origin)
+    .map((s) => `## ${s.title}\n\n${s.intro}\n\n${s.snippets.map((sn) => `### ${sn.title}\n\n\`\`\`\n${sn.code}\n\`\`\``).join("\n\n")}`)
+    .join("\n\n");
+  return `# Connect an agent to ${instanceName}\n\nOne API key (\`$KOFRA_API_KEY\`, starts with \`dw_\`; the instance owner creates keys) works for MCP, REST and the CLI. Keep it secret: anyone holding it can publish as you.\n\n${sections}\n\n## Reference\n\n- [llms.txt](${origin}/llms.txt): how to publish, update and roll back\n- [llms-full.txt](${origin}/llms-full.txt): every endpoint, MCP tool and error code\n- [skill.md](${origin}/skill.md): the Agent Skill for this instance\n- [openapi.json](${origin}/openapi.json): every REST operation\n`;
+}
+
+/** /.well-known/api-catalog: RFC 9727 linkset to this instance's OpenAPI, docs and MCP endpoint. */
+export function apiCatalog(origin: string) {
+  const markdown = (href: string) => ({ href, type: "text/markdown" });
+  return {
+    linkset: [
+      {
+        anchor: `${origin}/`,
+        "service-desc": [{ href: `${origin}/openapi.json`, type: "application/openapi+json;version=3.1.0" }],
+        "service-doc": [`${origin}/llms.txt`, `${origin}/llms-full.txt`, `${origin}/skill.md`, `${origin}/connect.md`].map(markdown),
+        describedby: [{ href: `${origin}/openapi.json`, type: "application/openapi+json;version=3.1.0" }],
+        mcp: [{ href: `${origin}/mcp`, type: "application/json", title: "Remote MCP server (Streamable HTTP)" }],
+      },
+    ],
+  };
+}
+
+/** /robots.txt: discovery docs are crawlable; the key-gated app shells are not. */
+export function robotsTxt(): string {
+  return `# Kofra app origin: discovery documents are public; dashboard, sign-in, claim,\n# file-browser and API shells need a key and are not worth crawling.\nUser-agent: *\nDisallow: /dashboard\nDisallow: /login\nDisallow: /claim\nDisallow: /v/\nDisallow: /view/\nDisallow: /mcp\nDisallow: /api/\n`;
 }

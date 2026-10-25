@@ -1726,7 +1726,7 @@ The link alone is not an operational reporting channel.
    one-line setup for each agent. The `curl` path keeps working.
 4. **Connect agents.** `/connect` shows: `claude mcp add --transport http kofra <app>/mcp --header
    "Authorization: Bearer $KOFRA_API_KEY"`, Codex, Cursor, `npx add-mcp <app>/mcp`,
-   `npx skills add <app> -g`, and `npx kofra login --url <app>`.
+   `npx skills add <app> -g`, and `npx kofra login --api <app>`.
 
 ### 12.2 What the button cannot do, and the fallback
 
