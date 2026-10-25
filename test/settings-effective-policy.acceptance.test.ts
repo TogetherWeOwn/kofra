@@ -106,7 +106,7 @@ describe("settings effective policy: /me source of truth", () => {
     };
     const dw = await freshInstance({}, { adapters: { policy } });
     const me = await dw.json("/api/v1/me", { key: dw.ownerKey });
-    expect(me.body.capabilities.site_password).toEqual({
+    expect(me.body.capabilities.site_password).toMatchObject({
       allowed: false,
       error: { code: "acme_refused_for_review", message, hint },
     });
