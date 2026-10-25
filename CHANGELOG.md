@@ -157,3 +157,11 @@
   text lockfiles for excluded SDKs, in addition to modern npm lockfiles. Check
   `npm:` alias targets in manifests and lockfiles as well as dependency names.
   Reject binary `bun.lockb` with instructions to regenerate an auditable text lockfile.
+
+### CLI discovery
+
+- Add `kofra operations [operationId] [--schema]`: list the instance's public
+  operation catalog, or inspect one exact row, without executing anything. Only
+  `GET /api/v1/operations` is ever requested; no API key is needed and none is
+  sent. Unknown ids fail with exit 4 (`operation_not_found`); `--schema` without
+  an id fails with exit 2 before any request.
