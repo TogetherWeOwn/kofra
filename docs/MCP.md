@@ -46,7 +46,7 @@ repository) or `npx skills add https://<app>` (templated with that instance).
   Missing or bad credentials get `401` with `WWW-Authenticate: Bearer`.
 - Narrowing: `?toolsets=core,sites,versions,keys,members` (default: all) and
   `?read_only=1`; or the headers `X-Kofra-Toolsets` and `X-Kofra-Read-Only`.
-  All 24 tools are about 8k tokens of definitions; `core` is about 5.5k.
+  All 25 tools (26 when `claim_site` is enabled) are about 8.5k tokens of definitions; `core` is about 5.5k.
 - Results: `structuredContent` matching the tool's `outputSchema`, plus one text
   block (a plain-English line, then the compact JSON), plus a `resource_link`
   for live URLs. Business errors are results with `isError: true` and the text

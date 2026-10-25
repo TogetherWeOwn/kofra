@@ -160,6 +160,17 @@ export async function duplicateSite(dc: DropwayContext, p: Principal, ref: unkno
   const { results: files } = await dc.env.DB.prepare("SELECT path, sha256, size, content_type AS contentType FROM version_files WHERE version_id = ? ORDER BY path")
     .bind(live.id)
     .all<{ path: string; sha256: string; size: number; contentType: string }>();
+  // A concurrent publish + delete of the source version between the live read
+  // and the manifest read leaves a short capture: refuse as a conflict (409
+  // version_conflict), not a client manifest error, before the new site exists.
+  const capturedBytes = files.reduce((sum, f) => sum + f.size, 0);
+  if (files.length !== live.file_count || capturedBytes !== live.total_bytes) {
+    throw conflict(
+      "version_conflict",
+      `Site "${source.slug}" changed while preparing its duplicate (its live version was replaced).`,
+      "Retry the duplicate; the copy starts from the current live version.",
+    );
+  }
   // The manifest went live once already, so this only re-checks the caps (which a
   // host may have lowered since). It runs before createSite so a refusal is clean.
   const owner = { siteId: source.id, tenantId: source.tenant_id };
@@ -179,7 +190,7 @@ export async function duplicateSite(dc: DropwayContext, p: Principal, ref: unkno
       { siteId: site.id, tenantId: site.tenant_id, fileCount: live.file_count, totalBytes: live.total_bytes, newBytes },
       dc,
     );
-    const [, , madeLive] = await dc.env.DB.batch([
+    const [, , , madeLive] = await dc.env.DB.batch([
       dc.env.DB.prepare(
         `INSERT INTO versions (id, site_id, number, status, file_count, total_bytes, manifest_hash, base_version_id, source, client, message, created_by, created_at, finalized_at)
          VALUES (?, ?, (SELECT COALESCE(MAX(number), 0) + 1 FROM versions WHERE site_id = ?), 'ready', ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
@@ -193,6 +204,14 @@ export async function duplicateSite(dc: DropwayContext, p: Principal, ref: unkno
         `INSERT INTO version_files (version_id, path, sha256, size, content_type)
          SELECT ?, path, sha256, size, content_type FROM version_files WHERE version_id = ?`,
       ).bind(versionId, live.id),
+      // Fence the copy inside the transaction: when the source version vanished
+      // after capture, the SELECT above copies zero rows and this deliberately
+      // invalid, tagged JSON path aborts the batch, so the refusal leaves no
+      // orphan version or live pointer (the site still has no live version and
+      // discardNewSite removes it).
+      dc.env.DB.prepare(`SELECT CASE WHEN (SELECT COUNT(*) FROM version_files WHERE version_id = ?) = ?
+        AND COALESCE((SELECT SUM(size) FROM version_files WHERE version_id = ?), 0) = ?
+        THEN 1 ELSE json_extract('{}', 'dropway_duplicate_changed') END`).bind(versionId, live.file_count, versionId, live.total_bytes),
       dc.env.DB.prepare(
         `UPDATE sites SET current_version_id = ?, updated_at = ? WHERE id = ? AND current_version_id IS NULL AND deleted_at IS NULL
            AND (? IS NULL OR (${PROJECTED_STORAGE_SQL}) <= ?)`,
@@ -205,9 +224,23 @@ export async function duplicateSite(dc: DropwayContext, p: Principal, ref: unkno
     }
   } catch (e) {
     await discardNewSite(dc, site);
+    if (String(e).includes("dropway_duplicate_changed")) {
+      throw conflict(
+        "version_conflict",
+        `Site "${source.slug}" changed while it was being duplicated (its live version was replaced).`,
+        "Retry the duplicate; the copy starts from the current live version.",
+      );
+    }
     throw e;
   }
-  await refreshLive(dc, site.id);
+  // KV is a cache; D1 is the source of truth and serving rebuilds on a miss. A
+  // cache failure after commit must not turn a complete copy into an error that
+  // retry cannot replay (the slug is taken by the committed copy).
+  try {
+    await refreshLive(dc, site.id);
+  } catch (e) {
+    console.error(JSON.stringify({ event: "duplicate_cache_warm_failed", siteId: site.id, error: String(e) }));
+  }
   const version = (await getVersion(dc, site.id, versionId))!;
   emit(dc, "onPublish", {
     kind: "deploy",
