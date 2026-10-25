@@ -29,12 +29,23 @@ Zero runtime dependencies. Node.js 20 or newer.
 | `restore <name> [v3]` | Make an older version live again. Without a version: the one before the live version. Alias `rollback` |
 | `delete <name> --yes` | Delete a site. `--version v3` deletes one non-live version instead |
 | `whoami` | The instance, your identity and your key's scopes |
+| `keys ls [--all]` | Your API keys as safe metadata (never the secrets); `--all` adds other members' keys when your key has `members:write` |
 | `login` / `logout` | Save or forget an API key for an instance |
 | `setup --email <you>` | First run of a new instance: create the owner and save their key |
 | `api [METHOD] <path>` | Call any REST endpoint, e.g. `kofra api PATCH /sites/my-site --data '{"spa":true}'` |
 | `operations [id]` | List API operations, or inspect one (`--schema` adds its input schema). Reads the public catalog only; never executes |
 
 `kofra help <command>` shows every option.
+
+```sh
+kofra keys ls               # your own keys: id, name, prefix, scopes, site restriction, expiry, last use
+kofra keys ls --all --json  # every member's keys (needs members:write) as one JSON object
+```
+
+`keys ls` prints safe metadata only; the secrets themselves are never shown. In text output,
+`*` marks the current key and terminal control characters are shown as visible `\uXXXX` escapes,
+keeping each key on one row. `--json` preserves the original metadata values. Create and revoke
+keys with the generic command, e.g. `kofra api POST /keys --data '{"name":"ci"}'`.
 
 ## Versions
 

@@ -818,6 +818,99 @@ The owner API key is saved like \`kofra login\` (the full key is printed only wi
   },
 };
 
+interface KeyItem {
+  id: string;
+  name: string | null;
+  prefix: string;
+  memberId: string;
+  scopes: string[];
+  siteId: string | null;
+  current?: boolean;
+  createdAt: string | null;
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+  revoked: boolean;
+}
+
+/** Validate a key record's shape without judging its values or dropping extension fields. */
+function isKeyItem(value: unknown): value is KeyItem {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  const text = (v: unknown): v is string => typeof v === "string";
+  const nullableText = (v: unknown): v is string | null => v === null || typeof v === "string";
+  return text(row.id)
+    && nullableText(row.name)
+    && text(row.prefix)
+    && text(row.memberId)
+    && Array.isArray(row.scopes) && row.scopes.every((s) => typeof s === "string")
+    && nullableText(row.siteId)
+    && (row.current === undefined || typeof row.current === "boolean")
+    && nullableText(row.createdAt)
+    && nullableText(row.lastUsedAt)
+    && nullableText(row.expiresAt)
+    && typeof row.revoked === "boolean";
+}
+
+const keysCmd: Command = {
+  summary: "List your API keys (safe metadata only, never the secrets)",
+  usage: "kofra keys ls [--all] [--json]",
+  flags: { all: { kind: "boolean" } },
+  details: `List API keys as safe metadata only: id, name, prefix, scopes, site
+restriction, expiry and last use. The secrets themselves are never shown.
+
+Examples:
+  kofra keys ls            # your own keys
+  kofra keys ls --all      # every member's keys (needs members:write)
+  kofra keys ls --json     # one JSON object: { keys: [...] }
+
+Listing needs the keys:write scope. With --all the server also lists other
+members' keys when your key has the members:write scope; otherwise --all
+still lists only your own keys. Create and revoke keys with the generic
+command, e.g.: kofra api POST /keys --data '{"name":"ci"}'`,
+  async run(p, io, out) {
+    const [sub, ...rest] = p.positionals;
+    if (sub !== "ls") {
+      throw new UsageError(sub === undefined ? `Missing subcommand. Usage: ${this.usage}` : `Unknown keys subcommand "${sub}". Usage: ${this.usage}`);
+    }
+    if (rest.length > 0) throw new UsageError(`Unexpected argument "${rest[0]}". Usage: ${this.usage}`);
+    const inst = await resolveInstance(p, io);
+    const client = makeClient(io, inst.api, requireKey(inst, "Listing keys"));
+    const { data } = await client.get<unknown>(bool(p, "all") === true ? "/keys?all=true" : "/keys");
+    const keys = data !== null && typeof data === "object" && !Array.isArray(data)
+      ? (data as { keys?: unknown }).keys
+      : undefined;
+    if (!Array.isArray(keys) || !keys.every(isKeyItem)) {
+      throw new CliError({
+        code: "invalid_key_list",
+        message: `The instance answered ${inst.api}/api/v1/keys with an unexpected shape.`,
+        hint: "Is this a Kofra instance? Check --api / KOFRA_API (use the origin, without /api/v1).",
+        exitCode: EXIT.error,
+      });
+    }
+    out.result({ keys }, () => {
+      if (!keys.length) return "No API keys.";
+      // Escape data before table layout so names cannot control the terminal or forge rows.
+      const textCell = (value: string) => value.replace(
+        /[\u0000-\u001f\u007f-\u009f]/g,
+        (control) => `\\u${control.charCodeAt(0).toString(16).padStart(4, "0")}`,
+      );
+      const rows = keys.map((k) => [
+        k.current === true ? "*" : "",
+        k.id,
+        k.name ?? "-",
+        k.prefix,
+        k.scopes.join(" "),
+        k.siteId ?? "-",
+        shortTime(k.createdAt),
+        shortTime(k.lastUsedAt),
+        k.expiresAt ?? "-",
+      ].map(textCell));
+      return table(rows, ["CURRENT (*)", "ID", "NAME", "PREFIX", "SCOPES", "SITE", "CREATED", "LAST USED", "EXPIRES"]);
+    });
+    return EXIT.ok;
+  },
+};
+
 interface CatalogOperation extends Record<string, unknown> {
   id: string;
   method: string;
@@ -998,6 +1091,7 @@ const COMMANDS: Record<string, Command> = {
   restore: restoreCmd,
   delete: deleteCmd,
   whoami: whoamiCmd,
+  keys: keysCmd,
   login: loginCmd,
   logout: logoutCmd,
   setup: setupCmd,
