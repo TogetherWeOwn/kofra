@@ -482,7 +482,7 @@ describe("R-04 inline caps", () => {
       error = result.data.error;
     }
     expect(error).toMatchObject({ code: "inline_too_large", hint: expect.any(String) });
-    expect(error.hint).toMatch(/CLI|npx dropway/i);
+    expect(error.hint).toMatch(/CLI|npx kofra/i);
     expect(error.hint).toMatch(/upload links/i);
   });
 
