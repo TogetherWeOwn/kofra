@@ -46,7 +46,7 @@ repository) or `npx skills add https://<app>` (templated with that instance).
   Missing or bad credentials get `401` with `WWW-Authenticate: Bearer`.
 - Narrowing: `?toolsets=core,sites,versions,keys,members` (default: all) and
   `?read_only=1`; or the headers `X-Kofra-Toolsets` and `X-Kofra-Read-Only`.
-  All 24 tools are about 8k tokens of definitions; `core` is about 5.5k.
+  All 31 tools (32 when `claim_site` is enabled) are about 9k tokens of definitions; `core` is about 5.5k.
 - Results: `structuredContent` matching the tool's `outputSchema`, plus one text
   block (a plain-English line, then the compact JSON), plus a `resource_link`
   for live URLs. Business errors are results with `isError: true` and the text
@@ -74,6 +74,7 @@ repository) or `npx skills add https://<app>` (templated with that instance).
 | `claim_site` | core | Claim an anonymous site (listed only when anonymous publishing is on) | `POST .../claim` |
 | `create_site` | sites | Reserve a site without files | `POST /api/v1/sites` |
 | `rename_site` | sites | New slug (the old URL stops working) | `POST .../rename` |
+| `duplicate_site` | sites | Copy the live version into a new slug, live at once (SPA mode only; re-apply a password) | `POST .../duplicate` |
 | `get_version` | versions | One version; missing uploads of a pending one | `GET .../versions/{version}` |
 | `delete_version` | versions | Delete a non-live version (needs `confirm`) | `DELETE .../versions/{id}` |
 | `list_api_keys`, `create_api_key`, `revoke_api_key` | keys | Scoped keys | `/api/v1/keys` |

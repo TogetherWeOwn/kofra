@@ -1,5 +1,5 @@
 import { HTTP_SITE, HTTP_MANIFEST_ENTRY, HTTP_DEPLOY } from "./http-schemas";
-import { accessModeOf, appOrigin, createSite, describeSite, parseSettings, releaseSlug, renameSite, requireConfirm, siteUrl, createSiteWithDeploy, serializeSite } from "@dropway/core";
+import { accessModeOf, appOrigin, createSite, describeSite, duplicateSite, parseSettings, releaseSlug, renameSite, requireConfirm, siteUrl, createSiteWithDeploy, serializeSite } from "@dropway/core";
 import { CONFIRM_SLUG, SETTINGS_INPUT, SITE_OUT, SITE_REF, obj } from "../mcp/schemas";
 import { readJson } from "../routes/api";
 import { defineOperation, rawRequestInput } from "../operations";
@@ -236,6 +236,102 @@ export const SITE_OPERATIONS = [
             url: "https://dropway.example/s/bright-otter-x7k2/",
             currentVersionId: "ver_example",
           },
+        },
+      },
+    ],
+  }),
+  defineOperation({
+    id: "duplicate_site",
+    method: "POST",
+    path: "/api/v1/sites/{site}/duplicate",
+    summary: "Duplicate a site's live version into a new slug",
+    toolset: "sites",
+    scopes: ["sites:write"],
+    description:
+      "Copy a site's live version into a brand-new slug, live at once: the copy's first version has exactly the source manifest (no bytes move; the source is untouched). Only SPA mode is carried over. The password and access gate, title, description and every other setting reset to the instance default: re-apply a password on the copy when the source was gated. The new slug is validated exactly like create_site (409 slug_taken on collision); an unknown or foreign source answers 404 site_not_found; a source with no live version answers 409.",
+    input: fromSchema({
+      type: "object",
+      properties: {
+        site: SITE_REF,
+        newSlug: {
+          type: "string",
+          description: "3-56 chars: a-z, 0-9, single hyphens.",
+        },
+        message: {
+          type: "string",
+          maxLength: 500,
+          description: "Version message for the copy's first version.",
+        },
+      },
+      required: ["site", "newSlug"],
+      additionalProperties: false,
+    }),
+    // Small output on purpose (the tools/list token budget): key fields are named,
+    // extra response fields (version, full site) pass through undeclared.
+    output: fromSchema(
+      obj(
+        {
+          slug: { type: "string" },
+          url: { type: "string" },
+          site: SITE_OUT,
+          versionId: { type: "string" },
+          fileCount: { type: "integer" },
+          totalBytes: { type: "integer" },
+          note: { type: "string" },
+        },
+        ["slug", "url", "versionId", "fileCount", "totalBytes"],
+      ),
+    ),
+    annotations: CREATE,
+    async handler(a, { dw, principal, client, transport }) {
+      const { site, version } = await duplicateSite(dw, principal, a.site, {
+        newSlug: a.newSlug,
+        message: a.message,
+        client,
+        source: transport === "rest" ? "api" : "mcp",
+      });
+      return {
+        slug: site.slug,
+        url: siteUrl(dw, site.slug),
+        site: { ...serializeSite(dw, site, version), access: { mode: accessModeOf(site) } },
+        versionId: version.id,
+        version: {
+          id: version.id,
+          number: version.number,
+          status: version.status,
+          live: true,
+          fileCount: version.file_count,
+          totalBytes: version.total_bytes,
+          message: version.message,
+        },
+        fileCount: version.file_count,
+        totalBytes: version.total_bytes,
+        note: "Only SPA mode was carried over. The password and access gate, title, description and every other setting were not copied: re-apply a password on the copy when the source was gated.",
+      };
+    },
+    http: {
+      status: 201,
+    },
+    tool: {
+      idempotent: true,
+      summarize: (r) => `Duplicated into ${r.slug} v${r.version.number} (${r.fileCount} files, ${r.totalBytes} bytes): ${r.url} Re-apply the source password when it was gated.`,
+    },
+    examples: [
+      {
+        input: { site: "bright-otter-x7k2", newSlug: "bright-otter-staging" },
+        output: {
+          slug: "bright-otter-staging",
+          url: "https://dropway.example/s/bright-otter-staging/",
+          site: {
+            slug: "bright-otter-staging",
+            url: "https://dropway.example/s/bright-otter-staging/",
+            currentVersionId: "ver_example",
+          },
+          versionId: "ver_example",
+          version: { id: "ver_example", number: 1, status: "ready", live: true, fileCount: 3, totalBytes: 1234, message: null },
+          fileCount: 3,
+          totalBytes: 1234,
+          note: "Only SPA mode was carried over. Re-apply a password on the copy when the source was gated.",
         },
       },
     ],

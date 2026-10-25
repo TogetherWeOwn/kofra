@@ -106,7 +106,7 @@ What Kofra is not:
 | PUB-12 | Publish warnings: root-absolute paths in path mode, SPA without a base path, browser storage on a sandboxed origin, `.wasm` without cross-origin isolation, possible secrets, invalid config files | P0 | R-12 |
 | PUB-13 | Files larger than one request (above about 95 MB): multipart upload through the Worker, resumable | P1 | R-35 |
 | PUB-14 | `archiveUrl` (publish a zip from a URL) and chat-client attachments (`{download_url, file_name}`) as sources | P1 | R-35 |
-| PUB-15 | Duplicate a site server-side (immediately live) | P1 | R-27 |
+| PUB-15 | Duplicate a site server-side (immediately live) | P1 | Done |
 | PUB-16 | TTL for keyed sites (`ttlSeconds`, `null` clears) | P1 | R-27 |
 | PUB-17 | Dry run: `dryRun: true` returns added, changed, removed and skipped files and the resulting size without creating a version | P1 | R-20 |
 | PUB-18 | Drag-and-drop publish in the dashboard (folder, zip or file) | P1 | R-22 |
@@ -1172,7 +1172,7 @@ Codes are stable forever.
 | PATCH | `/api/v1/sites/{site}` | `update_site_settings` | `sites:write` | P0 | Done (more settings R-27) |
 | DELETE | `/api/v1/sites/{site}` | `delete_site` | `sites:delete` | P0 | Done (scope R-17; freed name held per R-59) |
 | POST | `/api/v1/sites/{site}/claim` | `claim_site` | `sites:write` | P0 | Done |
-| POST | `/api/v1/sites/{site}/duplicate` | `duplicate_site` | `sites:write` | P1 | R-27 |
+| POST | `/api/v1/sites/{site}/duplicate` | `duplicate_site` | `sites:write` | P1 | Done |
 | POST | `/api/v1/sites/{site}/rename` | `rename_site` | `sites:write` | P2 | Done (R-59: old name 308s + redirectUntil; vanity and gallery stay R-50) |
 
 **Versions**
@@ -1792,7 +1792,7 @@ Workspaces 24, Variables 3, Billing 4, Support 1.
 | SPA mode | `spa` | P0 | Done |
 | Display metadata and AI generation | Title/description; HTML metadata then Workers AI | P1 | R-19 |
 | Viewer metadata for auto-viewers | Site title/description and OG image per version | P1 | R-19, R-20 |
-| Duplicate site | `duplicate_site` | P1 | R-27 |
+| Duplicate site | `duplicate_site` | P1 | Done |
 | Publish from Drive | `duplicate_site` from a drive | P1 | R-32 |
 | Delete site | `delete_site` (with `confirm`) | P0 | Done |
 | Caps: 2,500 files, 10 GB per version, 250 MB anonymous file, 5 GB keyed file | 2,500 / 10 GB / 25 MB anonymous (configurable) / 100 MB single request, 5 GB multipart | P0 / P1 | Done / R-35 |
