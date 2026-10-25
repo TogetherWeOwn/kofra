@@ -205,6 +205,8 @@ single `.zip` goes to `POST /api/v1/publish` instead. `.git/`, `node_modules/`,
   a live or interrupted operation's claim. Anonymous JSON publishing uses an
   IP-scoped key (no replay when the IP is unavailable), so clients must choose
   unpredictable keys and not share them with others behind the same network.
+  Hourly cleanup deletes at most 500 expired records per invocation, oldest expiry
+  first, including pending records; future-expiry owners and results remain intact.
 
 Never edit an applied migration; add `000N_*.sql`. Extensions keep their own
 tables in their own migrations or their own D1 database.
