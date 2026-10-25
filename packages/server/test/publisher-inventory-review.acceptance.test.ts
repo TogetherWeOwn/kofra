@@ -546,6 +546,7 @@ function findParts(root: TEl): Omit<Harness, "doc" | "root" | "spy" | "session" 
 async function bootPublisher(page: "publish" | "home" = "publish"): Promise<Harness> {
   const doc = new TDoc(page === "publish" ? BOOT : BOOT_HOME, page);
   const root = doc.addRoot(page === "publish" ? "dw-publish" : "dw-quick");
+  doc.addRoot("dw-toasts");
   const spy = new Spy();
   const session = makeStorage();
   const local = makeStorage();
@@ -633,6 +634,22 @@ function alerts(root: TEl): TEl[] {
 async function dropFiles(h: Harness, entries: FakeEntry[]): Promise<void> {
   fire(h.zone, "drop", { dataTransfer: dropOf(entries) });
   await flush();
+}
+
+/** Keep a drop's file read pending, proving it entered traversal before Publish. */
+async function beginGatedDrop(h: Harness): Promise<() => void> {
+  let resolveDrop!: () => void;
+  const gate = new Promise<void>((r) => (resolveDrop = r));
+  const entry = fileEntry("late.html", 9, { gate });
+  const read = entry.file;
+  let readStarted = false;
+  entry.file = (ok, err) => {
+    readStarted = true;
+    read(ok, err);
+  };
+  await dropFiles(h, [entry]);
+  expect(readStarted, "the drop must reach its gated file read before publishing starts").toBe(true);
+  return resolveDrop;
 }
 
 async function pickFolder(h: Harness, files: FakeFile[]): Promise<void> {
@@ -945,27 +962,79 @@ describe("publish state coherence", () => {
     await flush(60);
   });
 
-  it("handles a late-resolving drop deterministically: in-flight display and manifest stay aligned", async () => {
+  it("keeps the in-flight inventory and gives notice when a pending drop resolves during publish", async () => {
+    const h = await bootPublisher();
+    await pickFolder(h, [dirFile("dist/index.html", 41), dirFile("dist/.env", 9)]);
+    const toggle = findReviewToggle(h.root)!;
+    activate(toggle, "click");
+    const shown = h.summary.textContent;
+    const reviewed = reviewBody(h.root, toggle)!.textContent;
+    const resolveDrop = await beginGatedDrop(h);
+    const release = h.spy.pause("deploys");
+    try {
+      fire(h.publishBtn, "click", {});
+      await flush();
+      expect(h.publishBtn.disabled).toBe(true);
+      expect(h.spy.calls.some((c) => c.method === "POST" && /\/deploys$/.test(c.url))).toBe(true);
+      resolveDrop();
+      await flush();
+      expect(h.summary.textContent).toBe(shown);
+      expect(reviewBody(h.root, findReviewToggle(h.root)!)!.textContent).toBe(reviewed);
+      expect(h.root.textContent).not.toContain("late.html");
+      expect(h.doc.getElementById("dw-toasts")!.textContent, "a discarded pending drop must not be silent").toMatch(/drop|selection|publish/i);
+    } finally {
+      resolveDrop();
+      release();
+      await flush(60);
+    }
+    expect(h.spy.manifests).toHaveLength(1);
+    expect(h.spy.manifests[0]!.map((f) => ({ path: f.path, size: f.size }))).toEqual([{ path: "index.html", size: 41 }]);
+  });
+
+  it("keeps the completed selection cleared when a pending drop resolves after publish success", async () => {
     const h = await bootPublisher();
     await pickFolder(h, [dirFile("dist/index.html", 41)]);
-    let resolveDrop!: () => void;
-    const gate = new Promise<void>((r) => (resolveDrop = r));
-    const release = h.spy.pause("deploys");
-    fire(h.publishBtn, "click", {});
-    await flush();
-    // A drop starts during the publish but resolves only afterwards.
-    fire(h.zone, "drop", { dataTransfer: dropOf([fileEntry("late.html", 9, { gate })]) });
-    await flush();
+    const resolveDrop = await beginGatedDrop(h);
+    await clickPublish(h);
+    expect(h.result.textContent).toMatch(/live/i);
+    expect(h.summary.textContent).toBe("");
     resolveDrop();
     await flush();
-    // The late selection resolves while the publish is still active: the
-    // Builder may defer or ignore it with notice, but the in-flight display
-    // must keep describing the selection actually being sent.
-    expect(h.summary.textContent).toContain("index.html");
-    expect(h.summary.textContent).not.toContain("late.html");
-    release();
-    await flush(60);
-    expect(h.spy.manifests[0]!.map((f) => f.path)).toEqual(["index.html"]);
+    expect(h.summary.textContent, "a stale drop must not repopulate a completed publish").toBe("");
+    expect(h.root.textContent).not.toContain("late.html");
+    expect(h.clearBtn.hidden).toBe(true);
+    expect(h.publishBtn.disabled).toBe(true);
+    await clickPublish(h);
+    expect(h.spy.manifests).toHaveLength(1);
+    expect(h.spy.manifests[0]!.map((f) => ({ path: f.path, size: f.size }))).toEqual([{ path: "index.html", size: 41 }]);
+  });
+
+  it("keeps the original selection and review retryable when a pending drop resolves after publish failure", async () => {
+    const h = await bootPublisher();
+    await pickFolder(h, [dirFile("dist/index.html", 41), dirFile("dist/a.js", 42), dirFile("dist/.env", 9)]);
+    const toggle = findReviewToggle(h.root)!;
+    activate(toggle, "click");
+    const shown = h.summary.textContent;
+    const reviewed = reviewBody(h.root, toggle)!.textContent;
+    const resolveDrop = await beginGatedDrop(h);
+    h.spy.failNextDeploys = true;
+    await clickPublish(h);
+    expect(h.result.textContent).toMatch(/failed/i);
+    expect(h.summary.textContent).toBe(shown);
+    resolveDrop();
+    await flush();
+    expect(h.summary.textContent, "a stale drop must not replace the retryable selection").toBe(shown);
+    const retainedToggle = findReviewToggle(h.root)!;
+    expect(isExpanded(retainedToggle)).toBe(true);
+    expect(reviewBody(h.root, retainedToggle)!.textContent).toBe(reviewed);
+    expect(h.root.textContent).not.toContain("late.html");
+    expect(h.publishBtn.disabled).toBe(false);
+    await clickPublish(h);
+    expect(h.spy.manifests).toHaveLength(1);
+    expect(h.spy.manifests[0]!.map((f) => ({ path: f.path, size: f.size })).sort((a, b) => a.path.localeCompare(b.path))).toEqual([
+      { path: "a.js", size: 42 },
+      { path: "index.html", size: 41 },
+    ]);
   });
 
   it("keeps the selection and review available after a failed publish (control)", async () => {
