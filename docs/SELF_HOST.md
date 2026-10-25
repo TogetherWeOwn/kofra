@@ -209,6 +209,12 @@ without their required binding report `feature_unavailable`, even if a custom
 policy allows them. The default config runs usage reconciliation at midnight UTC
 and cleanup hourly; custom Worker configs must preserve both cron entries.
 
+The dashboard Settings page renders the same caller-effective values under
+"Your account": the four size/count limits, site and retained-storage usage
+against their configured limits, and each capability with its refusal reason
+when unavailable. The "This instance" section keeps showing the configured
+defaults above; effective values can be lower per key.
+
 The `0003_scopes_usage.sql` migration (after `0002_transfers.sql`) preserves deletion on existing `sites:write`
 keys by adding `sites:delete`. New keys must explicitly include `sites:delete` to
 delete; read/write-only automation stays non-destructive. Owners and admins may

@@ -1696,8 +1696,100 @@ export function dropwayClient() {
     loadKeys();
   };
 
+  /**
+   * Read-only effective-policy section for /dashboard/settings, rendered from the
+   * already-fetched /me response (no extra request, no polling). Shows the four
+   * caller-effective limits, site/storage usage against their configured limits,
+   * and every returned capability by its stable id. Refusal codes, messages and
+   * hints render as plain text. Null when /me carries no policy fields (older
+   * responses), so legacy output renders exactly as before.
+   */
+  function effectivePolicySection(m) {
+    var limits = m && m.limits && typeof m.limits === "object" ? m.limits : null;
+    var usage = m && m.usage && typeof m.usage === "object" ? m.usage : null;
+    var caps = m && m.capabilities && typeof m.capabilities === "object" ? m.capabilities : null;
+    if (!limits && !usage && !caps) return null;
+    limits = limits || {};
+    usage = usage || {};
+    caps = caps || {};
+
+    function isCount(n) {
+      return typeof n === "number" && isFinite(n) && n >= 0 && Math.floor(n) === n;
+    }
+    /** Exact bytes plus the shared short form, so a limit is never ambiguous. */
+    function byteText(n) {
+      return n + " bytes (" + bytes(n) + ")";
+    }
+    /** Only the sites/storage quotas use null-as-unlimited; other nulls stay ordinary. */
+    function quotaText(limit) {
+      if (limit === null) return "unlimited";
+      return isCount(limit) ? String(limit) : "unavailable";
+    }
+    function usedOf(label, used, limit) {
+      var l = quotaText(limit);
+      if (!isCount(used) && l === "unavailable") return "usage and limit unavailable";
+      if (!isCount(used)) return "usage unavailable of " + l + " " + label;
+      if (l === "unavailable") return used + " " + label + " in use, limit unavailable";
+      return used + " of " + l + " " + label;
+    }
+    function storageText(used, limit) {
+      var l = limit === null ? "unlimited" : isCount(limit) ? byteText(limit) : "unavailable";
+      if (!isCount(used) && l === "unavailable") return "usage and limit unavailable";
+      if (!isCount(used)) return "usage unavailable of " + l + " retained";
+      if (l === "unavailable") return byteText(used) + " retained, limit unavailable";
+      return byteText(used) + " of " + l + " retained";
+    }
+    function capabilityItem(id, decision) {
+      var li = h("li", {}, h("code", { text: id }), " — ");
+      if (!decision || typeof decision !== "object" || (decision.allowed !== true && decision.allowed !== false)) {
+        return add(li, "Unknown state.");
+      }
+      if (decision.allowed === true) return add(li, "Allowed.");
+      var err = decision.error && typeof decision.error === "object" ? decision.error : {};
+      add(li, "Unavailable. ");
+      if (err.code !== undefined && err.code !== null && err.code !== "") add(li, h("span", { class: "dw-mono", text: String(err.code) }), ": ");
+      if (err.message !== undefined && err.message !== null && err.message !== "") add(li, String(err.message), " ");
+      if (err.hint !== undefined && err.hint !== null && err.hint !== "") add(li, String(err.hint), " ");
+      var req = err.details && Array.isArray(err.details.requires) ? err.details.requires : null;
+      if (req && req.length) add(li, "Requires: " + req.join(", ") + ".");
+      return li;
+    }
+
+    var ids = Object.keys(caps);
+    var capList = h("ul", { class: "dw-small", style: "margin:.75rem 0 0" });
+    if (!ids.length) add(capList, h("li", { text: "Capability information unavailable." }));
+    ids.forEach(function (id) {
+      add(capList, capabilityItem(id, caps[id]));
+    });
+    return h(
+      "section",
+      { style: "margin-top:1rem", "aria-labelledby": "dw-effective-policy-h" },
+      h("h3", { id: "dw-effective-policy-h", text: "Your effective limits and capabilities" }),
+      h("p", { class: "dw-small dw-muted", text: "Effective values for the key you signed in with. They can be lower than the instance defaults under “This instance”." }),
+      h("p", { class: "dw-small dw-muted", text: "Allowed means this instance supports the capability for your key; each call still checks its own scopes. Storage counts bytes retained for your account, including earlier versions and deliveries." }),
+      h(
+        "dl",
+        { class: "dw-kv", style: "margin-top:.75rem" },
+        h("dt", { text: "Largest file" }), h("dd", { text: isCount(limits.maxFileBytes) ? byteText(limits.maxFileBytes) : "unavailable" }),
+        h("dt", { text: "Files per version" }), h("dd", { text: isCount(limits.maxFiles) ? plural(limits.maxFiles, "file") : "unavailable" }),
+        h("dt", { text: "Largest version" }), h("dd", { text: isCount(limits.maxSiteBytes) ? byteText(limits.maxSiteBytes) : "unavailable" }),
+        h("dt", { text: "One-call publish body" }), h("dd", { text: isCount(limits.oneShotMaxBytes) ? byteText(limits.oneShotMaxBytes) : "unavailable" }),
+      ),
+      h(
+        "dl",
+        { class: "dw-kv", style: "margin-top:.75rem" },
+        h("dt", { text: "Sites" }), h("dd", { text: usedOf("sites", usage.sites, limits.sites) }),
+        h("dt", { text: "Retained storage" }), h("dd", { text: storageText(usage.storage_bytes, limits.storage_bytes) }),
+      ),
+      capList,
+    );
+  }
+
   pages.settings = async function () {
     if (!requireAuth()) return;
+    // Usage and capability decisions must be fresh on each Settings visit.
+    var s = store("session");
+    if (s) s.removeItem(ME);
     var m = await renderAccount();
     var acct = d.getElementById("dw-me");
     if (acct && m && m.member) {
@@ -1712,6 +1804,7 @@ export function dropwayClient() {
           h("dt", { text: "Key scopes" }), h("dd", { class: "dw-mono", text: m.scopes.join(" ") }),
           h("dt", { text: "Key limited to a site" }), h("dd", { text: m.siteRestriction ? "yes" : "no" }),
         ),
+        effectivePolicySection(m),
       );
     }
     var mem = d.getElementById("dw-members");
