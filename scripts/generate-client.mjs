@@ -6,7 +6,7 @@
  * interface plus a typed method on DropwayClient. Wire shapes follow the REST
  * transport (`http.input ?? input`, like the OpenAPI generator), not the MCP
  * transport. Raw-body operations keep their bytes:
- * - an operation returning `responseType: application/octet-stream` reads bytes;
+ * - an operation returning octet-stream or ZIP reads bytes;
  * - a raw-body operation whose whole input is path parameters uploads bytes;
  * - any other raw-body operation (e.g. JSON publish) is a normal JSON call.
  *
@@ -114,7 +114,7 @@ export function emitInterface(name, schema) {
 }
 
 function isBytesOut(op) {
-  return op.responseType === "application/octet-stream";
+  return op.responseType === "application/octet-stream" || op.responseType === "application/zip";
 }
 
 function isBytesIn(op) {

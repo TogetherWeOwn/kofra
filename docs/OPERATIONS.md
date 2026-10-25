@@ -104,7 +104,8 @@ changing tool order. Duplicate method/path registrations are rejected. Existing
 contains `id`, `method`, `path`, `scopes`, a JSON `inputSchema`, and optional `cli`
 metadata. No handlers, Zod internals, credentials or tenant data are returned.
 `kofra api METHOD PATH` remains the escape hatch for operations without a
-convenience CLI command.
+convenience CLI command. `kofra operations [id] [--schema]` inspects this same
+catalog without executing anything.
 
 Core definitions live in `packages/server/src/operations/`, with stable order in
 `core.ts`. Existing REST clients keep their original payloads/statuses through

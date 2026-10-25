@@ -2,6 +2,7 @@ import type { Context } from "hono";
 import { appOrigin, encodePath, isSetUp, looksLikeSlug, requestPathToFilePath, siteUrl, type DropwayContext } from "@dropway/core";
 import type { DropwayEnv } from "../env";
 import type { UiSlots } from "../extensions";
+import { mcpJsonSnippets } from "../discovery";
 import { escapeHtml, formatBytes } from "../html";
 import { renderAppPage, sitesCspSource, uiSlotsOf } from "./shell";
 
@@ -79,15 +80,12 @@ export async function homePage(c: Context<DropwayEnv>): Promise<Response> {
       `<p>Claude Code:</p>${snippet(
         "dw-s-mcp",
         `claude mcp add --transport http kofra ${o}/mcp \\\n  --header "Authorization: Bearer $KOFRA_API_KEY"`,
-      )}<p>Other clients (Streamable HTTP):</p>${snippet(
-        "dw-s-mcpjson",
-        JSON.stringify({ mcpServers: { kofra: { type: "http", url: `${o}/mcp`, headers: { Authorization: "Bearer ${KOFRA_API_KEY}" } } } }, null, 2),
-      )}`,
+      )}${mcpJsonSnippets(o).map((sn, i) => `<p>${e(sn.title)}:</p>${snippet(i === 0 ? "dw-s-mcpjson" : "dw-s-vscodejson", sn.code)}`).join("")}`,
     ],
     [
       "docs",
       "Agent docs",
-      `<p>Point an agent at these; they describe this instance, not a generic one.</p><ul class="dw-small"><li><a href="/llms.txt">/llms.txt</a>: how to publish, update and roll back</li><li><a href="/llms-full.txt">/llms-full.txt</a>: every endpoint, MCP tool and error code</li><li><a href="/skill.md">/skill.md</a>: Agent Skill (<code>npx skills add ${e(o)}</code>)</li><li><a href="/openapi.json">/openapi.json</a>: every REST operation</li><li><code>${e(o)}/mcp</code>: the MCP endpoint</li></ul>`,
+      `<p>Point an agent at these; they describe this instance, not a generic one.</p><ul class="dw-small"><li><a href="/connect">/connect</a>: one-line setup per agent client</li><li><a href="/llms.txt">/llms.txt</a>: how to publish, update and roll back</li><li><a href="/llms-full.txt">/llms-full.txt</a>: every endpoint, MCP tool and error code</li><li><a href="/skill.md">/skill.md</a>: Agent Skill (<code>npx skills add ${e(o)}</code>)</li><li><a href="/openapi.json">/openapi.json</a>: every REST operation</li><li><code>${e(o)}/mcp</code>: the MCP endpoint</li></ul>`,
     ],
   ];
   const tabList = tabs

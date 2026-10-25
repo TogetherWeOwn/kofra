@@ -114,13 +114,16 @@ export function createDropway(opts: CreateDropwayOptions = {}): Dropway {
     c.set("requestId", c.req.header("cf-ray") ?? crypto.randomUUID());
     bindUiSlots(c, uiSlots);
     await next();
+    c.header("X-Request-Id", c.get("requestId"));
+    // Raw extension/transport responses still need retry guidance, even without ApiError.
+    if ((c.res.status === 429 || c.res.status === 503) && !c.res.headers.has("Retry-After")) c.header("Retry-After", "1");
   });
   app.route("/api/v1", api);
   app.route("/", createAppRouter({ app: appRoutes, uiSlots, mcp: opts.mcp ?? createMcpEndpoint(), mcpTools, operations }));
   app.notFound((c) => {
     if (c.req.path.startsWith("/api/")) {
       return c.json(
-        new ApiError(404, "route_not_found", `No API route for ${c.req.method} ${c.req.path}.`, `See ${appOrigin(c.get("dw"))}/openapi.json for every endpoint.`).toJSON(c.get("requestId")),
+        new ApiError(404, "route_not_found", `No API route for ${c.req.method} ${c.req.path}.`, `See ${appOrigin(c.get("dw"))}/openapi.json for every endpoint.`).toJSON(c.get("requestId"), appOrigin(c.get("dw"))),
         404,
       );
     }
@@ -156,6 +159,8 @@ export function createDropway(opts: CreateDropwayOptions = {}): Dropway {
           return sitesHome(dw);
         case "sites_not_found":
           return systemResponse(dw, request, { kind: "path", base: "/", sandbox: true, rewrite: null }, null, 404, "404", "Nothing is published here", "There is no site at this address. See {app}.");
+        case "gone":
+          return systemResponse(dw, request, route.mode, null, 410, "GONE", "This version is gone", "This version address names a deleted version. Old version links never serve another site's files.");
         case "app": {
           contexts.set(request, dw);
           const res = await app.fetch(request, env, ctx);

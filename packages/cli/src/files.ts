@@ -24,6 +24,15 @@ export interface CollectOptions {
   concurrency?: number;
 }
 
+/** Why one relative path was left out of the publish payload. Stable wire values. */
+export type OmissionReason = "ignored" | "excluded" | "symlink_directory" | "broken_symlink" | "special_file";
+
+export interface Omission {
+  /** Relative POSIX path as walked (directories carry a trailing slash). */
+  path: string;
+  reason: OmissionReason;
+}
+
 export interface Collected {
   /** "dir" or "file". */
   kind: "dir" | "file";
@@ -34,6 +43,8 @@ export interface Collected {
   secrets: SecretFinding[];
   /** Symlinked directories that were skipped. */
   skippedLinks: string[];
+  /** Every omitted path with its reason, sorted by path. Directories carry a trailing slash. */
+  omissions: Omission[];
 }
 
 interface Entry {
@@ -43,32 +54,42 @@ interface Entry {
 
 const toPosix = (p: string) => p.split(sep).join("/");
 
-async function walk(root: string, matcher: IgnoreMatcher, exclude: Set<string>, out: Entry[], ignored: string[], links: string[], relDir = "") {
+async function walk(root: string, matcher: IgnoreMatcher, exclude: Set<string>, out: Entry[], ignored: string[], links: string[], omissions: Omission[], relDir = "") {
   const dirents = await readdir(join(root, relDir), { withFileTypes: true });
   dirents.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   for (const d of dirents) {
     const rel = relDir ? `${relDir}/${d.name}` : d.name;
     const abs = join(root, rel);
-    if (exclude.has(abs)) continue;
+    if (exclude.has(abs)) {
+      omissions.push({ path: rel, reason: "excluded" });
+      continue;
+    }
     let isDir = d.isDirectory();
     let isFile = d.isFile();
     if (d.isSymbolicLink()) {
       const s = await stat(abs).catch(() => null);
-      if (!s) continue;
+      if (!s) {
+        omissions.push({ path: rel, reason: "broken_symlink" });
+        continue;
+      }
       if (s.isDirectory()) {
         // Following directory links can loop or escape the folder being published.
         links.push(rel);
+        omissions.push({ path: rel, reason: "symlink_directory" });
         continue;
       }
       isFile = s.isFile();
       isDir = false;
     }
     if (matcher.ignores(rel, isDir)) {
-      ignored.push(isDir ? `${rel}/` : rel);
+      const shown = isDir ? `${rel}/` : rel;
+      ignored.push(shown);
+      omissions.push({ path: shown, reason: "ignored" });
       continue;
     }
-    if (isDir) await walk(root, matcher, exclude, out, ignored, links, rel);
+    if (isDir) await walk(root, matcher, exclude, out, ignored, links, omissions, rel);
     else if (isFile) out.push({ abs, rel });
+    else omissions.push({ path: rel, reason: "special_file" }); // FIFO, socket or device (or a link to one)
   }
 }
 
@@ -102,6 +123,7 @@ export async function collectFiles(path: string, opts: CollectOptions = {}): Pro
   const exclude = new Set((opts.exclude ?? []).map((p) => resolve(p)));
   const ignored: string[] = [];
   const links: string[] = [];
+  const omissions: Omission[] = [];
   let entries: Entry[] = [];
   let kind: Collected["kind"];
 
@@ -109,7 +131,7 @@ export async function collectFiles(path: string, opts: CollectOptions = {}): Pro
     kind = "dir";
     const ignoreFile = await readFile(join(root, ".dropwayignore"), "utf8").catch(() => "");
     const matcher = new IgnoreMatcher(ignoreFile.split("\n"));
-    await walk(root, matcher, exclude, entries, ignored, links);
+    await walk(root, matcher, exclude, entries, ignored, links, omissions);
   } else if (st.isFile()) {
     kind = "file";
     const name = basename(root);
@@ -135,6 +157,8 @@ export async function collectFiles(path: string, opts: CollectOptions = {}): Pro
   await Promise.all(Array.from({ length: Math.max(1, Math.min(opts.concurrency ?? 16, entries.length)) }, worker));
   secrets.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : a.line - b.line));
 
+  omissions.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+
   return {
     kind,
     root,
@@ -143,5 +167,6 @@ export async function collectFiles(path: string, opts: CollectOptions = {}): Pro
     ignored,
     secrets,
     skippedLinks: links,
+    omissions,
   };
 }

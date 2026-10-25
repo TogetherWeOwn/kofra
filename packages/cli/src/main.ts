@@ -13,7 +13,7 @@ import { linkKey, linkPath, readCredentials, readLink, removeCredentials, saveCr
 import { collectFiles } from "./files.ts";
 import { encryptFiles } from "./encrypt.ts";
 import { withLegacyEnv } from "./legacy-brand.ts";
-import { formatBytes, plural, shortTime, table } from "./output.ts";
+import { formatBytes, plural, shellQuote, shortTime, table } from "./output.ts";
 import { publish, publishZip, waitForVersion, type ProgressEvent, type PublishResult, type VersionInfo } from "./publish.ts";
 import { VERSION } from "./version.ts";
 
@@ -189,7 +189,10 @@ async function listAllVersions(client: DropwayClient, slug: string): Promise<{ c
   return data;
 }
 
-/** "v3", "3" or a version id -> the version. Omitted -> the version before the live one (rollback). */
+/** "v3", "3" or a version id -> the version. Omitted -> the version before the live one (rollback).
+ * Used only by the destructive commands (restore, delete), which keep their
+ * historical list-based selection. Read-only commands resolve explicit refs
+ * directly (getVersionDirect) so old versions stay readable. */
 async function resolveVersion(client: DropwayClient, slug: string, ref: string | undefined): Promise<VersionRow> {
   const { currentVersionId, versions } = await listAllVersions(client, slug);
   if (!ref) {
@@ -206,6 +209,48 @@ async function resolveVersion(client: DropwayClient, slug: string, ref: string |
     throw new CliError({ code: "version_not_found", message: `${slug} has no finalized version "${ref}".`, hint: `List versions with: kofra versions ${slug}`, exitCode: EXIT.notFound });
   }
   return found;
+}
+
+interface DirectVersion {
+  site: string;
+  version: VersionRow;
+  missing: string[];
+}
+
+/**
+ * Read one version straight from the server ("live", "v3", "3" or an id).
+ * Unlike resolveVersion this never pages history, so versions older than the
+ * newest 500 stay readable. The ref travels as one encoded path segment, and
+ * server errors (code, hint, request id) pass through untouched.
+ */
+async function getVersionDirect(client: DropwayClient, slug: string, ref: string): Promise<DirectVersion> {
+  // encodeURIComponent leaves "." and ".." untouched, and URL normalization
+  // would then collapse the request onto a different endpoint (or the list
+  // route for ""). Refuse those locally instead of changing the endpoint.
+  if (ref === "" || ref === "." || ref === "..") {
+    throw new CliError({
+      code: "invalid_version_ref",
+      message: `Invalid version ${JSON.stringify(ref)}.`,
+      hint: `Use "live", "v3", "3" or a version id (see: kofra versions ${slug}).`,
+      exitCode: EXIT.usage,
+    });
+  }
+  const { data } = await client.get<DirectVersion>(`/sites/${enc(slug)}/versions/${enc(ref)}`);
+  return data;
+}
+
+/** Human text for one inspected version (used by `versions <name> <ref>`). */
+function singleVersionHuman(slug: string, data: DirectVersion): string {
+  const v = data.version;
+  const lines = [
+    `${slug} v${v.number} (${v.id}): ${v.status ?? "ready"}${v.live ? ", live" : ""}`,
+    `Files:    ${v.fileCount ?? "?"} (${formatBytes(v.totalBytes ?? 0)})`,
+    `Published: ${shortTime(v.finalizedAt ?? v.createdAt)}`,
+  ];
+  if (v.message) lines.push(`Message:   ${v.message}`);
+  if (v.client) lines.push(`Client:    ${v.client}`);
+  if (data.missing.length) lines.push(`Missing blobs: ${data.missing.length} (upload them, then finalize the version)`);
+  return lines.join("\n");
 }
 
 async function confirm(io: Io, out: Output, p: Parsed, expected: string, what: string): Promise<void> {
@@ -273,7 +318,14 @@ Never published: .git/, node_modules/, .env*, .dev.vars*, .npmrc, *.pem, *.key,
 .dropway/, .DS_Store, plus patterns in <path>/.dropwayignore ("!" re-includes).
 A .zip file is unpacked by the instance (one request, up to 25 MB by default).
 After a publish with a key, ./dropway.json remembers the site for <path>, so
-running the same command again updates that site.`,
+running the same command again updates that site.
+With --dry-run --json the result also lists "omissions": every skipped path
+with its reason (ignored, excluded, symlink_directory, broken_symlink), sorted
+by path. Nothing publishable is refused with no_files (exit 2) before anything
+is contacted. Fully offline agent check (no URL or key needed):
+  kofra publish ./dist --dry-run --json | jq '{files: [.files[].path], omissions}'
+This is a local inventory of what the CLI would send. It does not validate
+server policy, quotas or limits, and it is not the server's dry run.`,
   async run(p, io, out) {
     const target = positional(p, 0, "path", this.usage);
     const anonymous = bool(p, "anonymous") === true;
@@ -313,7 +365,7 @@ running the same command again updates that site.`,
       const client = makeClient(io, inst!.api, token);
       out.progress(`Uploading ${target} (${formatBytes(st.size)})...`);
       const bytes = new Uint8Array(await readFile(resolve(io.cwd, target)));
-      result = await publishZip(client, bytes, { site, ...settings });
+      result = await publishZip(client, bytes, { site, ...settings, baseVersionId: str(p, "base") });
       out.progress(null);
     } else {
       out.progress("Reading files...");
@@ -329,14 +381,26 @@ running the same command again updates that site.`,
           exitCode: EXIT.usage,
         });
       }
+      if (!collected.files.length) {
+        throw new CliError({
+          code: "no_files",
+          message: "There are no files to publish.",
+          hint: "Check the path, and .dropwayignore rules.",
+          details: { omissions: collected.omissions },
+          exitCode: EXIT.usage,
+        });
+      }
       if (dryRun) {
         out.result(
-          { dryRun: true, path: target, files: collected.files.map((f) => ({ path: f.path, size: f.size, sha256: f.sha256 })), totalBytes: collected.totalBytes, ignored: collected.ignored },
-          () =>
-            [
+          { dryRun: true, path: target, files: collected.files.map((f) => ({ path: f.path, size: f.size, sha256: f.sha256 })), totalBytes: collected.totalBytes, ignored: collected.ignored, omissions: collected.omissions },
+          () => {
+            const extras = collected.omissions.filter((o) => o.reason !== "ignored");
+            const label = (reason: string) => (reason === "excluded" ? "explicitly excluded" : reason === "symlink_directory" ? "symlinked folder" : reason === "special_file" ? "not a regular file" : "broken link");
+            return [
               ...collected.files.map((f) => `${f.path}  ${formatBytes(f.size)}`),
-              `Would publish ${plural(collected.files.length, "file")} (${formatBytes(collected.totalBytes)}).${collected.ignored.length ? ` Ignored: ${collected.ignored.join(", ")}` : ""}`,
-            ].join("\n"),
+              `Would publish ${plural(collected.files.length, "file")} (${formatBytes(collected.totalBytes)}).${collected.ignored.length ? ` Ignored: ${collected.ignored.join(", ")}` : ""}${extras.length ? ` Omitted: ${extras.map((o) => `${o.path} (${label(o.reason)})`).join(", ")}` : ""}`,
+            ].join("\n");
+          },
         );
         return EXIT.ok;
       }
@@ -457,12 +521,17 @@ const filesCmd: Command = {
   summary: "List the files of a site's live (or given) version",
   usage: "kofra files <name> [--version <v>]",
   flags: { version: { kind: "string" } },
+  details: `The version may be "live", "v3", "3" or a version id; it is read
+directly from the server, so versions older than the newest 500 work too.
+Without --version, the live version's files are listed.`,
   async run(p, io, out) {
     const slug = positional(p, 0, "name", this.usage);
     const inst = await resolveInstance(p, io);
     const client = makeClient(io, inst.api, requireKey(inst));
     const ref = str(p, "version");
-    const versionId = ref ? (await resolveVersion(client, slug, ref)).id : null;
+    // Any explicit --version (even an empty one) resolves directly: the server
+    // answers 404 for unknown refs instead of silently listing the live version.
+    const versionId = ref !== undefined ? (await getVersionDirect(client, slug, ref)).version.id : null;
     const { data } = await client.get<{ version: VersionInfo | null; files: Array<{ path: string; size: number; contentType: string; url: string; rawUrl: string }> }>(
       `/sites/${enc(slug)}/files${versionId ? `?version=${enc(versionId)}` : ""}`,
     );
@@ -473,23 +542,129 @@ const filesCmd: Command = {
   },
 };
 
+interface ReadFilePage {
+  path: string;
+  versionId: string;
+  contentType: string;
+  kind: string;
+  size: number;
+  sha256: string;
+  encoding: string;
+  offset: number;
+  length: number;
+  truncated: boolean;
+  nextOffset: number | null;
+  content: string;
+  url: string;
+  rawUrl: string;
+}
+
+const readFileCmd: Command = {
+  summary: "Read one file's content (one bounded page)",
+  usage: "kofra read-file <site> <path> [--version <v>] [--offset <n>] [--length <n>] [--encoding auto|text|base64]",
+  flags: {
+    version: { kind: "string" },
+    offset: { kind: "string" },
+    length: { kind: "string" },
+    encoding: { kind: "string" },
+  },
+  details: `One bounded page per call (default 64 KiB, up to 1 MiB with --length).
+The version ("live", "v3", "3" or an id) is passed straight to
+GET /api/v1/read-file (operation read_file; MCP tool read_file): no
+version listing and no auto-fetch of the whole file.
+
+With --json, stdout is exactly the API page (path, versionId,
+contentType, size, sha256, encoding, offset, length, truncated,
+nextOffset, content, url, rawUrl). Without --json, stdout carries only
+the page content byte-for-byte (no added newline; base64 stays base64,
+so redirection is safe) and the page metadata goes to stderr, so
+pipes get clean content and truncation is never silent (shown even with
+--quiet).
+
+Examples:
+  kofra read-file my-site index.html
+  kofra read-file my-site image.png --encoding base64 > image.b64
+  kofra read-file my-site big.txt --length 65536 --json
+  kofra read-file my-site big.txt --offset 65536 --length 65536`,
+  async run(p, io, out) {
+    if (p.positionals.length > 2) throw new UsageError(`Too many arguments. Usage: ${this.usage}`);
+    const slug = positional(p, 0, "site", this.usage);
+    const filePath = positional(p, 1, "path", this.usage);
+    const version = str(p, "version");
+    const encoding = str(p, "encoding");
+    if (encoding !== undefined && encoding !== "auto" && encoding !== "text" && encoding !== "base64") {
+      throw new UsageError("--encoding must be auto, text or base64.");
+    }
+    const offsetRaw = str(p, "offset");
+    let offset: number | undefined;
+    if (offsetRaw !== undefined) {
+      if (offsetRaw.trim() === "") throw new UsageError("--offset must be a whole number 0 or greater.");
+      const n = Number(offsetRaw);
+      if (!Number.isSafeInteger(n) || n < 0) throw new UsageError("--offset must be a whole number 0 or greater.");
+      offset = n;
+    }
+    const length = int(p, "length", 1, 1048576);
+    const inst = await resolveInstance(p, io);
+    const client = makeClient(io, inst.api, requireKey(inst));
+    const q = new URLSearchParams({ site: slug, path: filePath });
+    if (version !== undefined) q.set("version", version);
+    if (offset !== undefined) q.set("offset", String(offset));
+    if (length !== undefined) q.set("length", String(length));
+    if (encoding !== undefined) q.set("encoding", encoding);
+    const { data } = await client.get<ReadFilePage>(`/read-file?${q}`);
+    if (out.json) {
+      out.result(data as unknown as Record<string, unknown>, () => data.content);
+    } else {
+      // Human output is the content byte-for-byte: no added newline, so
+      // redirection stays safe and base64 can be decoded as-is.
+      io.stdout(data.content);
+      const end = data.offset + data.length;
+      const range = data.size === 0 ? "empty file" : `bytes ${data.offset}-${Math.max(data.offset, end - 1)} of ${data.size}`;
+      let line = `${data.path} — ${formatBytes(data.size)} (${data.contentType}), encoding ${data.encoding}, version ${data.versionId}, ${range}. SHA-256: ${data.sha256}`;
+      if (data.truncated && data.nextOffset !== null) {
+        const cont = [`kofra read-file ${shellQuote(slug)} ${shellQuote(data.path)}`, `--offset ${data.nextOffset}`];
+        if (version !== undefined) cont.push(`--version ${shellQuote(version)}`);
+        if (length !== undefined) cont.push(`--length ${length}`);
+        if (encoding !== undefined) cont.push(`--encoding ${encoding}`);
+        line += `\nTruncated: continue with: ${cont.join(" ")}`;
+      }
+      io.stderr(`${line}\n`);
+    }
+    return EXIT.ok;
+  },
+};
+
 const versionsCmd: Command = {
-  summary: "List a site's versions",
-  usage: "kofra versions <name>",
+  summary: "List a site's versions, or inspect one",
+  usage: "kofra versions <name> [ref]",
   flags: {},
+  details: `Inspect one version directly, without paging history (this works even
+for versions older than the newest 500 the list shows):
+  kofra versions <name> live          the live version
+  kofra versions <name> v3            version number 3 ("3" works too)
+  kofra versions <name> <versionId>   the exact version id
+
+A bare "kofra versions <name>" lists the newest 500 versions only, newest
+first; older versions stay inspectable by ref as above.`,
   async run(p, io, out) {
     const slug = positional(p, 0, "name", this.usage);
     const inst = await resolveInstance(p, io);
     const client = makeClient(io, inst.api, requireKey(inst));
-    const data = await listAllVersions(client, slug);
-    out.result(data as unknown as Record<string, unknown>, () =>
-      data.versions.length
-        ? table(
-            data.versions.map((v) => [`v${v.number}`, v.id === data.currentVersionId ? "live" : "", v.id, shortTime(v.finalizedAt ?? v.createdAt), String(v.fileCount ?? ""), formatBytes(v.totalBytes ?? 0), v.client ?? "", v.message ?? ""]),
-            ["VERSION", "", "ID", "PUBLISHED", "FILES", "SIZE", "CLIENT", "MESSAGE"],
-          )
-        : "No versions yet.",
-    );
+    const ref = p.positionals[1];
+    if (ref === undefined) {
+      const data = await listAllVersions(client, slug);
+      out.result(data as unknown as Record<string, unknown>, () =>
+        data.versions.length
+          ? table(
+              data.versions.map((v) => [`v${v.number}`, v.id === data.currentVersionId ? "live" : "", v.id, shortTime(v.finalizedAt ?? v.createdAt), String(v.fileCount ?? ""), formatBytes(v.totalBytes ?? 0), v.client ?? "", v.message ?? ""]),
+              ["VERSION", "", "ID", "PUBLISHED", "FILES", "SIZE", "CLIENT", "MESSAGE"],
+            )
+          : "No versions yet.",
+      );
+      return EXIT.ok;
+    }
+    const data = await getVersionDirect(client, slug, ref);
+    out.result(data as unknown as Record<string, unknown>, () => singleVersionHuman(slug, data));
     return EXIT.ok;
   },
 };
@@ -643,6 +818,206 @@ The owner API key is saved like \`kofra login\` (the full key is printed only wi
   },
 };
 
+interface KeyItem {
+  id: string;
+  name: string | null;
+  prefix: string;
+  memberId: string;
+  scopes: string[];
+  siteId: string | null;
+  current?: boolean;
+  createdAt: string | null;
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+  revoked: boolean;
+}
+
+/** Validate a key record's shape without judging its values or dropping extension fields. */
+function isKeyItem(value: unknown): value is KeyItem {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  const text = (v: unknown): v is string => typeof v === "string";
+  const nullableText = (v: unknown): v is string | null => v === null || typeof v === "string";
+  return text(row.id)
+    && nullableText(row.name)
+    && text(row.prefix)
+    && text(row.memberId)
+    && Array.isArray(row.scopes) && row.scopes.every((s) => typeof s === "string")
+    && nullableText(row.siteId)
+    && (row.current === undefined || typeof row.current === "boolean")
+    && nullableText(row.createdAt)
+    && nullableText(row.lastUsedAt)
+    && nullableText(row.expiresAt)
+    && typeof row.revoked === "boolean";
+}
+
+const keysCmd: Command = {
+  summary: "List your API keys (safe metadata only, never the secrets)",
+  usage: "kofra keys ls [--all] [--json]",
+  flags: { all: { kind: "boolean" } },
+  details: `List API keys as safe metadata only: id, name, prefix, scopes, site
+restriction, expiry and last use. The secrets themselves are never shown.
+
+Examples:
+  kofra keys ls            # your own keys
+  kofra keys ls --all      # every member's keys (needs members:write)
+  kofra keys ls --json     # one JSON object: { keys: [...] }
+
+Listing needs the keys:write scope. With --all the server also lists other
+members' keys when your key has the members:write scope; otherwise --all
+still lists only your own keys. Create and revoke keys with the generic
+command, e.g.: kofra api POST /keys --data '{"name":"ci"}'`,
+  async run(p, io, out) {
+    const [sub, ...rest] = p.positionals;
+    if (sub !== "ls") {
+      throw new UsageError(sub === undefined ? `Missing subcommand. Usage: ${this.usage}` : `Unknown keys subcommand "${sub}". Usage: ${this.usage}`);
+    }
+    if (rest.length > 0) throw new UsageError(`Unexpected argument "${rest[0]}". Usage: ${this.usage}`);
+    const inst = await resolveInstance(p, io);
+    const client = makeClient(io, inst.api, requireKey(inst, "Listing keys"));
+    const { data } = await client.get<unknown>(bool(p, "all") === true ? "/keys?all=true" : "/keys");
+    const keys = data !== null && typeof data === "object" && !Array.isArray(data)
+      ? (data as { keys?: unknown }).keys
+      : undefined;
+    if (!Array.isArray(keys) || !keys.every(isKeyItem)) {
+      throw new CliError({
+        code: "invalid_key_list",
+        message: `The instance answered ${inst.api}/api/v1/keys with an unexpected shape.`,
+        hint: "Is this a Kofra instance? Check --api / KOFRA_API (use the origin, without /api/v1).",
+        exitCode: EXIT.error,
+      });
+    }
+    out.result({ keys }, () => {
+      if (!keys.length) return "No API keys.";
+      // Escape data before table layout so names cannot control the terminal or forge rows.
+      const textCell = (value: string) => value.replace(
+        /[\u0000-\u001f\u007f-\u009f]/g,
+        (control) => `\\u${control.charCodeAt(0).toString(16).padStart(4, "0")}`,
+      );
+      const rows = keys.map((k) => [
+        k.current === true ? "*" : "",
+        k.id,
+        k.name ?? "-",
+        k.prefix,
+        k.scopes.join(" "),
+        k.siteId ?? "-",
+        shortTime(k.createdAt),
+        shortTime(k.lastUsedAt),
+        k.expiresAt ?? "-",
+      ].map(textCell));
+      return table(rows, ["CURRENT (*)", "ID", "NAME", "PREFIX", "SCOPES", "SITE", "CREATED", "LAST USED", "EXPIRES"]);
+    });
+    return EXIT.ok;
+  },
+};
+
+interface CatalogOperation extends Record<string, unknown> {
+  id: string;
+  method: string;
+  path: string;
+  scopes: string[];
+  inputSchema: Record<string, unknown>;
+  cli?: { command: string[]; positional?: string[] };
+}
+
+/** Validate the public catalog's fields without dropping extension metadata. */
+function isCatalogOperation(value: unknown): value is CatalogOperation {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  const strings = (v: unknown): v is string[] => Array.isArray(v) && v.every((s) => typeof s === "string");
+  const cli = row.cli as Record<string, unknown> | undefined;
+  return typeof row.id === "string" && row.id.length > 0
+    && typeof row.method === "string" && row.method.length > 0
+    && typeof row.path === "string" && row.path.length > 0
+    && strings(row.scopes)
+    && row.inputSchema !== null && typeof row.inputSchema === "object" && !Array.isArray(row.inputSchema)
+    && (cli === undefined || (cli !== null && typeof cli === "object" && !Array.isArray(cli)
+      && strings(cli.command) && (cli.positional === undefined || strings(cli.positional))));
+}
+
+/** The catalog row without its input schema; every other field stays exactly as the server sent it. */
+function stripInputSchema(row: Record<string, unknown>): Record<string, unknown> {
+  const compact: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(row)) if (key !== "inputSchema") compact[key] = value;
+  return compact;
+}
+
+function operationDetail(row: Record<string, unknown>, withSchema: boolean): string {
+  const scopes = Array.isArray(row.scopes) ? row.scopes.map(String) : [];
+  const cli = row.cli as { command?: unknown; positional?: unknown } | undefined;
+  const lines = [
+    String(row.id),
+    `  ${String(row.method)} ${String(row.path)}`,
+    `  Scopes: ${scopes.length ? scopes.join(" ") : "(none)"}`,
+  ];
+  if (cli && Array.isArray(cli.command)) {
+    const positionals = Array.isArray(cli.positional) ? cli.positional.map((name) => `<${String(name)}>`).join(" ") : "";
+    lines.push(`  CLI: kofra ${cli.command.map(String).join(" ")}${positionals ? ` ${positionals}` : ""}`);
+  }
+  if (withSchema) lines.push(`  Input schema:\n${JSON.stringify(row.inputSchema ?? {}, null, 2)}`);
+  return lines.join("\n");
+}
+
+const operationsCmd: Command = {
+  summary: "List API operations, or inspect one, without running anything",
+  usage: "kofra operations [operationId] [--schema] [--json]",
+  flags: { schema: { kind: "boolean" } },
+  details: `Reads the instance's public operation catalog (GET /api/v1/operations): the
+operation ids, methods, paths, required scopes and CLI paths. Nothing is
+executed, so inspecting an advertised DELETE is safe. No API key is needed
+and none is sent.
+
+With an exact operation id, shows that one row instead of the list. Input
+schemas are omitted by default; add --schema (with an id) to include the
+row's unchanged inputSchema.
+
+Examples:
+  kofra operations --json
+  kofra operations list_versions --json
+  kofra operations create_site --schema --json`,
+  async run(p, io, out) {
+    const [id, extra] = p.positionals;
+    if (extra !== undefined) throw new UsageError(`Too many arguments. Usage: ${this.usage}`);
+    const withSchema = bool(p, "schema") === true;
+    if (withSchema && id === undefined) throw new UsageError(`--schema needs an operation id. Usage: ${this.usage}`);
+    const inst = await resolveInstance(p, io);
+    // The catalog is public metadata: discover it without a credential.
+    const client = makeClient(io, inst.api, null);
+    const { data } = await client.get<unknown>("/operations");
+    const rows = Array.isArray(data) ? data : (data as { operations?: unknown } | null)?.operations;
+    if (!Array.isArray(rows) || !rows.every(isCatalogOperation)) {
+      throw new CliError({
+        code: "invalid_catalog",
+        message: `The instance answered ${inst.api}/api/v1/operations with an unexpected shape.`,
+        hint: "Is this a Kofra instance? Check --api / KOFRA_API (use the origin, without /api/v1).",
+        exitCode: EXIT.error,
+      });
+    }
+    if (id === undefined) {
+      const operations = rows.map(stripInputSchema);
+      out.result({ operations }, () => {
+        if (!operations.length) return "No operations: the instance answered with an empty catalog.";
+        return table(
+          rows.map((r) => [r.id, r.method, r.path, r.scopes.join(" ") || "(none)", r.cli ? `kofra ${r.cli.command.join(" ")}` : "-"]),
+          ["OPERATION", "METHOD", "PATH", "SCOPES", "CLI"],
+        );
+      });
+      return EXIT.ok;
+    }
+    const found = rows.find((r) => r.id === id);
+    if (!found) {
+      throw new CliError({
+        code: "operation_not_found",
+        message: `No operation "${id}".`,
+        hint: "List available operations with: kofra operations --json",
+        exitCode: EXIT.notFound,
+      });
+    }
+    out.result({ operation: withSchema ? found : stripInputSchema(found) }, () => operationDetail(found, withSchema));
+    return EXIT.ok;
+  },
+};
+
 const apiCmd: Command = {
   summary: "Call any REST endpoint (escape hatch)",
   usage: "kofra api <operationId | [METHOD] path> [--data <json> | --data @file.json | --data -]",
@@ -711,14 +1086,17 @@ const COMMANDS: Record<string, Command> = {
   list: listCmd,
   site: siteCmd,
   files: filesCmd,
+  "read-file": readFileCmd,
   versions: versionsCmd,
   restore: restoreCmd,
   delete: deleteCmd,
   whoami: whoamiCmd,
+  keys: keysCmd,
   login: loginCmd,
   logout: logoutCmd,
   setup: setupCmd,
   api: apiCmd,
+  operations: operationsCmd,
 };
 
 const ALIASES: Record<string, string> = {

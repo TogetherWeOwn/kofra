@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { sha256Hex } from "@dropway/core";
 import { CORE_MCP_TOOLS, skillMarkdown } from "@dropway/server";
 import repoSkill from "../skills/kofra/SKILL.md?raw";
-import { freshInstance, jsonBody, type Instance } from "./helpers";
+import { freshInstance, jsonBody, ORIGIN, type Instance } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
 
 let dw: Instance;
@@ -156,5 +156,62 @@ describe("llms.txt, llms-full.txt and the Agent Skill", () => {
 
   it("skills/kofra/SKILL.md in the repository is up to date (npm run skill:sync)", () => {
     expect(repoSkill).toBe(skillMarkdown(null));
+  });
+});
+
+describe("/connect, /connect.md, the api-catalog and robots.txt (R-11)", () => {
+  const CLAUDE = `claude mcp add --transport http kofra ${ORIGIN}/mcp`;
+
+  it("/connect renders every setup section as script-free HTML", async () => {
+    const res = await dw.call("/connect");
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const html = await res.text();
+    expect(html).not.toContain("<script");
+    for (const s of ["MCP (recommended)", "Agent Skill", "CLI", "REST"]) expect(html).toContain(s);
+    expect(html).toContain(CLAUDE);
+    expect(html).toContain(`npx skills add ${ORIGIN} -g`);
+    expect(html).toContain(`curl ${ORIGIN}/api/v1/publish`);
+    expect(html).toContain(`<a href="/llms.txt">/llms.txt</a>`);
+  });
+
+  it("/connect.md carries the same commands as /connect", async () => {
+    const res = await dw.call("/connect.md");
+    expect(res.headers.get("content-type")).toContain("text/markdown");
+    const md = await res.text();
+    expect(md).toContain(CLAUDE);
+    expect(md).toContain("[mcp_servers.kofra]");
+    expect(md).toContain(`npx skills add ${ORIGIN} -g`);
+    expect(md).toContain(`npx kofra login --api ${ORIGIN}`);
+    expect(md).toContain(`curl ${ORIGIN}/api/v1/publish`);
+    // every snippet on the HTML page appears verbatim in the Markdown: the two cannot drift
+    const html = await (await dw.call("/connect")).text();
+    const unescape = (s: string) => s.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+    const snippets = [...html.matchAll(/<pre><code>([\s\S]*?)<\/code><\/pre>/g)];
+    expect(snippets.length).toBeGreaterThan(0);
+    for (const m of snippets) expect(md).toContain(unescape(m[1]!));
+  });
+
+  it("/.well-known/api-catalog links the OpenAPI, docs and MCP endpoint", async () => {
+    const { status, body, res } = await dw.json("/.well-known/api-catalog");
+    expect(status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/linkset+json");
+    const link = body.linkset[0];
+    expect(link.anchor).toBe(`${ORIGIN}/`);
+    expect(link["service-desc"]).toEqual([{ href: `${ORIGIN}/openapi.json`, type: "application/openapi+json;version=3.1.0" }]);
+    expect(link["service-doc"].map((l: { href: string }) => l.href)).toEqual([`${ORIGIN}/llms.txt`, `${ORIGIN}/llms-full.txt`, `${ORIGIN}/skill.md`, `${ORIGIN}/connect.md`]);
+    expect(link.mcp[0].href).toBe(`${ORIGIN}/mcp`);
+  });
+
+  it("/robots.txt keeps discovery crawlable and key-gated shells out", async () => {
+    const res = await dw.call("/robots.txt");
+    expect(res.headers.get("content-type")).toContain("text/plain");
+    const txt = await res.text();
+    for (const p of ["/dashboard", "/login", "/claim", "/v/", "/view/", "/mcp", "/api/"]) expect(txt).toContain(`Disallow: ${p}`);
+    expect(txt).not.toContain("/connect");
+    expect(txt).not.toContain("/llms.txt");
+  });
+
+  it("the home page links /connect", async () => {
+    expect(await (await dw.call("/")).text()).toContain(`<a href="/connect">/connect</a>`);
   });
 });

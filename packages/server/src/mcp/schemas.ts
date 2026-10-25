@@ -8,7 +8,7 @@ type Schema = Record<string, unknown>;
 export const SITE_REF: Schema = {
   type: "string",
   minLength: 1,
-  description: "The site: its slug (e.g. bright-otter-x7k2), its id (site_...), or any URL of it.",
+  description: "Site slug, site_... id, or site URL.",
 };
 
 export const VERSION_REF: Schema = {
@@ -61,7 +61,7 @@ export const IDEMPOTENCY_KEY: Schema = {
   type: "string",
   minLength: 1,
   maxLength: 255,
-  description: "Optional unique id for this operation (e.g. a UUID). Retrying with the same key and arguments within 24 h returns the first result instead of acting twice.",
+  description: "Retry key (24 h): same arguments replay; different arguments return 422.",
 };
 
 export const CONFIRM_SLUG: Schema = { type: "string", description: "Must equal the site's slug. Destructive actions need this explicit confirmation." };

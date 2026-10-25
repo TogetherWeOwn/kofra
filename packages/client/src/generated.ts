@@ -35,7 +35,7 @@ export interface PublishSiteInput {
     size?: number;
     /** Copy a file you already published: from a site you can read (default: this site), a version (default: live) and a path (default: the same path). */
     copyFrom?: {
-      /** The site: its slug (e.g. bright-otter-x7k2), its id (site_...), or any URL of it. */
+      /** Site slug, site_... id, or site URL. */
       site?: string;
       /** A version: "live", "v3" or "3" (version number 3), or a version id (ver_...). */
       version?: string;
@@ -279,7 +279,7 @@ export interface ListFilesInput {
 export type ListFilesOutput = Record<string, unknown>;
 
 export interface ReadFileInput {
-  /** The site: its slug (e.g. bright-otter-x7k2), its id (site_...), or any URL of it. */
+  /** Site slug, site_... id, or site URL. */
   site: string;
   /** File path, e.g. "index.html". */
   path: string;
@@ -533,6 +533,7 @@ export interface RenameSiteOutput {
   oldSlug?: string;
   slug?: string;
   url?: string;
+  redirectUntil?: string | null;
   site?: {
     slug?: string;
     /** Share this URL as returned; never construct it. */
@@ -562,6 +563,47 @@ export interface RenameSiteOutput {
     links?: Record<string, unknown>;
     [key: string]: unknown;
   };
+  [key: string]: unknown;
+}
+
+export interface DuplicateSiteInput {
+  /** Site slug, site_... id, or site URL. */
+  site: string;
+  /** 3-56 chars: a-z, 0-9, single hyphens. */
+  newSlug: string;
+  /** Version message for the copy's first version. */
+  message?: string;
+}
+
+export interface DuplicateSiteOutput {
+  slug: string;
+  url: string;
+  site?: {
+    slug: string;
+    url: string;
+    currentVersionId?: string | null;
+    [key: string]: unknown;
+  };
+  versionId: string;
+  fileCount: number;
+  totalBytes: number;
+  note?: string;
+  [key: string]: unknown;
+}
+
+export interface ReleaseSlugInput {
+  slug: string;
+  reason: string;
+  confirm: string;
+  [key: string]: unknown;
+}
+
+export interface ReleaseSlugOutput {
+  released?: boolean;
+  slug?: string;
+  redirectsReleased?: number;
+  holdsReleased?: number;
+  reason?: string;
   [key: string]: unknown;
 }
 
@@ -598,6 +640,14 @@ export interface DeleteVersionInput {
 }
 
 export type DeleteVersionOutput = Record<string, unknown>;
+
+export interface ExportVersionInput {
+  slug: string;
+  version: string;
+  [key: string]: unknown;
+}
+
+export type ExportVersionOutput = Record<string, unknown>;
 
 export interface ListApiKeysInput {
   all?: "1" | "true";
@@ -940,8 +990,11 @@ export const OPERATIONS = {
   "claim_site": { method: "POST", path: "/api/v1/sites/{slug}/claim", summary: "Claim an anonymous site" },
   "create_site": { method: "POST", path: "/api/v1/sites", summary: "Create an empty site" },
   "rename_site": { method: "POST", path: "/api/v1/sites/{slug}/rename", summary: "Rename a site" },
+  "duplicate_site": { method: "POST", path: "/api/v1/sites/{site}/duplicate", summary: "Duplicate a site's live version into a new slug" },
+  "release_slug": { method: "POST", path: "/api/v1/slugs/release", summary: "Release a held site name early" },
   "get_version": { method: "GET", path: "/api/v1/sites/{slug}/versions/{id}", summary: "Get a version" },
   "delete_version": { method: "DELETE", path: "/api/v1/sites/{slug}/versions/{id}", summary: "Delete a version" },
+  "export_version": { method: "GET", path: "/api/v1/sites/{slug}/versions/{version}/export", summary: "Download a version as a ZIP" },
   "list_api_keys": { method: "GET", path: "/api/v1/keys", summary: "List API keys" },
   "create_api_key": { method: "POST", path: "/api/v1/keys", summary: "Create an API key" },
   "revoke_api_key": { method: "DELETE", path: "/api/v1/keys/{id}", summary: "Revoke an API key" },
@@ -1032,6 +1085,14 @@ export class DropwayClient extends DropwayHttpClient {
   async renameSite(input: RenameSiteInput, opts?: CallOptions): Promise<RenameSiteOutput> {
     return this.call<RenameSiteInput, RenameSiteOutput>(OPERATIONS["rename_site"], input, opts);
   }
+  /** Duplicate a site's live version into a new slug */
+  async duplicateSite(input: DuplicateSiteInput, opts?: CallOptions): Promise<DuplicateSiteOutput> {
+    return this.call<DuplicateSiteInput, DuplicateSiteOutput>(OPERATIONS["duplicate_site"], input, opts);
+  }
+  /** Release a held site name early */
+  async releaseSlug(input: ReleaseSlugInput, opts?: CallOptions): Promise<ReleaseSlugOutput> {
+    return this.call<ReleaseSlugInput, ReleaseSlugOutput>(OPERATIONS["release_slug"], input, opts);
+  }
   /** Get a version */
   async getVersion(input: GetVersionInput, opts?: CallOptions): Promise<GetVersionOutput> {
     return this.call<GetVersionInput, GetVersionOutput>(OPERATIONS["get_version"], input, opts);
@@ -1039,6 +1100,10 @@ export class DropwayClient extends DropwayHttpClient {
   /** Delete a version */
   async deleteVersion(input: DeleteVersionInput, opts?: CallOptions): Promise<DeleteVersionOutput> {
     return this.call<DeleteVersionInput, DeleteVersionOutput>(OPERATIONS["delete_version"], input, opts);
+  }
+  /** Download a version as a ZIP */
+  async exportVersion(input: ExportVersionInput, opts?: CallOptions): Promise<BytesResult> {
+    return this.callBytes(OPERATIONS["export_version"], input, opts);
   }
   /** List API keys */
   async listApiKeys(input: ListApiKeysInput, opts?: CallOptions): Promise<ListApiKeysOutput> {

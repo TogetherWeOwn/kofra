@@ -216,6 +216,10 @@ export function dropwayClient() {
     }
     return v.toFixed(v < 10 ? 1 : 0) + " " + u[i];
   }
+  function exactBytes(n) {
+    if (n === null || n === undefined) return "";
+    return n.toLocaleString("en-US") + (n === 1 ? " byte" : " bytes");
+  }
   function ago(iso) {
     if (!iso) return "";
     var t = new Date(iso).getTime();
@@ -464,11 +468,16 @@ export function dropwayClient() {
       if (p.indexOf("/") < 0 || p.split("/")[0] !== first) return items;
     }
     return items.map(function (it) {
-      return { path: it.path.slice(first.length + 1), file: it.file };
+      return Object.assign({}, it, { path: it.path.slice(first.length + 1) });
     });
   }
 
-  function readEntry(entry, prefix, out) {
+  /**
+   * Read one DataTransfer entry into `out`. Unreadable files and directories are
+   * reported into `errors` ({ path, kind }) instead of resolving silently, so a
+   * partial traversal can never publish as if it were complete.
+   */
+  function readEntry(entry, prefix, out, errors) {
     return new Promise(function (resolve) {
       if (entry.isFile) {
         entry.file(
@@ -477,10 +486,12 @@ export function dropwayClient() {
             resolve();
           },
           function () {
+            errors.push({ path: prefix + entry.name, kind: "file" });
             resolve();
           },
         );
       } else if (entry.isDirectory) {
+        var dirPath = prefix + entry.name;
         var reader = entry.createReader();
         var all = [];
         var next = function () {
@@ -489,7 +500,7 @@ export function dropwayClient() {
               if (!batch.length) {
                 Promise.all(
                   all.map(function (e) {
-                    return readEntry(e, prefix + entry.name + "/", out);
+                    return readEntry(e, dirPath + "/", out, errors);
                   }),
                 ).then(function () {
                   resolve();
@@ -500,6 +511,7 @@ export function dropwayClient() {
               next();
             },
             function () {
+              errors.push({ path: dirPath, kind: "directory" });
               resolve();
             },
           );
@@ -519,17 +531,21 @@ export function dropwayClient() {
       }
     }
     if (!entries.length) {
-      return Array.prototype.map.call(dt.files || [], function (f) {
-        return { path: f.name, file: f };
-      });
+      return {
+        items: Array.prototype.map.call(dt.files || [], function (f) {
+          return { path: f.name, file: f };
+        }),
+        errors: [],
+      };
     }
     var out = [];
+    var errors = [];
     await Promise.all(
       entries.map(function (e) {
-        return readEntry(e, "", out);
+        return readEntry(e, "", out, errors);
       }),
     );
-    return out;
+    return { items: out, errors: errors };
   }
 
   async function sha256Hex(file) {
@@ -609,7 +625,10 @@ export function dropwayClient() {
       );
       return;
     }
-    var state = { items: [], skipped: [], busy: false };
+    // errors: unreadable files/directories from the last traversal (publishing
+    // blocked until reselected). seq: selection generation; a drop that resolves
+    // after a newer selection (or after a publish started) is stale and ignored.
+    var state = { items: [], skipped: [], errors: [], busy: false, seq: 0 };
     var siteSelect = h("select", { class: "dw-select", id: "dw-pub-site", "aria-label": "Site to update" }, h("option", { value: "", text: "Loading sites…" }));
     var slugInput = h("input", { class: "dw-input", id: "dw-pub-slug", placeholder: "generated if empty", autocomplete: "off", spellcheck: "false", pattern: "[a-z0-9][a-z0-9-]{1,62}" });
     var modeNew = h("input", { type: "radio", name: "dw-pub-mode", value: "new", checked: !opts.site });
@@ -624,32 +643,60 @@ export function dropwayClient() {
     var bar = h("span");
     var progress = h("div", { class: "dw-progress", hidden: true, role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100" }, bar);
     var result = h("div");
+    var errorList = h("div", { hidden: true });
+    var review = h("details", { class: "dw-review", hidden: true });
+    var chooseDirBtn = h("button", { type: "button", class: "dw-btn", text: "Choose folder", onclick: function (e) { e.stopPropagation(); dirInput.click(); } });
+    var chooseFileBtn = h("button", { type: "button", class: "dw-btn", text: "Choose files", onclick: function (e) { e.stopPropagation(); fileInput.click(); } });
     var zone = h(
       "div",
       { class: "dw-drop", tabindex: "0", role: "button", "aria-label": "Drop a folder, files or a zip here, or press Enter to choose a folder" },
       h("strong", { text: "Drop a folder, files or a .zip" }),
       h("p", { class: "dw-muted dw-small", style: "margin:.25rem 0 .9rem", text: "Files are hashed in your browser; only files the server does not have yet are uploaded." }),
-      h(
-        "div",
-        { class: "dw-row", style: "justify-content:center" },
-        h("button", { type: "button", class: "dw-btn", text: "Choose folder", onclick: function (e) { e.stopPropagation(); dirInput.click(); } }),
-        h("button", { type: "button", class: "dw-btn", text: "Choose files", onclick: function (e) { e.stopPropagation(); fileInput.click(); } }),
-      ),
+      h("div", { class: "dw-row", style: "justify-content:center" }, chooseDirBtn, chooseFileBtn),
       dirInput,
       fileInput,
     );
 
-    function setItems(items) {
+    /** Render one unreadable traversal entry. Ignored files never land here. */
+    function traversalAlert(er) {
+      return h(
+        "div",
+        { class: "dw-error", role: "alert" },
+        h("strong", { text: (er.kind === "directory" ? "Could not read folder “" : "Could not read file “") + er.path + "”." }),
+        h("div", { class: "dw-small", text: "Check access to this path, then reselect the folder, or use Choose files to select only the files you want to publish. Publishing stays disabled until the selection is complete." }),
+      );
+    }
+
+    /** One review row per path (never a joined line), so narrow screens can wrap. */
+    function reviewRow(text) {
+      return h("li", { class: "dw-review-row" }, h("code", { class: "dw-mono", text: text }));
+    }
+
+    function setItems(items, errors) {
+      // Normalize the whole selection before applying the existing ignore rules,
+      // including unreadable paths. A directory's slash marks its subtree; an
+      // unreadable sole root normalizes to "" and remains a blocking error.
+      var selection = items.concat((errors || []).map(function (er) {
+        return { path: er.path + (er.kind === "directory" ? "/" : ""), error: er };
+      }));
+      errors = [];
       var keep = [];
       var skipped = [];
-      stripCommonRoot(items).forEach(function (it) {
+      stripCommonRoot(selection).forEach(function (it) {
         var why = ignored(it.path);
-        if (why) skipped.push(it.path + " (" + why + ")");
+        if (why) skipped.push(it.path + " (" + why + (it.error ? "; " + (it.error.kind === "directory" ? "contents unreadable" : "unreadable") : "") + ")");
+        else if (it.error) errors.push(it.error);
         else keep.push(it);
       });
       state.items = keep;
       state.skipped = skipped;
+      state.errors = errors;
       clear(result);
+      clear(errorList);
+      errors.forEach(function (er) {
+        add(errorList, traversalAlert(er));
+      });
+      errorList.hidden = !errors.length;
       var total = keep.reduce(function (s, it) {
         return s + it.file.size;
       }, 0);
@@ -659,23 +706,70 @@ export function dropwayClient() {
       });
       clear(summary);
       if (keep.length) {
+        // The one-line display names the selection being sent (bounded: the
+        // review below holds the complete inventory). It must keep describing
+        // the in-flight publish while busy, so setItems never runs then.
+        var preview = keep
+          .slice(0, 3)
+          .map(function (it) {
+            return it.path;
+          })
+          .join(", ");
+        if (keep.length > 3) preview += " + " + (keep.length - 3) + " more in the review";
         add(
           summary,
           h("span", { style: "color:var(--fg);font-weight:600", text: zip ? "1 zip file · " + bytes(total) + " (unpacked on the server)" : plural(keep.length, "file") + " · " + bytes(total) }),
           !zip && keep.length > 1 ? (hasIndex ? " · has an index page" : " · no index.html: the site root will list the files") : "",
-          skipped.length ? h("div", { text: "Skipped " + plural(skipped.length, "file") + ": " + skipped.slice(0, 5).join(", ") + (skipped.length > 5 ? "…" : "") }) : null,
+          h("div", { text: preview }),
+          skipped.length ? h("div", { text: "Skipped " + plural(skipped.length, "file") + ": " + skipped.slice(0, 5).join(", ") + (skipped.length > 5 ? ", +" + (skipped.length - 5) + " more in the review" : "") }) : null,
         );
-      } else if (skipped.length) add(summary, "Every file was skipped: " + skipped.slice(0, 5).join(", "));
-      publishBtn.disabled = !keep.length || state.busy;
+      } else if (skipped.length) add(summary, "Every file was skipped: " + skipped.slice(0, 5).join(", ") + (skipped.length > 5 ? ", +" + (skipped.length - 5) + " more in the review" : ""));
+      // The review lists the exact normalized inventory publish() will send:
+      // every included path with its byte size, every excluded path with its
+      // ignore reason. It reads no file contents and makes no requests.
+      var wasOpen = review.open;
+      clear(review);
+      if (!keep.length && !skipped.length) {
+        review.hidden = true;
+      } else {
+        review.hidden = false;
+        var label = keep.length ? "Review " + plural(keep.length, "file") + " · " + bytes(total) : "Review selection";
+        if (skipped.length) label += " · " + plural(skipped.length, "excluded file");
+        add(review, h("summary", { text: label }));
+        if (keep.length) {
+          add(review, h("p", { class: "dw-small dw-muted dw-review-h", text: zip ? "Archive" : "Included (" + keep.length + ")" }));
+          var included = h("ul", { class: "dw-review-list" });
+          keep.forEach(function (it) {
+            add(included, h("li", { class: "dw-review-row" }, h("code", { class: "dw-mono", text: it.path }), " · " + bytes(it.file.size)));
+          });
+          add(review, included);
+          if (zip) add(review, h("p", { class: "dw-small dw-muted", text: "This archive is unpacked by the server; its entries cannot be listed before upload." }));
+        }
+        if (skipped.length) {
+          add(review, h("p", { class: "dw-small dw-muted dw-review-h", text: "Excluded (" + skipped.length + ")" }));
+          var excluded = h("ul", { class: "dw-review-list" });
+          skipped.forEach(function (entry) {
+            add(excluded, reviewRow(entry));
+          });
+          add(review, excluded);
+        }
+        review.open = wasOpen;
+      }
+      publishBtn.disabled = !keep.length || state.busy || !!errors.length;
       clearBtn.hidden = !keep.length;
     }
 
+    function busyNotice() {
+      toast("A publish is in progress. The new selection was ignored; try again when it finishes.", false);
+    }
     zone.addEventListener("click", function () {
+      if (state.busy) return;
       dirInput.click();
     });
     zone.addEventListener("keydown", function (e) {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
+        if (state.busy) return;
         dirInput.click();
       }
     });
@@ -692,25 +786,48 @@ export function dropwayClient() {
     });
     zone.addEventListener("drop", async function (e) {
       e.preventDefault();
-      setItems(await filesFromDrop(e.dataTransfer));
+      if (state.busy) {
+        busyNotice();
+        return;
+      }
+      var ticket = ++state.seq;
+      var found = await filesFromDrop(e.dataTransfer);
+      // A newer selection arrived (or a publish started) while enumerating:
+      // the stale result must not replace the displayed selection.
+      if (state.busy) {
+        busyNotice();
+        return;
+      }
+      if (ticket !== state.seq) return;
+      setItems(found.items, found.errors);
     });
     dirInput.addEventListener("change", function () {
-      setItems(
-        Array.prototype.map.call(dirInput.files, function (f) {
-          return { path: f.webkitRelativePath || f.name, file: f };
-        }),
-      );
+      var picked = Array.prototype.map.call(dirInput.files, function (f) {
+        return { path: f.webkitRelativePath || f.name, file: f };
+      });
       dirInput.value = "";
+      if (state.busy) {
+        busyNotice();
+        return;
+      }
+      state.seq++;
+      setItems(picked, []);
     });
     fileInput.addEventListener("change", function () {
-      setItems(
-        Array.prototype.map.call(fileInput.files, function (f) {
-          return { path: f.name, file: f };
-        }),
-      );
+      var picked = Array.prototype.map.call(fileInput.files, function (f) {
+        return { path: f.name, file: f };
+      });
       fileInput.value = "";
+      if (state.busy) {
+        busyNotice();
+        return;
+      }
+      state.seq++;
+      setItems(picked, []);
     });
     clearBtn.addEventListener("click", function () {
+      if (state.busy) return;
+      state.seq++;
       setItems([]);
       clear(status);
       progress.hidden = true;
@@ -724,10 +841,23 @@ export function dropwayClient() {
       status.textContent = text;
     }
 
+    /** Destination controls bound to the active publish; frozen while it runs. */
+    function setDestinationDisabled(on) {
+      modeNew.disabled = on;
+      modeUpd.disabled = on;
+      slugInput.disabled = on;
+      siteSelect.disabled = on;
+      chooseDirBtn.disabled = on;
+      chooseFileBtn.disabled = on;
+      clearBtn.disabled = on;
+    }
+
     async function run() {
-      if (state.busy || !state.items.length) return;
+      if (state.busy || !state.items.length || state.errors.length) return;
+      state.seq++;
       state.busy = true;
       publishBtn.disabled = true;
+      setDestinationDisabled(true);
       clear(result);
       var auth = key;
       var claim = null;
@@ -801,7 +931,8 @@ export function dropwayClient() {
         add(result, errorBox(e, "Publish failed"));
       } finally {
         state.busy = false;
-        publishBtn.disabled = !state.items.length;
+        setDestinationDisabled(false);
+        publishBtn.disabled = !state.items.length || !!state.errors.length;
       }
     }
 
@@ -887,6 +1018,8 @@ export function dropwayClient() {
       opts.compact ? null : h("div", { class: "dw-field" }, h("label", { class: "dw-label", for: "dw-pub-msg", text: "Message" }), message),
       zone,
       h("div", { class: "dw-row", style: "justify-content:space-between;margin-top:.75rem" }, summary, h("div", { class: "dw-row" }, clearBtn, publishBtn)),
+      errorList,
+      review,
       progress,
       status,
       result,
@@ -1001,7 +1134,7 @@ export function dropwayClient() {
     if (!v) badges.push(h("span", { class: "dw-badge", text: "Empty" }));
     return h(
       "tr",
-      { "data-search": [s.slug, s.title || "", s.description || ""].join(" ").toLowerCase() },
+      { "data-search": [s.slug, s.title || ""].join(" ").toLowerCase() },
       h(
         "td",
         {},
@@ -1032,7 +1165,7 @@ export function dropwayClient() {
     renderAccount();
     var root = d.getElementById("dw-sites");
     var count = d.getElementById("dw-sites-count");
-    var search = h("input", { class: "dw-input", type: "search", placeholder: "Filter by name or title", "aria-label": "Filter sites" });
+    var search = h("input", { class: "dw-input", type: "search", placeholder: "Filter loaded sites by name or title", "aria-label": "Filter loaded sites" });
     var tbody = h("tbody");
     var more = h("button", { type: "button", class: "dw-btn", text: "Load more", hidden: true });
     var table = h(
@@ -1046,47 +1179,128 @@ export function dropwayClient() {
       ),
     );
     var body = h("div", {}, skeleton(4));
+    var errorWrap = h("div", {});
+    var moreWrap = h("div", { class: "dw-pad", style: "text-align:center", hidden: true }, more);
     clear(root);
-    add(root, h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "All sites" }), search), body, h("div", { class: "dw-pad", style: "text-align:center", hidden: true }, more)));
+    add(root, h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "All sites" }), search), body, errorWrap, moreWrap));
     var cursor = null;
     var loaded = 0;
+    var seenSlugs = [];
+    var consumedCursors = [];
+    var loading = false;
+    var hasMore = true;
+    var tableShown = false;
+    function currentQuery() {
+      return search.value.trim().toLowerCase();
+    }
+    function updateCounts() {
+      if (!count || !tableShown) return;
+      var q = currentQuery();
+      var visible = 0;
+      $$("tr[data-search]", tbody).forEach(function (tr) {
+        if (!tr.hidden) visible++;
+      });
+      if (q) {
+        count.textContent = plural(visible, "match", "matches") + " of " + plural(loaded, "loaded site", "loaded sites") + (hasMore ? "+" : "") + ".";
+      } else {
+        count.textContent = plural(loaded, "site") + (hasMore ? "+" : "") + ".";
+      }
+    }
+    function applyFilter() {
+      var q = currentQuery();
+      $$("tr[data-search]", tbody).forEach(function (tr) {
+        var hay = tr.getAttribute("data-search") || "";
+        tr.hidden = !!(q && hay.indexOf(q) < 0);
+      });
+      updateCounts();
+    }
+    function syncMore() {
+      moreWrap.hidden = !hasMore;
+      more.hidden = !hasMore;
+      more.disabled = !hasMore;
+      if (more.getAttribute("aria-busy")) more.removeAttribute("aria-busy");
+      if (more.textContent !== "Load more") more.textContent = "Load more";
+    }
+    function emptySites() {
+      return h(
+        "div",
+        { class: "dw-empty", role: "status" },
+        h("h3", { text: "No sites yet" }),
+        h("p", { text: "Publish a folder from this browser, or let an agent publish with the API, CLI or MCP." }),
+        h("a", { class: "dw-btn primary", href: "/dashboard/publish", text: "Publish a folder" }),
+      );
+    }
     async function load() {
+      if (loading) return;
+      if (!hasMore) return;
+      loading = true;
+      var focusedBefore = d.activeElement === more;
+      more.disabled = true;
+      more.setAttribute("aria-busy", "true");
+      more.textContent = "Loading…";
+      var requestCursor = cursor;
       try {
-        var res = await api("/sites?limit=100" + (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""));
-        if (!loaded) clear(body);
-        if (!loaded && !res.sites.length) {
-          add(
-            body,
-            h(
-              "div",
-              { class: "dw-empty", role: "status" },
-              h("h3", { text: "No sites yet" }),
-              h("p", { text: "Publish a folder from this browser, or let an agent publish with the API, CLI or MCP." }),
-              h("a", { class: "dw-btn primary", href: "/dashboard/publish", text: "Publish a folder" }),
-            ),
-          );
+        var res = await api("/sites?limit=100" + (requestCursor ? "&cursor=" + encodeURIComponent(requestCursor) : ""));
+        if (consumedCursors.indexOf(requestCursor) < 0) consumedCursors.push(requestCursor);
+        clear(errorWrap);
+        if (!tableShown && !loaded && !res.sites.length) {
+          clear(body);
+          add(body, emptySites());
           if (count) count.textContent = "No sites yet.";
+          var firstNext = res.nextCursor;
+          if (firstNext && consumedCursors.indexOf(firstNext) < 0) {
+            cursor = firstNext;
+            hasMore = true;
+          } else {
+            cursor = null;
+            hasMore = false;
+          }
+          syncMore();
           return;
         }
-        if (!loaded) add(body, table);
+        if (!tableShown) {
+          clear(body);
+          add(body, table);
+          tableShown = true;
+        }
         res.sites.forEach(function (s) {
+          if (seenSlugs.indexOf(s.slug) >= 0) return;
+          seenSlugs.push(s.slug);
           tbody.appendChild(siteRow(s));
         });
-        loaded += res.sites.length;
-        if (count) count.textContent = plural(loaded, "site") + (res.nextCursor ? "+" : "") + ".";
-        cursor = res.nextCursor;
-        more.parentNode.hidden = !cursor;
-        more.hidden = !cursor;
+        loaded = seenSlugs.length;
+        var next = res.nextCursor;
+        if (!next || consumedCursors.indexOf(next) >= 0) {
+          cursor = null;
+          hasMore = false;
+        } else {
+          cursor = next;
+          hasMore = true;
+        }
+        applyFilter();
+        syncMore();
       } catch (e) {
-        clear(body);
-        add(body, h("div", { class: "dw-pad" }, errorBox(e, "Could not load sites")));
+        clear(errorWrap);
+        add(errorWrap, h("div", { class: "dw-pad" }, errorBox(e, "Could not load sites"), h("p", { class: "dw-small", text: "Use Load more to retry this page." })));
+        if (!tableShown && !loaded) {
+          clear(body);
+          if (count) count.textContent = "Could not load sites.";
+        }
+        cursor = requestCursor;
+        hasMore = true;
+        syncMore();
+        more.disabled = false;
+      } finally {
+        loading = false;
+        if (focusedBefore && hasMore && (d.activeElement === d.body || d.activeElement === null)) {
+          try {
+            more.focus();
+          } catch (focusErr) {}
+        }
       }
     }
     search.addEventListener("input", function () {
-      var q = search.value.trim().toLowerCase();
-      $$("tr[data-search]", tbody).forEach(function (tr) {
-        tr.hidden = q && tr.getAttribute("data-search").indexOf(q) < 0;
-      });
+      applyFilter();
     });
     more.addEventListener("click", load);
     load();
@@ -1198,49 +1412,190 @@ export function dropwayClient() {
         : h("div", { class: "dw-empty" }, h("h3", { text: "Nothing published yet" }), h("a", { class: "dw-btn primary", href: "/dashboard/publish?site=" + encodeURIComponent(slug), text: "Publish files" })),
     );
 
+    var filesReq = 0;
     async function showFiles(v) {
+      var my = ++filesReq;
       clear(filesSection);
       add(filesSection, h("header", {}, h("h2", { text: "Files in v" + v.number + (v.live ? " (live)" : "") })), skeleton(3));
+      var data;
       try {
-        files = await api("/sites/" + encodeURIComponent(slug) + "/files" + (v.live ? "" : "?version=" + encodeURIComponent(v.id)));
+        // Always pin the selected version by immutable ID: a live-row snapshot
+        // may already be stale by the time this request lands.
+        data = await api("/sites/" + encodeURIComponent(slug) + "/files?version=" + encodeURIComponent(v.id));
       } catch (e) {
+        if (my !== filesReq) return;
         clear(filesSection);
         add(filesSection, h("div", { class: "dw-pad" }, errorBox(e, "Could not load files")));
         return;
       }
+      if (my !== filesReq) return;
+      // Identity comes from the response, never the clicked row: the live
+      // pointer may have moved between selection and retrieval.
+      var mv = (data && data.version) || { id: v.id, number: v.number, live: v.live };
+      var rows = (data && data.files) || [];
       var filter = h("input", { class: "dw-input", type: "search", placeholder: "Filter files", "aria-label": "Filter files" });
+      if (!rows.length) {
+        clear(filesSection);
+        add(
+          filesSection,
+          h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", text: "0 files" }), filter)),
+          h("div", { class: "dw-empty" }, h("h3", { text: "No files in this version" }), h("p", { class: "dw-small", text: "This version has an empty manifest." })),
+        );
+        return;
+      }
+      var copyStatus = h("p", { class: "dw-pad dw-small", style: "margin:0", role: "status", text: "" });
+      var copyReq = 0;
+      var copyTimer = null;
       var tb = h("tbody");
-      files.files.forEach(function (f) {
-        tb.appendChild(
+      // Rows keep their own closures (checksum and download targets, links);
+      // sorting only reorders these nodes and never mutates the manifest rows.
+      var items = rows.map(function (f) {
+        var tr = h(
+          "tr",
+          { "data-search": f.path.toLowerCase() },
+          h("td", { class: "dw-mono" }, mv.live ? h("a", { href: "/v/" + encodeURIComponent(slug) + "/" + encodePath(f.path), text: f.path }) : h("span", { text: f.path })),
+          h("td", { class: "dw-hide-sm" }, h("span", { class: "dw-badge", text: f.kind })),
+          h("td", { class: "num dw-small" }, h("span", { text: exactBytes(f.size) }), f.size >= 1024 ? h("span", { class: "dw-sub", text: bytes(f.size) }) : null),
+          h("td", {}, h("code", { class: "dw-mono dw-digest", text: f.sha256 })),
           h(
-            "tr",
-            { "data-search": f.path.toLowerCase() },
-            h("td", { class: "dw-mono" }, v.live ? h("a", { href: "/v/" + encodeURIComponent(slug) + "/" + encodePath(f.path), text: f.path }) : h("span", { text: f.path })),
-            h("td", { class: "dw-hide-sm" }, h("span", { class: "dw-badge", text: f.kind })),
-            h("td", { class: "num dw-small", text: bytes(f.size) }),
-            h(
-              "td",
-              { class: "act" },
-              v.live ? h("a", { class: "dw-btn small", href: f.url, target: "_blank", rel: "noopener", text: "Open" }) : null,
-              " ",
-              h("button", { type: "button", class: "dw-btn small", text: "Download", onclick: function (ev) { downloadFile(slug, f.path, v.live ? null : v.id, ev.currentTarget); } }),
-            ),
+            "td",
+            { class: "act" },
+            mv.live ? h("a", { class: "dw-btn small", href: f.url, target: "_blank", rel: "noopener", text: "Open" }) : null,
+            " ",
+            h("button", {
+              type: "button",
+              class: "dw-btn small",
+              text: "Copy SHA-256",
+              "aria-label": "Copy SHA-256 for " + f.path,
+              onclick: function (ev) {
+                var btn = ev.currentTarget;
+                var attempt = ++copyReq;
+                clearTimeout(copyTimer);
+                copyStatus.textContent = "";
+                copyText(f.sha256, btn).then(function (ok) {
+                  if (attempt !== copyReq || my !== filesReq) return;
+                  // A separate task makes identical results observable again.
+                  copyTimer = setTimeout(function () {
+                    if (attempt !== copyReq || my !== filesReq) return;
+                    copyStatus.textContent = ok
+                      ? "Copied SHA-256 for " + f.path + "."
+                      : "Copy failed for " + f.path + ". Select the checksum and copy it yourself.";
+                  }, 0);
+                });
+              },
+            }),
+            " ",
+            h("button", { type: "button", class: "dw-btn small", text: "Download", onclick: function (ev) { downloadFile(slug, f.path, mv.live ? null : mv.id, ev.currentTarget); } }),
           ),
         );
+        tb.appendChild(tr);
+        return { file: f, row: tr };
       });
-      filter.addEventListener("input", function () {
+      // Client-side ordering of the already-loaded manifest: no requests, no
+      // storage, no endpoint. Default is deterministic Path ascending.
+      var sortField = "path";
+      var sortDir = "ascending";
+      var headCells = {};
+      var fieldSelect = null;
+      var dirSelect = null;
+      function cmpText(a, b) {
+        return a < b ? -1 : a > b ? 1 : 0;
+      }
+      function compareFiles(a, b) {
+        var primary = sortField === "size" ? a.size - b.size : cmpText(sortField === "kind" ? a.kind : a.path, sortField === "kind" ? b.kind : b.path);
+        if (primary !== 0) return sortDir === "ascending" ? primary : -primary;
+        if (sortField === "path") return 0;
+        return cmpText(a.path, b.path);
+      }
+      function applyFilter() {
         var q = filter.value.trim().toLowerCase();
-        $$("tr[data-search]", tb).forEach(function (tr) {
-          tr.hidden = q && tr.getAttribute("data-search").indexOf(q) < 0;
+        items.forEach(function (it) {
+          it.row.hidden = q && it.row.getAttribute("data-search").indexOf(q) < 0;
         });
+      }
+      function applySort() {
+        items
+          .slice()
+          .sort(function (x, y) {
+            return compareFiles(x.file, y.file);
+          })
+          .forEach(function (it) {
+            tb.appendChild(it.row);
+          });
+        ["path", "kind", "size"].forEach(function (field) {
+          var hc = headCells[field];
+          if (!hc) return;
+          if (field === sortField) {
+            hc.th.setAttribute("aria-sort", sortDir);
+            hc.arrow.textContent = sortDir === "ascending" ? " ▲" : " ▼";
+            hc.btn.setAttribute("aria-label", "Sort by " + field + ", " + sortDir + " (activate to sort " + (sortDir === "ascending" ? "descending" : "ascending") + ")");
+          } else {
+            hc.th.removeAttribute("aria-sort");
+            hc.arrow.textContent = "";
+            hc.btn.setAttribute("aria-label", "Sort by " + field);
+          }
+        });
+        if (fieldSelect) fieldSelect.value = sortField;
+        if (dirSelect) dirSelect.value = sortDir;
+        applyFilter();
+      }
+      function sortTh(field, label, cls) {
+        var arrow = h("span", { "aria-hidden": "true" });
+        var btn = h(
+          "button",
+          {
+            type: "button",
+            class: "dw-th-sort",
+            "aria-label": "Sort by " + field,
+            onclick: function () {
+              if (sortField === field) sortDir = sortDir === "ascending" ? "descending" : "ascending";
+              else {
+                sortField = field;
+                sortDir = "ascending";
+              }
+              applySort();
+            },
+          },
+          h("span", { text: label }),
+          arrow,
+        );
+        var th = h("th", { scope: "col", class: cls || null, "data-sort-field": field }, btn);
+        headCells[field] = { th: th, btn: btn, arrow: arrow };
+        return th;
+      }
+      function sortOption(value, label) {
+        var o = h("option", { text: label });
+        o.value = value;
+        o.setAttribute("value", value);
+        return o;
+      }
+      // Toolbar mirror of the header sorts: every field stays sortable on narrow
+      // screens, where the Kind column (and its header control) is hidden.
+      fieldSelect = h("select", { class: "dw-select", "aria-label": "Sort files by" }, sortOption("path", "Path"), sortOption("kind", "Kind"), sortOption("size", "Size"));
+      fieldSelect.value = sortField;
+      fieldSelect.addEventListener("change", function () {
+        sortField = fieldSelect.value;
+        sortDir = "ascending";
+        applySort();
       });
+      dirSelect = h("select", { class: "dw-select", "aria-label": "Sort direction" }, sortOption("ascending", "Ascending"), sortOption("descending", "Descending"));
+      dirSelect.value = sortDir;
+      dirSelect.addEventListener("change", function () {
+        sortDir = dirSelect.value;
+        applySort();
+      });
+      var sortBar = h("label", { class: "dw-sort" }, h("span", { class: "dw-small dw-muted", text: "Sort" }), fieldSelect, dirSelect);
+      filter.addEventListener("input", applyFilter);
       clear(filesSection);
       add(
         filesSection,
-        h("header", {}, h("h2", { text: "Files in v" + v.number + (v.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", text: plural(files.files.length, "file") }), filter)),
-        h("div", { class: "dw-scroll" }, h("table", { class: "dw-table" }, h("thead", {}, h("tr", {}, h("th", { text: "Path" }), h("th", { class: "dw-hide-sm", text: "Kind" }), h("th", { class: "num", text: "Size" }), h("th", {}))), tb)),
-        v.live ? null : h("p", { class: "dw-pad dw-small dw-muted", style: "margin:0", text: "Older versions are not served publicly. Restore this version to view it on the site, or download single files." }),
+        h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", text: plural(rows.length, "file") }), sortBar, filter)),
+        h("p", { class: "dw-pad dw-small dw-muted", style: "margin:0", text: "SHA-256 manifest checksums for the selected version (v" + mv.number + ", " + mv.id + "). A checksum is not proof of authenticity, provenance, safe content, or independent verification, and does not show the current live download matches — compare it against a trusted source you already have." }),
+        h("div", { class: "dw-scroll" }, h("table", { class: "dw-table" }, h("thead", {}, h("tr", {}, sortTh("path", "Path"), sortTh("kind", "Kind", "dw-hide-sm"), sortTh("size", "Size", "num"), h("th", { scope: "col", text: "SHA-256" }), h("th", { scope: "col" }))), tb)),
+        copyStatus,
+        mv.live ? null : h("p", { class: "dw-pad dw-small dw-muted", style: "margin:0", text: "Older versions are not served publicly. Restore this version to view it on the site, or download single files." }),
       );
+      applySort();
     }
 
     var s = site.settings;
@@ -1470,8 +1825,100 @@ export function dropwayClient() {
     loadKeys();
   };
 
+  /**
+   * Read-only effective-policy section for /dashboard/settings, rendered from the
+   * already-fetched /me response (no extra request, no polling). Shows the four
+   * caller-effective limits, site/storage usage against their configured limits,
+   * and every returned capability by its stable id. Refusal codes, messages and
+   * hints render as plain text. Null when /me carries no policy fields (older
+   * responses), so legacy output renders exactly as before.
+   */
+  function effectivePolicySection(m) {
+    var limits = m && m.limits && typeof m.limits === "object" ? m.limits : null;
+    var usage = m && m.usage && typeof m.usage === "object" ? m.usage : null;
+    var caps = m && m.capabilities && typeof m.capabilities === "object" ? m.capabilities : null;
+    if (!limits && !usage && !caps) return null;
+    limits = limits || {};
+    usage = usage || {};
+    caps = caps || {};
+
+    function isCount(n) {
+      return typeof n === "number" && isFinite(n) && n >= 0 && Math.floor(n) === n;
+    }
+    /** Exact bytes plus the shared short form, so a limit is never ambiguous. */
+    function byteText(n) {
+      return n + " bytes (" + bytes(n) + ")";
+    }
+    /** Only the sites/storage quotas use null-as-unlimited; other nulls stay ordinary. */
+    function quotaText(limit) {
+      if (limit === null) return "unlimited";
+      return isCount(limit) ? String(limit) : "unavailable";
+    }
+    function usedOf(label, used, limit) {
+      var l = quotaText(limit);
+      if (!isCount(used) && l === "unavailable") return "usage and limit unavailable";
+      if (!isCount(used)) return "usage unavailable of " + l + " " + label;
+      if (l === "unavailable") return used + " " + label + " in use, limit unavailable";
+      return used + " of " + l + " " + label;
+    }
+    function storageText(used, limit) {
+      var l = limit === null ? "unlimited" : isCount(limit) ? byteText(limit) : "unavailable";
+      if (!isCount(used) && l === "unavailable") return "usage and limit unavailable";
+      if (!isCount(used)) return "usage unavailable of " + l + " retained";
+      if (l === "unavailable") return byteText(used) + " retained, limit unavailable";
+      return byteText(used) + " of " + l + " retained";
+    }
+    function capabilityItem(id, decision) {
+      var li = h("li", {}, h("code", { text: id }), " — ");
+      if (!decision || typeof decision !== "object" || (decision.allowed !== true && decision.allowed !== false)) {
+        return add(li, "Unknown state.");
+      }
+      if (decision.allowed === true) return add(li, "Allowed.");
+      var err = decision.error && typeof decision.error === "object" ? decision.error : {};
+      add(li, "Unavailable. ");
+      if (err.code !== undefined && err.code !== null && err.code !== "") add(li, h("span", { class: "dw-mono", text: String(err.code) }), ": ");
+      if (err.message !== undefined && err.message !== null && err.message !== "") add(li, String(err.message), " ");
+      if (err.hint !== undefined && err.hint !== null && err.hint !== "") add(li, String(err.hint), " ");
+      var req = err.details && Array.isArray(err.details.requires) ? err.details.requires : null;
+      if (req && req.length) add(li, "Requires: " + req.join(", ") + ".");
+      return li;
+    }
+
+    var ids = Object.keys(caps);
+    var capList = h("ul", { class: "dw-small", style: "margin:.75rem 0 0" });
+    if (!ids.length) add(capList, h("li", { text: "Capability information unavailable." }));
+    ids.forEach(function (id) {
+      add(capList, capabilityItem(id, caps[id]));
+    });
+    return h(
+      "section",
+      { style: "margin-top:1rem", "aria-labelledby": "dw-effective-policy-h" },
+      h("h3", { id: "dw-effective-policy-h", text: "Your effective limits and capabilities" }),
+      h("p", { class: "dw-small dw-muted", text: "Effective values for the key you signed in with. They can be lower than the instance defaults under “This instance”." }),
+      h("p", { class: "dw-small dw-muted", text: "Allowed means this instance supports the capability for your key; each call still checks its own scopes. Storage counts bytes retained for your account, including earlier versions and deliveries." }),
+      h(
+        "dl",
+        { class: "dw-kv", style: "margin-top:.75rem" },
+        h("dt", { text: "Largest file" }), h("dd", { text: isCount(limits.maxFileBytes) ? byteText(limits.maxFileBytes) : "unavailable" }),
+        h("dt", { text: "Files per version" }), h("dd", { text: isCount(limits.maxFiles) ? plural(limits.maxFiles, "file") : "unavailable" }),
+        h("dt", { text: "Largest version" }), h("dd", { text: isCount(limits.maxSiteBytes) ? byteText(limits.maxSiteBytes) : "unavailable" }),
+        h("dt", { text: "One-call publish body" }), h("dd", { text: isCount(limits.oneShotMaxBytes) ? byteText(limits.oneShotMaxBytes) : "unavailable" }),
+      ),
+      h(
+        "dl",
+        { class: "dw-kv", style: "margin-top:.75rem" },
+        h("dt", { text: "Sites" }), h("dd", { text: usedOf("sites", usage.sites, limits.sites) }),
+        h("dt", { text: "Retained storage" }), h("dd", { text: storageText(usage.storage_bytes, limits.storage_bytes) }),
+      ),
+      capList,
+    );
+  }
+
   pages.settings = async function () {
     if (!requireAuth()) return;
+    // Usage and capability decisions must be fresh on each Settings visit.
+    var s = store("session");
+    if (s) s.removeItem(ME);
     var m = await renderAccount();
     var acct = d.getElementById("dw-me");
     if (acct && m && m.member) {
@@ -1486,6 +1933,7 @@ export function dropwayClient() {
           h("dt", { text: "Key scopes" }), h("dd", { class: "dw-mono", text: m.scopes.join(" ") }),
           h("dt", { text: "Key limited to a site" }), h("dd", { text: m.siteRestriction ? "yes" : "no" }),
         ),
+        effectivePolicySection(m),
       );
     }
     var mem = d.getElementById("dw-members");
@@ -1685,13 +2133,15 @@ export function dropwayClient() {
     }
 
     function buildTree(files) {
-      var root = { dirs: {}, files: [] };
+      // Prototype-less directory maps: legal names like __proto__ or toString are own data, never methods.
+      var root = { dirs: Object.create(null), files: [] };
       files.forEach(function (f) {
         var parts = f.path.split("/");
         var node = root;
         for (var i = 0; i < parts.length - 1; i++) {
-          node.dirs[parts[i]] = node.dirs[parts[i]] || { dirs: {}, files: [] };
-          node = node.dirs[parts[i]];
+          var seg = parts[i];
+          if (!Object.hasOwn(node.dirs, seg)) node.dirs[seg] = { dirs: Object.create(null), files: [] };
+          node = node.dirs[seg];
         }
         node.files.push(f);
       });
@@ -1756,22 +2206,79 @@ export function dropwayClient() {
     }
     var smallSite = manifest.files.length <= 40;
     var filter = h("input", { class: "dw-input", type: "search", placeholder: "Filter files", "aria-label": "Filter files" });
-    var treeBox = h("div", { class: "dw-treebox" }, renderNode(buildTree(manifest.files), "", 0));
-    filter.addEventListener("input", function () {
-      var q = filter.value.trim().toLowerCase();
-      $$("a[data-path]", treeBox).forEach(function (a) {
-        a.parentNode.hidden = q && a.getAttribute("data-path").toLowerCase().indexOf(q) < 0;
-      });
-      if (q) $$("details", treeBox).forEach(function (x) { x.open = true; });
+    // Display names for the manifest's server-derived kinds (mirrors KIND_LABELS
+    // in @dropway/core). This labels values; it never classifies files itself.
+    var KIND_LABELS = {
+      html: "HTML page", markdown: "Markdown", image: "Image", svg: "SVG image", pdf: "PDF document",
+      video: "Video", audio: "Audio", json: "JSON", csv: "Table", code: "Code", text: "Text",
+      notebook: "Jupyter notebook", model3d: "3D model", font: "Font", archive: "Archive",
+      wasm: "WebAssembly", binary: "Binary file",
+    };
+    function kindLabel(kind) {
+      if (KIND_LABELS[kind]) return KIND_LABELS[kind];
+      var words = String(kind).replace(/[_-]+/g, " ").trim();
+      return words ? words.charAt(0).toUpperCase() + words.slice(1) : String(kind);
+    }
+    var kinds = [];
+    manifest.files.forEach(function (f) {
+      if (f && f.kind && kinds.indexOf(f.kind) < 0) kinds.push(f.kind);
     });
+    kinds.sort();
+    var kindOptions = [h("option", { value: "", text: "All" })];
+    kinds.forEach(function (k) {
+      kindOptions.push(h("option", { value: k, text: kindLabel(k) }));
+    });
+    var kindSel = h("select", { id: "dw-kind", class: "dw-select", "aria-label": "File kind" }, kindOptions);
+    var reset = h("button", { type: "button", class: "dw-btn small", text: "Clear" });
+    var matchCount = h("span", { class: "dw-small dw-muted", role: "status", text: "" });
+    var emptyNote = h("div", { class: "dw-tree-note", text: "", hidden: true });
+    var treeBox = h("div", { class: "dw-treebox" }, renderNode(buildTree(manifest.files), "", 0));
+    function applyFilter() {
+      var q = filter.value.trim().toLowerCase();
+      var kind = kindSel.value;
+      var filtering = !!(q || kind);
+      var total = manifest.files.length;
+      var matching = 0;
+      $$("a[data-path]", treeBox).forEach(function (a) {
+        var show = (!q || a.getAttribute("data-path").toLowerCase().indexOf(q) >= 0) && (!kind || a.getAttribute("data-kind") === kind);
+        a.parentNode.hidden = !show;
+        if (show) matching++;
+      });
+      // Innermost branches first, so each parent sees its children's settled state.
+      $$("details", treeBox).reverse().forEach(function (x) {
+        var hasMatch = $$("a[data-path]", x).some(function (a) {
+          return !a.parentNode.hidden;
+        });
+        x.parentNode.hidden = filtering && !hasMatch;
+        if (filtering && hasMatch) x.open = true;
+      });
+      matchCount.textContent = matching + " of " + plural(total, "file");
+      emptyNote.hidden = matching > 0;
+      emptyNote.textContent = total === 0 ? "No files in this version" : "No matching files";
+    }
+    filter.addEventListener("input", applyFilter);
+    kindSel.addEventListener("change", applyFilter);
+    reset.addEventListener("click", function () {
+      filter.value = "";
+      kindSel.value = "";
+      applyFilter();
+    });
+    applyFilter();
     clear(tree);
     add(
       tree,
       h("div", { class: "dw-tree-head" }, h("a", { class: "dw-title", href: "/dashboard/sites/" + encodeURIComponent(slug), text: slug }), h("span", { class: "dw-small dw-muted", text: manifest.version ? "v" + manifest.version.number + " · " + plural(manifest.files.length, "file") : "No live version" })),
       filter,
+      h("label", { class: "dw-label", for: "dw-kind", text: "File kind" }),
+      kindSel,
+      h("div", { class: "dw-row" }, reset, matchCount),
+      emptyNote,
       treeBox,
     );
     go(current, mode, false);
+    // Push entries carry {p, mode}; record the same for the loaded entry so
+    // Back restores the prior file and view mode instead of losing the mode.
+    history.replaceState({ p: current, mode: mode }, "");
     var cur = $("a[aria-current]", tree);
     if (cur) cur.scrollIntoView({ block: "nearest" });
   };

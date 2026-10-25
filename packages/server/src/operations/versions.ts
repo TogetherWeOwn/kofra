@@ -1,5 +1,5 @@
 import { HTTP_VERSION } from "./http-schemas";
-import { deleteVersion, getDeployStatus, getSiteByRef, requireConfirm, resolveVersionRef, getSiteFor } from "@dropway/core";
+import { deleteVersion, exportVersionZip, getDeployStatus, getSiteByRef, requireConfirm, resolveVersionRef, getSiteFor } from "@dropway/core";
 import { CONFIRM_SLUG, SITE_REF, VERSION_OUT, VERSION_REF, obj } from "../mcp/schemas";
 import { defineOperation } from "../operations";
 import { fromSchema, RO, DESTROY, P, D } from "./shared";
@@ -136,5 +136,53 @@ export const VERSION_OPERATIONS = [
         output: { deleted: true, id: "ver_old" },
       },
     ],
+  }),
+  defineOperation({
+    id: "export_version",
+    method: "GET",
+    path: "/api/v1/sites/{slug}/versions/{version}/export",
+    summary: "Download a version as a ZIP",
+    toolset: "versions",
+    scopes: ["sites:read"],
+    description:
+      'Stream one version ("live", "v3", "3" or an id) as a deterministic ZIP of exactly its served manifest bytes: entries stored uncompressed and sorted by path, one fixed timestamp, no data descriptors. Answers 413 when the version exceeds the effective file-count or byte caps. Binary payload: download it over REST (for example curl).',
+    input: fromSchema({
+      type: "object",
+      properties: { site: SITE_REF, version: VERSION_REF },
+      required: ["site", "version"],
+      additionalProperties: false,
+    }),
+    output: fromSchema({ type: "object", additionalProperties: true }),
+    annotations: RO,
+    mcp: {
+      exclude: "Binary ZIP bytes never pass through the model; download the export over REST (GET /api/v1/sites/{slug}/versions/{version}/export), for example with curl.",
+    },
+    http: {
+      input: fromSchema({
+        type: "object",
+        properties: { slug: { type: "string" }, version: { type: "string" } },
+        required: ["slug", "version"],
+      }),
+      responseType: "application/zip",
+      handler: async (c) => {
+        const version = c.req.param("version")!.trim();
+        const out = await exportVersionZip(D(c), P(c), c.req.param("slug")!, version);
+        const headers = {
+          "Content-Type": "application/zip",
+          "Content-Disposition": `attachment; filename="${out.filename}"`,
+          "Cache-Control": version === "" || version.toLowerCase() === "live"
+            ? "private, no-cache"
+            : "private, max-age=31536000, immutable",
+          "X-Content-Type-Options": "nosniff",
+          "X-Kofra-Version": out.versionId,
+        };
+        if (c.req.method === "HEAD") return c.body(null, 200, headers);
+        return c.body(out.stream, 200, headers);
+      },
+    },
+    examples: [{ input: { site: "bright-otter-x7k2", version: "live" }, output: "Hello" }],
+    async handler() {
+      throw new Error("REST transport required");
+    },
   }),
 ];

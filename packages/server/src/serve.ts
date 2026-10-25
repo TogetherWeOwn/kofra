@@ -13,6 +13,8 @@ import {
   readBlob,
   readBlobRange,
   requestPathToFilePath,
+  resolveSlugRedirect,
+  siteUrl,
   verifyPassword,
   type DropwayContext,
   type LiveSite,
@@ -295,7 +297,22 @@ export async function serveSite(
   if (filePath === null) return systemResponse(dw, req, mode, null, 400, "400", "Bad request", "That address could not be decoded.");
 
   const live = await getLiveSite(dw, slug);
-  if (!live) return systemResponse(dw, req, mode, null, 404, "404", "Nothing is published here", "There is no site at this address. It may have been deleted. See {app}.");
+  if (!live) {
+    // R-59: a renamed site's old name 308s to the current name, path and query
+    // kept. Never cached: the hold ends and the name may be reused.
+    const redirect = await resolveSlugRedirect(dw, slug);
+    if (redirect) {
+      return new Response(null, {
+        status: 308,
+        headers: {
+          Location: siteUrl(dw, redirect.slug) + pathname.replace(/^\//, "") + url.search,
+          "Access-Control-Allow-Origin": "*",
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+    return systemResponse(dw, req, mode, null, 404, "404", "Nothing is published here", "There is no site at this address. It may have been deleted. See {app}.");
+  }
   // Anonymous sites are untrusted: sandbox them even where other sites are not.
   if (!mode.sandbox && live.tenantId === null && dw.config.sitesSandboxAnonymous) mode = { ...mode, sandbox: true };
   if (live.expiresAt && live.expiresAt < Date.now()) {

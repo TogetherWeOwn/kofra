@@ -81,6 +81,59 @@ Cleanup claims expiry hourly, retains closed bytes for 24 hours, then removes
 manifest references only if there is no hold or takedown. Storage accounting is
 released once at purge, never at revoke. Sender metadata remains readable.
 
+## Version file checksums
+
+On a site page, each version's Files panel lists every file's exact byte size
+and full SHA-256 manifest checksum with a Copy SHA-256 button (keyboard
+operable; success or failure is announced). The panel always fetches the
+selected version by its immutable version ID and shows the version number and
+ID from that same manifest response, so a digest is never attached to a stale
+live label. Digests come from manifest metadata only; the panel never downloads
+file bytes to display them.
+
+A checksum is the selected version's manifest metadata, not proof that the
+current live download matches it, and not a verdict on authenticity,
+authorship, safe content or scanning. Compare it against a trusted source you
+already have. Per-file Open links still point at the live site.
+
+## Releasing held site names
+
+Renames hold their old URLs; deleting or expiring a site tombstones its name.
+`release_slug` (`POST /api/v1/slugs/release`) requires `confirm` equal to the
+slug, a nonempty `reason`, and an **unrestricted admin key of the holding tenant**.
+Tenant admin scope is not instance-wide operator authority: foreign holds,
+ownerless anonymous holds and site-restricted keys are refused with 403.
+
+For a cross-tenant trademark dispute or an ownerless expiry, the **instance
+operator with existing D1 write access**, not a tenant API credential, performs
+an audited release outside the public API. Verify the exact slug and dispute
+first, then submit the following statements together in **one D1 `batch`**.
+Bind `:slug`, one epoch-millisecond `:now`, a nonempty `:reason` and an attributable
+`:operator` identity (for example `operator:case-42`) as parameters; these labels
+are illustrative, not values to paste unmodified:
+
+```sql
+INSERT INTO slug_tombstones
+  (id, slug, tenant_id, site_id, chosen, hold_until, reason, created_at,
+   released_at, release_reason, released_by)
+SELECT lower(hex(randomblob(16))), r.slug, s.tenant_id, r.site_id, r.chosen,
+       r.hold_until, 'rename', :now, :now, :reason, :operator
+FROM slug_redirects r LEFT JOIN sites s ON s.id = r.site_id
+WHERE r.slug = :slug AND r.hold_until > :now;
+
+UPDATE slug_tombstones
+SET released_at = :now, release_reason = :reason, released_by = :operator
+WHERE slug = :slug AND released_at IS NULL AND hold_until > :now;
+
+DELETE FROM slug_redirects WHERE slug = :slug AND hold_until > :now;
+```
+
+Verify no active redirect or unreleased active tombstone remains for the slug,
+and retain the released rows as the audit trail. A live site's current name and
+permanent delivery reservations are not released by this procedure. Never grant
+D1 credentials to a tenant or reuse the bootstrap key for release. Released audit
+rows are retained indefinitely; only expired **unreleased** holds are purged.
+
 ## First run: create the owner
 
 With the CLI (it saves the owner key in `~/.config/dropway/credentials.json`, mode 0600):
@@ -155,6 +208,12 @@ features enforce their corresponding quotas when implemented. Optional features
 without their required binding report `feature_unavailable`, even if a custom
 policy allows them. The default config runs usage reconciliation at midnight UTC
 and cleanup hourly; custom Worker configs must preserve both cron entries.
+
+The dashboard Settings page renders the same caller-effective values under
+"Your account": the four size/count limits, site and retained-storage usage
+against their configured limits, and each capability with its refusal reason
+when unavailable. The "This instance" section keeps showing the configured
+defaults above; effective values can be lower per key.
 
 The `0003_scopes_usage.sql` migration (after `0002_transfers.sql`) preserves deletion on existing `sites:write`
 keys by adding `sites:delete`. New keys must explicitly include `sites:delete` to
