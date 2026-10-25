@@ -464,7 +464,7 @@ export function dropwayClient() {
       if (p.indexOf("/") < 0 || p.split("/")[0] !== first) return items;
     }
     return items.map(function (it) {
-      return { path: it.path.slice(first.length + 1), file: it.file };
+      return Object.assign({}, it, { path: it.path.slice(first.length + 1) });
     });
   }
 
@@ -659,7 +659,7 @@ export function dropwayClient() {
         "div",
         { class: "dw-error", role: "alert" },
         h("strong", { text: (er.kind === "directory" ? "Could not read folder “" : "Could not read file “") + er.path + "”." }),
-        h("div", { class: "dw-small", text: "Reselect the folder or choose it again: part of the selection is unreadable, so publishing stays disabled until the selection is complete." }),
+        h("div", { class: "dw-small", text: "Check access to this path, then reselect the folder, or use Choose files to select only the files you want to publish. Publishing stays disabled until the selection is complete." }),
       );
     }
 
@@ -669,12 +669,19 @@ export function dropwayClient() {
     }
 
     function setItems(items, errors) {
-      errors = errors || [];
+      // Normalize the whole selection before applying the existing ignore rules,
+      // including unreadable paths. A directory's slash marks its subtree; an
+      // unreadable sole root normalizes to "" and remains a blocking error.
+      var selection = items.concat((errors || []).map(function (er) {
+        return { path: er.path + (er.kind === "directory" ? "/" : ""), error: er };
+      }));
+      errors = [];
       var keep = [];
       var skipped = [];
-      stripCommonRoot(items).forEach(function (it) {
+      stripCommonRoot(selection).forEach(function (it) {
         var why = ignored(it.path);
-        if (why) skipped.push(it.path + " (" + why + ")");
+        if (why) skipped.push(it.path + " (" + why + (it.error ? "; " + (it.error.kind === "directory" ? "contents unreadable" : "unreadable") : "") + ")");
+        else if (it.error) errors.push(it.error);
         else keep.push(it);
       });
       state.items = keep;
