@@ -24,6 +24,7 @@ Zero runtime dependencies. Node.js 20 or newer.
 | `list` | Your sites (`--all` for every page) |
 | `site <name>` | One site: URL, live version, settings |
 | `files <name>` | Files of the live version (or `--version v3`) with their URLs |
+| `read-file <site> <path>` | One file's content, one bounded page (`--version`, `--offset`, `--length`, `--encoding`) |
 | `versions <name>` | Every version, newest first; the live one is marked |
 | `restore <name> [v3]` | Make an older version live again. Without a version: the one before the live version. Alias `rollback` |
 | `delete <name> --yes` | Delete a site. `--version v3` deletes one non-live version instead |
@@ -94,6 +95,34 @@ tokens, Kofra keys) stop the publish with exit code 2 unless you pass `--allow-s
 Anonymous publishing (`--anonymous`) works only on instances that turned it on. The site expires and
 the output includes a `claimToken`: keep it to update the site (`--key <claimToken> --site <name>`) or
 to claim it into an account.
+
+## Reading files
+
+```sh
+kofra read-file my-site index.html                                # text to stdout, page info to stderr
+kofra read-file my-site image.png --encoding base64 > image.b64  # binaries as base64; decode with: base64 -d image.b64 > image.png
+kofra read-file my-site big.txt --length 65536 --json             # one bounded page as JSON
+kofra read-file my-site big.txt --offset 65536 --length 65536     # next page (use nextOffset from the last result)
+kofra read-file my-site index.html --version v2                   # an older version ("live", "v3", "3" or an id)
+```
+
+One bounded page per call (default 64 KiB, up to 1 MiB with `--length`). The version is passed
+straight to `GET /api/v1/read-file` (operation `read_file`; MCP tool `read_file`): no version
+listing, no auto-fetch of the whole file. For the schema see `/openapi.json` or `/llms-full.txt`
+on your instance.
+
+Without `--json`, stdout carries only the page content byte-for-byte (no added newline;
+base64 stays base64, so redirection is safe) and the page metadata (size, encoding, byte range,
+SHA-256, truncation and the continuation command) goes to stderr, so pipes get clean content and
+truncation is never silent (shown even with `--quiet`). With `--json`, stdout is exactly the API
+page object; see "Output for agents".
+
+Local check:
+
+```sh
+node packages/cli/bin/dropway.mjs read-file --help   # no instance needed
+npm run test:cli                                      # full CLI suite against a local Worker
+```
 
 ## Encrypted publishing
 

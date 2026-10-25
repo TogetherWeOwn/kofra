@@ -13,7 +13,7 @@ import { linkKey, linkPath, readCredentials, readLink, removeCredentials, saveCr
 import { collectFiles } from "./files.ts";
 import { encryptFiles } from "./encrypt.ts";
 import { withLegacyEnv } from "./legacy-brand.ts";
-import { formatBytes, plural, shortTime, table } from "./output.ts";
+import { formatBytes, plural, shellQuote, shortTime, table } from "./output.ts";
 import { publish, publishZip, waitForVersion, type ProgressEvent, type PublishResult, type VersionInfo } from "./publish.ts";
 import { VERSION } from "./version.ts";
 
@@ -473,6 +473,98 @@ const filesCmd: Command = {
   },
 };
 
+interface ReadFilePage {
+  path: string;
+  versionId: string;
+  contentType: string;
+  kind: string;
+  size: number;
+  sha256: string;
+  encoding: string;
+  offset: number;
+  length: number;
+  truncated: boolean;
+  nextOffset: number | null;
+  content: string;
+  url: string;
+  rawUrl: string;
+}
+
+const readFileCmd: Command = {
+  summary: "Read one file's content (one bounded page)",
+  usage: "kofra read-file <site> <path> [--version <v>] [--offset <n>] [--length <n>] [--encoding auto|text|base64]",
+  flags: {
+    version: { kind: "string" },
+    offset: { kind: "string" },
+    length: { kind: "string" },
+    encoding: { kind: "string" },
+  },
+  details: `One bounded page per call (default 64 KiB, up to 1 MiB with --length).
+The version ("live", "v3", "3" or an id) is passed straight to
+GET /api/v1/read-file (operation read_file; MCP tool read_file): no
+version listing and no auto-fetch of the whole file.
+
+With --json, stdout is exactly the API page (path, versionId,
+contentType, size, sha256, encoding, offset, length, truncated,
+nextOffset, content, url, rawUrl). Without --json, stdout carries only
+the page content byte-for-byte (no added newline; base64 stays base64,
+so redirection is safe) and the page metadata goes to stderr, so
+pipes get clean content and truncation is never silent (shown even with
+--quiet).
+
+Examples:
+  kofra read-file my-site index.html
+  kofra read-file my-site image.png --encoding base64 > image.b64
+  kofra read-file my-site big.txt --length 65536 --json
+  kofra read-file my-site big.txt --offset 65536 --length 65536`,
+  async run(p, io, out) {
+    if (p.positionals.length > 2) throw new UsageError(`Too many arguments. Usage: ${this.usage}`);
+    const slug = positional(p, 0, "site", this.usage);
+    const filePath = positional(p, 1, "path", this.usage);
+    const version = str(p, "version");
+    const encoding = str(p, "encoding");
+    if (encoding !== undefined && encoding !== "auto" && encoding !== "text" && encoding !== "base64") {
+      throw new UsageError("--encoding must be auto, text or base64.");
+    }
+    const offsetRaw = str(p, "offset");
+    let offset: number | undefined;
+    if (offsetRaw !== undefined) {
+      if (offsetRaw.trim() === "") throw new UsageError("--offset must be a whole number 0 or greater.");
+      const n = Number(offsetRaw);
+      if (!Number.isSafeInteger(n) || n < 0) throw new UsageError("--offset must be a whole number 0 or greater.");
+      offset = n;
+    }
+    const length = int(p, "length", 1, 1048576);
+    const inst = await resolveInstance(p, io);
+    const client = makeClient(io, inst.api, requireKey(inst));
+    const q = new URLSearchParams({ site: slug, path: filePath });
+    if (version !== undefined) q.set("version", version);
+    if (offset !== undefined) q.set("offset", String(offset));
+    if (length !== undefined) q.set("length", String(length));
+    if (encoding !== undefined) q.set("encoding", encoding);
+    const { data } = await client.get<ReadFilePage>(`/read-file?${q}`);
+    if (out.json) {
+      out.result(data as unknown as Record<string, unknown>, () => data.content);
+    } else {
+      // Human output is the content byte-for-byte: no added newline, so
+      // redirection stays safe and base64 can be decoded as-is.
+      io.stdout(data.content);
+      const end = data.offset + data.length;
+      const range = data.size === 0 ? "empty file" : `bytes ${data.offset}-${Math.max(data.offset, end - 1)} of ${data.size}`;
+      let line = `${data.path} — ${formatBytes(data.size)} (${data.contentType}), encoding ${data.encoding}, version ${data.versionId}, ${range}. SHA-256: ${data.sha256}`;
+      if (data.truncated && data.nextOffset !== null) {
+        const cont = [`kofra read-file ${shellQuote(slug)} ${shellQuote(data.path)}`, `--offset ${data.nextOffset}`];
+        if (version !== undefined) cont.push(`--version ${shellQuote(version)}`);
+        if (length !== undefined) cont.push(`--length ${length}`);
+        if (encoding !== undefined) cont.push(`--encoding ${encoding}`);
+        line += `\nTruncated: continue with: ${cont.join(" ")}`;
+      }
+      io.stderr(`${line}\n`);
+    }
+    return EXIT.ok;
+  },
+};
+
 const versionsCmd: Command = {
   summary: "List a site's versions",
   usage: "kofra versions <name>",
@@ -818,6 +910,7 @@ const COMMANDS: Record<string, Command> = {
   list: listCmd,
   site: siteCmd,
   files: filesCmd,
+  "read-file": readFileCmd,
   versions: versionsCmd,
   restore: restoreCmd,
   delete: deleteCmd,
