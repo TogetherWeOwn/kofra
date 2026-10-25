@@ -23,9 +23,9 @@ Zero runtime dependencies. Node.js 20 or newer.
 | `publish <path>` | Publish a folder, a single file or a `.zip`. Creates a site, or updates one with `--site <name>` |
 | `list` | Your sites (`--all` for every page) |
 | `site <name>` | One site: URL, live version, settings |
-| `files <name>` | Files of the live version (or `--version v3`) with their URLs |
+| `files <name>` | Files of the live version (or `--version <ref>` with `live`, `v3`, `3` or a version id, read directly) with their URLs |
 | `read-file <site> <path>` | One file's content, one bounded page (`--version`, `--offset`, `--length`, `--encoding`) |
-| `versions <name>` | Every version, newest first; the live one is marked |
+| `versions <name>` | Newest 500 versions, newest first, live marked — or `versions <name> <ref>` to inspect one directly |
 | `restore <name> [v3]` | Make an older version live again. Without a version: the one before the live version. Alias `rollback` |
 | `delete <name> --yes` | Delete a site. `--version v3` deletes one non-live version instead |
 | `whoami` | The instance, your identity and your key's scopes |
@@ -46,6 +46,26 @@ kofra keys ls --all --json  # every member's keys (needs members:write) as one J
 `*` marks the current key and terminal control characters are shown as visible `\uXXXX` escapes,
 keeping each key on one row. `--json` preserves the original metadata values. Create and revoke
 keys with the generic command, e.g. `kofra api POST /keys --data '{"name":"ci"}'`.
+
+## Versions
+
+A bare `kofra versions <name>` lists the newest 500 versions only, newest first; it has no
+cursor and does not promise full history. To inspect any single version — including ones older
+than that window — pass its ref, which is read directly from the server:
+
+```sh
+kofra versions team-report live            # the live version
+kofra versions team-report v3              # version number 3 ("3" works too)
+kofra versions team-report ver_abc123      # the exact version id
+kofra versions team-report v3 --json       # one JSON object: { site, version, missing }
+kofra files team-report --version v3       # files of that version, resolved directly
+```
+
+Runnable local check (from a repo clone, against your own instance):
+
+```sh
+node packages/cli/bin/dropway.mjs versions team-report v1 --api https://<your-instance> --json
+```
 
 ## Discovering operations
 

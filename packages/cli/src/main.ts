@@ -189,7 +189,10 @@ async function listAllVersions(client: DropwayClient, slug: string): Promise<{ c
   return data;
 }
 
-/** "v3", "3" or a version id -> the version. Omitted -> the version before the live one (rollback). */
+/** "v3", "3" or a version id -> the version. Omitted -> the version before the live one (rollback).
+ * Used only by the destructive commands (restore, delete), which keep their
+ * historical list-based selection. Read-only commands resolve explicit refs
+ * directly (getVersionDirect) so old versions stay readable. */
 async function resolveVersion(client: DropwayClient, slug: string, ref: string | undefined): Promise<VersionRow> {
   const { currentVersionId, versions } = await listAllVersions(client, slug);
   if (!ref) {
@@ -206,6 +209,48 @@ async function resolveVersion(client: DropwayClient, slug: string, ref: string |
     throw new CliError({ code: "version_not_found", message: `${slug} has no finalized version "${ref}".`, hint: `List versions with: kofra versions ${slug}`, exitCode: EXIT.notFound });
   }
   return found;
+}
+
+interface DirectVersion {
+  site: string;
+  version: VersionRow;
+  missing: string[];
+}
+
+/**
+ * Read one version straight from the server ("live", "v3", "3" or an id).
+ * Unlike resolveVersion this never pages history, so versions older than the
+ * newest 500 stay readable. The ref travels as one encoded path segment, and
+ * server errors (code, hint, request id) pass through untouched.
+ */
+async function getVersionDirect(client: DropwayClient, slug: string, ref: string): Promise<DirectVersion> {
+  // encodeURIComponent leaves "." and ".." untouched, and URL normalization
+  // would then collapse the request onto a different endpoint (or the list
+  // route for ""). Refuse those locally instead of changing the endpoint.
+  if (ref === "" || ref === "." || ref === "..") {
+    throw new CliError({
+      code: "invalid_version_ref",
+      message: `Invalid version ${JSON.stringify(ref)}.`,
+      hint: `Use "live", "v3", "3" or a version id (see: kofra versions ${slug}).`,
+      exitCode: EXIT.usage,
+    });
+  }
+  const { data } = await client.get<DirectVersion>(`/sites/${enc(slug)}/versions/${enc(ref)}`);
+  return data;
+}
+
+/** Human text for one inspected version (used by `versions <name> <ref>`). */
+function singleVersionHuman(slug: string, data: DirectVersion): string {
+  const v = data.version;
+  const lines = [
+    `${slug} v${v.number} (${v.id}): ${v.status ?? "ready"}${v.live ? ", live" : ""}`,
+    `Files:    ${v.fileCount ?? "?"} (${formatBytes(v.totalBytes ?? 0)})`,
+    `Published: ${shortTime(v.finalizedAt ?? v.createdAt)}`,
+  ];
+  if (v.message) lines.push(`Message:   ${v.message}`);
+  if (v.client) lines.push(`Client:    ${v.client}`);
+  if (data.missing.length) lines.push(`Missing blobs: ${data.missing.length} (upload them, then finalize the version)`);
+  return lines.join("\n");
 }
 
 async function confirm(io: Io, out: Output, p: Parsed, expected: string, what: string): Promise<void> {
@@ -457,12 +502,17 @@ const filesCmd: Command = {
   summary: "List the files of a site's live (or given) version",
   usage: "kofra files <name> [--version <v>]",
   flags: { version: { kind: "string" } },
+  details: `The version may be "live", "v3", "3" or a version id; it is read
+directly from the server, so versions older than the newest 500 work too.
+Without --version, the live version's files are listed.`,
   async run(p, io, out) {
     const slug = positional(p, 0, "name", this.usage);
     const inst = await resolveInstance(p, io);
     const client = makeClient(io, inst.api, requireKey(inst));
     const ref = str(p, "version");
-    const versionId = ref ? (await resolveVersion(client, slug, ref)).id : null;
+    // Any explicit --version (even an empty one) resolves directly: the server
+    // answers 404 for unknown refs instead of silently listing the live version.
+    const versionId = ref !== undefined ? (await getVersionDirect(client, slug, ref)).version.id : null;
     const { data } = await client.get<{ version: VersionInfo | null; files: Array<{ path: string; size: number; contentType: string; url: string; rawUrl: string }> }>(
       `/sites/${enc(slug)}/files${versionId ? `?version=${enc(versionId)}` : ""}`,
     );
@@ -566,22 +616,36 @@ Examples:
 };
 
 const versionsCmd: Command = {
-  summary: "List a site's versions",
-  usage: "kofra versions <name>",
+  summary: "List a site's versions, or inspect one",
+  usage: "kofra versions <name> [ref]",
   flags: {},
+  details: `Inspect one version directly, without paging history (this works even
+for versions older than the newest 500 the list shows):
+  kofra versions <name> live          the live version
+  kofra versions <name> v3            version number 3 ("3" works too)
+  kofra versions <name> <versionId>   the exact version id
+
+A bare "kofra versions <name>" lists the newest 500 versions only, newest
+first; older versions stay inspectable by ref as above.`,
   async run(p, io, out) {
     const slug = positional(p, 0, "name", this.usage);
     const inst = await resolveInstance(p, io);
     const client = makeClient(io, inst.api, requireKey(inst));
-    const data = await listAllVersions(client, slug);
-    out.result(data as unknown as Record<string, unknown>, () =>
-      data.versions.length
-        ? table(
-            data.versions.map((v) => [`v${v.number}`, v.id === data.currentVersionId ? "live" : "", v.id, shortTime(v.finalizedAt ?? v.createdAt), String(v.fileCount ?? ""), formatBytes(v.totalBytes ?? 0), v.client ?? "", v.message ?? ""]),
-            ["VERSION", "", "ID", "PUBLISHED", "FILES", "SIZE", "CLIENT", "MESSAGE"],
-          )
-        : "No versions yet.",
-    );
+    const ref = p.positionals[1];
+    if (ref === undefined) {
+      const data = await listAllVersions(client, slug);
+      out.result(data as unknown as Record<string, unknown>, () =>
+        data.versions.length
+          ? table(
+              data.versions.map((v) => [`v${v.number}`, v.id === data.currentVersionId ? "live" : "", v.id, shortTime(v.finalizedAt ?? v.createdAt), String(v.fileCount ?? ""), formatBytes(v.totalBytes ?? 0), v.client ?? "", v.message ?? ""]),
+              ["VERSION", "", "ID", "PUBLISHED", "FILES", "SIZE", "CLIENT", "MESSAGE"],
+            )
+          : "No versions yet.",
+      );
+      return EXIT.ok;
+    }
+    const data = await getVersionDirect(client, slug, ref);
+    out.result(data as unknown as Record<string, unknown>, () => singleVersionHuman(slug, data));
     return EXIT.ok;
   },
 };

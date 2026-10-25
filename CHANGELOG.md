@@ -158,6 +158,25 @@
   `npm:` alias targets in manifests and lockfiles as well as dependency names.
   Reject binary `bun.lockb` with instructions to regenerate an auditable text lockfile.
 
+### Link permanence
+
+- A renamed site's old name 308s to the new name (path and query kept, path and
+  subdomain modes) until `redirectUntil`, returned by `rename_site` alongside
+  `oldSlug`. Rename chains resolve through the current name.
+- Deleted and expired names are held for their previous tenant (chosen names 12
+  months, generated names 90 days): other tenants get 409 `slug_reserved`, the
+  holding tenant may reclaim. Durations are config (`SLUG_REDIRECT_DAYS`,
+  `SLUG_HOLD_CHOSEN_DAYS`, `SLUG_HOLD_GENERATED_DAYS`).
+- New operation `release_slug` (`POST /api/v1/slugs/release`): an unrestricted
+  admin key releases only its tenant's holds, with a required reason kept as the
+  audit record. Foreign and ownerless releases require the instance operator's
+  audited database procedure, not tenant-grantable API scopes.
+- Delete/expiry fence name, ownership and expiry in the transaction; stale
+  deletes return `site_changed`, and cleanup skips changed rows. Expired aliases
+  never become fresh tombstones; transfer renames never advertise a 308.
+- A deleted version's `<slug>--v<N>` answers 410 in both modes, never another
+  site's bytes. File deliveries keep their permanent sender-owned reservations.
+
 ### CLI discovery
 
 - Add `kofra operations [operationId] [--schema]`: list the instance's public

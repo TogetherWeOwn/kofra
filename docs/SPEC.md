@@ -1170,10 +1170,10 @@ Codes are stable forever.
 | GET | `/api/v1/sites` | `list_sites` | `sites:read` | P0 | Done (`query`, `folder`, `kind`, `sort` in R-28) |
 | GET | `/api/v1/sites/{site}` | `get_site` | `sites:read` | P0 | Done |
 | PATCH | `/api/v1/sites/{site}` | `update_site_settings` | `sites:write` | P0 | Done (more settings R-27) |
-| DELETE | `/api/v1/sites/{site}` | `delete_site` | `sites:delete` | P0 | Done (scope R-17) |
+| DELETE | `/api/v1/sites/{site}` | `delete_site` | `sites:delete` | P0 | Done (scope R-17; freed name held per R-59) |
 | POST | `/api/v1/sites/{site}/claim` | `claim_site` | `sites:write` | P0 | Done |
 | POST | `/api/v1/sites/{site}/duplicate` | `duplicate_site` | `sites:write` | P1 | R-27 |
-| POST | `/api/v1/sites/{site}/rename` | `rename_site` | `sites:write` | P2 | R-50 |
+| POST | `/api/v1/sites/{site}/rename` | `rename_site` | `sites:write` | P2 | Done (R-59: old name 308s + redirectUntil; vanity and gallery stay R-50) |
 
 **Versions**
 

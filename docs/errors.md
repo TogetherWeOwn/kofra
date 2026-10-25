@@ -11,6 +11,7 @@ Partial-update conflicts also retain optional yourBase, yourBaseNumber and liveC
 A missing delay on 429/503 defaults to one second. Other errors have a null delay unless supplied.
 Follow next calls to reconcile conflicts; retryable does not authorize replaying a changed request.
 Delivery unlock throttles use rate_limited (429); invalid operation shapes use invalid_request (400), and permanent slug reservations use slug_taken (409).
+slug_reserved is 400 for a reserved system label, or 409 for a freed name held for its previous tenant until details.holdUntil. Only the holding tenant may reclaim before then.
 A delivery takedown response never includes its private reason.
 Extension adapters can add codes and override guidance without changing built-in codes; unknown codes link to the catalog root unless docs is supplied.
 
@@ -88,6 +89,7 @@ Extension adapters can add codes and override guidance without changing built-in
 | `password_required` | 400 | false | Call again with a password of 4–200 characters. |
 | `path_required` | 400 | false | Add a path query parameter or X-Kofra-Path header to name the raw file. |
 | `rate_limited` | 429 | true | Wait retryAfterSeconds before retrying; update an existing anonymous site using its claim token. |
+| `reason_required` | 400 | false | Provide a non-empty reason for releasing the held name, such as a trademark dispute reference. |
 | `request_too_large` | 413 | false | Split the request or use manifest/upload/finalize instead of embedding file bytes. |
 | `route_not_found` | 404 | false | See /openapi.json for supported methods and endpoints. |
 | `scope_not_grantable` | 403 | false | Request only scopes held by both the caller and the target member's role. |
@@ -96,7 +98,8 @@ Extension adapters can add codes and override guidance without changing built-in
 | `site_too_large` | 413 | false | Split the content across several sites. |
 | `size_mismatch` | 400 | false | Recheck the file bytes, manifest size and Content-Length; send the raw file body. |
 | `slug_generation_failed` | 503 | true | Retry the request after the indicated delay. |
-| `slug_reserved` | 400 | false | Pick another name, or omit the slug to get a generated one. |
+| `slug_not_held` | 404 | false | Only active held names need release; live, expired, released and never-used names need no release. |
+| `slug_reserved` | 400 | false | Pick another name, or omit the slug to get a generated one. For a freed name held for its previous tenant (409), only that tenant may reclaim before details.holdUntil; otherwise wait until the hold ends. |
 | `slug_taken` | 409 | false | Pick another slug, or omit it when creating a site to get a generated name. |
 | `temporarily_unavailable` | 503 | true | Retry the request after the indicated delay. |
 | `tenant_not_found` | 404 | false | Check the tenant associated with the credential; ask the instance operator if it is missing. |

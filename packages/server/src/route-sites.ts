@@ -4,6 +4,7 @@ import {
   getLiveSite,
   looksLikeSlug,
   requestPathToFilePath,
+  resolveVersionAddress,
   siteUrl,
   type DropwayContext,
 } from "@dropway/core";
@@ -31,9 +32,38 @@ export type SiteRoute =
   | { kind: "redirect"; location: string; status: 301 | 307 | 308; byReferer: boolean }
   | { kind: "sites_home" }
   | { kind: "sites_not_found" }
+  | { kind: "gone"; mode: ServeMode }
   | { kind: "app" };
 
 const isSiteSlug = (s: string | undefined): s is string => !!s && looksLikeSlug(s) && !RESERVED_SLUGS.has(s);
+
+const VERSION_ADDRESS_RE = /^(.+)--v(\d{1,9})$/;
+
+/** Split a `<base>--v<N>` version address; null for anything else (including reserved bases). */
+function parseVersionAddress(segment: string | undefined): { base: string; num: number } | null {
+  if (!segment) return null;
+  const m = VERSION_ADDRESS_RE.exec(segment);
+  if (!m || !isSiteSlug(m[1])) return null;
+  const num = Number(m[2]);
+  return Number.isSafeInteger(num) && num >= 1 ? { base: m[1]!, num } : null;
+}
+
+/**
+ * R-59: route a version address. Deleted versions are gone (410, never another
+ * site's bytes); a renamed-away base 308s to the same address under the current
+ * name. Live previews (R-13) and unknown names return null: today's behavior.
+ */
+async function versionAddressRoute(
+  dw: DropwayContext,
+  parsed: { base: string; num: number },
+  locationFor: (current: string) => string,
+  mode: ServeMode,
+): Promise<SiteRoute | null> {
+  const resolved = await resolveVersionAddress(dw, parsed.base, parsed.num);
+  if (resolved.kind === "redirect") return { kind: "redirect", location: locationFor(resolved.slug), status: 308, byReferer: false };
+  if (resolved.kind === "gone") return { kind: "gone", mode };
+  return null;
+}
 
 /** The site a same-origin Referer points into, given the path prefix sites live under ("" = origin root). */
 function refererSlug(req: Request, url: URL, prefix: string): string | null {
@@ -87,6 +117,20 @@ export async function routeSiteRequest(dw: DropwayContext, req: Request): Promis
     if (host.endsWith(`.${c.sitesDomain}`)) {
       const label = host.slice(0, -(c.sitesDomain.length + 1));
       if (isSiteSlug(label)) return { kind: "site", slug: label, path: url.pathname, mode: { kind: "subdomain", base: "/", sandbox: c.sitesSandbox, rewrite: null } };
+      const versioned = parseVersionAddress(label);
+      if (versioned) {
+        const routed = await versionAddressRoute(
+          dw,
+          versioned,
+          (current) => {
+            const target = new URL(url);
+            target.hostname = `${current}--v${versioned.num}.${c.sitesDomain}`;
+            return target.toString();
+          },
+          { kind: "subdomain", base: "/", sandbox: c.sitesSandbox, rewrite: null },
+        );
+        if (routed) return routed;
+      }
       // Reserved labels are never user sites: www goes to the app; the rest (files, fallback,
       // customers, ...) belong to the platform and answer 404 here unless an embedding app
       // handles those hosts first. Dotted and malformed labels have no certificate or site.
@@ -99,6 +143,9 @@ export async function routeSiteRequest(dw: DropwayContext, req: Request): Promis
       const rest = url.pathname.slice(prefix.length + 1);
       const slug = rest.split("/")[0];
       if (isSiteSlug(slug)) return { kind: "redirect", location: siteUrl(dw, slug) + rest.slice(slug.length + 1) + url.search, status: 301, byReferer: false };
+      if (parseVersionAddress(slug)) {
+        return { kind: "redirect", location: `https://${slug}.${c.sitesDomain}/${rest.slice(slug!.length + 1)}${url.search}`, status: 301, byReferer: false };
+      }
     }
     return { kind: "app" };
   }
@@ -115,6 +162,16 @@ export async function routeSiteRequest(dw: DropwayContext, req: Request): Promis
       if (url.pathname === `/${first}`) return { kind: "redirect", location: `/${first}/${url.search}`, status: 301, byReferer: false };
       return { kind: "site", slug: first, path: url.pathname.slice(first.length + 1), mode: { kind: "path", base: `/${first}/`, sandbox: c.sitesSandbox, rewrite: { base: `/${first}/`, keep: [] } } };
     }
+    const versionedSitesOrigin = parseVersionAddress(first);
+    if (versionedSitesOrigin) {
+      const routed = await versionAddressRoute(
+        dw,
+        versionedSitesOrigin,
+        (current) => `${c.sitesOrigin}/${current}--v${versionedSitesOrigin.num}${url.pathname.slice(first!.length + 1)}${url.search}`,
+        { kind: "path", base: `/${first}/`, sandbox: c.sitesSandbox, rewrite: { base: `/${first}/`, keep: [] } },
+      );
+      if (routed) return routed;
+    }
     return { kind: "sites_not_found" };
   }
 
@@ -123,6 +180,20 @@ export async function routeSiteRequest(dw: DropwayContext, req: Request): Promis
   if (url.pathname.startsWith(`${prefix}/`)) {
     const rest = url.pathname.slice(prefix.length + 1);
     const slug = rest.split("/")[0];
+    const versionedPrefix = parseVersionAddress(slug);
+    if (versionedPrefix && c.sitesOrigin) {
+      return { kind: "redirect", location: `${c.sitesOrigin}/${rest}${url.search}`, status: 301, byReferer: false };
+    }
+    if (versionedPrefix) {
+      const base = `${prefix}/${slug}/`;
+      const routed = await versionAddressRoute(
+        dw,
+        versionedPrefix,
+        (current) => `${appOrigin(dw)}${prefix}/${current}--v${versionedPrefix.num}${rest.slice(slug!.length)}${url.search}`,
+        { kind: "path", base, sandbox: true, rewrite: { base, keep: [`${prefix}/`] } },
+      );
+      if (routed) return routed;
+    }
     if (isSiteSlug(slug)) {
       // With a separate sites origin, user content is never served from the app origin.
       if (c.sitesOrigin) return { kind: "redirect", location: `${c.sitesOrigin}/${rest}${url.search}`, status: 301, byReferer: false };

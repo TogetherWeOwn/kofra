@@ -159,6 +159,8 @@ export function createDropway(opts: CreateDropwayOptions = {}): Dropway {
           return sitesHome(dw);
         case "sites_not_found":
           return systemResponse(dw, request, { kind: "path", base: "/", sandbox: true, rewrite: null }, null, 404, "404", "Nothing is published here", "There is no site at this address. See {app}.");
+        case "gone":
+          return systemResponse(dw, request, route.mode, null, 410, "GONE", "This version is gone", "This version address names a deleted version. Old version links never serve another site's files.");
         case "app": {
           contexts.set(request, dw);
           const res = await app.fetch(request, env, ctx);

@@ -341,7 +341,9 @@ describe("MCP tools: publish, read back, edit, roll back", () => {
     const renamed = await mcp.call("rename_site", { site: "lifecycle", newSlug: "lifecycle-two" });
     expect(renamed.data).toMatchObject({ renamed: true, oldSlug: "lifecycle", slug: "lifecycle-two" });
     expect(await (await dw.call(renamed.data.url)).text()).toContain("app");
-    expect((await dw.call(pub.data.url)).status).toBe(404);
+    const oldUrl = await dw.call(pub.data.url);
+    expect(oldUrl.status).toBe(308);
+    expect(oldUrl.headers.get("location")).toBe(renamed.data.url);
     const taken = await mcp.call("publish_site", { site: "taken-name", files: [{ path: "index.html", content: "x" }] });
     expect((await mcp.call("rename_site", { site: "lifecycle-two", newSlug: taken.data.slug })).data.error.code).toBe("slug_taken");
 
