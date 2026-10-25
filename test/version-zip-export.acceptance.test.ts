@@ -13,7 +13,10 @@
  *   named `<slug>-v<N>.zip` (resolved version number, identical for every ref spelling).
  * - Deterministic bytes: entries sorted by path (manifest byte order), one fixed timestamp on
  *   every entry, no data descriptors. Two exports of one version are byte-identical.
- * - Success carries `Cache-Control: private, max-age=31536000, immutable`.
+ * - Pinned vN/N/id refs carry `Cache-Control: private, max-age=31536000, immutable`.
+ *   The mutable live alias (including accepted case/whitespace forms) carries `private, no-cache`.
+ * - GET and HEAD preserve headers set by configured API middleware before `await next()`.
+ *   HEAD has GET's metadata but no body or blob reads; unread GET bodies do not read blobs.
  * - Over-cap file count -> 413 `export_too_many_files`; over-cap total bytes -> 413
  *   `export_too_large`. Caps derive from the effective policy limits. Refusals name the
  *   version's counts in the message, carry details {fileCount,totalBytes,limit} and a
@@ -149,12 +152,15 @@ async function getExportJson(dw: Instance, slug: string, version: string, key: s
   return { status: res.status, body: body as Record<string, any>, res };
 }
 
-function expectZipHeaders(res: Response, slug: string, versionNumber: number): void {
+const LIVE_CACHE = "private, no-cache";
+const PINNED_CACHE = "private, max-age=31536000, immutable";
+
+function expectZipHeaders(res: Response, slug: string, versionNumber: number, cacheControl: string): void {
   expect(res.headers.get("content-type")).toMatch(/^application\/zip\b/);
   const disposition = res.headers.get("content-disposition") ?? "";
   expect(disposition).toMatch(/attachment/);
   expect(disposition).toContain(`filename="${slug}-v${versionNumber}.zip"`);
-  expect(res.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
+  expect(res.headers.get("cache-control")).toBe(cacheControl);
 }
 
 /** JSON errors carry a stable code, a message, a hint (the next action) and a request id. */
@@ -359,13 +365,17 @@ describe("export_version: exact-bytes round-trip", () => {
     { path: "empty.bin", bytes: new Uint8Array(0), contentType: "application/octet-stream" },
   ];
 
-  it("answers application/zip as an attachment with immutable cache-control", async () => {
+  it.each(["live", "LIVE", " LiVe ", "\tlIvE\n"])("answers application/zip as an attachment with no-cache for mutable ref %j", async (ref) => {
     const dw = await freshInstance();
     const pub = await publishManifest(dw, "zip-headers", [EDGE_FILES[0]!]);
-    const res = await getExport(dw, pub.slug, "live");
+    const res = await getExport(dw, pub.slug, ref);
     expect(res.status).toBe(200);
-    expectZipHeaders(res, pub.slug, pub.versionNumber);
-    expect((await res.arrayBuffer()).byteLength).toBeGreaterThan(0);
+    try {
+      expectZipHeaders(res, pub.slug, pub.versionNumber, LIVE_CACHE);
+      expect((await res.arrayBuffer()).byteLength).toBeGreaterThan(0);
+    } finally {
+      if (!res.bodyUsed) await res.body?.cancel();
+    }
   });
 
   it("round-trips every file with sha equality to the version manifest, incl. Unicode/zero-byte/nested names", async () => {
@@ -403,21 +413,60 @@ describe("export_version: exact-bytes round-trip", () => {
     expect(v1.versionNumber).toBe(1);
     const v2 = await deployVersion(dw, v1.slug, [{ path: "index.html", bytes: u8("version-two") }]);
     expect(v2.versionNumber).toBe(2);
-    const cases: Array<{ ref: string; number: number; text: string }> = [
-      { ref: "live", number: 2, text: "version-two" },
-      { ref: "v2", number: 2, text: "version-two" },
-      { ref: "2", number: 2, text: "version-two" },
-      { ref: v2.versionId, number: 2, text: "version-two" },
-      { ref: "v1", number: 1, text: "version-one" },
-      { ref: "1", number: 1, text: "version-one" },
-      { ref: v1.versionId, number: 1, text: "version-one" },
+    const cases: Array<{ ref: string; number: number; text: string; cache: string }> = [
+      { ref: "v2", number: 2, text: "version-two", cache: PINNED_CACHE },
+      { ref: "2", number: 2, text: "version-two", cache: PINNED_CACHE },
+      { ref: v2.versionId, number: 2, text: "version-two", cache: PINNED_CACHE },
+      { ref: "v1", number: 1, text: "version-one", cache: PINNED_CACHE },
+      { ref: "1", number: 1, text: "version-one", cache: PINNED_CACHE },
+      { ref: v1.versionId, number: 1, text: "version-one", cache: PINNED_CACHE },
+      { ref: "live", number: 2, text: "version-two", cache: LIVE_CACHE },
     ];
     for (const c of cases) {
       const res = await getExport(dw, v1.slug, c.ref);
       expect(res.status, `ref ${c.ref}`).toBe(200);
-      expectZipHeaders(res, v1.slug, c.number);
-      const out = unzipSync(new Uint8Array(await res.arrayBuffer()));
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      const out = unzipSync(bytes);
       expect(new TextDecoder().decode(out["index.html"]), `ref ${c.ref} bytes`).toBe(c.text);
+      expectZipHeaders(res, v1.slug, c.number, c.cache);
+    }
+  });
+
+  it("advances live exports after publish while vN/N/id ZIPs stay byte-stable", async () => {
+    const dw = await freshInstance();
+    const v1 = await publishManifest(dw, "zip-live-publish", [{ path: "index.html", bytes: u8("version-one") }]);
+    const liveRefs = ["live", "LIVE", " LiVe ", "\tlIvE\n"];
+    for (const ref of liveRefs) {
+      const res = await getExport(dw, v1.slug, ref);
+      expect(res.status, `initial live ref ${JSON.stringify(ref)}`).toBe(200);
+      expect(res.headers.get("content-disposition")).toContain('filename="zip-live-publish-v1.zip"');
+      const out = unzipSync(new Uint8Array(await res.arrayBuffer()));
+      expect(new TextDecoder().decode(out["index.html"])).toBe("version-one");
+    }
+    const pinned = new Map<string, Uint8Array>();
+    for (const ref of ["v1", "1", v1.versionId]) {
+      const res = await getExport(dw, v1.slug, ref);
+      expect(res.status).toBe(200);
+      expectZipHeaders(res, v1.slug, 1, PINNED_CACHE);
+      pinned.set(ref, new Uint8Array(await res.arrayBuffer()));
+    }
+
+    const v2 = await deployVersion(dw, v1.slug, [{ path: "index.html", bytes: u8("version-two") }]);
+    expect(v2.versionNumber).toBe(2);
+    for (const ref of liveRefs) {
+      const res = await getExport(dw, v1.slug, ref);
+      expect(res.status, `republished live ref ${JSON.stringify(ref)}`).toBe(200);
+      expect(res.headers.get("content-disposition")).toContain('filename="zip-live-publish-v2.zip"');
+      const out = unzipSync(new Uint8Array(await res.arrayBuffer()));
+      expect(new TextDecoder().decode(out["index.html"])).toBe("version-two");
+    }
+    for (const [ref, before] of pinned) {
+      const res = await getExport(dw, v1.slug, ref);
+      expect(res.status).toBe(200);
+      expectZipHeaders(res, v1.slug, 1, PINNED_CACHE);
+      const after = new Uint8Array(await res.arrayBuffer());
+      expect(bytesEqual(after, before), `pinned ref ${ref} stays byte-identical after publish`).toBe(true);
+      expect(new TextDecoder().decode(unzipSync(after)["index.html"])).toBe("version-one");
     }
   });
 
@@ -429,6 +478,66 @@ describe("export_version: exact-bytes round-trip", () => {
     expect(first.length).toBeGreaterThan(0);
     expect(second.length).toBe(first.length);
     expect(await sha256Hex(second)).toBe(await sha256Hex(first));
+  });
+});
+
+describe("export_version: application response contract", () => {
+  it.each(["GET", "HEAD"])("preserves headers set before await next() by configured API middleware on %s", async (method) => {
+    const dw = await freshInstance({}, {
+      apiMiddleware: [async (c, next) => {
+        c.header("X-Export-Identity", c.get("principal").kind);
+        await next();
+      }],
+    });
+    const pub = await publishManifest(dw, "zip-middleware", [{ path: "index.html", bytes: u8("middleware bytes") }]);
+    const { url } = await exportRequest(dw, pub.slug, "v1");
+    const res = await dw.call(url, { method, key: dw.ownerKey });
+    expect(res.status).toBe(200);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expectZipHeaders(res, pub.slug, 1, PINNED_CACHE);
+    if (method === "GET") {
+      expect(new TextDecoder().decode(unzipSync(bytes)["index.html"])).toBe("middleware bytes");
+    } else {
+      expect(bytes.length).toBe(0);
+    }
+    expect(res.headers.get("X-Export-Identity"), `${method} must retain middleware's prepared response header`).toBe("member");
+  });
+
+  it.each(["live", "LIVE", " LiVe ", "\tlIvE\n"])("does not mark mutable ref %j immutable on HEAD", async (ref) => {
+    const dw = await freshInstance();
+    const pub = await publishManifest(dw, "zip-head-live", [{ path: "index.html", bytes: u8("head bytes") }]);
+    const { url } = await exportRequest(dw, pub.slug, ref);
+    const res = await dw.call(url, { method: "HEAD", key: dw.ownerKey });
+    expect(res.status).toBe(200);
+    expect((await res.arrayBuffer()).byteLength).toBe(0);
+    expectZipHeaders(res, pub.slug, 1, LIVE_CACHE);
+  });
+
+  it("returns GET metadata and an empty body on HEAD without reading any R2 blobs", async () => {
+    const dw = await freshInstance();
+    const pub = await publishManifest(dw, "zip-head-lazy", [
+      { path: "first.txt", bytes: u8("first blob") },
+      { path: "second.txt", bytes: u8("second blob") },
+    ]);
+    const get = await getExport(dw, pub.slug, "v1");
+    expect(get.status).toBe(200);
+    expectZipHeaders(get, pub.slug, 1, PINNED_CACHE);
+    expect(Object.keys(unzipSync(new Uint8Array(await get.arrayBuffer())))).toEqual(["first.txt", "second.txt"]);
+    const { url } = await exportRequest(dw, pub.slug, "v1");
+    const gate = gateR2AfterFirstBlob(dw);
+    try {
+      const head = await dw.call(url, { method: "HEAD", key: dw.ownerKey });
+      expect(head.status).toBe(get.status);
+      for (const name of ["content-type", "content-disposition", "cache-control", "content-length", "x-content-type-options"]) {
+        expect(head.headers.get(name), `HEAD metadata ${name} matches GET`).toBe(get.headers.get(name));
+      }
+      expect((await head.arrayBuffer()).byteLength).toBe(0);
+      await sleep(0); // Allow scheduled stream pulls a turn before checking the read spy.
+      expect(gate.calls, "HEAD must not read even the first blob").toHaveLength(0);
+    } finally {
+      gate.release();
+      gate.restore();
+    }
   });
 });
 
@@ -473,7 +582,8 @@ describe("export_version: cap refusals derive from policy limits", () => {
     setOverride({ maxFiles: 3, maxSiteBytes: pub.totalBytes });
     const res = await getExport(dw, pub.slug, "live");
     expect(res.status).toBe(200);
-    expectZipHeaders(res, pub.slug, pub.versionNumber);
+    expect((await res.arrayBuffer()).byteLength).toBeGreaterThan(0);
+    expectZipHeaders(res, pub.slug, pub.versionNumber, LIVE_CACHE);
   });
 });
 
@@ -548,14 +658,46 @@ describe("export_version: auth matrix", () => {
     expect(locked.status, `setup: password gate: ${JSON.stringify(locked.body)}`).toBe(200);
     const allowed = await getExport(dw, pub.slug, "live", dw.ownerKey);
     expect(allowed.status).toBe(200);
-    expectZipHeaders(allowed, pub.slug, pub.versionNumber);
+    expect((await allowed.arrayBuffer()).byteLength).toBeGreaterThan(0);
     const denied = await getExportJson(dw, pub.slug, "live", null);
     expect(denied.status).toBe(401);
     expectErrorJson(denied.body);
+    expectZipHeaders(allowed, pub.slug, pub.versionNumber, LIVE_CACHE);
   });
 });
 
 describe("export_version: streaming", () => {
+  it("reads no R2 blobs until the GET body has a reader, then streams the exact files", async () => {
+    const dw = await freshInstance();
+    const pub = await publishManifest(dw, "zip-unread", [
+      { path: "first.txt", bytes: u8("first unread blob") },
+      { path: "second.txt", bytes: u8("second unread blob") },
+    ]);
+    const gate = gateR2AfterFirstBlob(dw);
+    let res: Response | undefined;
+    try {
+      res = await getExport(dw, pub.slug, "v1");
+      expect(res.status).toBe(200);
+      expectZipHeaders(res, pub.slug, 1, PINNED_CACHE);
+      expect(res.body).not.toBeNull();
+      expect(res.bodyUsed).toBe(false);
+      expect(res.body!.locked).toBe(false);
+      await sleep(0); // No reader exists, even after scheduled stream pulls get a turn.
+      expect(gate.calls, "an unread GET must not prefetch even the first blob").toHaveLength(0);
+      gate.release();
+      const out = unzipSync(new Uint8Array(await res.arrayBuffer()));
+      expect(Object.keys(out)).toEqual(["first.txt", "second.txt"]);
+      expect(new TextDecoder().decode(out["first.txt"])).toBe("first unread blob");
+      expect(new TextDecoder().decode(out["second.txt"])).toBe("second unread blob");
+      expect(gate.calls).toHaveLength(2);
+      expect(new Set(gate.calls).size).toBe(2);
+    } finally {
+      gate.release();
+      if (res && !res.bodyUsed) await res.body?.cancel();
+      gate.restore();
+    }
+  });
+
   it("emits ZIP bytes before all blobs are read and never re-reads a blob", async () => {
     const dw = await freshInstance();
     const files: FixtureFile[] = Array.from({ length: 6 }, (_, i) => ({
@@ -568,9 +710,9 @@ describe("export_version: streaming", () => {
     expect(totalBytes).toBe(6 * 128 * 1024);
     const gate = gateR2AfterFirstBlob(dw);
     try {
-      const res = await getExport(dw, pub.slug, "live");
+      const res = await getExport(dw, pub.slug, "v1");
       expect(res.status).toBe(200);
-      expectZipHeaders(res, pub.slug, pub.versionNumber);
+      expectZipHeaders(res, pub.slug, pub.versionNumber, PINNED_CACHE);
       expect(res.body, "export must stream a body").not.toBeNull();
       const reader = res.body!.getReader();
       const first = await Promise.race([
@@ -609,6 +751,7 @@ describe("export_version: streaming", () => {
         expect(bytesEqual(out[f.path]!, f.bytes), `${f.path} round-trips exactly`).toBe(true);
       }
       const uniqueReads = new Set(gate.calls);
+      expect(gate.calls.length, "total R2 reads must equal file count, including duplicates").toBe(files.length);
       expect(uniqueReads.size, `one R2 read per blob, no re-reads (got ${gate.calls.length} reads)`).toBe(files.length);
     } finally {
       gate.release();
