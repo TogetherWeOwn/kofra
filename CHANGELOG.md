@@ -34,6 +34,21 @@
 - Pinned dashboard version links load pending and older versions by immutable id,
   independently of the newest-100 ready-version history page.
 
+### Typed client and npm packages
+
+- New `@dropway/client`: a zero-dependency typed REST client generated from the
+  operation registry (`npm run client:generate`; CI fails when it is stale).
+  Every operation gets an input/output interface and a method; raw-byte
+  operations upload and download bytes. Failures throw `DropwayError` with the
+  server's stable code, hint, details, status and retryability.
+- The `kofra` CLI's transport builds on `@dropway/client` (bundled into `dist/`,
+  so the installed CLI still has no runtime dependencies); exit codes and error
+  output are unchanged.
+- `.github/workflows/publish.yml` publishes `@dropway/core`, `@dropway/server`,
+  `@dropway/client` and `kofra` with npm trusted publishing (OIDC, no tokens)
+  on `v*` tags. Operator to-do: register each package name as a trusted
+  publisher on npmjs.com first.
+
 ### Error envelope v2
 
 - Add retryable, retryAfterSeconds, docs and structured next calls to ApiError,

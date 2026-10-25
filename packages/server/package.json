@@ -6,15 +6,20 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TogetherWeOwn/dropway.git",
+    "url": "git+https://github.com/TogetherWeOwn/kofra.git",
     "directory": "packages/server"
   },
   "exports": {
     ".": "./src/index.ts"
   },
   "files": [
-    "src"
+    "src",
+    "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "dependencies": {
     "@cfworker/json-schema": "4.1.1",
     "@dropway/core": "^0.1.0",

@@ -219,7 +219,7 @@ Full matrix in section 10.
 | AX-10 | `call_api` (any operation by method and path) and `search_docs` | P1 | R-25 |
 | AX-11 | Code Mode endpoint `/mcp/code` (`search` + `execute` over the OpenAPI) | P2 | R-43 |
 | AX-12 | Webhooks on site events, HMAC-signed | P2 | R-40 |
-| AX-13 | Typed TypeScript client `@dropway/client` | P2 | R-45 |
+| AX-13 | Typed TypeScript client `@dropway/client` | P2 | Done (R-45) |
 
 ### 4.10 Small apps without a backend (APP)
 
@@ -448,7 +448,7 @@ packages/core             @dropway/core   service layer: storage, publish protoc
 packages/server           @dropway/server createDropway(): Hono app factory, operation registry, REST, MCP,
                                           serving, viewers, dashboard, Durable Object classes, testing kit
 packages/cli              kofra         CLI and local stdio MCP (npm package "kofra")
-packages/client (R-45)    @dropway/client typed REST client generated from the registry
+packages/client           @dropway/client typed REST client generated from the registry
 ```
 
 Rules:
@@ -646,8 +646,9 @@ Hooks never block or fail a request; errors are logged. Use `PolicyAdapter` to r
 ### 6.5 Operation registry (R-02)
 
 Every API operation is defined once. The registry generates the Hono route (with validation), the
-OpenAPI operation, the MCP tool, the CLI command table (`GET /api/v1/operations`), `llms.txt` lines and
-docs pages. Embedding apps add operations the same way, so their REST, MCP and docs stay consistent.
+OpenAPI operation, the MCP tool, the CLI command table (`GET /api/v1/operations`), the typed client
+(`@dropway/client`, R-45), `llms.txt` lines and docs pages. Embedding apps add operations the same way,
+so their REST, MCP and docs stay consistent.
 
 ```ts
 export interface OperationDefinition<I extends z.ZodTypeAny = z.ZodTypeAny, O extends z.ZodTypeAny = z.ZodTypeAny> {

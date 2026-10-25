@@ -1,0 +1,40 @@
+# Publish @dropway/core, @dropway/server, @dropway/client and kofra to npm.
+#
+# Trusted publishing (OIDC): no tokens stored. Operator to-do, once per package
+# name on npmjs.com: Settings > Trusted publisher > GitHub Actions, with
+# organization TogetherWeOwn, repository kofra, workflow publish.yml.
+# The four packages version in lockstep; push tag vX.Y.Z to release.
+name: publish
+on:
+  push:
+    tags: ["v[0-9]*"]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      # npm's OIDC exchange needs npm >= 11.5.1, hence Node 24.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org/
+      - run: npm ci
+      - name: Tag matches the workspace versions
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          for p in packages/core packages/server packages/client packages/cli; do
+            v=$(node -p "require('./$p/package.json').version")
+            test "v$v" = "$RELEASE_TAG" || { echo "tag $RELEASE_TAG does not match $p ($v)"; exit 1; }
+          done
+      - run: npm run build -w kofra
+      - run: npm publish --provenance --access public -w @dropway/core
+      - run: npm publish --provenance --access public -w @dropway/server
+      - run: npm publish --provenance --access public -w @dropway/client
+      - run: npm publish --provenance -w kofra

@@ -6,7 +6,7 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TogetherWeOwn/dropway.git",
+    "url": "git+https://github.com/TogetherWeOwn/kofra.git",
     "directory": "packages/core"
   },
   "exports": {
@@ -15,8 +15,13 @@
   },
   "files": [
     "src",
-    "migrations"
+    "migrations",
+    "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "dependencies": {
     "fflate": "^0.8.3"
   }

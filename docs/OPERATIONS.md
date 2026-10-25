@@ -4,7 +4,9 @@ Use Zod 4.6.7 or later in your embedding app; `@dropway/server` declares it as a
 peer so operation schemas and the server share the same Zod type identity.
 
 `defineOperation()` is the public API extension boundary. One definition supplies
-REST, OpenAPI 3.1, an MCP tool, the CLI command table and agent discovery text.
+REST, OpenAPI 3.1, an MCP tool, the CLI command table, the `@dropway/client`
+typed method and agent discovery text. Regenerate the client after changing an
+operation (`npm run client:generate`); CI fails when it is stale.
 Business logic still belongs in a service taking `DropwayContext` and `Principal`.
 
 ```ts

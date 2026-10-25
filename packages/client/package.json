@@ -1,0 +1,24 @@
+{
+  "name": "@dropway/client",
+  "version": "0.1.0",
+  "description": "Typed REST client for Kofra, generated from the operation registry. Fetch-only TypeScript source for bundlers targeting Node, Workers and browsers.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TogetherWeOwn/kofra.git",
+    "directory": "packages/client"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}
