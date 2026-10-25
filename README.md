@@ -177,6 +177,7 @@ Every instance describes itself:
 
 - [Self-hosting and configuration](docs/SELF_HOST.md)
 - [CLI reference](packages/cli/README.md)
+- [Site recovery spec: `kofra pull`](docs/CLI_PULL.md) (proposed, design only)
 - [Architecture and extension points](docs/ARCHITECTURE.md)
 - [Agents: MCP server, REST twins, skill](docs/MCP.md)
 - [Product specification](docs/SPEC.md) and [roadmap](docs/ROADMAP.md)

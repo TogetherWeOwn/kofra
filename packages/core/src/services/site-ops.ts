@@ -15,6 +15,7 @@ import { quotaExceeded, requireQuota } from "./policy";
 import { createSite, discardNewSite, getSiteFor, getVersion, parseSettings, updateSite, type SiteRow, type VersionRow } from "./sites";
 import { getUsage, incrementalBytes, PROJECTED_STORAGE_SQL, usageStatements } from "./usage";
 import { atomicWrite, siteSlugError } from "./atomic-write";
+import { checkNameAvailable, collapseOwnRedirect, insertRedirect, reclaimTombstone } from "./slug-holds";
 
 /**
  * Site and version lookups that accept what agents naturally have in hand
@@ -96,24 +97,44 @@ export function requireConfirm(confirm: unknown, expected: string, what = "the s
   }
 }
 
-/** Give a site a new slug. Its live URL changes at once; the old URL stops working. */
+/**
+ * Give a site a new slug. Its live URL changes at once; the old URL 308s to
+ * the new one (path and query kept) until the rename hold ends.
+ */
 export async function renameSite(dc: DropwayContext, p: Principal, ref: unknown, newSlug: unknown) {
   if (p.kind !== "member") throw unauthorized("Renaming a site needs an API key.");
   const site = await getSiteByRef(dc, p, ref, "sites:write");
   if (typeof newSlug !== "string") throw badRequest("invalid_slug", "newSlug must be a string.");
   const wanted = validateSlug(newSlug);
-  if (wanted === site.slug) return { renamed: false, site, oldSlug: site.slug };
+  if (wanted === site.slug) return { renamed: false, site, oldSlug: site.slug, redirectUntil: null as number | null };
+  await checkNameAvailable(dc, wanted, site.tenant_id, site.id);
   const extension = await dc.adapters.policy.siteNameMutation?.(p, {
     operation: "rename", siteId: site.id, tenantId: site.tenant_id, slug: wanted, previousSlug: site.slug,
   }, dc);
+  const now = Date.now();
+  const holdUntil = now + dc.config.slugHolds.renameMs;
   const fence = "id = ? AND tenant_id IS ? AND slug = ? AND deleted_at IS NULL";
+  // Transfers keep their permanent sender-owned reservations (XFR-04): no
+  // time-boxed redirect, so the original sender can reuse the old name.
+  const holdStatements = site.mode === "transfer"
+    ? []
+    : [
+        // Rename-back collapses the site's own redirect row for the new name;
+        // active redirects of other sites still refuse via the trigger.
+        collapseOwnRedirect(dc, wanted, site.id),
+        ...insertRedirect(dc, { slug: site.slug, siteId: site.id, chosen: site.slug_chosen === 1, holdUntil, createdAt: now }),
+      ];
   await atomicWrite(dc, [
+    // Reclaim the tenant's own hold on the new name, if any, before the
+    // UPDATE fires the hold triggers.
+    ...(site.tenant_id !== null ? [reclaimTombstone(dc, wanted, site.tenant_id)] : []),
     // CASE is lazy: the deliberately invalid, tagged JSON path aborts a stale
     // attempt INSIDE the transaction, including when the row was hard-deleted.
     dc.env.DB.prepare(`SELECT CASE WHEN EXISTS (SELECT 1 FROM sites WHERE ${fence})
       THEN 1 ELSE json_extract('{}', 'dropway_site_changed') END`).bind(site.id, site.tenant_id, site.slug),
-    dc.env.DB.prepare(`UPDATE sites SET slug = ?, updated_at = ? WHERE ${fence}`)
-      .bind(wanted, Date.now(), site.id, site.tenant_id, site.slug),
+    dc.env.DB.prepare(`UPDATE sites SET slug = ?, slug_chosen = 1, updated_at = ? WHERE ${fence}`)
+      .bind(wanted, now, site.id, site.tenant_id, site.slug),
+    ...holdStatements,
   ], extension, (error) => {
     if (String(error).includes("JSON path") && String(error).includes("dropway_site_changed")) {
       return conflict("site_changed", "The site changed while preparing its rename.", "Reload the site and retry.");
@@ -123,7 +144,7 @@ export async function renameSite(dc: DropwayContext, p: Principal, ref: unknown,
   await dropLive(dc, site.slug);
   await refreshLive(dc, site.id);
   const fresh = (await dc.env.DB.prepare("SELECT * FROM sites WHERE id = ?").bind(site.id).first<SiteRow>())!;
-  return { renamed: true, site: fresh, oldSlug: site.slug };
+  return { renamed: true, site: fresh, oldSlug: site.slug, redirectUntil: site.mode === "transfer" ? null : holdUntil };
 }
 
 export interface DuplicateSiteInput {
@@ -171,29 +192,29 @@ export async function duplicateSite(dc: DropwayContext, p: Principal, ref: unkno
       "Retry the duplicate; the copy starts from the current live version.",
     );
   }
-  // The manifest went live once already, so this only re-checks the caps (which a
-  // host may have lowered since). It runs before createSite so a refusal is clean.
-  const owner = { siteId: source.id, tenantId: source.tenant_id };
-  validateManifest(files, await dc.adapters.policy.limits(p, owner, dc));
-  const newBytes = await incrementalBytes(dc, source.tenant_id, source.id, files);
-  const storageQuota = await requireQuota(dc, p, "storage_bytes", owner, (await getUsage(dc, source.tenant_id)).storage_bytes, newBytes);
-
   // New-slug validation, collisions (including transfer tombstones), quotas and
   // policy run inside createSite, exactly as for a fresh site.
   const { site } = await createSite(dc, p, { slug: wanted, spa: source.spa === 1 });
   const now = Date.now();
   const versionId = newId("ver");
   const message = input.message == null ? null : String(input.message).slice(0, 500);
+  let version: VersionRow;
   try {
+    // Publication allowances belong to the destination, not the source that may
+    // have grandfathered limits. Refusals here discard the newly allocated site.
+    const owner = { siteId: site.id, tenantId: site.tenant_id };
+    validateManifest(files, await dc.adapters.policy.limits(p, owner, dc));
+    const newBytes = await incrementalBytes(dc, site.tenant_id, site.id, files);
+    const storageQuota = await requireQuota(dc, p, "storage_bytes", owner, (await getUsage(dc, site.tenant_id)).storage_bytes, newBytes);
     await dc.adapters.policy.beforeDeploy?.(
       p,
       { siteId: site.id, tenantId: site.tenant_id, fileCount: live.file_count, totalBytes: live.total_bytes, newBytes },
       dc,
     );
-    const [, , , madeLive] = await dc.env.DB.batch([
+    const [inserted, , , madeLive] = await dc.env.DB.batch<VersionRow>([
       dc.env.DB.prepare(
         `INSERT INTO versions (id, site_id, number, status, file_count, total_bytes, manifest_hash, base_version_id, source, client, message, created_by, created_at, finalized_at)
-         VALUES (?, ?, (SELECT COALESCE(MAX(number), 0) + 1 FROM versions WHERE site_id = ?), 'ready', ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, (SELECT COALESCE(MAX(number), 0) + 1 FROM versions WHERE site_id = ?), 'ready', ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?) RETURNING *`,
       ).bind(
         versionId, site.id, site.id, live.file_count, live.total_bytes, live.manifest_hash,
         input.source ?? "api", input.client ? String(input.client).slice(0, 120) : null, message,
@@ -222,6 +243,9 @@ export async function duplicateSite(dc: DropwayContext, p: Principal, ref: unkno
       if (storageQuota !== null) throw quotaExceeded("storage_bytes", storageQuota);
       throw conflict("version_conflict", "The new site changed while it was being duplicated.", "Retry the duplicate.");
     }
+    // Carry the inserted metadata out of the successful transaction; a later
+    // read failure must not turn a committed duplicate into a non-replayable error.
+    version = inserted!.results[0]!;
   } catch (e) {
     await discardNewSite(dc, site);
     if (String(e).includes("dropway_duplicate_changed")) {
@@ -241,7 +265,6 @@ export async function duplicateSite(dc: DropwayContext, p: Principal, ref: unkno
   } catch (e) {
     console.error(JSON.stringify({ event: "duplicate_cache_warm_failed", siteId: site.id, error: String(e) }));
   }
-  const version = (await getVersion(dc, site.id, versionId))!;
   emit(dc, "onPublish", {
     kind: "deploy",
     site: { id: site.id, slug: site.slug, tenantId: site.tenant_id, url: siteUrl(dc, site.slug) },

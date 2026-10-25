@@ -33,7 +33,7 @@ import {
 } from "@dropway/core";
 import { CONFIRM_SLUG, FILE_INPUT, PUBLISH_OUT, SETTINGS_INPUT, SITE_OUT, SITE_REF, VERSION_OUT, VERSION_REF, obj } from "../mcp/schemas";
 import { readJson } from "../routes/api";
-import { defineOperation } from "../operations";
+import { defineOperation, rawRequestInput } from "../operations";
 import { fromSchema, ANY, ANY_OR_NULL, RO, WRITE, DESTROY, siteOut, str, settingsFrom, publishSummary, whoamiPrincipal, P, D } from "./shared";
 
 export const CORE_API_OPERATIONS = [
@@ -298,6 +298,9 @@ export const CORE_API_OPERATIONS = [
     },
     http: {
       statuses: [200, 202],
+      // The handler collects every malformed source field and coerces legacy
+      // base references itself; schema validation would reject those first.
+      parseInput: (c) => rawRequestInput(c),
       input: fromSchema({
         type: "object",
         properties: {
@@ -1041,7 +1044,7 @@ export const CORE_API_OPERATIONS = [
     summary: "Delete a site",
     toolset: "core",
     scopes: ["sites:delete"],
-    description: "Delete a site and all its versions. Its URL stops working at once and the slug becomes free. Set confirm to the site's slug.",
+    description: "Delete a site and all its versions. Its URL stops working at once and the name is held for your tenant: only you may reclaim it before the hold ends. Set confirm to the site's slug.",
     input: fromSchema({
       type: "object",
       properties: { site: SITE_REF, confirm: CONFIRM_SLUG },

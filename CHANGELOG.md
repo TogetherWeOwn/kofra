@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Error envelope v2
+
+- Add retryable, retryAfterSeconds, docs and structured next calls to ApiError,
+  REST and both MCP protocol lanes, retaining existing constructor calls and fields.
+  HTTP 429/503 always include Retry-After; omitted delays default to one second.
+- Report every malformed manifest field and MCP argument together in details.fields.
+  Version conflicts identify the live version id, number, client and publication
+  time (epoch milliseconds), with a get_site call to begin reconciliation.
+- Publish the built-in catalog at /docs/errors and /docs/errors.md, and use it in
+  discovery. Generate docs/errors.md with npm run errors:sync; npm run check
+  rejects stale output. Extension-specific error codes remain supported.
+- No server embedding option or extension signature changes; the extension API
+  remains version 3 after the file-delivery additions below. ApiError's optional
+  sixth argument supplies metadata.
+
 ### Renamed: Dropway is now Kofra
 
 - User-visible names: product name, docs, UI copy, the default `INSTANCE_NAME` (`Kofra`), the CLI
@@ -142,3 +157,30 @@
   text lockfiles for excluded SDKs, in addition to modern npm lockfiles. Check
   `npm:` alias targets in manifests and lockfiles as well as dependency names.
   Reject binary `bun.lockb` with instructions to regenerate an auditable text lockfile.
+
+### Link permanence
+
+- A renamed site's old name 308s to the new name (path and query kept, path and
+  subdomain modes) until `redirectUntil`, returned by `rename_site` alongside
+  `oldSlug`. Rename chains resolve through the current name.
+- Deleted and expired names are held for their previous tenant (chosen names 12
+  months, generated names 90 days): other tenants get 409 `slug_reserved`, the
+  holding tenant may reclaim. Durations are config (`SLUG_REDIRECT_DAYS`,
+  `SLUG_HOLD_CHOSEN_DAYS`, `SLUG_HOLD_GENERATED_DAYS`).
+- New operation `release_slug` (`POST /api/v1/slugs/release`): an unrestricted
+  admin key releases only its tenant's holds, with a required reason kept as the
+  audit record. Foreign and ownerless releases require the instance operator's
+  audited database procedure, not tenant-grantable API scopes.
+- Delete/expiry fence name, ownership and expiry in the transaction; stale
+  deletes return `site_changed`, and cleanup skips changed rows. Expired aliases
+  never become fresh tombstones; transfer renames never advertise a 308.
+- A deleted version's `<slug>--v<N>` answers 410 in both modes, never another
+  site's bytes. File deliveries keep their permanent sender-owned reservations.
+
+### CLI discovery
+
+- Add `kofra operations [operationId] [--schema]`: list the instance's public
+  operation catalog, or inspect one exact row, without executing anything. Only
+  `GET /api/v1/operations` is ever requested; no API key is needed and none is
+  sent. Unknown ids fail with exit 4 (`operation_not_found`); `--schema` without
+  an id fails with exit 2 before any request.
