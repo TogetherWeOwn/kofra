@@ -325,7 +325,11 @@ const BOOT = {
   page: { name: "settings" },
 };
 
-async function runSettings(mePayload: unknown, membersPayload: unknown = { members: [] }): Promise<SettingsWorld> {
+async function runSettings(
+  mePayload: unknown,
+  membersPayload: unknown = { members: [] },
+  cachedMe?: unknown,
+): Promise<SettingsWorld> {
   const doc = new FakeDocument();
   doc.body.setAttribute("data-page", "settings");
 
@@ -375,7 +379,12 @@ async function runSettings(mePayload: unknown, membersPayload: unknown = { membe
     return { ok: false, status: 404, text: async () => JSON.stringify({ error: { code: "not_found", message: "Not found" } }) };
   };
 
-  const session = makeStorage({ "dropway.key": API_KEY });
+  const session = makeStorage({
+    "dropway.key": API_KEY,
+    ...(cachedMe === undefined ? {} : {
+      "dropway.me": JSON.stringify({ key: API_KEY, at: Date.now(), me: cachedMe }),
+    }),
+  });
   const local = makeStorage();
   const location = {
     href: "https://kofra.test/dashboard/settings",
@@ -407,9 +416,8 @@ async function runSettings(mePayload: unknown, membersPayload: unknown = { membe
   const deadline = Date.now() + 2000;
   for (;;) {
     await sleep(5);
-    const meCalled = fetchCalls.some((c) => c.url === "/api/v1/me");
     const identityRendered = descendants(me).some((el) => el.tagName === "dl");
-    if (meCalled && identityRendered) break;
+    if (identityRendered) break;
     if (Date.now() > deadline) {
       throw new Error(`settings world did not settle (calls: ${JSON.stringify(fetchCalls)}, identity: ${identityRendered})`);
     }
@@ -565,6 +573,87 @@ function expectReadsOnly(world: SettingsWorld, opts: { members: boolean }): void
 }
 
 describe("settings effective policy", () => {
+  it("replaces a warm same-key cache with current effective limits, usage and capability refusals", async () => {
+    const cached = memberMe({
+      limits: {
+        maxFileBytes: 16777216,
+        maxFiles: 777,
+        maxSiteBytes: 805306368,
+        oneShotMaxBytes: 33554432,
+        sites: 97,
+        storage_bytes: 2147483648,
+      },
+      usage: { sites: 73, storage_bytes: 2097152 },
+      capabilities: { screenshots: allowed(), stale_capability: allowed() },
+    });
+    const fresh = memberMe({
+      capabilities: {
+        screenshots: refused(
+          "feature_unavailable",
+          "Screenshots are unavailable for the current caller.",
+          "Ask the instance administrator about current screenshot support.",
+        ),
+      },
+    });
+    const world = await runSettings(fresh, ADMIN_MEMBERS, cached);
+    const { root } = policyBlock(world);
+    for (const n of [8388608, 536870912, 4194304]) {
+      expect(byteRow(root, n), `current effective limit ${n} replaces the cached value`).not.toBeNull();
+    }
+    expect(rowMatching(root, [/\b120\b/]), "current files-per-version limit renders").not.toBeNull();
+    expect(rowMatching(root, [/\b2\b/, /\b5\b/]), "current site usage and limit render together").not.toBeNull();
+    const storage = byteRow(root, 123456);
+    expect(storage, "current retained storage usage renders").not.toBeNull();
+    expect(storage, "current retained storage limit renders in the same row").toBe(byteRow(root, 1073741824));
+    const screenshots = capabilityRow(root, "screenshots");
+    expect(screenshots, "current screenshot refusal replaces cached availability").not.toBeNull();
+    expect(screenshots!.textContent).toContain("feature_unavailable");
+    expect(screenshots!.textContent).toContain("Screenshots are unavailable for the current caller.");
+    expect(screenshots!.textContent).toContain("Ask the instance administrator about current screenshot support.");
+    expect(screenshots!.textContent).not.toMatch(/\ballowed\b/i);
+    expect(capabilityRow(root, "stale_capability"), "cached-only capabilities disappear").toBeNull();
+    for (const stale of [16777216, 805306368, 33554432, 2147483648, 2097152]) {
+      expect(byteRow(root, stale), `cached byte value ${stale} is not rendered`).toBeNull();
+    }
+    expect(rowMatching(root, [/\b777\b/]), "cached file count is not rendered").toBeNull();
+    expect(rowMatching(root, [/\b73\b/, /\b97\b/]), "cached site usage and limit are not rendered").toBeNull();
+    expectReadsOnly(world, { members: true });
+  });
+
+  it.each([
+    { label: "non-admin member", scopes: MEMBER_SCOPES, siteRestriction: null },
+    { label: "site-restricted key", scopes: ["sites:read", "sites:write"], siteRestriction: "site_current_only" },
+  ])("does not inherit warm-cache member controls for a current $label", async ({ scopes, siteRestriction }) => {
+    const cachedOwner = memberMe();
+    const fresh = memberMe({ role: "member", scopes, siteRestriction });
+    const world = await runSettings(fresh, ADMIN_MEMBERS, cachedOwner);
+    expect(ddForLabel(world.me, "Role")!.textContent).toBe("member");
+    expect(ddForLabel(world.me, "Key scopes")!.textContent).toBe(scopes.join(" "));
+    expect(ddForLabel(world.me, "Key limited to a site")!.textContent).toBe(siteRestriction ? "yes" : "no");
+    expect(world.membersSection.hidden, "cached owner privileges cannot expose member controls").toBe(true);
+    expect(world.members.textContent).not.toContain("peer@example.test");
+    expect(world.members.textContent).not.toContain("Remove");
+    expect(descendants(world.members).filter((el) => ["button", "input", "select", "form"].includes(el.tagName))).toEqual([]);
+    expectReadsOnly(world, { members: false });
+  });
+
+  it("loads authorized members for a current owner despite a warm restricted-member cache", async () => {
+    const cachedMember = memberMe({
+      role: "member",
+      scopes: ["sites:read"],
+      siteRestriction: "site_cached_only",
+    });
+    const world = await runSettings(memberMe(), ADMIN_MEMBERS, cachedMember);
+    expect(ddForLabel(world.me, "Role")!.textContent).toBe("owner");
+    expect(ddForLabel(world.me, "Key scopes")!.textContent).toBe(OWNER_SCOPES.join(" "));
+    expect(ddForLabel(world.me, "Key limited to a site")!.textContent).toBe("no");
+    expect(world.membersSection.hidden, "current owner keeps the authorized members section").toBe(false);
+    expect(world.members.textContent).toContain("peer@example.test");
+    expect(world.members.textContent).toContain("You");
+    expect(world.members.textContent).toContain("Remove");
+    expectReadsOnly(world, { members: true });
+  });
+
   it("renders the four caller-effective byte/count limits, distinct from instance defaults", async () => {
     const world = await runSettings(memberMe(), ADMIN_MEMBERS);
     const { heading, root } = policyBlock(world);
