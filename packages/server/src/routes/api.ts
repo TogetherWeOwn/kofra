@@ -1,7 +1,7 @@
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { cors } from "hono/cors";
 import { cloneRawRequest } from "hono/request";
-import { ApiError, badRequest } from "@dropway/core";
+import { ApiError, appOrigin, badRequest } from "@dropway/core";
 import { withLegacyHeaderNames } from "../legacy-brand";
 import type { DropwayEnv } from "../env";
 
@@ -51,9 +51,11 @@ export async function readJson(c: Context<DropwayEnv>, maxBytes = 8 * 1024 * 102
 
 export function apiErrorResponse(c: Context<DropwayEnv>, err: unknown): Response {
   const requestId = c.get("requestId");
+  c.header("X-Request-Id", requestId);
   if (err instanceof ApiError) {
-    if (err.status === 429 && err.details?.retryAfterSeconds) c.header("Retry-After", String(err.details.retryAfterSeconds));
-    return c.json(err.toJSON(requestId), err.status as 400);
+    const body = err.toJSON(requestId, appOrigin(c.get("dw")));
+    if (err.status === 429 || err.status === 503) c.header("Retry-After", String(body.error.retryAfterSeconds));
+    return c.json(body, err.status as 400);
   }
   console.error(
     JSON.stringify({
@@ -65,7 +67,7 @@ export function apiErrorResponse(c: Context<DropwayEnv>, err: unknown): Response
     }),
   );
   return c.json(
-    new ApiError(500, "internal_error", "Something went wrong on our side.", "Retry the request; if it keeps failing, report the requestId.").toJSON(requestId),
+    new ApiError(500, "internal_error", "Something went wrong on our side.", "Retry the request; if it keeps failing, report the requestId.").toJSON(requestId, appOrigin(c.get("dw"))),
     500,
   );
 }

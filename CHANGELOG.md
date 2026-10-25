@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Error envelope v2
+
+- Add retryable, retryAfterSeconds, docs and structured next calls to ApiError,
+  REST and both MCP protocol lanes, retaining existing constructor calls and fields.
+  HTTP 429/503 always include Retry-After; omitted delays default to one second.
+- Report every malformed manifest field and MCP argument together in details.fields.
+  Version conflicts identify the live version id, number, client and publication
+  time (epoch milliseconds), with a get_site call to begin reconciliation.
+- Publish the built-in catalog at /docs/errors and /docs/errors.md, and use it in
+  discovery. Generate docs/errors.md with npm run errors:sync; npm run check
+  rejects stale output. Extension-specific error codes remain supported.
+- No server embedding option or extension signature changes; the extension API
+  remains version 3 after the file-delivery additions below. ApiError's optional
+  sixth argument supplies metadata.
+
 ### Renamed: Dropway is now Kofra
 
 - User-visible names: product name, docs, UI copy, the default `INSTANCE_NAME` (`Kofra`), the CLI

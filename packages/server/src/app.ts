@@ -1,5 +1,5 @@
 import { Hono, type Context } from "hono";
-import { appOrigin, type DropwayContext } from "@dropway/core";
+import { ApiError, ERROR_CODES, errorCatalogMarkdown, appOrigin, type DropwayContext } from "@dropway/core";
 import type { DropwayEnv } from "./env";
 import type { McpHandlerFactory, McpToolDefinition, UiSlots } from "./extensions";
 import { APP_PAGE_CSP, escapeHtml, htmlPage } from "./html";
@@ -44,6 +44,13 @@ export function createAppRouter(opts: { app: Hono<DropwayEnv>; uiSlots: UiSlots;
   });
   // Agent discovery (./discovery): llms.txt, llms-full.txt, the skill and its well-known indexes.
   const markdown = { "Content-Type": "text/markdown; charset=utf-8", "Cache-Control": "public, max-age=300", "Access-Control-Allow-Origin": "*", "X-Content-Type-Options": "nosniff" };
+  app.get("/docs/errors.md", (c) => c.body(errorCatalogMarkdown(), 200, markdown));
+  app.get("/docs/errors", (c) => {
+    const rows = Object.entries(ERROR_CODES).sort(([a], [b]) => a.localeCompare(b)).map(([code, entry]) =>
+      `<tr id="${escapeHtml(code)}"><td><code>${escapeHtml(code)}</code></td><td>${entry.status}</td><td>${entry.retryable}</td><td>${escapeHtml(entry.hint)}</td></tr>`,
+    ).join("");
+    return c.html(htmlPage({ title: "Error codes", body: `<main><h1>Error codes</h1><p>Follow the hint and next calls. On 429/503, wait Retry-After seconds before retrying. <a href="/docs/errors.md">Markdown catalog</a></p><table><thead><tr><th>Code</th><th>HTTP status</th><th>Retryable</th><th>Hint</th></tr></thead><tbody>${rows}</tbody></table></main>` }), 200, { ...pageHeaders(), "Cache-Control": "public, max-age=300" });
+  });
   const describedBy = (o: string) => ({ Link: `<${o}/llms.txt>; rel="describedby"; type="text/markdown", <${o}/openapi.json>; rel="service-desc"` });
   app.get("/llms.txt", (c) => {
     const dw = c.get("dw");
@@ -78,7 +85,7 @@ export function createAppRouter(opts: { app: Hono<DropwayEnv>; uiSlots: UiSlots;
   app.all("/mcp", (c) => {
     if (mcpHandler) return mcpHandler(c);
     return c.json(
-      { error: { code: "mcp_not_enabled", message: "This build has no MCP server mounted.", hint: "Use the REST API (see /openapi.json) or update the instance." } },
+      new ApiError(501, "mcp_not_enabled", "This build has no MCP server mounted.").toJSON(c.get("requestId"), appOrigin(c.get("dw"))),
       501,
     );
   });

@@ -1,4 +1,4 @@
-import { appOrigin, sha256Hex, siteUrl, type DropwayConfig, type DropwayContext } from "@dropway/core";
+import { ERROR_CODES, appOrigin, sha256Hex, siteUrl, type DropwayConfig, type DropwayContext } from "@dropway/core";
 import type { McpToolDefinition } from "./extensions";
 import { buildOpenApi } from "./openapi";
 import type { OperationDefinition } from "./operations";
@@ -170,7 +170,7 @@ Base URL: ${origin}
 Auth: \`Authorization: Bearer dw_...\` (API key from the instance owner; scopes sites:read, sites:write, sites:delete, keys:write, members:write, data:write, secrets:write, admin).${
     config.anonymous.enabled ? " Anonymous publishing is enabled: without a key, sites expire after 24 hours and a claimToken is returned." : " Anonymous publishing is disabled on this instance."
   }
-Errors: JSON \`{ "error": { "code", "message", "hint", "details" }, "requestId" }\`. Follow the hint; validation errors list every bad field in details.fields.
+Errors: JSON \`{ "error": { "code", "message", "hint", "retryable", "retryAfterSeconds", "docs", "next", "details" }, "requestId" }\`. Follow the hint and next calls; validation errors list bad fields in details.fields. Catalog: ${origin}/docs/errors.md.
 URLs: share the \`url\` from responses exactly as returned (site URLs look like ${siteUrl({ config, requestUrl: new URL(origin) }, "bright-otter-x7k2")}).
 
 ## Quick start
@@ -202,25 +202,6 @@ ${visibleTools.map((t) => `- \`${t.name}\`: ${firstSentence(t.description)}`).jo
 `;
 }
 
-const ERROR_CODES: Array<[string, string]> = [
-  ["400 invalid_request, invalid_json, invalid_path, duplicate_path, invalid_sha256, invalid_slug, slug_reserved", "Input problems; details.fields lists every bad field. Fix and resend."],
-  ["400 hash_mismatch, size_mismatch", "Uploaded bytes differ from the declared sha256 or size. Re-read the file; do not re-encode it."],
-  ["400 confirm_mismatch", "Destructive call without the right confirm value; details.expected names it."],
-  ["401 unauthorized, invalid_api_key, api_key_expired", "Missing or bad credential. Send Authorization: Bearer dw_..."],
-  ["403 insufficient_scope, scope_not_grantable, forbidden", "The key lacks a scope (details.required) or the action is not allowed."],
-  ["403 limit_reached", "An admin-set resource quota was reached; remove unused resources or follow the adapter's hint."],
-  ["404 site_not_found, version_not_found, file_not_found, member_not_found, key_not_found, folder_not_found", "Nothing by that name that this key can see; the hint names the list call."],
-  ["409 slug_taken, version_conflict, version_is_live, missing_blobs, already_claimed", "Conflicts. version_conflict: re-read the live version and retry with its id as baseVersionId. missing_blobs: upload details.uploads, then finalize again."],
-  ["409 idempotency_in_progress", "The first call with this idempotency key is still running; retry in a second."],
-  ["411 length_required", "Send Content-Length with raw uploads."],
-  ["413 inline_too_large, file_too_large, site_too_large, request_too_large", "Over a size cap; the hint names the right upload path."],
-  ["422 fetch_failed, fetch_blocked", "A url source could not be fetched, or is not a public https URL."],
-  ["422 idempotency_key_reused", "Same idempotency key, different arguments. Use a new key."],
-  ["429 rate_limited", "Wait details.retryAfterSeconds (Retry-After header)."],
-  ["501 feature_unavailable", "This instance lacks the feature; details.requires says what."],
-  ["500 invalid_policy_quota", "The policy returned an invalid quota; ask the instance administrator to fix its adapter."],
-  ["500 internal_error, 502 blob_missing", "Retry once; report the requestId if it repeats."],
-];
 
 /** /llms-full.txt: the complete agent reference. */
 export function llmsFullTxt(origin: string, config: DropwayConfig, tools: readonly McpToolDefinition[], registry?: readonly OperationDefinition[], availableTools?: ReadonlySet<string>): string {
@@ -261,7 +242,7 @@ export function llmsFullTxt(origin: string, config: DropwayConfig, tools: readon
 
 ## Error codes
 
-${ERROR_CODES.map(([c, m]) => `- ${c}: ${m}`).join("\n")}
+${Object.entries(ERROR_CODES).sort(([a], [b]) => a.localeCompare(b)).map(([code, entry]) => `- ${entry.status} ${code} (retryable: ${entry.retryable}): ${entry.hint}`).join("\n")}
 
 ## REST operations
 

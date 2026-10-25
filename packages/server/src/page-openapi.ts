@@ -30,6 +30,18 @@ export const PAGE_PATHS: Json = {
       responses: { "200": { description: "HTML", content: { "text/html": { schema: { type: "string" } } } } },
     }),
   },
+  "/docs/errors": {
+    get: page("error_catalog_page", "Built-in error codes and remediation (HTML)", {
+      tags: ["agents"], security: [], "x-mcp-exclude": "documentation page",
+      responses: { "200": { description: "HTML error catalog", content: { "text/html": { schema: { type: "string" } } } } },
+    }),
+  },
+  "/docs/errors.md": {
+    get: page("error_catalog_markdown", "Generated built-in error catalog (Markdown)", {
+      tags: ["agents"], security: [], "x-mcp-exclude": "documentation document",
+      responses: { "200": { description: "Markdown error catalog", content: { "text/markdown": { schema: { type: "string" } } } } },
+    }),
+  },
   "/health": {
     get: page("health", "Health check", {
       tags: ["agents"],
