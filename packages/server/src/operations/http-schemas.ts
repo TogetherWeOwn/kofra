@@ -41,7 +41,7 @@ export const HTTP_MANIFEST_ENTRY: Record<string, any> = {
   required: ["path", "size", "sha256"],
   properties: {
     path: { type: "string" },
-    size: { type: "integer" },
+    size: { type: "integer", minimum: 0 },
     sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
     contentType: { type: "string" },
   },

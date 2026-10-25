@@ -4,10 +4,11 @@ import { appOrigin, siteUrl } from "../context";
 import { ApiError, badRequest, forbidden, notFound, tooLarge } from "../errors";
 import { SHA256_RE, sha256Hex } from "../lib/crypto";
 import { normaliseContentType } from "../lib/mime";
+import { stringField } from "../lib/input";
 import { normaliseFilePath } from "../lib/paths";
 import type { Principal } from "../principal";
 import { blobScope, putVerifiedBlob } from "./blobs";
-import { createDeploy, finalizeDeploy, type Warning } from "./deploys";
+import { createDeploy, finalizeDeploy, parseDeployOptions, versionConflict, type Warning } from "./deploys";
 import { discardNewSite, findSite, getVersion, serializeSite, serializeVersion, type SiteRow, type VersionRow } from "./sites";
 import { resolvePublishTarget } from "./publish";
 import { getSiteByRef, resolveSiteSlug, resolveVersionRef } from "./site-ops";
@@ -303,28 +304,27 @@ export async function resolveFileInputs(
       urlCount++;
       plans.push({ kind: "url", path, url: r.url, headers, contentType });
     } else if (src === "sha256") {
-      const sha = String(r.sha256).toLowerCase();
-      if (!SHA256_RE.test(sha)) return void problems.push({ field: `${f}.sha256`, problem: "must be 64 lowercase hex characters (sha256sum <file>)" });
+      let sha = "";
+      try { sha = String(r.sha256).toLowerCase(); } catch { /* validated below */ }
+      if (!SHA256_RE.test(sha)) problems.push({ field: `${f}.sha256`, problem: "must be 64 lowercase hex characters (sha256sum <file>)" });
       let size: number | null = null;
       if (r.size !== undefined && r.size !== null) {
-        size = Number(r.size);
-        if (!Number.isInteger(size) || size < 0) return void problems.push({ field: `${f}.size`, problem: "must be a non-negative integer (bytes)" });
+        size = NaN;
+        try { size = Number(r.size); } catch { /* validated below */ }
+        if (!Number.isInteger(size) || size < 0) problems.push({ field: `${f}.size`, problem: "must be a non-negative integer (bytes)" });
       }
       plans.push({ kind: "stored", path, sha256: sha, size, contentType });
     } else {
       const c = r.copyFrom;
       if (!c || typeof c !== "object" || Array.isArray(c)) return void problems.push({ field: `${f}.copyFrom`, problem: "must be an object { site?, version?, path? }" });
       const cf = c as Record<string, unknown>;
-      plans.push({
-        kind: "copy",
-        path,
-        from: {
-          site: cf.site == null ? undefined : String(cf.site),
-          version: cf.version == null ? undefined : String(cf.version),
-          path: cf.path == null ? undefined : String(cf.path),
-        },
-        contentType,
-      });
+      const from: { site?: string; version?: string; path?: string } = {};
+      for (const name of ["site", "version", "path"] as const) {
+        if (cf[name] == null) continue;
+        try { from[name] = String(cf[name]); }
+        catch { problems.push({ field: `${f}.copyFrom.${name}`, problem: "must be convertible to a string" }); }
+      }
+      plans.push({ kind: "copy", path, from, contentType });
     }
   });
   if (urlCount > MAX_URL_SOURCES) problems.push({ field, problem: `has ${urlCount} url sources; at most ${MAX_URL_SOURCES} per call` });
@@ -562,6 +562,7 @@ export interface PublishSourcesInput {
  * files still need uploading (status "awaiting_upload" with upload links).
  */
 export async function publishSources(dc: DropwayContext, p: Principal, input: PublishSourcesInput) {
+  const metadata = parseDeployOptions({ message: input.message, baseVersionId: input.baseVersionId });
   const tenantId = p.kind === "member" ? p.tenantId : null;
   const slug = input.site === undefined || input.site === null || input.site === "" ? null : await resolveSiteSlug(dc, input.site);
   // Resolve sources before creating anything, so a bad URL never leaves an empty site behind.
@@ -582,7 +583,7 @@ export async function publishSources(dc: DropwayContext, p: Principal, input: Pu
   const actor: Principal = target.claimToken ? { kind: "claim", siteId: site.id, ip: p.ip } : p;
   let out: Awaited<ReturnType<typeof completeVersion>>;
   try {
-    const deploy = await createDeploy(dc, actor, site, manifest, { source: input.source ?? "mcp", message: input.message, client: input.client ?? null, baseVersionId: input.baseVersionId });
+    const deploy = await createDeploy(dc, actor, site, manifest, { ...metadata, source: input.source ?? "mcp", client: input.client ?? null });
     out = await completeVersion(dc, actor, site, deploy, resolved.files, { fetched: resolved.fetched });
   } catch (e) {
     // A site created by this call is removed again, so a failed publish leaves nothing behind.
@@ -631,16 +632,9 @@ export async function updateSiteFiles(dc: DropwayContext, p: Principal, siteRef:
   const site = await getSiteByRef(dc, p, siteRef, "sites:write");
   let base: VersionRow | null = null;
   if (input.baseVersionId !== undefined && input.baseVersionId !== null && input.baseVersionId !== "") {
-    base = await resolveVersionRef(dc, site, input.baseVersionId);
+    base = await resolveVersionRef(dc, site, stringField(input.baseVersionId, "baseVersionId"));
     if (base.id !== site.current_version_id) {
-      const live = site.current_version_id ? await getVersion(dc, site.id, site.current_version_id) : null;
-      throw new ApiError(
-        409,
-        "version_conflict",
-        `The live version is ${live ? `v${live.number}` : "none"}, not v${base.number}: someone published since your base version.`,
-        "Call get_site (or list_files) to see the live files, re-apply your change, and pass the live version as baseVersionId.",
-        { liveVersionId: site.current_version_id, liveVersionNumber: live?.number ?? null, yourBase: base.id, yourBaseNumber: base.number, liveClient: live?.client ?? null },
-      );
+      throw await versionConflict(dc, site, base);
     }
   } else if (site.current_version_id) {
     base = await getVersion(dc, site.id, site.current_version_id);

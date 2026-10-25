@@ -1,5 +1,6 @@
 import { badRequest } from "../errors";
 import { randomString } from "./crypto";
+import { stringField } from "./input";
 
 const ADJECTIVES = [
   "amber", "bold", "brave", "bright", "calm", "clever", "cosmic", "crisp", "dapper", "eager",
@@ -58,12 +59,13 @@ export function looksLikeSlug(s: string): boolean {
 }
 
 /** Validate a caller-chosen slug. Slugs are DNS labels: they may become <slug>.<SITES_DOMAIN>. */
-export function validateSlug(input: string): string {
-  const slug = String(input).trim().toLowerCase();
+export function validateSlug(input: unknown): string {
+  const raw = stringField(input, "slug");
+  const slug = raw.trim().toLowerCase();
   if (!looksLikeSlug(slug) || slug.length > MAX_SLUG_LENGTH) {
     throw badRequest(
       "invalid_slug",
-      `"${input}" is not a valid site name.`,
+      `"${raw}" is not a valid site name.`,
       `Use 3-${MAX_SLUG_LENGTH} characters: lowercase letters, digits and single hyphens, starting and ending with a letter or digit.`,
     );
   }
