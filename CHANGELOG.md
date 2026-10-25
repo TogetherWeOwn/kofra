@@ -26,10 +26,13 @@
   with CLI/upload-links remediation. URL_FETCH_MAX_BYTES configures URL sources
   (default 100 MiB; file and one-shot caps still apply). The MCP wire cap is 8 MiB
   so requests just above the decoded inline budget get actionable tool errors.
-- Bump EXTENSION_API_VERSION to 4: Principal adds an upload-only variant
-  (versionId, expiresAt in epoch milliseconds, ip), and DropwayConfig adds
-  urlFetchMaxBytes. Custom identity/policy adapters must keep upload principals
-  restricted to blob uploads. Existing member/claim permissions are unchanged.
+- Migration 0006 stores large replay results in bounded D1 rows, atomically with
+  completion. Expiry cleanup and key reclaim retire their payload chunks; replay
+  preserves the entire original response, including Unicode paths and upload links.
+- Charge URL chunks to one shared streaming budget and cancel sibling fetches on
+  refusal, rather than buffering whole bodies before enforcing the one-shot cap.
+- Pinned dashboard version links load pending and older versions by immutable id,
+  independently of the newest-100 ready-version history page.
 
 ### Error envelope v2
 
@@ -109,6 +112,11 @@
   Add `delete_folder` to the registry; deleting an organizer keeps its sites.
 
 ### Extension API
+
+- Bump `EXTENSION_API_VERSION` to 4: Principal adds an upload-only variant
+  (versionId, expiresAt in epoch milliseconds, ip), and DropwayConfig adds
+  urlFetchMaxBytes. Custom identity/policy adapters must keep upload principals
+  restricted to blob uploads. Existing member/claim permissions are unchanged.
 
 - Bump `EXTENSION_API_VERSION` to 3. `beforeDeploy` now receives `newBytes`, and
   `deleteVersion(dc, principal, site, versionId)` now enforces deletion permission.

@@ -207,6 +207,13 @@ single `.zip` goes to `POST /api/v1/publish` instead. `.git/`, `node_modules/`,
   unpredictable keys and not share them with others behind the same network.
   Hourly cleanup deletes at most 500 expired records per invocation, oldest expiry
   first, including pending records; future-expiry owners and results remain intact.
+  Large replay responses use bounded `idempotency_result_chunks` rows (migration
+  `0006`), committed atomically with the owner-fenced completion. Small results
+  remain inline and existing records still replay. Chunk boundaries preserve UTF-16
+  surrogate pairs; each row stays below D1's 2 MB value/row limit. Parent deletion
+  cascades to payload rows; reclaiming an expired key removes the previous owner's
+  chunks. A persistence failure preserves the successful mutation's response and
+  leaves its claim pending (unknown replay outcome), without logging result secrets.
 
 Never edit an applied migration; add `000N_*.sql`. Extensions keep their own
 tables in their own migrations or their own D1 database.
@@ -251,7 +258,9 @@ only `upload_blob`, never reads, publish or finalize. The default identity adapt
 accepts dwu_ credentials only on blob upload URLs; the service independently checks
 pending state, deletion, expiry and exact manifest membership on every upload.
 `DropwayConfig.urlFetchMaxBytes` (or `URL_FETCH_MAX_BYTES`) limits URL sources;
-per-file and one-shot limits still apply. Embedding Workers must retain
+per-file and one-shot limits still apply. Concurrent URL bodies debit one shared
+one-shot budget as each chunk arrives, before buffering it; a refusal cancels all
+sibling fetches and readers. Embedding Workers must retain
 `global_fetch_strictly_public` in their compatibility flags: hostname-string
 validation alone cannot prevent DNS-pointed private targets or rebinding. Custom
 fetchers are trusted deployment code and must enforce the same network boundary.

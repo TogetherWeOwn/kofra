@@ -20,11 +20,21 @@ import type { Principal } from "../principal";
 
 const TTL_MS = 86_400_000;
 const KEY_RE = /^[\x21-\x7e]{1,255}$/;
+// At most 3 UTF-8 bytes per UTF-16 code unit: each value/row stays well below 2 MB.
+const RESULT_CHUNK_CHARS = 256_000;
 
 interface StoredRecord {
   state: "pending" | "done";
   input_hash: string;
+  owner_token: string;
   result_json: string | null;
+}
+
+function inProgress(): ApiError {
+  return new ApiError(409, "idempotency_in_progress", "The first request with this idempotency key is still running or its outcome is unknown.", "Retry this same request and key shortly; do not use a new key for an uncertain operation.", {
+    retryable: true,
+    retryAfterSeconds: 1,
+  });
 }
 
 /** Check an idempotency key: 1-255 printable ASCII characters, or absent. */
@@ -88,7 +98,7 @@ export async function withIdempotency<T>(dc: DropwayContext, opts: IdempotencyOp
      WHERE idempotency_keys.expires_at <= ?`,
   ).bind(keyHash, inputHash, owner, now + TTL_MS, now).run();
   if (claimed.meta.changes === 0) {
-    const existing = await dc.env.DB.prepare("SELECT input_hash, state, result_json FROM idempotency_keys WHERE key_hash = ?").bind(keyHash).first<StoredRecord>();
+    const existing = await dc.env.DB.prepare("SELECT input_hash, owner_token, state, result_json FROM idempotency_keys WHERE key_hash = ?").bind(keyHash).first<StoredRecord>();
     if (existing && existing.input_hash !== inputHash) {
       throw new ApiError(
         422,
@@ -97,11 +107,19 @@ export async function withIdempotency<T>(dc: DropwayContext, opts: IdempotencyOp
         "Use a new key for a new operation; reuse a key only to retry the exact same request.",
       );
     }
-    if (existing?.state === "done") return { result: JSON.parse(existing.result_json!) as T, replayed: true };
-    throw new ApiError(409, "idempotency_in_progress", "The first request with this idempotency key is still running or its outcome is unknown.", "Retry this same request and key shortly; do not use a new key for an uncertain operation.", {
-      retryable: true,
-      retryAfterSeconds: 1,
-    });
+    if (existing?.state === "done") {
+      let json = existing.result_json;
+      if (json === null) {
+        const { results } = await dc.env.DB.prepare(
+          "SELECT result_json FROM idempotency_result_chunks WHERE key_hash = ? AND owner_token = ? ORDER BY chunk_index",
+        ).bind(keyHash, existing.owner_token).all<{ result_json: string }>();
+        // Cleanup/reclaim may have retired this owner between the two reads.
+        if (!results.length) throw inProgress();
+        json = results.map((row) => row.result_json).join("");
+      }
+      return { result: JSON.parse(json) as T, replayed: true };
+    }
+    throw inProgress();
   }
   let result: T;
   try {
@@ -110,8 +128,32 @@ export async function withIdempotency<T>(dc: DropwayContext, opts: IdempotencyOp
     await dc.env.DB.prepare("DELETE FROM idempotency_keys WHERE key_hash = ? AND owner_token = ? AND state = 'pending'").bind(keyHash, owner).run();
     throw e;
   }
-  const stored = opts.redactForReplay ? opts.redactForReplay(result) : result;
-  await dc.env.DB.prepare("UPDATE idempotency_keys SET state = 'done', result_json = ?, expires_at = ? WHERE key_hash = ? AND owner_token = ? AND state = 'pending'")
-    .bind(JSON.stringify(stored), Date.now() + TTL_MS, keyHash, owner).run();
+  try {
+    const stored = opts.redactForReplay ? opts.redactForReplay(result) : result;
+    const json = JSON.stringify(stored);
+    const statements: D1PreparedStatement[] = [];
+    if (json.length > RESULT_CHUNK_CHARS) {
+      for (let start = 0, index = 0; start < json.length; index++) {
+        let end = Math.min(start + RESULT_CHUNK_CHARS, json.length);
+        // Never turn a surrogate pair into two invalid UTF-8 strings in D1.
+        const last = json.charCodeAt(end - 1);
+        if (end < json.length && last >= 0xd800 && last <= 0xdbff) end--;
+        statements.push(dc.env.DB.prepare(
+          `INSERT INTO idempotency_result_chunks (key_hash, owner_token, chunk_index, result_json)
+           SELECT key_hash, owner_token, ?, ? FROM idempotency_keys
+           WHERE key_hash = ? AND owner_token = ? AND state = 'pending'`,
+        ).bind(index, json.slice(start, end), keyHash, owner));
+        start = end;
+      }
+    }
+    statements.push(dc.env.DB.prepare("UPDATE idempotency_keys SET state = 'done', result_json = ?, expires_at = ? WHERE key_hash = ? AND owner_token = ? AND state = 'pending'")
+      .bind(statements.length ? null : json, Date.now() + TTL_MS, keyHash, owner));
+    // Payload and completion commit together; a late owner cannot write to a reclaimed key.
+    await dc.env.DB.batch(statements);
+  } catch {
+    // The mutation succeeded. Preserve its response and the pending claim (unknown
+    // replay outcome) rather than returning a false failure or executing it again.
+    console.error(JSON.stringify({ event: "idempotency_result_persistence_failed", operation: opts.operation }));
+  }
   return { result, replayed: false };
 }

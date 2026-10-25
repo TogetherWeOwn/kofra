@@ -140,22 +140,25 @@ function cleanHeaders(headers: unknown, field: string, problems: FieldProblem[])
 /** Fetch one URL source: https only, public hosts only (re-checked on each redirect), size- and time-capped. */
 export async function fetchUrlSource(
   url: string,
-  opts: { headers?: Record<string, string>; maxBytes: number; timeoutMs?: number; fetcher?: typeof fetch },
+  opts: { headers?: Record<string, string>; maxBytes: number; timeoutMs?: number; fetcher?: typeof fetch; signal?: AbortSignal; consumeBytes?: (bytes: number) => void },
 ): Promise<{ bytes: Uint8Array; contentType: string | null; finalUrl: string }> {
   const doFetch = opts.fetcher ?? fetch;
-  const signal = AbortSignal.timeout(opts.timeoutMs ?? URL_FETCH_TIMEOUT_MS);
+  const timeout = AbortSignal.timeout(opts.timeoutMs ?? URL_FETCH_TIMEOUT_MS);
+  const signal = opts.signal ? AbortSignal.any([timeout, opts.signal]) : timeout;
   let current = assertPublicHttpsUrl(url);
   let headers = opts.headers;
+  const fetchFailure = (error: unknown) => new ApiError(
+    422, "fetch_failed", `Could not fetch ${current.href}: ${timeout.aborted ? "timed out" : String((error as Error)?.message ?? error)}.`,
+    "Check the URL is reachable from the public internet, or send the bytes another way.",
+    { url: current.href, retryable: true },
+  );
   for (let hop = 0; ; hop++) {
     let res: Response;
     try {
       res = await doFetch(current.href, { headers: { "User-Agent": "Kofra-Fetch/1 (+https://github.com/TogetherWeOwn/dropway)", ...headers }, redirect: "manual", signal });
     } catch (e) {
-      const timedOut = signal.aborted;
-      throw new ApiError(422, "fetch_failed", `Could not fetch ${current.href}: ${timedOut ? "timed out" : String((e as Error)?.message ?? e)}.`, "Check the URL is reachable from the public internet, or send the bytes another way.", {
-        url: current.href,
-        retryable: true,
-      });
+      if (opts.signal?.aborted) throw opts.signal.reason;
+      throw fetchFailure(e);
     }
     if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
       await res.body?.cancel().catch(() => {});
@@ -184,15 +187,26 @@ export async function fetchUrlSource(
     let total = 0;
     if (res.body) {
       const reader = res.body.getReader();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        total += value.byteLength;
-        if (total > opts.maxBytes) {
-          await reader.cancel().catch(() => {});
-          throw tooBig();
+      const cancel = () => { void reader.cancel(signal.reason).catch(() => {}); };
+      signal.addEventListener("abort", cancel, { once: true });
+      try {
+        for (;;) {
+          signal.throwIfAborted();
+          const { done, value } = await reader.read();
+          signal.throwIfAborted();
+          if (done) break;
+          total += value.byteLength;
+          if (total > opts.maxBytes) throw tooBig();
+          opts.consumeBytes?.(value.byteLength);
+          chunks.push(value);
         }
-        chunks.push(value);
+      } catch (e) {
+        await reader.cancel().catch(() => {});
+        if (opts.signal?.aborted) throw opts.signal.reason;
+        throw e instanceof ApiError ? e : fetchFailure(e);
+      } finally {
+        signal.removeEventListener("abort", cancel);
+        reader.releaseLock();
       }
     }
     const bytes = new Uint8Array(total);
@@ -358,19 +372,29 @@ export async function resolveFileInputs(
   };
 
   let fetchedBytes = 0;
+  const acquisition = new AbortController();
+  const consumeBytes = (bytes: number) => {
+    acquisition.signal.throwIfAborted();
+    fetchedBytes += bytes;
+    if (fetchedBytes > opts.lim.oneShotMaxBytes) {
+      const error = tooLarge("request_too_large", `URL sources in one call may total ${opts.lim.oneShotMaxBytes} bytes.`, "Split the files across several update_site_files calls.", { limit: opts.lim.oneShotMaxBytes });
+      acquisition.abort(error);
+      throw error;
+    }
+  };
   const out: ResolvedFile[] = new Array(plans.length);
   const queue = plans.map((plan, i) => ({ plan, i }));
   const worker = async () => {
     for (let job = queue.shift(); job; job = queue.shift()) {
+      acquisition.signal.throwIfAborted();
       const { plan, i } = job;
       if (plan.kind === "inline") {
         out[i] = { path: plan.path, size: plan.bytes.length, sha256: await sha256Hex(plan.bytes), contentType: normaliseContentType(plan.contentType, plan.path), bytes: plan.bytes, source: "inline" };
       } else if (plan.kind === "url") {
-        const got = await fetchUrlSource(plan.url, { headers: plan.headers, maxBytes: Math.min(opts.lim.maxFileBytes, dc.config.urlFetchMaxBytes), fetcher: opts.fetcher });
-        fetchedBytes += got.bytes.length;
-        if (fetchedBytes > opts.lim.oneShotMaxBytes) {
-          throw tooLarge("request_too_large", `URL sources in one call may total ${opts.lim.oneShotMaxBytes} bytes.`, "Split the files across several update_site_files calls.", { limit: opts.lim.oneShotMaxBytes });
-        }
+        const got = await fetchUrlSource(plan.url, {
+          headers: plan.headers, maxBytes: Math.min(opts.lim.maxFileBytes, dc.config.urlFetchMaxBytes), fetcher: opts.fetcher,
+          signal: acquisition.signal, consumeBytes,
+        });
         out[i] = {
           path: plan.path,
           size: got.bytes.length,
@@ -399,7 +423,16 @@ export async function resolveFileInputs(
       }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(4, Math.max(1, plans.length)) }, worker));
+  const workers = Array.from({ length: Math.min(4, Math.max(1, plans.length)) }, () => worker().catch((error) => {
+    acquisition.abort(error);
+    throw error;
+  }));
+  try {
+    await Promise.all(workers);
+  } catch (error) {
+    await Promise.allSettled(workers);
+    throw error;
+  }
   for (const f of out) {
     if (f.size > opts.lim.maxFileBytes) {
       throw tooLarge("file_too_large", `"${f.path}" is ${f.size} bytes; the per-file limit is ${opts.lim.maxFileBytes}.`, "Compress or split the file.", { path: f.path, size: f.size, limit: opts.lim.maxFileBytes });

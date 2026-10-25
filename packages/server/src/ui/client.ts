@@ -1184,11 +1184,20 @@ export function dropwayClient() {
     var root = d.getElementById("dw-site");
     clear(root);
     add(root, skeleton(5));
-    var site, versions, files;
+    var site, versions, files, linkedVersion, linkedVersionError;
+    var requestedVersion = new URL(location.href).searchParams.get("version");
     try {
-      var r = await Promise.all([api("/sites/" + encodeURIComponent(slug)), api("/sites/" + encodeURIComponent(slug) + "/versions?limit=100")]);
+      var r = await Promise.all([
+        api("/sites/" + encodeURIComponent(slug)),
+        api("/sites/" + encodeURIComponent(slug) + "/versions?limit=100"),
+        requestedVersion ? api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(requestedVersion)).catch(function (error) {
+          linkedVersionError = error;
+          return null;
+        }) : Promise.resolve(null),
+      ]);
       site = r[0].site;
       versions = r[1].versions;
+      linkedVersion = r[2] && r[2].version;
     } catch (e) {
       clear(root);
       add(root, errorBox(e, "Could not load " + slug), h("a", { class: "dw-btn", href: "/dashboard", text: "Back to sites" }));
@@ -1533,9 +1542,9 @@ export function dropwayClient() {
     var live = versions.filter(function (v) {
       return v.live;
     })[0];
-    var requestedVersion = new URL(location.href).searchParams.get("version");
-    var selected = requestedVersion ? versions.filter(function (v) { return v.id === requestedVersion; })[0] : live;
+    var selected = requestedVersion ? linkedVersion : live;
     if (selected) showFiles(selected);
+    else if (requestedVersion) add(filesSection, h("div", { class: "dw-pad" }, errorBox(linkedVersionError || { message: "This version is unavailable." }, "Version unavailable")));
     else filesSection.hidden = true;
   };
 
