@@ -313,8 +313,8 @@ interface FakeDirEntry extends FakeEntry {
   createReader: () => { readEntries: (ok: (b: FakeEntry[]) => void, err: () => void) => void };
 }
 
-function fileEntry(name: string, size: number, opts?: { fail?: boolean; gate?: Promise<void> }): FakeFileEntry {
-  const f = fakeFile(name, size);
+function fileEntry(name: string, size: number, opts?: { fail?: boolean; gate?: Promise<void>; file?: FakeFile }): FakeFileEntry {
+  const f = opts?.file ?? fakeFile(name, size);
   return {
     isFile: true,
     isDirectory: false,
@@ -330,7 +330,7 @@ function fileEntry(name: string, size: number, opts?: { fail?: boolean; gate?: P
   };
 }
 
-function dirEntry(name: string, batches: FakeEntry[][], opts?: { fail?: boolean }): FakeDirEntry {
+function dirEntry(name: string, batches: FakeEntry[][], opts?: { fail?: boolean; failAfterBatches?: number }): FakeDirEntry {
   return {
     isFile: false,
     isDirectory: true,
@@ -339,7 +339,7 @@ function dirEntry(name: string, batches: FakeEntry[][], opts?: { fail?: boolean 
       let i = 0;
       return {
         readEntries: (ok, err) => {
-          if (opts?.fail) {
+          if (opts?.fail || (opts?.failAfterBatches !== undefined && i >= opts.failAfterBatches)) {
             err();
             return;
           }
@@ -1114,5 +1114,237 @@ describe("preserved publisher behavior (controls)", () => {
     const text = h.root.textContent;
     expect(text).not.toMatch(/malware|virus|integrity|guarantee/i);
     expect(text).not.toMatch(/scanned|verified as safe|safety check/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// E. Ignored unreadable entries: exclusions do not make included files incomplete
+// ---------------------------------------------------------------------------
+
+// Breaks caught here: treating every traversal failure as blocking, ignoring
+// raw prefixes before common-root normalization, or silently dropping unknown
+// nonignored contents. These tests exercise the served script, not its helpers.
+describe("ignored unreadable entries", () => {
+  function expandedRows(h: Harness): string[] {
+    const toggle = findReviewToggle(h.root);
+    expect(toggle, "the selection must remain inspectable").not.toBeNull();
+    if (!isExpanded(toggle!)) activate(toggle!, "click");
+    const body = reviewBody(h.root, toggle!)!;
+    // Paths and sizes can be sibling text/code nodes in the same list row.
+    const rows = allElements(body).filter((e) => e.tagName === "li" || e.tagName === "tr");
+    return (rows.length ? rows : reviewRows(body)).map((r) => r.textContent);
+  }
+
+  function expectExcluded(rows: string[], path: string, reason: string): string {
+    const row = rows.find((r) => r.includes(path));
+    expect(row, `excluded row for ${path}`).toBeDefined();
+    expect(row).toContain(reason);
+    return row!;
+  }
+
+  function expectUnknownDirectory(rows: string[], path: string, reason: string): void {
+    expectExcluded(rows, path, reason);
+    // A failed enumeration is not proof of an empty or completely listed tree.
+    const matching = rows.filter((r) => r.includes(path) && r.includes(reason));
+    expect(matching.some((r) => /unknown|unreadable|not (?:read|listed|enumerated|inspected)|could not|couldn't|cannot|can't|unavailable/i.test(r)), "excluded directory must disclose unreadable/unknown contents").toBe(true);
+  }
+
+  async function expectBlockedWithoutRequests(h: Harness, callsAtBoot: number, path: string): Promise<void> {
+    const messages = alerts(h.root).map((a) => a.textContent).join("\n");
+    expect(messages).toContain(path);
+    expect(messages).toMatch(/reselect|retry|try again|choose/i);
+    expect(h.publishBtn.disabled).toBe(true);
+    expect(h.spy.calls).toHaveLength(callsAtBoot);
+    await clickPublish(h);
+    expect(h.spy.calls, "not even site creation is allowed for incomplete included contents").toHaveLength(callsAtBoot);
+    expect(h.spy.manifests).toHaveLength(0);
+  }
+
+  it.each([
+    { path: ".env", reason: "may contain secrets" },
+    { path: ".env.local", reason: "may contain secrets" },
+    { path: ".git/config", reason: ".git folder" },
+    { path: "node_modules/dep/x.js", reason: "node_modules folder" },
+  ])("excludes unreadable $path without blocking the readable project", async ({ path, reason }) => {
+    const h = await bootPublisher();
+    const callsAtBoot = h.spy.calls.length;
+    const index = fakeFile("index.html", 41);
+    const script = fakeFile("app.js", 12);
+    const parts = path.split("/");
+    let unreadable: FakeEntry = fileEntry(parts.pop()!, 9, { fail: true });
+    for (const name of parts.reverse()) unreadable = dirEntry(name, [[unreadable]]);
+    await dropFiles(h, [dirEntry("project", [[
+      fileEntry("index.html", 41, { file: index }),
+      dirEntry("assets", [[fileEntry("app.js", 12, { file: script })]]),
+      unreadable,
+    ]])]);
+    const rows = expandedRows(h);
+    expectExcluded(rows, path, reason);
+    expect(rows.some((r) => r.includes("index.html") && r.includes("41 B"))).toBe(true);
+    expect(rows.some((r) => r.includes("assets/app.js") && r.includes("12 B"))).toBe(true);
+    expect(h.summary.textContent).toContain("2 files");
+    expect(h.summary.textContent).toContain("53 B");
+    expect(h.spy.calls).toHaveLength(callsAtBoot);
+    expect(index.arrayBufferCalls + script.arrayBufferCalls, "review never hashes readable files").toBe(0);
+    expect(alerts(h.root), "intentionally excluded files are not traversal blockers").toHaveLength(0);
+    expect(h.publishBtn.disabled).toBe(false);
+    await clickPublish(h);
+    expect(h.spy.manifests).toHaveLength(1);
+    expect(h.spy.manifests[0]!.map((f) => ({ path: f.path, size: f.size })).sort((a, b) => a.path.localeCompare(b.path))).toEqual([
+      { path: "assets/app.js", size: 12 },
+      { path: "index.html", size: 41 },
+    ]);
+  });
+
+  it.each([
+    { name: ".git", reason: ".git folder" },
+    { name: "node_modules", reason: "node_modules folder" },
+  ])("honestly excludes an unreadable $name directory with unknown contents", async ({ name, reason }) => {
+    const h = await bootPublisher();
+    const callsAtBoot = h.spy.calls.length;
+    const index = fakeFile("index.html", 41);
+    await dropFiles(h, [dirEntry("project", [[
+      fileEntry("index.html", 41, { file: index }),
+      dirEntry(name, [], { fail: true }),
+    ]])]);
+    const rows = expandedRows(h);
+    expectUnknownDirectory(rows, `${name}/`, reason);
+    expect(h.spy.calls).toHaveLength(callsAtBoot);
+    expect(index.arrayBufferCalls).toBe(0);
+    expect(alerts(h.root)).toHaveLength(0);
+    expect(h.publishBtn.disabled).toBe(false);
+    await clickPublish(h);
+    expect(h.spy.manifests).toHaveLength(1);
+    expect(h.spy.manifests[0]!.map((f) => ({ path: f.path, size: f.size }))).toEqual([{ path: "index.html", size: 41 }]);
+  });
+
+  it("keeps a partially enumerated ignored subtree honest after a later batch fails", async () => {
+    const h = await bootPublisher();
+    const callsAtBoot = h.spy.calls.length;
+    const config = fakeFile("config", 9);
+    await dropFiles(h, [dirEntry("project", [[
+      fileEntry("index.html", 41),
+      dirEntry(".git", [[fileEntry("config", 9, { file: config })]], { failAfterBatches: 1 }),
+    ]])]);
+    const rows = expandedRows(h);
+    expectUnknownDirectory(rows, ".git/", ".git folder");
+    expect(h.spy.calls).toHaveLength(callsAtBoot);
+    expect(config.arrayBufferCalls).toBe(0);
+    expect(alerts(h.root)).toHaveLength(0);
+    await clickPublish(h);
+    expect(h.spy.manifests).toHaveLength(1);
+    expect(h.spy.manifests[0]!.map((f) => ({ path: f.path, size: f.size }))).toEqual([{ path: "index.html", size: 41 }]);
+    expect(config.arrayBufferCalls, "excluded contents are never read, even at publish time").toBe(0);
+  });
+
+  it.each(["file", "directory"] as const)("still blocks a nonignored unreadable %s alongside ignored failures", async (kind) => {
+    const h = await bootPublisher();
+    const callsAtBoot = h.spy.calls.length;
+    const broken = kind === "file" ? fileEntry("broken.txt", 9, { fail: true }) : dirEntry("locked", [], { fail: true });
+    await dropFiles(h, [dirEntry("project", [[
+      fileEntry("index.html", 41),
+      fileEntry(".env.local", 9, { fail: true }),
+      dirEntry("assets", [[broken]]),
+    ]])]);
+    expandedRows(h);
+    await expectBlockedWithoutRequests(h, callsAtBoot, kind === "file" ? "assets/broken.txt" : "assets/locked");
+  });
+
+  it.each([".git", "node_modules"])("strips the selected %s root before applying ignore policy", async (root) => {
+    const h = await bootPublisher();
+    const callsAtBoot = h.spy.calls.length;
+    const index = fakeFile("index.html", 41);
+    const config = fakeFile("config", 9);
+    await dropFiles(h, [dirEntry(root, [[
+      fileEntry("index.html", 41, { file: index }),
+      fileEntry("config", 9, { file: config }),
+      fileEntry(".env", 4),
+    ]])]);
+    const rows = expandedRows(h);
+    expectExcluded(rows, ".env", "may contain secrets");
+    expect(rows.some((r) => r.includes("index.html") && r.includes("41 B"))).toBe(true);
+    expect(rows.some((r) => r.includes("config") && r.includes("9 B"))).toBe(true);
+    expect(rows.join("\n")).not.toContain(`${root}/`);
+    expect(alerts(h.root)).toHaveLength(0);
+    expect(h.spy.calls).toHaveLength(callsAtBoot);
+    expect(index.arrayBufferCalls + config.arrayBufferCalls).toBe(0);
+    await clickPublish(h);
+    expect(h.spy.manifests).toHaveLength(1);
+    expect(h.spy.manifests[0]!.map((f) => ({ path: f.path, size: f.size })).sort((a, b) => a.path.localeCompare(b.path))).toEqual([
+      { path: "config", size: 9 },
+      { path: "index.html", size: 41 },
+    ]);
+  });
+
+  it.each([
+    { root: ".git", kind: "file" },
+    { root: ".git", kind: "directory" },
+    { root: "node_modules", kind: "file" },
+    { root: "node_modules", kind: "directory" },
+  ])("does not ignore an unreadable $kind merely because the selected root is $root", async ({ root, kind }) => {
+    const h = await bootPublisher();
+    const callsAtBoot = h.spy.calls.length;
+    const broken = kind === "file" ? fileEntry("broken.txt", 9, { fail: true }) : dirEntry("locked", [], { fail: true });
+    await dropFiles(h, [dirEntry(root, [[fileEntry("index.html", 41), broken]])]);
+    expandedRows(h);
+    await expectBlockedWithoutRequests(h, callsAtBoot, kind === "file" ? "broken.txt" : "locked");
+  });
+
+  it.each([".git", "node_modules"])("does not claim to know the contents of an unreadable selected %s root", async (root) => {
+    const h = await bootPublisher();
+    const callsAtBoot = h.spy.calls.length;
+    await dropFiles(h, [dirEntry(root, [], { fail: true })]);
+    await expectBlockedWithoutRequests(h, callsAtBoot, root);
+  });
+
+  it("normalizes multiple top-level entries together, preserving their distinct prefixes", async () => {
+    const h = await bootPublisher();
+    const callsAtBoot = h.spy.calls.length;
+    const index = fakeFile("index.html", 41);
+    const readme = fakeFile("readme.md", 12);
+    await dropFiles(h, [
+      dirEntry("site", [[fileEntry("index.html", 41, { file: index }), fileEntry(".env", 9, { fail: true })]]),
+      dirEntry(".git", [[fileEntry("config", 9, { fail: true })]]),
+      dirEntry("node_modules", [], { fail: true }),
+      fileEntry("readme.md", 12, { file: readme }),
+    ]);
+    const rows = expandedRows(h);
+    expectExcluded(rows, "site/.env", "may contain secrets");
+    expectExcluded(rows, ".git/config", ".git folder");
+    expectUnknownDirectory(rows, "node_modules/", "node_modules folder");
+    expect(rows.some((r) => r.includes("site/index.html") && r.includes("41 B"))).toBe(true);
+    expect(h.spy.calls).toHaveLength(callsAtBoot);
+    expect(index.arrayBufferCalls + readme.arrayBufferCalls).toBe(0);
+    expect(alerts(h.root)).toHaveLength(0);
+    expect(h.publishBtn.disabled).toBe(false);
+    await clickPublish(h);
+    expect(h.spy.manifests).toHaveLength(1);
+    expect(h.spy.manifests[0]!.map((f) => ({ path: f.path, size: f.size })).sort((a, b) => a.path.localeCompare(b.path))).toEqual([
+      { path: "readme.md", size: 12 },
+      { path: "site/index.html", size: 41 },
+    ]);
+  });
+
+  it.each(["file", "directory"] as const)("blocks a nonignored top-level unreadable %s in a mixed selection", async (kind) => {
+    const h = await bootPublisher();
+    const callsAtBoot = h.spy.calls.length;
+    await dropFiles(h, [
+      dirEntry("site", [[fileEntry("index.html", 41)]]),
+      dirEntry(".git", [], { fail: true }),
+      kind === "file" ? fileEntry("broken.txt", 9, { fail: true }) : dirEntry("locked", [], { fail: true }),
+    ]);
+    expandedRows(h);
+    await expectBlockedWithoutRequests(h, callsAtBoot, kind === "file" ? "broken.txt" : "locked");
+  });
+
+  it("blocks an unreadable ancestor even when the only discovered children were ignored", async () => {
+    const h = await bootPublisher();
+    const callsAtBoot = h.spy.calls.length;
+    await dropFiles(h, [
+      fileEntry("index.html", 41),
+      dirEntry("locked", [[dirEntry(".git", [], { fail: true }), fileEntry(".env", 9, { fail: true })]], { failAfterBatches: 1 }),
+    ]);
+    expandedRows(h);
+    await expectBlockedWithoutRequests(h, callsAtBoot, "locked");
   });
 });
