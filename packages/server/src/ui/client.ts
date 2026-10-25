@@ -1561,6 +1561,9 @@ export function dropwayClient() {
 
   pages.settings = async function () {
     if (!requireAuth()) return;
+    // Usage and capability decisions must be fresh on each Settings visit.
+    var s = store("session");
+    if (s) s.removeItem(ME);
     var m = await renderAccount();
     var acct = d.getElementById("dw-me");
     if (acct && m && m.member) {
