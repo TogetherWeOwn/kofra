@@ -117,6 +117,7 @@ Extension adapters can add codes and override guidance without changing built-in
 | `transfer_unavailable` | 451 | false | Contact the sender. |
 | `transfer_unlock_unavailable` | 503 | true | Retry later. |
 | `unauthorized` | 401 | false | Send Authorization: Bearer dw_...; the instance owner creates keys through /api/v1/keys or /api/v1/members. |
+| `upload_expired` | 410 | false | Publish again for fresh upload links; stored files are reused. |
 | `version_conflict` | 409 | false | Call get_site, reconcile the change, and retry using its live version ID as baseVersionId. |
 | `version_is_live` | 409 | false | Restore or publish another version before deleting this one. |
 | `version_not_found` | 404 | false | List versions for the site; if there is no live version yet, publish files first. |

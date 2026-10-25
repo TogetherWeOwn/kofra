@@ -1,7 +1,8 @@
 import type { IdentityAdapter } from "../adapters";
 import type { DropwayContext } from "../context";
 import { sha256Hex, timingSafeEqualStr } from "../lib/crypto";
-import { unauthorized } from "../errors";
+import { forbidden, unauthorized } from "../errors";
+import { authenticateUploadToken, UPLOAD_TOKEN_PREFIX } from "./upload-tokens";
 import type { Principal } from "../principal";
 import { API_KEY_PREFIX, authenticateApiKey } from "./keys";
 
@@ -23,6 +24,7 @@ export function bearerToken(request: Request): string | null {
 
 /** Resolve a bearer token: claim token (dwc_), the bootstrap secret, or an API key (dw_). */
 export async function principalFromToken(dc: DropwayContext, token: string, ip: string): Promise<Principal> {
+  if (token.startsWith(UPLOAD_TOKEN_PREFIX)) return authenticateUploadToken(dc, token, ip);
   if (token.startsWith(CLAIM_TOKEN_PREFIX)) {
     const row = await dc.env.DB.prepare("SELECT id FROM sites WHERE claim_token_hash = ? AND deleted_at IS NULL")
       .bind(await sha256Hex(token))
@@ -44,6 +46,9 @@ export const defaultIdentity: IdentityAdapter = {
     const ip = requestIp(request);
     const token = bearerToken(request);
     if (!token) return { kind: "anonymous", ip };
+    if (token.startsWith(UPLOAD_TOKEN_PREFIX) && (!/^(PUT|POST)$/.test(request.method) || !/^\/api\/v1\/blobs\/[a-fA-F0-9]{64}$/.test(new URL(request.url).pathname))) {
+      throw forbidden("Upload tokens can only PUT file bytes to their upload links.", "Use an API key for other operations.");
+    }
     return principalFromToken(dc, token, ip);
   },
 };

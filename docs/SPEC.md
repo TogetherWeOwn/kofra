@@ -94,12 +94,12 @@ What Kofra is not:
 |---|---|---|---|
 | PUB-01 | One-call publish `POST /api/v1/publish`: multipart (`-F path=@file`), a `.zip` body, one raw file, or JSON with inline files. Creates a site or, with `?slug=`/`site`, replaces all files of an existing one | P0 | Done |
 | PUB-02 | Manifest publish: send `{path, size, sha256, contentType?}` for every file; the server answers with only the hashes it still needs; upload those; finalize atomically | P0 | Done (as `/deploys`; renamed `/versions` in R-05) |
-| PUB-03 | File sources in JSON and MCP, one per file: `content` (utf8), `content`+`encoding:"base64"` (small binaries), `url` (server fetches it, SSRF-guarded), `sha256`+`size` (already stored), `copyFrom` (another site, version or path) | P0 | R-04 |
-| PUB-04 | Upload links: the response lists `PUT <app>/api/v1/blobs/<sha256>` targets with a ready `curl` line and a short-lived upload token scoped to the pending version. One egress host; no R2 credentials needed | P0 | R-04 |
+| PUB-03 | File sources in JSON and MCP, one per file: `content` (utf8), `content`+`encoding:"base64"` (small binaries), `url` (server fetches it, SSRF-guarded), `sha256`+`size` (already stored), `copyFrom` (another site, version or path) | P0 | Implemented (R-04); deployment verification pending |
+| PUB-04 | Upload links: the response lists `PUT <app>/api/v1/blobs/<sha256>` targets with a ready `curl` line and a short-lived upload token scoped to the pending version. One egress host; no R2 credentials needed | P0 | Implemented for JSON/MCP file sources (R-04); deployment verification pending |
 | PUB-05 | Byte-identical republish returns `status: "unchanged"` and mints no version; settings in the same call still apply | P0 | Done |
 | PUB-06 | Stale-write protection: `baseVersionId` returns `409 version_conflict` naming the live version, who published it and when | P0 | Done |
 | PUB-07 | Partial update `PATCH /api/v1/sites/{site}/files` (`update_site_files`): write, delete and move paths relative to a base version; everything else carries over by hash | P0 | R-05 |
-| PUB-08 | `Idempotency-Key` on every create (24 h); finalize, restore and delete are idempotent | P0 | Partial (finalize replay done); R-04 |
+| PUB-08 | `Idempotency-Key` on every create (24 h); finalize, restore and delete are idempotent | P0 | JSON publish and registered keyed writes use atomic D1 replay; legacy raw/multipart/ZIP publishing is not keyed. Finalize replay done |
 | PUB-09 | Client attribution: `X-Kofra-Client: <harness>/<detail>` header or MCP `clientInfo`, stored per version | P0 | Done (header); MCP in R-06 |
 | PUB-10 | Version message (like a commit message, up to 200 chars) | P0 | Done |
 | PUB-11 | Pending versions expire after 1 hour; finalizing with missing bytes returns `409 missing_blobs` with fresh upload links | P0 | Partial (expiry done); R-05 |
@@ -163,7 +163,7 @@ Full matrix in section 10.
 | ID-02 | Members with roles `owner`, `admin`, `member` | P1 | Done (REST); tools R-25; dashboard R-22 |
 | ID-03 | Scoped API keys: named, scopes, optional single-site restriction, optional path prefix, optional expiry, last-used time; shown once, stored as SHA-256; 50 per member | P0 | Done (new scopes R-17; path prefix R-32) |
 | ID-04 | Claim tokens (`dwc_`) for anonymous sites | P0 | Done |
-| ID-05 | Upload tokens (`dwu_`) scoped to one pending version | P0 | R-04 |
+| ID-05 | Upload tokens (`dwu_`) scoped to one pending version | P0 | Implemented (R-04), HMAC and live manifest/expiry checks; deployment verification pending |
 | ID-06 | Dashboard sign-in: one-time login links minted by the owner, an agent or the CLI; email codes when an email binding exists; optional Cloudflare Access identity; revocable sessions | P1 | R-21 |
 | ID-07 | OAuth 2.1 for MCP and the CLI (Client ID Metadata Documents, Dynamic Client Registration for older clients, PKCE loopback, device code for headless machines), step-up scopes | P1 | R-24 |
 | ID-08 | Audit log of every write (who, what, when, from which client) | P2 | R-38 |
@@ -719,7 +719,7 @@ run before core viewers. Section 10 lists core viewers.
 
 ### 6.9 Testing kit and contract (R-01 done, R-18 remaining)
 
-- `@dropway/server` exports `EXTENSION_API_VERSION = 3`; extension API changes update that value and
+- `@dropway/server` exports `EXTENSION_API_VERSION = 4`; extension API changes update that value and
   the Extension API section in `CHANGELOG.md`.
 - `test/extension-contract.test.ts` builds `createDropway()` with fake adapters and exercises every
   existing point: identity and scopes, policy limits and refusals, all five metering event kinds,
@@ -766,19 +766,19 @@ Never edit an applied migration. Each file below is one roadmap item's migration
 in merge order.
 
 ```sql
--- 0002_publish_v2.sql (R-04, R-05, R-17)
+-- 0005_publish_idempotency.sql (R-04; 0002-0004 already contain other features)
 CREATE TABLE idempotency_keys (
-  scope            TEXT NOT NULL,          -- "k:<api key id>" | "m:<member id>" | "ip:<ip hash>"
-  key              TEXT NOT NULL,
-  request_hash     TEXT NOT NULL,          -- SHA-256 of method, path and canonical body
-  status           TEXT NOT NULL CHECK (status IN ('in_progress', 'done')),
-  response_status  INTEGER,
-  response_json    TEXT,
-  created_at       INTEGER NOT NULL,
-  expires_at       INTEGER NOT NULL,       -- created_at + 24 h
-  PRIMARY KEY (scope, key)
-) WITHOUT ROWID;
-CREATE INDEX idempotency_expires ON idempotency_keys(expires_at);
+  key_hash TEXT PRIMARY KEY,               -- hash of authorization identity, operation and key
+  input_hash TEXT NOT NULL,                -- canonical JSON request hash
+  owner_token TEXT NOT NULL,               -- fences completion/failure to the claim owner
+  state TEXT NOT NULL CHECK (state IN ('pending', 'done')),
+  result_json TEXT,
+  expires_at INTEGER NOT NULL              -- 24-hour key lifetime
+);
+CREATE INDEX idempotency_keys_expires ON idempotency_keys(expires_at);
+
+-- Remaining schema sketch below belongs to later roadmap items (R-05/R-17).
+-- It is not part of migration 0005.
 
 ALTER TABLE versions ADD COLUMN config_json TEXT;               -- parsed _redirects, _headers, .dropway/*.json
 ALTER TABLE versions ADD COLUMN warnings_json TEXT;
@@ -1097,6 +1097,9 @@ are sampled, not written one by one. Reads use the SQL API when the operator set
 - Pagination: `?limit=` (1-200, default 50) and `?cursor=`; responses carry `nextCursor`.
 - `Idempotency-Key` header on every POST that creates something (24 h; same key + different body =
   `422 idempotency_key_reused`; still running = `409 idempotency_in_progress`, retryable).
+  Anonymous JSON publishing scopes replay by client IP, operation and key; use an unpredictable UUID
+  per logical operation and reuse it only on retry. IP scoping is not authentication: clients sharing
+  a network must not share keys. Without a client IP, anonymous replay is disabled.
 - `X-Kofra-Client: <harness>/<detail>` (attribution). `X-Request-Id` on every response.
 - Rate limits (R-36): `RateLimit-Policy` and `RateLimit` headers (IETF draft format), `Retry-After` on 429/503.
 - URLs in responses: `url` (live), `versionUrl` (exact version), per file `url`, `viewUrl`, `rawUrl`,
@@ -1153,7 +1156,7 @@ Codes are stable forever.
 
 | Method | Path | Tool | Scope | Pri | Status |
 |---|---|---|---|---|---|
-| POST | `/api/v1/publish` | `publish_site` | `sites:write`, or none when anonymous is on | P0 | Partial (multipart, zip, raw, inline done; other sources R-04) |
+| POST | `/api/v1/publish` | `publish_site` | `sites:write`, or none when anonymous is on | P0 | Implemented: JSON file sources and keyed replay; legacy multipart, zip and raw remain compatible and unkeyed. Deployment verification pending |
 | PATCH | `/api/v1/sites/{site}/files` | `update_site_files` | `sites:write` | P0 | R-05 |
 | GET | `/api/v1/sites/{site}/files` | `list_files` | `sites:read` | P0 | Done |
 | GET, HEAD | `/api/v1/sites/{site}/files/{path}` | `read_file` | `sites:read` | P0 | Done (`as=markdown`, ranges in R-25/R-34) |
@@ -1657,8 +1660,10 @@ grant more than they hold. Keys can be limited to one site and, for drives, a pa
 - **IPs.** Only salted hashes (`SIGNING_SECRET`) are stored. Analytics visitors are daily salted hashes.
 - **SSRF.** URL sources, proxy routes and webhooks fetch `https` only, refuse private, loopback,
   link-local and Cloudflare-internal addresses, follow at most 3 redirects (re-checking each), time out at
-  30 s, and cap bodies (100 MB for sources, 10 MB for proxy bodies). The Worker uses the
-  `global_fetch_strictly_public` compatibility flag when OAuth CIMD is enabled.
+  30 s, and cap bodies (100 MB for sources, 10 MB for proxy bodies). URL-source caller headers survive
+  same-origin redirects only; every caller header is permanently dropped after crossing an origin.
+  The Worker always uses `global_fetch_strictly_public`; embedding deployments must retain that
+  network boundary, including when OAuth CIMD is disabled.
 - **Secrets in content.** The CLI refuses to upload files matching high-signal secret patterns (private
   key blocks, `AKIA...`, `ghp_`, `sk-`, `xox`, `dw_`) unless `--allow-secrets`; the server returns
   `possible_secret` warnings and suggests `delete_version`.
@@ -1779,7 +1784,7 @@ Workspaces 24, Variables 3, Billing 4, Support 1.
 | here.now feature (operations) | Kofra equivalent | Pri | Status |
 |---|---|---|---|
 | 3-step publish: create, PUT to presigned R2, finalize (Sites) | Manifest publish + upload links + `finalize_version`; plus one-call publish and inline/URL sources | P0 | Done / R-04 |
-| Presigned R2 upload URLs | Upload links on the app origin (one egress host, no R2 keys) | P0 | R-04 |
+| Presigned R2 upload URLs | Upload links on the app origin (one egress host, no R2 keys) | P0 | Implemented with version-scoped upload capabilities (R-04); deployment verification pending |
 | Incremental deploys by sha256, `skipped[]` | Missing-hash negotiation, per-tenant dedupe | P0 | Done |
 | Refresh upload URLs | `missing_blobs` returns fresh links; `get_version` lists what is missing | P0 | R-05 |
 | Idempotent finalize (`replayed`) | `already_live` | P0 | Done |

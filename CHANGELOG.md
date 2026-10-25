@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Publish v2
+
+- REST JSON publishing now uses the same flat file sources as MCP: content,
+  public HTTPS URLs, SHA-256/size and copyFrom. Results carry status, an owner
+  dashboard versionUrl, file counters, warnings and next calls. Multipart, ZIP
+  and raw-body responses remain compatible; JSON retains slug, unchanged and
+  anonymous claimToken aliases.
+- Missing bytes get ready curl commands and HMAC-signed dwu_ upload capabilities
+  scoped to one pending version for one hour. They cannot read files, publish
+  or finalize versions, and stop working after the version is finalized/deleted.
+- D1 atomically claims authorization-scoped idempotency keys for JSON publishing
+  and existing keyed operations: replay equal input, reject changed input with
+  422 and concurrent duplicates with retryable 409. Migration 0005 adds the
+  records; interrupted calls with an unknown outcome retain their claim until
+  the 24-hour expiry rather than risking a duplicate side effect. Anonymous JSON
+  publishing replays the first claim credential within its client-IP/key scope;
+  without a client IP replay is disabled. Use unpredictable keys, not shared names.
+- URL sources retain caller headers on same-origin redirects only, permanently
+  dropping all caller headers after a cross-origin hop. Raw file reads accept
+  site ids as well as slugs, including when authenticated by a claim token.
+- Enforce decoded inline caps per file/call (UTF-8: 1/4 MiB; base64: 256 KiB/1 MiB)
+  with CLI/upload-links remediation. URL_FETCH_MAX_BYTES configures URL sources
+  (default 100 MiB; file and one-shot caps still apply). The MCP wire cap is 8 MiB
+  so requests just above the decoded inline budget get actionable tool errors.
+- Migration 0006 stores large replay results in bounded D1 rows, atomically with
+  completion. Expiry cleanup and key reclaim retire their payload chunks; replay
+  preserves the entire original response, including Unicode paths and upload links.
+- Charge URL chunks to one shared streaming budget and cancel sibling fetches on
+  refusal, rather than buffering whole bodies before enforcing the one-shot cap.
+- Pinned dashboard version links load pending and older versions by immutable id,
+  independently of the newest-100 ready-version history page.
+
 ### Typed client and npm packages
 
 - New `@dropway/client`: a zero-dependency typed REST client generated from the
@@ -95,6 +127,11 @@
   Add `delete_folder` to the registry; deleting an organizer keeps its sites.
 
 ### Extension API
+
+- Bump `EXTENSION_API_VERSION` to 4: Principal adds an upload-only variant
+  (versionId, expiresAt in epoch milliseconds, ip), and DropwayConfig adds
+  urlFetchMaxBytes. Custom identity/policy adapters must keep upload principals
+  restricted to blob uploads. Existing member/claim permissions are unchanged.
 
 - Bump `EXTENSION_API_VERSION` to 3. `beforeDeploy` now receives `newBytes`, and
   `deleteVersion(dc, principal, site, versionId)` now enforces deletion permission.

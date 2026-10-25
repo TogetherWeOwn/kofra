@@ -109,7 +109,9 @@ export function jsonSchemaToTs(schema, indent = "") {
 
 export function emitInterface(name, schema) {
   const ts = jsonSchemaToTs(schema);
-  if (!ts.startsWith("{")) return `export type ${name} = ${ts};\n`;
+  if (!ts.startsWith("{") || Array.isArray(schema.anyOf) || Array.isArray(schema.oneOf)) {
+    return `export type ${name} = ${ts};\n`;
+  }
   return `export interface ${name} ${ts}\n`;
 }
 

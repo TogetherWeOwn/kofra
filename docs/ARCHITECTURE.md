@@ -62,7 +62,8 @@ throws `ApiError` with a stable `code` and a `hint` for the caller.
 | `publish.ts` | One-shot publish (multipart, JSON, zip, raw) built on `deploys.ts` |
 | `sources.ts` | Agent file sources (`content`, base64, `url` with an SSRF guard, `sha256` + upload links, `copyFrom`), `publishSources`, partial `updateSiteFiles`, `finalizeVersionByRef` |
 | `site-ops.ts` | Site refs (slug, id or URL), version refs (`live`, `v3`, `3`, id), rename, access modes, paged file reads, `confirm` checks |
-| `idempotency.ts` | Idempotency keys (KV, 24 h): replay the first result, 422 on a reused key with another body |
+| `idempotency.ts` | Atomic D1 idempotency claims (24 h): replay the first result, 422 on a reused key with another body, retryable 409 for concurrent/unknown outcomes |
+| `upload-tokens.ts` | HMAC upload-only capabilities for the blobs of one pending version, expiring one hour after creation |
 | `blobs.ts` | R2 storage at `blobs/<sha256>` (R2 verifies the hash on write), edge cache |
 | `live.ts` | `live:<slug>` manifest in KV (D1 fallback, per-isolate 5 s cache); v3 filename maps are prototype-less so legal names like `__proto__` survive |
 | `cleanup.ts` | Hourly cron: expire anonymous sites, purge deleted sites, drop stale uploads, delete orphan blobs |
@@ -202,12 +203,29 @@ selection stays bound to the in-flight publish.
 - `blobs` + `blob_scopes`: bytes exist once in R2; a scope (`t:<tenant>` or `s:<anonymous site>`) skips an upload only for bytes it has proven it holds, so dedupe never reveals another owner's files.
 - `usage_counters`: active owned sites and unique bytes in ordinary sites' ready versions, plus each transfer's reserved bytes until purge (including deleted or held deliveries). Lifecycle transactions refresh counters; transfer insert/purge triggers preserve their retention charge. `recomputeUsage(dc, tenantId)` repairs drift; the midnight cron emits one `storage_snapshot` per tenant. Ordinary pending manifests are not charged; a transfer reserves its bytes before its initial deploy, so that deploy's `newBytes` is zero. `0003_scopes_usage.sql` extends the table from `0002_transfers.sql` without rewriting the applied migration.
 
+- `idempotency_keys` (`0005_publish_idempotency.sql`): authorization/operation/key
+  hashes, request hashes, an owner fence and the first result. D1 arbitrates
+  concurrent claims; failed operations release only their own pending claim.
+  Unknown outcomes fail closed until the 24-hour key expiry, rather than stealing
+  a live or interrupted operation's claim. Anonymous JSON publishing uses an
+  IP-scoped key (no replay when the IP is unavailable), so clients must choose
+  unpredictable keys and not share them with others behind the same network.
+  Hourly cleanup deletes at most 500 expired records per invocation, oldest expiry
+  first, including pending records; future-expiry owners and results remain intact.
+  Large replay responses use bounded `idempotency_result_chunks` rows (migration
+  `0006`), committed atomically with the owner-fenced completion. Small results
+  remain inline and existing records still replay. Chunk boundaries preserve UTF-16
+  surrogate pairs; each row stays below D1's 2 MB value/row limit. Parent deletion
+  cascades to payload rows; reclaiming an expired key removes the previous owner's
+  chunks. A persistence failure preserves the successful mutation's response and
+  leaves its claim pending (unknown replay outcome), without logging result secrets.
+
 Never edit an applied migration; add `000N_*.sql`. Extensions keep their own
 tables in their own migrations or their own D1 database.
 
 ## Extension points: `createDropway(options)`
 
-`@dropway/server` exports `EXTENSION_API_VERSION = 3` for this public embedding
+`@dropway/server` exports `EXTENSION_API_VERSION = 4` for this public embedding
 contract. Update it and the Extension API section in `CHANGELOG.md` when changing
 the contract. `test/extension-contract.test.ts` exercises every existing extension
 point with fake adapters and real emulated D1/R2/KV bindings; it runs in public CI.
@@ -237,6 +255,20 @@ export default createDropway({
 `dropway.context(env, ctx)` builds a `DropwayContext` outside a request (queue
 consumers, scripts, tests). Inside routes, use `c.get("dw")` and
 `c.get("principal")`.
+
+### Publish credentials (version 4)
+
+`Principal` includes `{ kind: "upload", versionId, expiresAt, ip }`. It authorizes
+only `upload_blob`, never reads, publish or finalize. The default identity adapter
+accepts dwu_ credentials only on blob upload URLs; the service independently checks
+pending state, deletion, expiry and exact manifest membership on every upload.
+`DropwayConfig.urlFetchMaxBytes` (or `URL_FETCH_MAX_BYTES`) limits URL sources;
+per-file and one-shot limits still apply. Concurrent URL bodies debit one shared
+one-shot budget as each chunk arrives, before buffering it; a refusal cancels all
+sibling fetches and readers. Embedding Workers must retain
+`global_fetch_strictly_public` in their compatibility flags: hostname-string
+validation alone cannot prevent DNS-pointed private targets or rebinding. Custom
+fetchers are trusted deployment code and must enforce the same network boundary.
 
 ### Atomic mutation extensions (version 2)
 

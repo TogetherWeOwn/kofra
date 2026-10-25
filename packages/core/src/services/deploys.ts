@@ -2,6 +2,7 @@ import type { Limits } from "../config";
 import type { DropwayContext } from "../context";
 import { appOrigin, siteFileUrl, siteUrl } from "../context";
 import { ApiError, badRequest, conflict, notFound, tooLarge, unauthorized, forbidden } from "../errors";
+import { PENDING_VERSION_TTL_MS, uploadExpired } from "./upload-tokens";
 import { newId, sha256Hex, SHA256_RE } from "../lib/crypto";
 import { extname, normaliseContentType } from "../lib/mime";
 import { encodePath, normaliseFilePath } from "../lib/paths";
@@ -361,9 +362,9 @@ export async function uploadBlob(
   contentType: string | null,
 ) {
   const cancel = () => body?.cancel().catch(() => {});
-  if (p.kind !== "member" && p.kind !== "claim") {
+  if (p.kind !== "member" && p.kind !== "claim" && p.kind !== "upload") {
     await cancel();
-    throw unauthorized("Uploads need the API key or claim token used to create the deploy.");
+    throw unauthorized("Uploads need an API key, claim token or version-scoped upload token.");
   }
   if (p.kind === "member" && !hasScope(p, "sites:write")) {
     await cancel();
@@ -379,7 +380,11 @@ export async function uploadBlob(
                JOIN sites s ON s.id = v.site_id
               WHERE vf.sha256 = ? AND v.status = 'pending' AND s.deleted_at IS NULL`;
   const binds: unknown[] = [sha];
-  if (p.kind === "member") {
+  if (p.kind === "upload") {
+    if (Date.now() >= p.expiresAt) { await cancel(); throw uploadExpired(); }
+    sql += " AND v.id = ? AND v.created_at + ? = ? AND v.created_at + ? > ? AND (s.expires_at IS NULL OR s.expires_at > ?)";
+    binds.push(p.versionId, PENDING_VERSION_TTL_MS, p.expiresAt, PENDING_VERSION_TTL_MS, Date.now(), Date.now());
+  } else if (p.kind === "member") {
     sql += " AND s.tenant_id = ?";
     binds.push(p.tenantId);
     if (p.siteId) {
@@ -393,6 +398,7 @@ export async function uploadBlob(
   const expected = await dc.env.DB.prepare(sql + " LIMIT 1").bind(...binds).first<{ size: number; site_id: string; tenant_id: string | null }>();
   if (!expected) {
     await cancel();
+    if (p.kind === "upload") throw forbidden("This upload token does not authorize that blob or pending version.", "Use this version's upload.items headers and URL.");
     throw notFound(
       "blob_not_expected",
       "No pending deploy you control lists a file with this SHA-256.",

@@ -195,7 +195,8 @@ export const HTTP_AGENT_PUBLISH_RESULT: Record<string, any> = {
     status: { enum: ["live", "unchanged", "awaiting_upload"] },
     url: { type: "string" },
     slug: { type: "string" },
-    site: HTTP_SITE,
+    versionUrl: { type: "string", description: "Owner dashboard link pinned to the exact version id; requires the owner's API key in the dashboard." },
+    site: { ...HTTP_SITE, properties: { ...HTTP_SITE.properties, id: { type: "string" } } },
     version: { oneOf: [HTTP_VERSION, { type: "null" }] },
     files: {
       type: "object",

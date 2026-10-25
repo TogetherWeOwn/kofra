@@ -25,7 +25,7 @@ export interface PublishSiteInput {
     content?: string;
     /** How content is encoded. Default "utf8". */
     encoding?: "utf8" | "base64";
-    /** A public https URL the server downloads (up to 25 MB, 3 redirects). Best for files that are already online. */
+    /** Public https URL to download. URL_FETCH_MAX_BYTES (default 100 MiB), 30 s, 3 redirects; file/request caps also apply. */
     url?: string;
     /** Request headers for the url download, e.g. Authorization. Used once, never stored. */
     headers?: Record<string, string>;
@@ -69,6 +69,8 @@ export interface PublishSiteOutput {
   /** Live URL. Share it exactly as returned. */
   url: string;
   slug: string;
+  /** Owner dashboard link pinned by version id. */
+  versionUrl?: string;
   site?: {
     slug: string;
     url: string;
@@ -120,6 +122,8 @@ export interface UpdateSiteFilesOutput {
   status?: "live" | "unchanged" | "awaiting_upload";
   url?: string;
   slug?: string;
+  /** Owner dashboard link pinned to the exact version id; requires the owner's API key in the dashboard. */
+  versionUrl?: string;
   site?: {
     slug?: string;
     /** Share this URL as returned; never construct it. */
@@ -147,6 +151,7 @@ export interface UpdateSiteFilesOutput {
     createdAt?: string;
     updatedAt?: string;
     links?: Record<string, unknown>;
+    id?: string;
     [key: string]: unknown;
   };
   version?: {
@@ -730,11 +735,25 @@ export type RecoverOwnerKeyInput = Record<string, unknown>;
 export type RecoverOwnerKeyOutput = Record<string, unknown>;
 
 export interface PublishUploadInput {
+  /** Legacy alias for site. */
   slug?: string;
+  /** Existing site ref or new slug. */
+  site?: string;
   files: ({
     path: string;
-    content: string;
+    content?: string;
     encoding?: "utf8" | "base64";
+    /** Public https URL the server downloads. */
+    url?: string;
+    headers?: Record<string, string>;
+    sha256?: string;
+    size?: number;
+    copyFrom?: {
+      site?: string;
+      version?: string;
+      path?: string;
+      [key: string]: unknown;
+    };
     contentType?: string;
     [key: string]: unknown;
   })[];
@@ -754,7 +773,76 @@ export interface PublishUploadInput {
   [key: string]: unknown;
 }
 
-export interface PublishUploadOutput {
+export type PublishUploadOutput = {
+  status?: "live" | "unchanged" | "awaiting_upload";
+  url?: string;
+  slug?: string;
+  /** Owner dashboard link pinned to the exact version id; requires the owner's API key in the dashboard. */
+  versionUrl?: string;
+  site?: {
+    slug?: string;
+    /** Share this URL as returned; never construct it. */
+    url?: string;
+    title?: string | null;
+    description?: string | null;
+    anonymous?: boolean;
+    expiresAt?: string | null;
+    settings?: Record<string, unknown>;
+    currentVersionId?: string | null;
+    currentVersion?: {
+      id?: string;
+      number?: number;
+      status?: "pending" | "ready";
+      live?: boolean;
+      fileCount?: number;
+      totalBytes?: number;
+      source?: string;
+      client?: string | null;
+      message?: string | null;
+      createdAt?: string;
+      finalizedAt?: string | null;
+      [key: string]: unknown;
+    } | null;
+    createdAt?: string;
+    updatedAt?: string;
+    links?: Record<string, unknown>;
+    id?: string;
+    [key: string]: unknown;
+  };
+  version?: {
+    id?: string;
+    number?: number;
+    status?: "pending" | "ready";
+    live?: boolean;
+    fileCount?: number;
+    totalBytes?: number;
+    source?: string;
+    client?: string | null;
+    message?: string | null;
+    createdAt?: string;
+    finalizedAt?: string | null;
+    [key: string]: unknown;
+  } | null;
+  files?: {
+    total?: number;
+    stored?: number;
+    reused?: number;
+    fetched?: number;
+    pending?: number;
+    [key: string]: unknown;
+  };
+  upload?: {
+    versionId?: string;
+    expiresAt?: string;
+    items?: Record<string, unknown>[];
+    finalize?: Record<string, unknown>;
+    [key: string]: unknown;
+  };
+  changes?: Record<string, unknown>;
+  warnings?: Record<string, unknown>[];
+  next?: Record<string, unknown>[];
+  [key: string]: unknown;
+} | {
   url?: string;
   slug?: string;
   created?: boolean;
@@ -814,7 +902,7 @@ export interface PublishUploadOutput {
   claimToken?: string;
   expiresAt?: string | null;
   [key: string]: unknown;
-}
+};
 
 export interface CreateVersionInput {
   files: {

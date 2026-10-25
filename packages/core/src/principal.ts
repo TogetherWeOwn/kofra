@@ -50,7 +50,9 @@ export type Principal =
   /** The ADMIN_BOOTSTRAP_KEY secret: may only create the owner (first run) or mint a recovery owner key. */
   | { kind: "bootstrap"; ip: string }
   /** A claim token (dwc_...) returned when an anonymous site was created; controls only that site. */
-  | { kind: "claim"; siteId: string; ip: string };
+  | { kind: "claim"; siteId: string; ip: string }
+  /** Signed upload capability: only the blobs of one pending version, never site access. */
+  | { kind: "upload"; versionId: string; expiresAt: number; ip: string };
 
 export function hasScope(p: Principal, scope: Scope): boolean {
   return p.kind === "member" && p.scopes.includes(scope);
