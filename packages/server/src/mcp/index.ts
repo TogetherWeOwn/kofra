@@ -14,6 +14,7 @@ import type { DropwayEnv } from "../env";
 import type { McpHandlerFactory, McpToolDefinition } from "../extensions";
 import { IDEMPOTENCY_KEY } from "./schemas";
 import { requireOperationScopes } from "../operations";
+import { dereference, validate as validateSchema, type OutputUnit, type Schema, type ValidationResult } from "@cfworker/json-schema";
 import { withLegacyHeaderNames } from "../legacy-brand";
 
 /**
@@ -45,6 +46,9 @@ export interface McpEndpointOptions {
 type CompiledTool = {
   def: McpToolDefinition;
   input: ReturnType<typeof fromJsonSchema>;
+  validate: (value: unknown) => ValidationResult;
+  schema: Schema;
+  lookup: ReturnType<typeof dereference>;
   output: ReturnType<typeof fromJsonSchema> | undefined;
 };
 
@@ -76,8 +80,89 @@ function compile(tools: readonly McpToolDefinition[]): CompiledTool[] {
       const props = (schema.properties as Record<string, unknown> | undefined) ?? {};
       schema = { ...schema, properties: { ...props, idempotencyKey: IDEMPOTENCY_KEY } };
     }
-    return { def, input: fromJsonSchema(schema), output: def.outputSchema ? fromJsonSchema(def.outputSchema) : undefined };
+    const input = fromJsonSchema(schema);
+    // Reuse the SDK's edge validation engine, but collect all structured errors
+    // inside our boundary. JSON Schema defaults are annotations, not input values.
+    // fromJsonSchema above checks the supported dialect; mirror its edge mapping.
+    const dialect = typeof schema.$schema === "string" ? schema.$schema.replace(/#$/, "") : "";
+    const draft = /\/draft-0[67]\/schema$/.test(dialect) ? "7" : dialect.endsWith("/2019-09/schema") ? "2019-09" : "2020-12";
+    const wireInput = { "~standard": { ...input["~standard"], validate: (value: unknown) => ({ value }) } };
+    const lookup = dereference(schema);
+    return {
+      def, input: wireInput, schema, lookup,
+      validate: (value) => validateSchema(value, schema, draft, lookup, false),
+      output: def.outputSchema ? fromJsonSchema(def.outputSchema) : undefined,
+    };
   });
+}
+
+function pointerSegments(location: string): string[] {
+  return location === "#" ? [] : decodeURI(location).slice(2).split("/").map((part) => part.replace(/~1/g, "/").replace(/~0/g, "~"));
+}
+
+function ownValue(value: unknown, key: string): unknown {
+  return value !== null && typeof value === "object" && Object.hasOwn(value, key) ? (value as Record<string, unknown>)[key] : undefined;
+}
+
+/** Follow the engine's evaluation path, including references, to the failed keyword. */
+function schemaKeyword(schema: Schema, lookup: ReturnType<typeof dereference>, issue: OutputUnit): unknown {
+  const path = pointerSegments(issue.keywordLocation);
+  // cfworker 4.1.1 spells dependentRequired's location "dependantRequired".
+  path[path.length - 1] = issue.keyword;
+  let current: unknown = schema;
+  let anchor: unknown;
+  for (const part of path) {
+    const isSchema = typeof ownValue(current, "__absolute_uri__") === "string";
+    if (isSchema && ownValue(current, "$recursiveAnchor") === true && anchor === undefined) anchor = current;
+    if (isSchema && part === "$ref") current = lookup[ownValue(current, "__absolute_ref__") as string];
+    else if (isSchema && part === "$recursiveRef") current = anchor ?? lookup[ownValue(current, "__absolute_recursive_ref__") as string];
+    else current = ownValue(current, part);
+  }
+  return current;
+}
+
+function fieldPath(path: string[]): string {
+  return path.map((part, i) => /^(?:[A-Za-z_$][\w$]*|0|[1-9]\d*)$/.test(part) ? `${i ? "." : ""}${part}` : `[${JSON.stringify(part)}]`).join("");
+}
+
+function validationFields(errors: OutputUnit[], schema: Schema, lookup: ReturnType<typeof dereference>, value: unknown): Array<{ path: string; message: string }> {
+  const collected = new Set<string>();
+  const fields = errors.flatMap((issue) => {
+    const path = pointerSegments(issue.instanceLocation);
+    const field = { path, message: issue.error, keyword: issue.keyword };
+    if (!["required", "dependentRequired", "dependencies"].includes(issue.keyword)) return [field];
+    const instance = path.reduce<unknown>((current, part) => ownValue(current, part), value);
+    if (!instance || typeof instance !== "object") return [field];
+    const key = JSON.stringify([issue.instanceLocation, issue.keywordLocation]);
+    if (collected.has(key)) return [];
+    collected.add(key);
+    // Missing-key names come from the schema and input, never diagnostic prose:
+    // both trigger and missing names may themselves contain quotes/delimiters.
+    const constraint = schemaKeyword(schema, lookup, issue);
+    const missing: typeof field[] = [];
+    if (issue.keyword === "required" && Array.isArray(constraint)) {
+      for (const name of constraint as string[]) {
+        if (!Object.hasOwn(instance, name)) missing.push({ ...field, path: [...path, name], message: `Instance does not have required property "${name}".` });
+      }
+    } else if (constraint && typeof constraint === "object") {
+      for (const [trigger, names] of Object.entries(constraint)) {
+        if (!Object.hasOwn(instance, trigger) || !Array.isArray(names)) continue;
+        for (const name of names as string[]) {
+          if (!Object.hasOwn(instance, name)) missing.push({ ...field, path: [...path, name], message: `Instance has "${trigger}" but does not have "${name}".` });
+        }
+      }
+    }
+    return missing.length ? missing : [field];
+  });
+  const wrappers = new Set(["properties", "additionalProperties", "items", "prefixItems", "dependentSchemas", "dependencies", "$ref", "$recursiveRef"]);
+  const result = new Map<string, { path: string; message: string }>();
+  for (const field of fields) {
+    if (wrappers.has(field.keyword) && fields.some((other) => other.path.length > field.path.length && field.path.every((part, i) => part === other.path[i]))) continue;
+    // Deduplicate by segments, not a lossy rendering of literal separators.
+    const key = JSON.stringify(field.path);
+    if (!result.has(key)) result.set(key, { path: fieldPath(field.path), message: field.message });
+  }
+  return [...result.values()];
 }
 
 function truthy(v: string | null | undefined): boolean {
@@ -111,8 +196,8 @@ function clientName(server: McpServer, request: Request): string | null {
   return ua ? ua.split(/\s+/)[0]!.slice(0, 120) : null;
 }
 
-function errorText(err: ApiError, requestId: string): string {
-  const json = err.toJSON(requestId);
+function errorText(err: ApiError, requestId: string, dw: DropwayContext): string {
+  const json = err.toJSON(requestId, appOrigin(dw));
   return `${err.code}: ${err.message}${err.hint ? ` Fix: ${err.hint}` : ""}\n${JSON.stringify(json)}`;
 }
 
@@ -132,7 +217,7 @@ function buildServer(compiled: CompiledTool[], ctx: { dw: DropwayContext; princi
     { name: options.name ?? "kofra", title: dw.config.instanceName, version: MCP_SERVER_VERSION, websiteUrl: appOrigin(dw) },
     { instructions: (options.instructions ?? mcpInstructions)(dw) },
   );
-  for (const { def, input, output } of compiled) {
+  for (const { def, input, validate, schema, lookup, output } of compiled) {
     server.registerTool(
       def.name,
       {
@@ -144,9 +229,15 @@ function buildServer(compiled: CompiledTool[], ctx: { dw: DropwayContext; princi
         ...(def.alwaysLoad ? { _meta: { "anthropic/alwaysLoad": true } } : {}),
       },
       async (rawArgs: unknown) => {
-        const args = { ...((rawArgs ?? {}) as Record<string, unknown>) };
         try {
           scopeCheck(principal, def);
+          const parsed = validate(rawArgs ?? {});
+          if (!parsed.valid) {
+            throw new ApiError(400, "invalid_request", `Invalid input for ${def.name}.`, "Correct the listed fields and retry.", {
+              fields: validationFields(parsed.errors, schema, lookup, rawArgs ?? {}),
+            });
+          }
+          const args = { ...((rawArgs ?? {}) as Record<string, unknown>) };
           const idempotencyKey = def.idempotent ? validateIdempotencyKey(args.idempotencyKey) : null;
           delete args.idempotencyKey;
           const toolCtx = { dw, principal, request, client: clientName(server, request), idempotencyKey };
@@ -172,7 +263,7 @@ function buildServer(compiled: CompiledTool[], ctx: { dw: DropwayContext; princi
           return { content, structuredContent: data } as never;
         } catch (e) {
           const err = toApiError(e, def.name, requestId);
-          return { isError: true, content: [{ type: "text", text: errorText(err, requestId) }] } as never;
+          return { isError: true, content: [{ type: "text", text: errorText(err, requestId, dw) }] } as never;
         }
       },
     );
@@ -184,7 +275,7 @@ const CORS = {
   origin: "*",
   headers: withLegacyHeaderNames(["Content-Type", "Accept", "Authorization", "mcp-session-id", "MCP-Protocol-Version", "Mcp-Method", "Mcp-Name", "Last-Event-ID", "X-Kofra-Client", "X-Kofra-Toolsets", "X-Kofra-Read-Only"]).join(", "),
   methods: "GET, POST, DELETE, OPTIONS",
-  exposeHeaders: "mcp-session-id, WWW-Authenticate, X-Request-Id",
+  exposeHeaders: "mcp-session-id, WWW-Authenticate, X-Request-Id, Retry-After",
   maxAge: 86400,
 };
 
@@ -194,13 +285,14 @@ function authError(dw: DropwayContext, err: ApiError, requestId: string): Respon
     "Content-Type": "application/json",
     "Cache-Control": "no-store",
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Expose-Headers": "WWW-Authenticate, X-Request-Id",
+    "Access-Control-Expose-Headers": "WWW-Authenticate, X-Request-Id, Retry-After",
     "X-Request-Id": requestId,
   });
   if (err.status === 401) {
     headers.set("WWW-Authenticate", `Bearer realm="${dw.config.instanceName}", error="invalid_token", error_description="${err.message.replace(/"/g, "'")}"`);
   }
-  const body = err.toJSON(requestId);
+  const body = err.toJSON(requestId, o);
+  if (err.status === 429 || err.status === 503) headers.set("Retry-After", String(body.error.retryAfterSeconds));
   body.error.hint ??= `Connect with an API key: claude mcp add --transport http kofra ${o}/mcp --header "Authorization: Bearer dw_..."`;
   return new Response(JSON.stringify(body), { status: err.status, headers });
 }
@@ -230,7 +322,7 @@ export function createMcpEndpoint(options: McpEndpointOptions = {}): McpHandlerF
       try {
         principal = await dw.adapters.identity.resolve(request, dw);
         if (principal.kind === "anonymous") {
-          throw new ApiError(401, "unauthorized", "The MCP endpoint needs an API key.", undefined);
+          throw new ApiError(401, "unauthorized", "The MCP endpoint needs an API key.", `Connect with an API key: claude mcp add --transport http kofra ${appOrigin(dw)}/mcp --header "Authorization: Bearer dw_..."`);
         }
         if (principal.kind === "bootstrap") {
           throw new ApiError(403, "forbidden", "The bootstrap key can only set up the instance.", "Use the owner API key returned by POST /api/v1/setup.");

@@ -35,7 +35,7 @@ The first three feature branches are merged into `main` on top of the baseline b
 | R-06 | Done | Remote MCP server at `/mcp` (Streamable HTTP) with a tool for every core capability, toolsets and read-only mode. |
 | R-07, R-08 | Done | Viewer bar with Rendered / Source / Raw, HTML frame, code highlighting, Markdown, JSON, CSV, images, SVG, PDF, video, audio, fonts, notebooks, binary info, cached renders. |
 | R-09, R-10 | Done | `kofra` CLI: publish (hash locally, upload only missing files), list, versions, restore, delete, login, whoami, setup, `api`. Not yet published to npm. |
-| R-11 | Done | `/llms.txt`, `/llms-full.txt`, `/skill.md`, `/.well-known/agent-skills`, repo skill in `skills/kofra`. |
+| R-11 | Done | `/llms.txt`, `/llms-full.txt`, `/skill.md`, `/.well-known/agent-skills`, repo skill in `skills/kofra`, `/connect`, `/connect.md`, `/.well-known/api-catalog`, `/robots.txt`. |
 | R-22 | Partial | Dashboard (sign-in with an API key, sites, versions, publish, keys, members, settings) and the app-origin file browser `/v/:slug/`. Sessions and login links are R-21. |
 
 Next: R-02 (operation registry), R-12 (path-mode hardening), R-13 (version preview URLs), R-14, R-15, R-16.

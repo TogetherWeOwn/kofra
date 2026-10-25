@@ -38,7 +38,7 @@ packages/server           @dropway/server: createDropway() Hono app factory
   src/mcp/                Remote MCP server (/mcp): endpoint (index.ts), core tools (tools.ts), schemas
   src/app.ts              App-origin routes: home (./ui), /openapi.json, discovery routes, /claim, /mcp
   src/openapi.ts          OpenAPI 3.1 document for every route (operationId = MCP tool name)
-  src/discovery.ts        /llms.txt, /llms-full.txt, /skill.md, /.well-known/agent-skills (generated)
+  src/discovery.ts        /llms.txt, /llms-full.txt, /skill.md, /connect(.md), /.well-known/*, /robots.txt (generated)
   src/extensions.ts       Types for routes, MCP tools, UI slots, createDropway options
 packages/cli              `kofra` CLI (npm package "kofra", Node 20+, zero runtime dependencies)
 skills/kofra/SKILL.md   Agent Skill (`npx skills add TogetherWeOwn/dropway`); generated, `npm run skill:sync`
@@ -64,7 +64,7 @@ throws `ApiError` with a stable `code` and a `hint` for the caller.
 | `site-ops.ts` | Site refs (slug, id or URL), version refs (`live`, `v3`, `3`, id), rename, access modes, paged file reads, `confirm` checks |
 | `idempotency.ts` | Idempotency keys (KV, 24 h): replay the first result, 422 on a reused key with another body |
 | `blobs.ts` | R2 storage at `blobs/<sha256>` (R2 verifies the hash on write), edge cache |
-| `live.ts` | `live:<slug>` manifest in KV (D1 fallback, per-isolate 5 s cache) |
+| `live.ts` | `live:<slug>` manifest in KV (D1 fallback, per-isolate 5 s cache); v3 filename maps are prototype-less so legal names like `__proto__` survive |
 | `cleanup.ts` | Hourly cron: expire anonymous sites, purge deleted sites, drop stale uploads, delete orphan blobs |
 | `events.ts` | Runs hooks and metering after the response (never throws) |
 | `transfers.ts` | Sender-owned deliveries: create/read/update/revoke, revision fencing and permanent slug reservations |
@@ -85,8 +85,8 @@ fetch(request)
        site      -> serveSite()       (packages/server/src/serve.ts)
        redirect  -> 301/307           (trailing slash, other origin, Referer fallback)
        app       -> Hono app: /api/v1/* (identity adapter resolves the principal),
-                    /, /openapi.json, /llms.txt, /llms-full.txt, /skill.md,
-                    /.well-known/agent-skills/*, /claim, /mcp, UI pages
+                    /, /openapi.json, /llms.txt, /llms-full.txt, /skill.md, /connect(.md),
+                    /.well-known/*, /robots.txt, /claim, /mcp, UI pages
 ```
 
 ### Where sites are served (config `SITES_MODE`)
@@ -164,7 +164,7 @@ pass extra viewers in `createDropway({ viewers })`; they run first.
 | `/dashboard/publish` | Drag-and-drop publish: folder, files or a zip |
 | `/dashboard/keys` | Create and revoke scoped API keys |
 | `/dashboard/settings` | Account, members, instance configuration, `uiSlots.settingsSections` |
-| `/v/:slug/*path` (`/view/...` redirects) | File browser: tree, view tabs, and the file in a sandboxed iframe on the sites origin |
+| `/v/:slug/*path` (`/view/...` redirects) | File browser: tree, view tabs, and the file in a sandboxed iframe on the sites origin. The tree combines a case-insensitive path filter with the manifest file kind (All by default); the count covers loaded files only, matching ancestors stay discoverable, and Clear restores All plus an empty path filter without changing the displayed file |
 
 Pages are server-rendered shells. One first-party script,
 `/__dropway/ui/app-<hash>.js`, fills in data from the public REST API, using the

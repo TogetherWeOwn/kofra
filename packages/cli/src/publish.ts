@@ -246,12 +246,13 @@ export async function publish(client: DropwayClient, files: SourceFile[], opts: 
  * Publish a .zip in one request: the instance unpacks it (one-shot publish, up
  * to the instance's ONESHOT_MAX_BYTES, 25 MB by default).
  */
-export async function publishZip(client: DropwayClient, zip: Blob | Uint8Array, opts: Pick<PublishOptions, "site" | "message" | "title" | "spa"> = {}): Promise<PublishResult> {
+export async function publishZip(client: DropwayClient, zip: Blob | Uint8Array, opts: Pick<PublishOptions, "site" | "message" | "title" | "spa" | "baseVersionId"> = {}): Promise<PublishResult> {
   const q = new URLSearchParams();
   if (opts.site) q.set("slug", opts.site.trim().toLowerCase());
   if (opts.message !== undefined) q.set("message", opts.message);
   if (opts.title !== undefined) q.set("title", opts.title);
   if (opts.spa !== undefined) q.set("spa", String(opts.spa));
+  if (opts.baseVersionId) q.set("baseVersionId", opts.baseVersionId);
   const qs = q.toString();
   const { data } = await client.request<{
     url: string;
@@ -285,6 +286,13 @@ export async function publishZip(client: DropwayClient, zip: Blob | Uint8Array, 
 /**
  * Poll the live URL until it serves `versionId` (X-Kofra-Version), so an agent
  * can open the URL the moment the command returns. Resolves false on timeout.
+ *
+ * The timeout is an overall budget: in-flight fetches, body disposal and the
+ * interval between polls all count against it. The outstanding fetch is aborted
+ * at the deadline, no poll starts after it, and live requires a successful
+ * status plus the expected version header (a body-disposal failure is never
+ * live). A transport that ignores AbortSignal still cannot strand the helper:
+ * the deadline race settles first.
  */
 export async function waitForVersion(
   url: string,
@@ -294,14 +302,65 @@ export async function waitForVersion(
   const doFetch = opts.fetch ?? ((req: Request) => fetch(req));
   const deadline = Date.now() + (opts.timeoutMs ?? 90_000);
   const interval = opts.intervalMs ?? 1000;
+  const TIMED_OUT = Symbol("wait-timeout");
+  let first = true;
   for (;;) {
+    if (!first && Date.now() >= deadline) return false;
+    first = false;
+
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(TIMED_OUT);
+      }, Math.max(0, deadline - Date.now()));
+    });
+    let res: Response;
     try {
-      const res = await doFetch(new Request(url, { method: "GET", headers: { Accept: "*/*", "Cache-Control": "no-cache" }, redirect: "follow" }));
-      await res.body?.cancel().catch(() => {});
-      if ((res.headers.get("x-kofra-version") ?? res.headers.get(`${LEGACY_HEADER_PREFIX}Version`)) === versionId) return true;
-    } catch {
-      /* not reachable yet */
+      const req = new Request(url, {
+        method: "GET",
+        headers: { Accept: "*/*", "Cache-Control": "no-cache" },
+        redirect: "follow",
+        signal: controller.signal,
+      });
+      res = await Promise.race([doFetch(req), timeout]);
+    } catch (e) {
+      if (timer !== undefined) clearTimeout(timer);
+      if (e === TIMED_OUT) return false;
+      if (controller.signal.aborted || Date.now() >= deadline) return false;
+      /* Network failure before the deadline: retry after the interval. */
+      if (Date.now() + interval > deadline) return false;
+      await new Promise((r) => setTimeout(r, interval));
+      continue;
     }
+    if (timer !== undefined) clearTimeout(timer);
+
+    try {
+      const cancel = res.body && typeof (res.body as { cancel?: unknown }).cancel === "function"
+        ? (res.body as unknown as { cancel: () => Promise<unknown> }).cancel.bind(res.body)
+        : null;
+      if (cancel) {
+        let cancelTimer: ReturnType<typeof setTimeout> | undefined;
+        const cancelTimeout = new Promise<never>((_, reject) => {
+          cancelTimer = setTimeout(() => reject(TIMED_OUT), Math.max(0, deadline - Date.now()));
+        });
+        try {
+          await Promise.race([cancel(), cancelTimeout]);
+        } finally {
+          if (cancelTimer !== undefined) clearTimeout(cancelTimer);
+        }
+      }
+    } catch (e) {
+      if (e === TIMED_OUT || Date.now() >= deadline) return false;
+      /* A body that cannot be disposed is never live; retry while budget remains. */
+      if (Date.now() + interval > deadline) return false;
+      await new Promise((r) => setTimeout(r, interval));
+      continue;
+    }
+
+    const statusOk = typeof res.ok === "boolean" ? res.ok : res.status >= 200 && res.status < 300;
+    if (statusOk && (res.headers.get("x-kofra-version") ?? res.headers.get(`${LEGACY_HEADER_PREFIX}Version`)) === versionId) return true;
     if (Date.now() + interval > deadline) return false;
     await new Promise((r) => setTimeout(r, interval));
   }
