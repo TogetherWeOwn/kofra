@@ -1001,7 +1001,7 @@ export function dropwayClient() {
     if (!v) badges.push(h("span", { class: "dw-badge", text: "Empty" }));
     return h(
       "tr",
-      { "data-search": [s.slug, s.title || "", s.description || ""].join(" ").toLowerCase() },
+      { "data-search": [s.slug, s.title || ""].join(" ").toLowerCase() },
       h(
         "td",
         {},
@@ -1032,7 +1032,7 @@ export function dropwayClient() {
     renderAccount();
     var root = d.getElementById("dw-sites");
     var count = d.getElementById("dw-sites-count");
-    var search = h("input", { class: "dw-input", type: "search", placeholder: "Filter by name or title", "aria-label": "Filter sites" });
+    var search = h("input", { class: "dw-input", type: "search", placeholder: "Filter loaded sites by name or title", "aria-label": "Filter loaded sites" });
     var tbody = h("tbody");
     var more = h("button", { type: "button", class: "dw-btn", text: "Load more", hidden: true });
     var table = h(
@@ -1046,47 +1046,128 @@ export function dropwayClient() {
       ),
     );
     var body = h("div", {}, skeleton(4));
+    var errorWrap = h("div", {});
+    var moreWrap = h("div", { class: "dw-pad", style: "text-align:center", hidden: true }, more);
     clear(root);
-    add(root, h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "All sites" }), search), body, h("div", { class: "dw-pad", style: "text-align:center", hidden: true }, more)));
+    add(root, h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "All sites" }), search), body, errorWrap, moreWrap));
     var cursor = null;
     var loaded = 0;
+    var seenSlugs = [];
+    var consumedCursors = [];
+    var loading = false;
+    var hasMore = true;
+    var tableShown = false;
+    function currentQuery() {
+      return search.value.trim().toLowerCase();
+    }
+    function updateCounts() {
+      if (!count || !tableShown) return;
+      var q = currentQuery();
+      var visible = 0;
+      $$("tr[data-search]", tbody).forEach(function (tr) {
+        if (!tr.hidden) visible++;
+      });
+      if (q) {
+        count.textContent = plural(visible, "match", "matches") + " of " + plural(loaded, "loaded site", "loaded sites") + (hasMore ? "+" : "") + ".";
+      } else {
+        count.textContent = plural(loaded, "site") + (hasMore ? "+" : "") + ".";
+      }
+    }
+    function applyFilter() {
+      var q = currentQuery();
+      $$("tr[data-search]", tbody).forEach(function (tr) {
+        var hay = tr.getAttribute("data-search") || "";
+        tr.hidden = !!(q && hay.indexOf(q) < 0);
+      });
+      updateCounts();
+    }
+    function syncMore() {
+      moreWrap.hidden = !hasMore;
+      more.hidden = !hasMore;
+      more.disabled = !hasMore;
+      if (more.getAttribute("aria-busy")) more.removeAttribute("aria-busy");
+      if (more.textContent !== "Load more") more.textContent = "Load more";
+    }
+    function emptySites() {
+      return h(
+        "div",
+        { class: "dw-empty", role: "status" },
+        h("h3", { text: "No sites yet" }),
+        h("p", { text: "Publish a folder from this browser, or let an agent publish with the API, CLI or MCP." }),
+        h("a", { class: "dw-btn primary", href: "/dashboard/publish", text: "Publish a folder" }),
+      );
+    }
     async function load() {
+      if (loading) return;
+      if (!hasMore) return;
+      loading = true;
+      var focusedBefore = d.activeElement === more;
+      more.disabled = true;
+      more.setAttribute("aria-busy", "true");
+      more.textContent = "Loading…";
+      var requestCursor = cursor;
       try {
-        var res = await api("/sites?limit=100" + (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""));
-        if (!loaded) clear(body);
-        if (!loaded && !res.sites.length) {
-          add(
-            body,
-            h(
-              "div",
-              { class: "dw-empty", role: "status" },
-              h("h3", { text: "No sites yet" }),
-              h("p", { text: "Publish a folder from this browser, or let an agent publish with the API, CLI or MCP." }),
-              h("a", { class: "dw-btn primary", href: "/dashboard/publish", text: "Publish a folder" }),
-            ),
-          );
+        var res = await api("/sites?limit=100" + (requestCursor ? "&cursor=" + encodeURIComponent(requestCursor) : ""));
+        if (consumedCursors.indexOf(requestCursor) < 0) consumedCursors.push(requestCursor);
+        clear(errorWrap);
+        if (!tableShown && !loaded && !res.sites.length) {
+          clear(body);
+          add(body, emptySites());
           if (count) count.textContent = "No sites yet.";
+          var firstNext = res.nextCursor;
+          if (firstNext && consumedCursors.indexOf(firstNext) < 0) {
+            cursor = firstNext;
+            hasMore = true;
+          } else {
+            cursor = null;
+            hasMore = false;
+          }
+          syncMore();
           return;
         }
-        if (!loaded) add(body, table);
+        if (!tableShown) {
+          clear(body);
+          add(body, table);
+          tableShown = true;
+        }
         res.sites.forEach(function (s) {
+          if (seenSlugs.indexOf(s.slug) >= 0) return;
+          seenSlugs.push(s.slug);
           tbody.appendChild(siteRow(s));
         });
-        loaded += res.sites.length;
-        if (count) count.textContent = plural(loaded, "site") + (res.nextCursor ? "+" : "") + ".";
-        cursor = res.nextCursor;
-        more.parentNode.hidden = !cursor;
-        more.hidden = !cursor;
+        loaded = seenSlugs.length;
+        var next = res.nextCursor;
+        if (!next || consumedCursors.indexOf(next) >= 0) {
+          cursor = null;
+          hasMore = false;
+        } else {
+          cursor = next;
+          hasMore = true;
+        }
+        applyFilter();
+        syncMore();
       } catch (e) {
-        clear(body);
-        add(body, h("div", { class: "dw-pad" }, errorBox(e, "Could not load sites")));
+        clear(errorWrap);
+        add(errorWrap, h("div", { class: "dw-pad" }, errorBox(e, "Could not load sites"), h("p", { class: "dw-small", text: "Use Load more to retry this page." })));
+        if (!tableShown && !loaded) {
+          clear(body);
+          if (count) count.textContent = "Could not load sites.";
+        }
+        cursor = requestCursor;
+        hasMore = true;
+        syncMore();
+        more.disabled = false;
+      } finally {
+        loading = false;
+        if (focusedBefore && hasMore && (d.activeElement === d.body || d.activeElement === null)) {
+          try {
+            more.focus();
+          } catch (focusErr) {}
+        }
       }
     }
     search.addEventListener("input", function () {
-      var q = search.value.trim().toLowerCase();
-      $$("tr[data-search]", tbody).forEach(function (tr) {
-        tr.hidden = q && tr.getAttribute("data-search").indexOf(q) < 0;
-      });
+      applyFilter();
     });
     more.addEventListener("click", load);
     load();
