@@ -194,7 +194,7 @@ export async function duplicateSite(dc: DropwayContext, p: Principal, ref: unkno
   }
   // New-slug validation, collisions (including transfer tombstones), quotas and
   // policy run inside createSite, exactly as for a fresh site.
-  const { site } = await createSite(dc, p, { slug: wanted, spa: source.spa === 1 });
+  const { site } = await createSite(dc, p, { slug: wanted, spa: source.spa === 1 }, { deferNameReclaim: true });
   const now = Date.now();
   const versionId = newId("ver");
   const message = input.message == null ? null : String(input.message).slice(0, 500);
@@ -237,6 +237,14 @@ export async function duplicateSite(dc: DropwayContext, p: Principal, ref: unkno
         `UPDATE sites SET current_version_id = ?, updated_at = ? WHERE id = ? AND current_version_id IS NULL AND deleted_at IS NULL
            AND (? IS NULL OR (${PROJECTED_STORAGE_SQL}) <= ?)`,
       ).bind(versionId, now, site.id, storageQuota, site.tenant_id, site.id, versionId, storageQuota),
+      // Reclaim only after this copy actually became live, in the same batch.
+      // A source fence failure rolls back; a zero-row quota UPDATE leaves the
+      // original hold intact even when discardNewSite removes the destination.
+      ...(site.tenant_id !== null ? [dc.env.DB.prepare(`DELETE FROM slug_tombstones
+        WHERE slug = ? AND tenant_id IS ? AND released_at IS NULL
+          AND EXISTS (SELECT 1 FROM sites WHERE id = ? AND current_version_id = ?
+            AND updated_at = ? AND deleted_at IS NULL)`)
+        .bind(site.slug, site.tenant_id, site.id, versionId, now)] : []),
       ...usageStatements(dc, site.tenant_id),
     ]);
     if (!madeLive?.meta.changes) {

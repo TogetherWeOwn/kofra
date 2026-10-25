@@ -185,6 +185,8 @@ export function anonymousDisabled(): ApiError {
 }
 
 export interface CreateSiteOptions {
+  /** Internal provisional-create path: the caller reclaims the hold only when its first version becomes live. */
+  deferNameReclaim?: boolean;
   /**
    * Runs after every permission, rate-limit and policy check, just before the row
    * is written. Throw to refuse without creating anything (used to validate the
@@ -264,9 +266,9 @@ export async function createSite(
         operation: "create", siteId: site.id, tenantId, slug: site.slug, previousSlug: null,
       }, dc);
       await atomicWrite(dc, [
-        // Reclaim the tenant's own hold on this name, if any, before the
-        // INSERT fires the hold triggers. Anonymous creations never reclaim.
-        ...(tenantId !== null ? [reclaimTombstone(dc, site.slug, tenantId)] : []),
+        // Same-tenant holds pass the INSERT trigger. Provisional creates retain
+        // them until publication succeeds; anonymous creations never reclaim.
+        ...(tenantId !== null && !opts.deferNameReclaim ? [reclaimTombstone(dc, site.slug, tenantId)] : []),
         // Refuse inside the batch so neither core nor extension writes can commit
         // when another create consumed the last slot during preparation.
         dc.env.DB.prepare(`SELECT CASE WHEN ? IS NULL OR
