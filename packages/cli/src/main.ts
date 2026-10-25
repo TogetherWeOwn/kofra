@@ -318,7 +318,14 @@ Never published: .git/, node_modules/, .env*, .dev.vars*, .npmrc, *.pem, *.key,
 .dropway/, .DS_Store, plus patterns in <path>/.dropwayignore ("!" re-includes).
 A .zip file is unpacked by the instance (one request, up to 25 MB by default).
 After a publish with a key, ./dropway.json remembers the site for <path>, so
-running the same command again updates that site.`,
+running the same command again updates that site.
+With --dry-run --json the result also lists "omissions": every skipped path
+with its reason (ignored, excluded, symlink_directory, broken_symlink), sorted
+by path. Nothing publishable is refused with no_files (exit 2) before anything
+is contacted. Fully offline agent check (no URL or key needed):
+  kofra publish ./dist --dry-run --json | jq '{files: [.files[].path], omissions}'
+This is a local inventory of what the CLI would send. It does not validate
+server policy, quotas or limits, and it is not the server's dry run.`,
   async run(p, io, out) {
     const target = positional(p, 0, "path", this.usage);
     const anonymous = bool(p, "anonymous") === true;
@@ -374,14 +381,26 @@ running the same command again updates that site.`,
           exitCode: EXIT.usage,
         });
       }
+      if (!collected.files.length) {
+        throw new CliError({
+          code: "no_files",
+          message: "There are no files to publish.",
+          hint: "Check the path, and .dropwayignore rules.",
+          details: { omissions: collected.omissions },
+          exitCode: EXIT.usage,
+        });
+      }
       if (dryRun) {
         out.result(
-          { dryRun: true, path: target, files: collected.files.map((f) => ({ path: f.path, size: f.size, sha256: f.sha256 })), totalBytes: collected.totalBytes, ignored: collected.ignored },
-          () =>
-            [
+          { dryRun: true, path: target, files: collected.files.map((f) => ({ path: f.path, size: f.size, sha256: f.sha256 })), totalBytes: collected.totalBytes, ignored: collected.ignored, omissions: collected.omissions },
+          () => {
+            const extras = collected.omissions.filter((o) => o.reason !== "ignored");
+            const label = (reason: string) => (reason === "excluded" ? "explicitly excluded" : reason === "symlink_directory" ? "symlinked folder" : reason === "special_file" ? "not a regular file" : "broken link");
+            return [
               ...collected.files.map((f) => `${f.path}  ${formatBytes(f.size)}`),
-              `Would publish ${plural(collected.files.length, "file")} (${formatBytes(collected.totalBytes)}).${collected.ignored.length ? ` Ignored: ${collected.ignored.join(", ")}` : ""}`,
-            ].join("\n"),
+              `Would publish ${plural(collected.files.length, "file")} (${formatBytes(collected.totalBytes)}).${collected.ignored.length ? ` Ignored: ${collected.ignored.join(", ")}` : ""}${extras.length ? ` Omitted: ${extras.map((o) => `${o.path} (${label(o.reason)})`).join(", ")}` : ""}`,
+            ].join("\n");
+          },
         );
         return EXIT.ok;
       }

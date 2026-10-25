@@ -112,6 +112,22 @@ SSH keys, `.dropway/`, `.DS_Store`, and anything matched by `<path>/.dropwayigno
 `!pattern` re-includes). Text files (up to 4 MB) that contain credentials (private keys, cloud and API
 tokens, Kofra keys) stop the publish with exit code 2 unless you pass `--allow-secrets`.
 
+`--dry-run --json` explains every skipped path in an `omissions` array (`{path, reason}`, sorted by
+relative path; pruned directories appear once): `ignored` (built-in or `.dropwayignore` rules),
+`excluded` (explicitly excluded, e.g. the `./dropway.json` project link), `symlink_directory`
+(directory links are never followed), `broken_symlink`, and `special_file` (FIFOs, sockets and
+devices are never published). An offline agent check, needing no URL
+or key:
+
+```sh
+kofra publish ./dist --dry-run --json | jq '{files: [.files[].path], omissions}'
+```
+
+Nothing publishable is refused with `no_files` (exit 2) before anything is contacted. This is a
+local inventory of what the CLI would send: it does not validate server policy, quotas or limits,
+and it is not the server's dry run. ZIP dry-runs stay an opaque archive summary (`{zip: true,
+bytes}`); the CLI never unpacks the archive locally.
+
 Anonymous publishing (`--anonymous`) works only on instances that turned it on. The site expires and
 the output includes a `claimToken`: keep it to update the site (`--key <claimToken> --site <name>`) or
 to claim it into an account.
