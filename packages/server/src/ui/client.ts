@@ -468,11 +468,16 @@ export function dropwayClient() {
       if (p.indexOf("/") < 0 || p.split("/")[0] !== first) return items;
     }
     return items.map(function (it) {
-      return { path: it.path.slice(first.length + 1), file: it.file };
+      return Object.assign({}, it, { path: it.path.slice(first.length + 1) });
     });
   }
 
-  function readEntry(entry, prefix, out) {
+  /**
+   * Read one DataTransfer entry into `out`. Unreadable files and directories are
+   * reported into `errors` ({ path, kind }) instead of resolving silently, so a
+   * partial traversal can never publish as if it were complete.
+   */
+  function readEntry(entry, prefix, out, errors) {
     return new Promise(function (resolve) {
       if (entry.isFile) {
         entry.file(
@@ -481,10 +486,12 @@ export function dropwayClient() {
             resolve();
           },
           function () {
+            errors.push({ path: prefix + entry.name, kind: "file" });
             resolve();
           },
         );
       } else if (entry.isDirectory) {
+        var dirPath = prefix + entry.name;
         var reader = entry.createReader();
         var all = [];
         var next = function () {
@@ -493,7 +500,7 @@ export function dropwayClient() {
               if (!batch.length) {
                 Promise.all(
                   all.map(function (e) {
-                    return readEntry(e, prefix + entry.name + "/", out);
+                    return readEntry(e, dirPath + "/", out, errors);
                   }),
                 ).then(function () {
                   resolve();
@@ -504,6 +511,7 @@ export function dropwayClient() {
               next();
             },
             function () {
+              errors.push({ path: dirPath, kind: "directory" });
               resolve();
             },
           );
@@ -523,17 +531,21 @@ export function dropwayClient() {
       }
     }
     if (!entries.length) {
-      return Array.prototype.map.call(dt.files || [], function (f) {
-        return { path: f.name, file: f };
-      });
+      return {
+        items: Array.prototype.map.call(dt.files || [], function (f) {
+          return { path: f.name, file: f };
+        }),
+        errors: [],
+      };
     }
     var out = [];
+    var errors = [];
     await Promise.all(
       entries.map(function (e) {
-        return readEntry(e, "", out);
+        return readEntry(e, "", out, errors);
       }),
     );
-    return out;
+    return { items: out, errors: errors };
   }
 
   async function sha256Hex(file) {
@@ -613,7 +625,10 @@ export function dropwayClient() {
       );
       return;
     }
-    var state = { items: [], skipped: [], busy: false };
+    // errors: unreadable files/directories from the last traversal (publishing
+    // blocked until reselected). seq: selection generation; a drop that resolves
+    // after a newer selection (or after a publish started) is stale and ignored.
+    var state = { items: [], skipped: [], errors: [], busy: false, seq: 0 };
     var siteSelect = h("select", { class: "dw-select", id: "dw-pub-site", "aria-label": "Site to update" }, h("option", { value: "", text: "Loading sites…" }));
     var slugInput = h("input", { class: "dw-input", id: "dw-pub-slug", placeholder: "generated if empty", autocomplete: "off", spellcheck: "false", pattern: "[a-z0-9][a-z0-9-]{1,62}" });
     var modeNew = h("input", { type: "radio", name: "dw-pub-mode", value: "new", checked: !opts.site });
@@ -628,32 +643,60 @@ export function dropwayClient() {
     var bar = h("span");
     var progress = h("div", { class: "dw-progress", hidden: true, role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100" }, bar);
     var result = h("div");
+    var errorList = h("div", { hidden: true });
+    var review = h("details", { class: "dw-review", hidden: true });
+    var chooseDirBtn = h("button", { type: "button", class: "dw-btn", text: "Choose folder", onclick: function (e) { e.stopPropagation(); dirInput.click(); } });
+    var chooseFileBtn = h("button", { type: "button", class: "dw-btn", text: "Choose files", onclick: function (e) { e.stopPropagation(); fileInput.click(); } });
     var zone = h(
       "div",
       { class: "dw-drop", tabindex: "0", role: "button", "aria-label": "Drop a folder, files or a zip here, or press Enter to choose a folder" },
       h("strong", { text: "Drop a folder, files or a .zip" }),
       h("p", { class: "dw-muted dw-small", style: "margin:.25rem 0 .9rem", text: "Files are hashed in your browser; only files the server does not have yet are uploaded." }),
-      h(
-        "div",
-        { class: "dw-row", style: "justify-content:center" },
-        h("button", { type: "button", class: "dw-btn", text: "Choose folder", onclick: function (e) { e.stopPropagation(); dirInput.click(); } }),
-        h("button", { type: "button", class: "dw-btn", text: "Choose files", onclick: function (e) { e.stopPropagation(); fileInput.click(); } }),
-      ),
+      h("div", { class: "dw-row", style: "justify-content:center" }, chooseDirBtn, chooseFileBtn),
       dirInput,
       fileInput,
     );
 
-    function setItems(items) {
+    /** Render one unreadable traversal entry. Ignored files never land here. */
+    function traversalAlert(er) {
+      return h(
+        "div",
+        { class: "dw-error", role: "alert" },
+        h("strong", { text: (er.kind === "directory" ? "Could not read folder “" : "Could not read file “") + er.path + "”." }),
+        h("div", { class: "dw-small", text: "Check access to this path, then reselect the folder, or use Choose files to select only the files you want to publish. Publishing stays disabled until the selection is complete." }),
+      );
+    }
+
+    /** One review row per path (never a joined line), so narrow screens can wrap. */
+    function reviewRow(text) {
+      return h("li", { class: "dw-review-row" }, h("code", { class: "dw-mono", text: text }));
+    }
+
+    function setItems(items, errors) {
+      // Normalize the whole selection before applying the existing ignore rules,
+      // including unreadable paths. A directory's slash marks its subtree; an
+      // unreadable sole root normalizes to "" and remains a blocking error.
+      var selection = items.concat((errors || []).map(function (er) {
+        return { path: er.path + (er.kind === "directory" ? "/" : ""), error: er };
+      }));
+      errors = [];
       var keep = [];
       var skipped = [];
-      stripCommonRoot(items).forEach(function (it) {
+      stripCommonRoot(selection).forEach(function (it) {
         var why = ignored(it.path);
-        if (why) skipped.push(it.path + " (" + why + ")");
+        if (why) skipped.push(it.path + " (" + why + (it.error ? "; " + (it.error.kind === "directory" ? "contents unreadable" : "unreadable") : "") + ")");
+        else if (it.error) errors.push(it.error);
         else keep.push(it);
       });
       state.items = keep;
       state.skipped = skipped;
+      state.errors = errors;
       clear(result);
+      clear(errorList);
+      errors.forEach(function (er) {
+        add(errorList, traversalAlert(er));
+      });
+      errorList.hidden = !errors.length;
       var total = keep.reduce(function (s, it) {
         return s + it.file.size;
       }, 0);
@@ -663,23 +706,70 @@ export function dropwayClient() {
       });
       clear(summary);
       if (keep.length) {
+        // The one-line display names the selection being sent (bounded: the
+        // review below holds the complete inventory). It must keep describing
+        // the in-flight publish while busy, so setItems never runs then.
+        var preview = keep
+          .slice(0, 3)
+          .map(function (it) {
+            return it.path;
+          })
+          .join(", ");
+        if (keep.length > 3) preview += " + " + (keep.length - 3) + " more in the review";
         add(
           summary,
           h("span", { style: "color:var(--fg);font-weight:600", text: zip ? "1 zip file · " + bytes(total) + " (unpacked on the server)" : plural(keep.length, "file") + " · " + bytes(total) }),
           !zip && keep.length > 1 ? (hasIndex ? " · has an index page" : " · no index.html: the site root will list the files") : "",
-          skipped.length ? h("div", { text: "Skipped " + plural(skipped.length, "file") + ": " + skipped.slice(0, 5).join(", ") + (skipped.length > 5 ? "…" : "") }) : null,
+          h("div", { text: preview }),
+          skipped.length ? h("div", { text: "Skipped " + plural(skipped.length, "file") + ": " + skipped.slice(0, 5).join(", ") + (skipped.length > 5 ? ", +" + (skipped.length - 5) + " more in the review" : "") }) : null,
         );
-      } else if (skipped.length) add(summary, "Every file was skipped: " + skipped.slice(0, 5).join(", "));
-      publishBtn.disabled = !keep.length || state.busy;
+      } else if (skipped.length) add(summary, "Every file was skipped: " + skipped.slice(0, 5).join(", ") + (skipped.length > 5 ? ", +" + (skipped.length - 5) + " more in the review" : ""));
+      // The review lists the exact normalized inventory publish() will send:
+      // every included path with its byte size, every excluded path with its
+      // ignore reason. It reads no file contents and makes no requests.
+      var wasOpen = review.open;
+      clear(review);
+      if (!keep.length && !skipped.length) {
+        review.hidden = true;
+      } else {
+        review.hidden = false;
+        var label = keep.length ? "Review " + plural(keep.length, "file") + " · " + bytes(total) : "Review selection";
+        if (skipped.length) label += " · " + plural(skipped.length, "excluded file");
+        add(review, h("summary", { text: label }));
+        if (keep.length) {
+          add(review, h("p", { class: "dw-small dw-muted dw-review-h", text: zip ? "Archive" : "Included (" + keep.length + ")" }));
+          var included = h("ul", { class: "dw-review-list" });
+          keep.forEach(function (it) {
+            add(included, h("li", { class: "dw-review-row" }, h("code", { class: "dw-mono", text: it.path }), " · " + bytes(it.file.size)));
+          });
+          add(review, included);
+          if (zip) add(review, h("p", { class: "dw-small dw-muted", text: "This archive is unpacked by the server; its entries cannot be listed before upload." }));
+        }
+        if (skipped.length) {
+          add(review, h("p", { class: "dw-small dw-muted dw-review-h", text: "Excluded (" + skipped.length + ")" }));
+          var excluded = h("ul", { class: "dw-review-list" });
+          skipped.forEach(function (entry) {
+            add(excluded, reviewRow(entry));
+          });
+          add(review, excluded);
+        }
+        review.open = wasOpen;
+      }
+      publishBtn.disabled = !keep.length || state.busy || !!errors.length;
       clearBtn.hidden = !keep.length;
     }
 
+    function busyNotice() {
+      toast("A publish is in progress. The new selection was ignored; try again when it finishes.", false);
+    }
     zone.addEventListener("click", function () {
+      if (state.busy) return;
       dirInput.click();
     });
     zone.addEventListener("keydown", function (e) {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
+        if (state.busy) return;
         dirInput.click();
       }
     });
@@ -696,25 +786,48 @@ export function dropwayClient() {
     });
     zone.addEventListener("drop", async function (e) {
       e.preventDefault();
-      setItems(await filesFromDrop(e.dataTransfer));
+      if (state.busy) {
+        busyNotice();
+        return;
+      }
+      var ticket = ++state.seq;
+      var found = await filesFromDrop(e.dataTransfer);
+      // A newer selection arrived (or a publish started) while enumerating:
+      // the stale result must not replace the displayed selection.
+      if (state.busy) {
+        busyNotice();
+        return;
+      }
+      if (ticket !== state.seq) return;
+      setItems(found.items, found.errors);
     });
     dirInput.addEventListener("change", function () {
-      setItems(
-        Array.prototype.map.call(dirInput.files, function (f) {
-          return { path: f.webkitRelativePath || f.name, file: f };
-        }),
-      );
+      var picked = Array.prototype.map.call(dirInput.files, function (f) {
+        return { path: f.webkitRelativePath || f.name, file: f };
+      });
       dirInput.value = "";
+      if (state.busy) {
+        busyNotice();
+        return;
+      }
+      state.seq++;
+      setItems(picked, []);
     });
     fileInput.addEventListener("change", function () {
-      setItems(
-        Array.prototype.map.call(fileInput.files, function (f) {
-          return { path: f.name, file: f };
-        }),
-      );
+      var picked = Array.prototype.map.call(fileInput.files, function (f) {
+        return { path: f.name, file: f };
+      });
       fileInput.value = "";
+      if (state.busy) {
+        busyNotice();
+        return;
+      }
+      state.seq++;
+      setItems(picked, []);
     });
     clearBtn.addEventListener("click", function () {
+      if (state.busy) return;
+      state.seq++;
       setItems([]);
       clear(status);
       progress.hidden = true;
@@ -728,10 +841,23 @@ export function dropwayClient() {
       status.textContent = text;
     }
 
+    /** Destination controls bound to the active publish; frozen while it runs. */
+    function setDestinationDisabled(on) {
+      modeNew.disabled = on;
+      modeUpd.disabled = on;
+      slugInput.disabled = on;
+      siteSelect.disabled = on;
+      chooseDirBtn.disabled = on;
+      chooseFileBtn.disabled = on;
+      clearBtn.disabled = on;
+    }
+
     async function run() {
-      if (state.busy || !state.items.length) return;
+      if (state.busy || !state.items.length || state.errors.length) return;
+      state.seq++;
       state.busy = true;
       publishBtn.disabled = true;
+      setDestinationDisabled(true);
       clear(result);
       var auth = key;
       var claim = null;
@@ -805,7 +931,8 @@ export function dropwayClient() {
         add(result, errorBox(e, "Publish failed"));
       } finally {
         state.busy = false;
-        publishBtn.disabled = !state.items.length;
+        setDestinationDisabled(false);
+        publishBtn.disabled = !state.items.length || !!state.errors.length;
       }
     }
 
@@ -891,6 +1018,8 @@ export function dropwayClient() {
       opts.compact ? null : h("div", { class: "dw-field" }, h("label", { class: "dw-label", for: "dw-pub-msg", text: "Message" }), message),
       zone,
       h("div", { class: "dw-row", style: "justify-content:space-between;margin-top:.75rem" }, summary, h("div", { class: "dw-row" }, clearBtn, publishBtn)),
+      errorList,
+      review,
       progress,
       status,
       result,

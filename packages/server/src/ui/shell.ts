@@ -227,6 +227,12 @@ dialog.dw-dialog .dw-row{justify-content:flex-end;margin-top:1rem}
 .dw-drop{border:2px dashed var(--line);border-radius:10px;padding:2rem 1rem;text-align:center;background:var(--bg);transition:border-color .12s,background .12s}
 .dw-drop.over{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 6%,var(--bg))}
 .dw-drop strong{display:block;font-size:1.05rem;margin-bottom:.35rem}
+.dw-review{margin:.75rem 0 0;border:1px solid var(--line);border-radius:var(--radius);background:var(--card)}
+.dw-review>summary{cursor:pointer;padding:.55rem .8rem;font-weight:600;font-size:.88rem;color:var(--fg)}
+.dw-review>p{margin:.55rem 0 .2rem;padding:0 .8rem}
+.dw-review-h{font-weight:600}
+.dw-review-list{list-style:none;margin:0 0 .55rem;padding:0 .8rem;max-height:12rem;overflow:auto}
+.dw-review-row{padding:.2rem 0;border-top:1px dotted var(--line);font-size:.85rem;overflow-wrap:anywhere}
 .dw-progress{height:.45rem;border-radius:99px;background:var(--code);overflow:hidden;margin:.6rem 0}
 .dw-progress>span{display:block;height:100%;width:0;background:var(--accent);transition:width .15s}
 .dw-url{display:inline-flex;align-items:center;gap:.35rem;max-width:100%;min-width:0}

@@ -184,7 +184,12 @@ Drag-and-drop publishing hashes files in the browser (SHA-256), sends the
 manifest to `POST /api/v1/sites/:slug/deploys`, uploads only the blobs the
 server reports missing (4 at a time, retried on 429/5xx), then finalizes. A
 single `.zip` goes to `POST /api/v1/publish` instead. `.git/`, `node_modules/`,
-`.env*` and OS clutter are skipped and listed.
+`.env*` and OS clutter are skipped and listed. Before publishing, the browser
+shows a review of every included path with its byte size and every excluded
+path with its ignore reason. Unreadable paths covered by those same ignore rules
+remain excluded (an unreadable folder's contents are not listed); other read
+failures block publishing until the selection is reselected. The displayed
+selection stays bound to the in-flight publish.
 
 ## Data model (D1, `packages/core/migrations`)
 
