@@ -6,6 +6,7 @@ import { newId, sha256Hex, SHA256_RE } from "../lib/crypto";
 import { extname, normaliseContentType } from "../lib/mime";
 import { encodePath, normaliseFilePath } from "../lib/paths";
 import { detectFileKind } from "../lib/filetypes";
+import { stringField } from "../lib/input";
 import { hasScope, type Principal } from "../principal";
 import { blobScope, putVerifiedBlob } from "./blobs";
 import { emit, meter } from "./events";
@@ -46,6 +47,15 @@ export interface DeployOptions {
   baseVersionId?: unknown;
 }
 
+/** Validate metadata before a transport applies settings or a service starts a deploy. */
+export function parseDeployOptions(opts: DeployOptions = {}) {
+  return {
+    ...opts,
+    baseVersionId: opts.baseVersionId == null || opts.baseVersionId === "" ? null : stringField(opts.baseVersionId, "baseVersionId"),
+    message: opts.message == null ? null : stringField(opts.message, "message").slice(0, 500),
+  };
+}
+
 /** Validate and normalise a manifest against size/count limits. */
 export function validateManifest(files: unknown, lim: Limits): { entries: NormalisedEntry[]; totalBytes: number } {
   if (!Array.isArray(files) || files.length === 0) {
@@ -61,23 +71,55 @@ export function validateManifest(files: unknown, lim: Limits): { entries: Normal
   const sizes = new Map<string, number>();
   const entries: NormalisedEntry[] = [];
   let totalBytes = 0;
-  for (const raw of files) {
+  let firstError: ApiError | undefined;
+  const fields: Array<{ path: string; message: string }> = [];
+  const invalid = (error: ApiError, path: string) => {
+    firstError ??= error;
+    fields.push({ path, message: error.message });
+  };
+  files.forEach((raw, i) => {
     const f = raw as Partial<ManifestEntry>;
-    if (!f || typeof f !== "object") throw badRequest("invalid_manifest", "Each file must be an object with path, size and sha256.");
-    const path = normaliseFilePath(String(f.path ?? ""));
-    if (seen.has(path)) throw badRequest("duplicate_path", `The path "${path}" appears more than once.`);
-    seen.add(path);
-    const size = Number(f.size);
-    if (!Number.isInteger(size) || size < 0) throw badRequest("invalid_size", `size for "${path}" must be a non-negative integer (bytes).`);
-    if (size > lim.maxFileBytes) {
-      throw tooLarge("file_too_large", `"${path}" is ${size} bytes; the per-file limit is ${lim.maxFileBytes}.`, "Compress or split the file.", { path, size, limit: lim.maxFileBytes });
+    const field = `files.${i}`;
+    if (!f || typeof f !== "object" || Array.isArray(f)) {
+      invalid(badRequest("invalid_manifest", "Each file must be an object with path, size and sha256."), field);
+      return;
     }
-    const sha256 = String(f.sha256 ?? "").toLowerCase();
-    if (!SHA256_RE.test(sha256)) throw badRequest("invalid_sha256", `sha256 for "${path}" must be 64 hex characters.`, "Compute it with `sha256sum <file>` or `shasum -a 256 <file>`.");
-    if (sizes.has(sha256) && sizes.get(sha256) !== size) throw badRequest("size_mismatch", `Files with the same SHA-256 must declare the same size.`, "Use the actual file byte length for every occurrence of a hash.");
-    sizes.set(sha256, size);
+    let path = "";
+    try {
+      path = String(f.path ?? "");
+      path = normaliseFilePath(path);
+      if (seen.has(path)) invalid(badRequest("duplicate_path", `The path "${path}" appears more than once.`), `${field}.path`);
+      seen.add(path);
+    } catch (error) {
+      invalid(error instanceof ApiError ? error : badRequest("invalid_path", "File path must be a string."), `${field}.path`);
+    }
+    // JSON objects can shadow toString/valueOf. A failed coercion is still a
+    // client field error, and must not discard errors collected from siblings.
+    let size = NaN;
+    try { size = Number(f.size); } catch { /* validated below */ }
+    if (!Number.isInteger(size) || size < 0) {
+      invalid(badRequest("invalid_size", `size for "${path}" must be a non-negative integer (bytes).`), `${field}.size`);
+    } else if (size > lim.maxFileBytes) {
+      invalid(tooLarge("file_too_large", `"${path}" is ${size} bytes; the per-file limit is ${lim.maxFileBytes}.`, "Compress or split the file.", { path, size, limit: lim.maxFileBytes }), `${field}.size`);
+    }
+    let sha256 = "";
+    try { sha256 = String(f.sha256 ?? "").toLowerCase(); } catch { /* validated below */ }
+    if (!SHA256_RE.test(sha256)) invalid(badRequest("invalid_sha256", `sha256 for "${path}" must be 64 hex characters.`, "Compute it with `sha256sum <file>` or `shasum -a 256 <file>`."), `${field}.sha256`);
+    if (f.contentType != null && typeof f.contentType !== "string") {
+      invalid(badRequest("invalid_manifest", `contentType for "${path}" must be a string or null.`, "Send a MIME type string, null, or omit contentType to infer it from the path."), `${field}.contentType`);
+    } else {
+      entries.push({ path, size, sha256, contentType: normaliseContentType(f.contentType, path) });
+    }
+    // Same-hash entries must agree on size. Only valid rows enter the map,
+    // mirroring the pre-collector throw-before-record order as a field error.
+    if (SHA256_RE.test(sha256) && Number.isInteger(size) && size >= 0) {
+      if (sizes.has(sha256) && sizes.get(sha256) !== size) invalid(badRequest("size_mismatch", `Files with the same SHA-256 must declare the same size.`, "Use the actual file byte length for every occurrence of a hash."), `${field}.size`);
+      sizes.set(sha256, size);
+    }
     totalBytes += size;
-    entries.push({ path, size, sha256, contentType: normaliseContentType(f.contentType, path) });
+  });
+  if (firstError) {
+    throw Object.assign(firstError, { details: { ...firstError.details, fields } });
   }
   if (totalBytes > lim.maxSiteBytes) {
     throw tooLarge("site_too_large", `This version is ${totalBytes} bytes; the limit is ${lim.maxSiteBytes}.`, "Split the content across several sites.", {
@@ -157,12 +199,14 @@ export async function createDeploy(dc: DropwayContext, p: Principal, site: SiteR
   const owner = siteOwner(site);
   const lim = await dc.adapters.policy.limits(p, owner, dc);
   const { entries, totalBytes } = validateManifest(files, lim);
+  // Validate client metadata before any storage or policy work, so a
+  // malformed baseVersionId/message fails closed without side effects.
+  const { baseVersionId, message } = parseDeployOptions(opts);
   await validateStoredSizes(dc, site, entries);
   const newBytes = site.mode === "transfer" ? 0 : await incrementalBytes(dc, site.tenant_id, site.id, entries);
   await dc.adapters.policy.beforeDeploy?.(p, { siteId: site.id, tenantId: site.tenant_id, fileCount: entries.length, totalBytes, newBytes }, dc);
 
-  const baseVersionId = opts.baseVersionId == null || opts.baseVersionId === "" ? null : String(opts.baseVersionId);
-  if (baseVersionId && baseVersionId !== site.current_version_id) throw versionConflict(site);
+  if (baseVersionId && baseVersionId !== site.current_version_id) throw await versionConflict(dc, site);
 
   const hash = await manifestHash(entries);
   const origin = appOrigin(dc);
@@ -194,7 +238,7 @@ export async function createDeploy(dc: DropwayContext, p: Principal, site: SiteR
     base_version_id: baseVersionId,
     source: opts.source ?? "api",
     client: opts.client ? String(opts.client).slice(0, 120) : null,
-    message: opts.message == null ? null : String(opts.message).slice(0, 500),
+    message,
     created_by: p.kind === "member" ? p.memberId : p.kind,
     created_at: now,
     finalized_at: null,
@@ -269,6 +313,7 @@ export async function createSiteWithDeploy(
   opts: DeployOptions = {},
 ) {
   const withFiles = files !== undefined;
+  if (withFiles) opts = parseDeployOptions(opts);
   const { site, claimToken } = await createSite(dc, p, input, {
     beforeInsert: withFiles ? (owner) => precheckManifest(dc, p, owner.tenantId, files) : undefined,
   });
@@ -283,12 +328,26 @@ export async function createSiteWithDeploy(
   }
 }
 
-function versionConflict(site: SiteRow) {
-  return conflict(
+/** Read the live pointer and publication metadata together, not from a stale caller snapshot. */
+export async function versionConflict(dc: DropwayContext, site: SiteRow, base?: VersionRow): Promise<ApiError> {
+  const live = await dc.env.DB.prepare(
+    `SELECT s.current_version_id AS id, v.number, v.client, v.finalized_at
+       FROM sites s LEFT JOIN versions v ON v.id = s.current_version_id AND v.site_id = s.id
+      WHERE s.id = ? AND s.deleted_at IS NULL`,
+  ).bind(site.id).first<{ id: string | null; number: number | null; client: string | null; finalized_at: number | null }>();
+  return new ApiError(
+    409,
     "version_conflict",
-    "The live version changed since baseVersionId (someone else published).",
-    "Fetch the site (GET /api/v1/sites/:slug), reconcile with its files, and deploy again with the new currentVersionId as baseVersionId.",
-    { liveVersionId: site.current_version_id },
+    `The live version is ${live?.number != null ? `v${live.number}` : "none"}; someone published since your base version.`,
+    "Call get_site to see what changed, re-apply your change, and pass the live version id as baseVersionId.",
+    {
+      liveVersionId: live?.id ?? null,
+      liveVersionNumber: live?.number ?? null,
+      liveVersionClient: live?.client ?? null,
+      liveVersionAt: live?.finalized_at ?? null,
+      ...(base ? { yourBase: base.id, yourBaseNumber: base.number, liveClient: live?.client ?? null } : {}),
+    },
+    { next: [{ tool: "get_site", args: { site: site.slug }, why: "Read the live version before re-applying your change." }] },
   );
 }
 
@@ -409,9 +468,9 @@ export async function finalizeDeploy(dc: DropwayContext, p: Principal, site: Sit
     const fresh = await getSiteFor(dc, p, site.slug, "sites:write");
     const latest = await getVersion(dc, site.id, version.id);
     if (latest?.status === "ready") return { version: latest, replayed: true, live: latest.id === fresh.current_version_id, warnings: [] as Warning[] };
-    if (version.base_version_id && fresh.current_version_id !== version.base_version_id) throw versionConflict(fresh);
+    if (version.base_version_id && fresh.current_version_id !== version.base_version_id) throw await versionConflict(dc, fresh);
     if (storageQuota !== null) throw quotaExceeded("storage_bytes", storageQuota);
-    throw versionConflict(fresh);
+    throw await versionConflict(dc, fresh);
   }
   await refreshLive(dc, site.id);
   const finalized: VersionRow = { ...version, status: "ready", finalized_at: now };

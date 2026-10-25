@@ -31,8 +31,34 @@ Zero runtime dependencies. Node.js 20 or newer.
 | `login` / `logout` | Save or forget an API key for an instance |
 | `setup --email <you>` | First run of a new instance: create the owner and save their key |
 | `api [METHOD] <path>` | Call any REST endpoint, e.g. `kofra api PATCH /sites/my-site --data '{"spa":true}'` |
+| `operations [id]` | List API operations, or inspect one (`--schema` adds its input schema). Reads the public catalog only; never executes |
 
 `kofra help <command>` shows every option.
+
+## Discovering operations
+
+`kofra operations` reads the instance's public operation catalog (`GET
+/api/v1/operations`) and prints each operation's id, method, path, required
+scopes and CLI path. It never executes an operation, needs no API key, and
+sends none. Input schemas are omitted by default; inspect one row with an
+exact id, and add `--schema` for its unchanged `inputSchema`:
+
+```sh
+kofra operations --json                          # compact list, server order
+kofra operations list_versions --json            # one row, no schema
+kofra operations create_site --schema --json     # one row, with inputSchema
+```
+
+Unknown ids fail with exit 4 (`operation_not_found`) and a hint to list; `--schema`
+without an id fails with exit 2 before any request.
+
+Local check (from the repository root, with a dev instance running):
+
+```sh
+npm run dev &>/tmp/kofra-dev.log &   # serves http://127.0.0.1:8787
+node packages/cli/bin/dropway.mjs operations --api http://127.0.0.1:8787 --json
+kill %1
+```
 
 ## Publishing
 
@@ -49,6 +75,12 @@ How it works: the CLI hashes every file (SHA-256), sends the list, uploads only 
 instance is missing (6 in parallel, retried on rate limits, server errors and network errors), then
 makes the new version live in one atomic step. Publishing identical files again reports
 `"unchanged": true` and creates no version.
+
+Conditional updates: `--base <versionId>` fails with `version_conflict` (exit 5) unless that
+version is still live — for folders and `.zip` alike. A conflicted publish is sent once, never
+retried; re-read the site and publish again with the new live id. `--wait` polls the live URL
+until it serves the new version (exit 8 on timeout); `--wait-timeout <s>` (default 90) is the
+overall budget, including in-flight requests. Live needs a successful status plus the new id.
 
 After the first publish with a key, `./dropway.json` records which site each published path updates,
 so running the same command again updates that site. It holds no secrets and is safe to commit.
