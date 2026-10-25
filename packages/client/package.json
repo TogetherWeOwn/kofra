@@ -1,7 +1,7 @@
 {
   "name": "@dropway/client",
   "version": "0.1.0",
-  "description": "Typed REST client for Kofra, generated from the operation registry. Fetch-only: runs on Node, Workers and browsers.",
+  "description": "Typed REST client for Kofra, generated from the operation registry. Fetch-only TypeScript source for bundlers targeting Node, Workers and browsers.",
   "license": "MIT",
   "type": "module",
   "repository": {

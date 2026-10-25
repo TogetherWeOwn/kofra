@@ -20,7 +20,7 @@
   "bugs": "https://github.com/TogetherWeOwn/dropway/issues",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TogetherWeOwn/dropway.git",
+    "url": "git+https://github.com/TogetherWeOwn/kofra.git",
     "directory": "packages/cli"
   },
   "bin": {

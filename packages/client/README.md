@@ -1,6 +1,6 @@
 # @dropway/client
 
-Typed REST client for [Kofra](https://github.com/TogetherWeOwn/kofra), generated from the operation registry. Fetch-only with zero dependencies. Import it directly on Node 22.18+ (type stripping) or Cloudflare Workers, or through a bundler anywhere else. The `kofra` CLI's transport builds on this package.
+Typed REST client for [Kofra](https://github.com/TogetherWeOwn/kofra), generated from the operation registry. Fetch-only with zero dependencies. Like the core and server packages, this package ships TypeScript source: use a bundler (esbuild, wrangler or Vite) targeting Node 20+, Cloudflare Workers or browsers. Plain Node imports from `node_modules` are not supported, including on Node versions with native type stripping. The `kofra` CLI bundles this package into its JavaScript executable.
 
 ```ts
 import { DropwayClient } from "@dropway/client";
