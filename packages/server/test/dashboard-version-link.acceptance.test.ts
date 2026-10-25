@@ -604,19 +604,19 @@ async function mount(requestedVersion: string, fixture: Fixture) {
   const start = Date.now();
   for (;;) {
     const section = doc.querySelector("#files");
-    if (section && (isHidden(section) || doc.querySelector("#files table") !== null || doc.querySelector("#files .dw-empty") !== null)) break;
+    if (section && (isHidden(section) || doc.querySelector("#files table") !== null || doc.querySelector("#files .dw-empty") !== null || doc.querySelector("#files .dw-error") !== null)) break;
+    if (!section && doc.querySelector("#dw-site .dw-error")) break;
     if (Date.now() - start > 5000) throw new Error(`Timed out waiting for the files panel to settle.\n${dump(doc.body, 0).slice(0, 4000)}`);
     await tick(10);
   }
   await tick(0);
   await tick(0);
 
-  const filesSection = must(doc.querySelector("#files"), "#files section");
   return {
     doc,
     calls,
-    filesSection,
-    visiblePaths: () => [...filesSection.querySelectorAll("tbody tr")]
+    get filesSection() { return must(doc.querySelector("#files"), "#files section"); },
+    visiblePaths: () => [...must(doc.querySelector("#files"), "#files section").querySelectorAll("tbody tr")]
       .filter((r) => !isHidden(r))
       .map((tr) => must(tr.querySelectorAll("td")[0], "path cell").textContent),
   };
@@ -633,6 +633,35 @@ function expectFilesPanel(m: Awaited<ReturnType<typeof mount>>, version: Version
 }
 
 describe("dashboard version links", () => {
+  it("keeps site history and settings when a pinned immutable version no longer exists", async () => {
+    const liveFiles = [manifestFile("live-only-sentinel.txt", "text", 12)];
+    const live = versionFixture("v-live", 2, true, "ready", liveFiles.length);
+    // An explicit id that has been deleted has the same 404 contract as an
+    // unknown id. It must not erase the site page or silently select live.
+    const missingId = "ver_deleted_immutable";
+    const fixture = { versions: [live], filesByVersion: new Map([[live.id, liveFiles]]) };
+    const expectSiteChrome = (page: Awaited<ReturnType<typeof mount>>) => {
+      const root = must(page.doc.querySelector("#dw-site"), "site page");
+      expect(root.textContent).toContain("test-site");
+      const headings = root.querySelectorAll("h2,h3").map((el) => el.textContent);
+      expect(headings.some((text) => /versions/i.test(text))).toBe(true);
+      expect(headings.some((text) => /settings/i.test(text))).toBe(true);
+      expect(root.textContent).toContain("v2");
+    };
+    // The same shell assertions must hold on a known version: this guards
+    // against accidentally testing nonexistent selectors or fixture wording.
+    expectSiteChrome(await mount(live.id, fixture));
+    const m = await mount(missingId, fixture);
+    expect(m.calls).toContain(`/api/v1/sites/test-site/versions/${missingId}`);
+    expectSiteChrome(m);
+    expect(isHidden(m.filesSection)).toBe(false);
+    expect(m.filesSection.textContent).toMatch(/unknown version|version.*(?:unavailable|not found|no longer)|(?:unavailable|not found).*version/i);
+    expect(m.visiblePaths()).toEqual([]);
+    expect(m.doc.querySelector("#dw-site")!.textContent).not.toContain("live-only-sentinel.txt");
+    const fileRequests = m.calls.filter((url) => url.split("?")[0] === "/api/v1/sites/test-site/files");
+    expect(fileRequests.every((url) => new URL(url, "https://test").searchParams.get("version") === missingId)).toBe(true);
+  });
+
   it("renders the files panel for a pending version named by ?version= (awaiting_upload versionUrl)", async () => {
     const liveFiles = [manifestFile("index.html", "html", 12, "text/html")];
     const pendingFiles = [manifestFile("pending.txt", "text", 7)];
