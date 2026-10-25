@@ -81,6 +81,21 @@ Cleanup claims expiry hourly, retains closed bytes for 24 hours, then removes
 manifest references only if there is no hold or takedown. Storage accounting is
 released once at purge, never at revoke. Sender metadata remains readable.
 
+## Version file checksums
+
+On a site page, each version's Files panel lists every file's exact byte size
+and full SHA-256 manifest checksum with a Copy SHA-256 button (keyboard
+operable; success or failure is announced). The panel always fetches the
+selected version by its immutable version ID and shows the version number and
+ID from that same manifest response, so a digest is never attached to a stale
+live label. Digests come from manifest metadata only; the panel never downloads
+file bytes to display them.
+
+A checksum is the selected version's manifest metadata, not proof that the
+current live download matches it, and not a verdict on authenticity,
+authorship, safe content or scanning. Compare it against a trusted source you
+already have. Per-file Open links still point at the live site.
+
 ## Releasing held site names
 
 Renames hold their old URLs; deleting or expiring a site tombstones its name.
