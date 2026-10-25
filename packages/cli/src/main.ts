@@ -685,6 +685,11 @@ command, e.g.: kofra api POST /keys --data '{"name":"ci"}'`,
     const keys = data.keys;
     out.result({ keys }, () => {
       if (!keys.length) return "No API keys.";
+      // Escape data before table layout so names cannot control the terminal or forge rows.
+      const textCell = (value: string) => value.replace(
+        /[\u0000-\u001f\u007f-\u009f]/g,
+        (control) => `\\u${control.charCodeAt(0).toString(16).padStart(4, "0")}`,
+      );
       const rows = keys.map((k) => [
         k.current === true ? "*" : "",
         k.id,
@@ -695,8 +700,8 @@ command, e.g.: kofra api POST /keys --data '{"name":"ci"}'`,
         shortTime(k.createdAt),
         shortTime(k.lastUsedAt),
         k.expiresAt ?? "-",
-      ]);
-      return `${table(rows, ["", "ID", "NAME", "PREFIX", "SCOPES", "SITE", "CREATED", "LAST USED", "EXPIRES"])}\n* = the key used for this listing`;
+      ].map(textCell));
+      return table(rows, ["CURRENT (*)", "ID", "NAME", "PREFIX", "SCOPES", "SITE", "CREATED", "LAST USED", "EXPIRES"]);
     });
     return EXIT.ok;
   },

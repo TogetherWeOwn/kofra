@@ -40,7 +40,9 @@ kofra keys ls               # your own keys: id, name, prefix, scopes, site rest
 kofra keys ls --all --json  # every member's keys (needs members:write) as one JSON object
 ```
 
-`keys ls` prints safe metadata only; the secrets themselves are never shown. Create and revoke
+`keys ls` prints safe metadata only; the secrets themselves are never shown. In text output,
+`*` marks the current key and terminal control characters are shown as visible `\uXXXX` escapes,
+keeping each key on one row. `--json` preserves the original metadata values. Create and revoke
 keys with the generic command, e.g. `kofra api POST /keys --data '{"name":"ci"}'`.
 
 ## Publishing
