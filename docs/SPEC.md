@@ -201,6 +201,7 @@ Full matrix in section 10.
 | ORG-03 | Titles and descriptions: caller value, then HTML metadata, then Workers AI when bound (switchable off) | P1 | R-19 |
 | ORG-04 | QR code per site in the dashboard and viewer bar | P1 | R-22 |
 | ORG-05 | Opt-in public gallery of the instance's public sites with a JSON feed | P2 | R-50 |
+| ORG-06 | Dashboard version files: sort the loaded manifest by path, kind or exact byte size, ascending/descending, composed with the path filter; client-side only, default Path ascending | P1 | Done |
 
 ### 4.9 Agent surfaces (AX)
 

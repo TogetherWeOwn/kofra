@@ -1290,38 +1290,139 @@ export function dropwayClient() {
         return;
       }
       var filter = h("input", { class: "dw-input", type: "search", placeholder: "Filter files", "aria-label": "Filter files" });
+      if (!files.files.length) {
+        clear(filesSection);
+        add(
+          filesSection,
+          h("header", {}, h("h2", { text: "Files in v" + v.number + (v.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", text: "0 files" }), filter)),
+          h("div", { class: "dw-empty" }, h("h3", { text: "No files in this version" }), h("p", { class: "dw-small", text: "This version has an empty manifest." })),
+        );
+        return;
+      }
       var tb = h("tbody");
-      files.files.forEach(function (f) {
-        tb.appendChild(
+      // Rows keep their own closures (download targets, links); sorting only
+      // reorders these nodes and never mutates files.files.
+      var items = files.files.map(function (f) {
+        var tr = h(
+          "tr",
+          { "data-search": f.path.toLowerCase() },
+          h("td", { class: "dw-mono" }, v.live ? h("a", { href: "/v/" + encodeURIComponent(slug) + "/" + encodePath(f.path), text: f.path }) : h("span", { text: f.path })),
+          h("td", { class: "dw-hide-sm" }, h("span", { class: "dw-badge", text: f.kind })),
+          h("td", { class: "num dw-small", text: bytes(f.size) }),
           h(
-            "tr",
-            { "data-search": f.path.toLowerCase() },
-            h("td", { class: "dw-mono" }, v.live ? h("a", { href: "/v/" + encodeURIComponent(slug) + "/" + encodePath(f.path), text: f.path }) : h("span", { text: f.path })),
-            h("td", { class: "dw-hide-sm" }, h("span", { class: "dw-badge", text: f.kind })),
-            h("td", { class: "num dw-small", text: bytes(f.size) }),
-            h(
-              "td",
-              { class: "act" },
-              v.live ? h("a", { class: "dw-btn small", href: f.url, target: "_blank", rel: "noopener", text: "Open" }) : null,
-              " ",
-              h("button", { type: "button", class: "dw-btn small", text: "Download", onclick: function (ev) { downloadFile(slug, f.path, v.live ? null : v.id, ev.currentTarget); } }),
-            ),
+            "td",
+            { class: "act" },
+            v.live ? h("a", { class: "dw-btn small", href: f.url, target: "_blank", rel: "noopener", text: "Open" }) : null,
+            " ",
+            h("button", { type: "button", class: "dw-btn small", text: "Download", onclick: function (ev) { downloadFile(slug, f.path, v.live ? null : v.id, ev.currentTarget); } }),
           ),
         );
+        tb.appendChild(tr);
+        return { file: f, row: tr };
       });
-      filter.addEventListener("input", function () {
+      // Client-side ordering of the already-loaded manifest: no requests, no
+      // storage, no endpoint. Default is deterministic Path ascending.
+      var sortField = "path";
+      var sortDir = "ascending";
+      var headCells = {};
+      var fieldSelect = null;
+      var dirSelect = null;
+      function cmpText(a, b) {
+        return a < b ? -1 : a > b ? 1 : 0;
+      }
+      function compareFiles(a, b) {
+        var primary = sortField === "size" ? a.size - b.size : cmpText(sortField === "kind" ? a.kind : a.path, sortField === "kind" ? b.kind : b.path);
+        if (primary !== 0) return sortDir === "ascending" ? primary : -primary;
+        if (sortField === "path") return 0;
+        return cmpText(a.path, b.path);
+      }
+      function applyFilter() {
         var q = filter.value.trim().toLowerCase();
-        $$("tr[data-search]", tb).forEach(function (tr) {
-          tr.hidden = q && tr.getAttribute("data-search").indexOf(q) < 0;
+        items.forEach(function (it) {
+          it.row.hidden = q && it.row.getAttribute("data-search").indexOf(q) < 0;
         });
+      }
+      function applySort() {
+        items
+          .slice()
+          .sort(function (x, y) {
+            return compareFiles(x.file, y.file);
+          })
+          .forEach(function (it) {
+            tb.appendChild(it.row);
+          });
+        ["path", "kind", "size"].forEach(function (field) {
+          var hc = headCells[field];
+          if (!hc) return;
+          if (field === sortField) {
+            hc.th.setAttribute("aria-sort", sortDir);
+            hc.arrow.textContent = sortDir === "ascending" ? " ▲" : " ▼";
+            hc.btn.setAttribute("aria-label", "Sort by " + field + ", " + sortDir + " (activate to sort " + (sortDir === "ascending" ? "descending" : "ascending") + ")");
+          } else {
+            hc.th.removeAttribute("aria-sort");
+            hc.arrow.textContent = "";
+            hc.btn.setAttribute("aria-label", "Sort by " + field);
+          }
+        });
+        if (fieldSelect) fieldSelect.value = sortField;
+        if (dirSelect) dirSelect.value = sortDir;
+        applyFilter();
+      }
+      function sortTh(field, label, cls) {
+        var arrow = h("span", { "aria-hidden": "true" });
+        var btn = h(
+          "button",
+          {
+            type: "button",
+            class: "dw-th-sort",
+            "aria-label": "Sort by " + field,
+            onclick: function () {
+              if (sortField === field) sortDir = sortDir === "ascending" ? "descending" : "ascending";
+              else {
+                sortField = field;
+                sortDir = "ascending";
+              }
+              applySort();
+            },
+          },
+          h("span", { text: label }),
+          arrow,
+        );
+        var th = h("th", { scope: "col", class: cls || null, "data-sort-field": field }, btn);
+        headCells[field] = { th: th, btn: btn, arrow: arrow };
+        return th;
+      }
+      function sortOption(value, label) {
+        var o = h("option", { text: label });
+        o.value = value;
+        o.setAttribute("value", value);
+        return o;
+      }
+      // Toolbar mirror of the header sorts: every field stays sortable on narrow
+      // screens, where the Kind column (and its header control) is hidden.
+      fieldSelect = h("select", { class: "dw-select", "aria-label": "Sort files by" }, sortOption("path", "Path"), sortOption("kind", "Kind"), sortOption("size", "Size"));
+      fieldSelect.value = sortField;
+      fieldSelect.addEventListener("change", function () {
+        sortField = fieldSelect.value;
+        sortDir = "ascending";
+        applySort();
       });
+      dirSelect = h("select", { class: "dw-select", "aria-label": "Sort direction" }, sortOption("ascending", "Ascending"), sortOption("descending", "Descending"));
+      dirSelect.value = sortDir;
+      dirSelect.addEventListener("change", function () {
+        sortDir = dirSelect.value;
+        applySort();
+      });
+      var sortBar = h("label", { class: "dw-sort" }, h("span", { class: "dw-small dw-muted", text: "Sort" }), fieldSelect, dirSelect);
+      filter.addEventListener("input", applyFilter);
       clear(filesSection);
       add(
         filesSection,
-        h("header", {}, h("h2", { text: "Files in v" + v.number + (v.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", text: plural(files.files.length, "file") }), filter)),
-        h("div", { class: "dw-scroll" }, h("table", { class: "dw-table" }, h("thead", {}, h("tr", {}, h("th", { text: "Path" }), h("th", { class: "dw-hide-sm", text: "Kind" }), h("th", { class: "num", text: "Size" }), h("th", {}))), tb)),
+        h("header", {}, h("h2", { text: "Files in v" + v.number + (v.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", text: plural(files.files.length, "file") }), sortBar, filter)),
+        h("div", { class: "dw-scroll" }, h("table", { class: "dw-table" }, h("thead", {}, h("tr", {}, sortTh("path", "Path"), sortTh("kind", "Kind", "dw-hide-sm"), sortTh("size", "Size", "num"), h("th", { scope: "col" }))), tb)),
         v.live ? null : h("p", { class: "dw-pad dw-small dw-muted", style: "margin:0", text: "Older versions are not served publicly. Restore this version to view it on the site, or download single files." }),
       );
+      applySort();
     }
 
     var s = site.settings;
