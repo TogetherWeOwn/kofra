@@ -134,6 +134,7 @@ class FakeElement {
       t.parentNode = this;
       this.childNodes.push(t);
     }
+    this.doc.textMutated();
   }
   get children(): FakeElement[] {
     return this.childNodes.filter((c): c is FakeElement => c instanceof FakeElement);
@@ -170,12 +171,14 @@ class FakeElement {
     if (child.parentNode) child.parentNode.removeChild(child);
     child.parentNode = this;
     this.childNodes.push(child);
+    this.doc.textMutated();
     return child;
   }
   removeChild<T extends FakeChild>(child: T): T {
     const i = this.childNodes.indexOf(child);
     if (i >= 0) this.childNodes.splice(i, 1);
     child.parentNode = null;
+    this.doc.textMutated();
     return child;
   }
   remove(): void {
@@ -373,6 +376,30 @@ class FakeDocument {
   body: FakeElement;
   title = "";
   activeElement: FakeElement | null = null;
+  private textObservers = new Set<{ element: FakeElement; values: string[]; previous: string; queued: boolean }>();
+
+  // Sample at the mutation-observer microtask boundary, not at each assignment:
+  // a same-turn clear/restore must NOT look like two observable announcements.
+  observeText(element: FakeElement): string[] {
+    const values: string[] = [];
+    this.textObservers.add({ element, values, previous: element.textContent, queued: false });
+    return values;
+  }
+  textMutated(): void {
+    for (const observer of this.textObservers) {
+      if (observer.queued) continue;
+      observer.queued = true;
+      queueMicrotask(() => {
+        observer.queued = false;
+        const text = observer.element.textContent;
+        if (text !== observer.previous) {
+          observer.values.push(text);
+          observer.previous = text;
+        }
+      });
+    }
+  }
+
   constructor() {
     this.body = new FakeElement(this, "body");
   }
@@ -574,6 +601,7 @@ interface MountOptions {
   liveFiles: ManifestFile[];
   historicalFiles?: ManifestFile[];
   slug?: string;
+  writeClipboard?: (text: string) => Promise<void>;
 }
 
 async function tick(ms = 0): Promise<void> {
@@ -694,7 +722,10 @@ async function mount(opts: MountOptions): Promise<Mounted> {
     sessionStorage: session,
     location: locationStub,
     history: { pushState(_a: unknown, _b: string, _c: string): void {} },
-    navigator: { clipboard: { writeText: async (text: string) => { clipboardWrites.push(text); } } },
+    navigator: { clipboard: { writeText: async (text: string) => {
+      clipboardWrites.push(text);
+      await opts.writeClipboard?.(text);
+    } } },
     fetch: fetchMock,
     Headers,
     URL: SandboxURL,
@@ -1567,6 +1598,150 @@ describe("version-files field orderings", () => {
     await sorter.setSort("size", "ascending");
     await sorter.setSort("size", "descending");
     expect(m.visiblePaths()).toEqual(sizeDesc);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Checksum-copy announcements: repeated outcomes and superseded attempts
+// ---------------------------------------------------------------------------
+
+const COPY_FILE = { ...manifestFile("docs/checksum.txt", "text", 17), sha256: "0123456789abcdef".repeat(4) };
+const COPY_SUCCESS = /^copied\b/i;
+const COPY_FAILURE = /could not|unable|failed|not copied|unavailable|blocked|denied/i;
+
+function controlledClipboard() {
+  const pending: Array<{ resolve(): void; reject(reason: Error): void }> = [];
+  return {
+    pending,
+    write: (_text: string) => new Promise<void>((resolve, reject) => { pending.push({ resolve, reject }); }),
+    finish(index: number, success: boolean): void {
+      const attempt = must(pending[index], `clipboard attempt ${index}`);
+      if (success) attempt.resolve();
+      else attempt.reject(new Error("Clipboard permission denied"));
+    },
+  };
+}
+
+async function copyMicrotasks(): Promise<void> {
+  // Drain promise/observer continuations without allowing a timer task to run.
+  for (let i = 0; i < 12; i++) await Promise.resolve();
+}
+
+function copyControls(m: Mounted, rowIndex = 0) {
+  const row = must(m.rows()[rowIndex], "checksum row");
+  const copy = must(row.querySelectorAll("button").find((b) => /copy.*(?:sha.?256|checksum)/i.test(accessibleName(b))), "Copy SHA-256 button");
+  const status = must(row.querySelector('[role="status"]') ?? m.filesSection.querySelector('[role="status"]'), "mounted checksum status");
+  return { row, copy, status };
+}
+
+describe("checksum-copy announcements", () => {
+  // Catches identical status reassignment and same-task clear/restore: neither
+  // gives the mounted live region a distinct empty/nonempty mutation delivery.
+  it.each([true, false])("reannounces a repeated outcome in a later task (clipboard success=%s)", async (success) => {
+    const clipboard = controlledClipboard();
+    const m = await mount({ liveFiles: [COPY_FILE], writeClipboard: clipboard.write });
+    const { copy, status } = copyControls(m);
+    const outcome = success ? COPY_SUCCESS : COPY_FAILURE;
+    m.press(copy, "Enter");
+    clipboard.finish(0, success);
+    await m.waitFor(() => outcome.test(status.textContent), "first truthful copy outcome");
+    const firstOutcome = status.textContent;
+    const mutations = m.doc.observeText(status);
+
+    m.press(copy, " ");
+    expect(status.textContent, "a new attempt clears the existing mounted status immediately").toBe("");
+    await copyMicrotasks();
+    expect(status.textContent, "the region stays empty while the clipboard is pending").toBe("");
+    expect(mutations, "the cleared region is observable before the clipboard settles").toEqual([""]);
+    clipboard.finish(1, success);
+    await copyMicrotasks();
+    expect(status.textContent, "the outcome is restored in a later task, not a promise/observer microtask").toBe("");
+    await m.waitFor(() => status.textContent !== "", "repeated copy announcement");
+    await copyMicrotasks();
+    expect(status.textContent).toBe(firstOutcome);
+    expect(mutations, "separate clear and restore deliveries, even for identical feedback").toEqual(["", firstOutcome]);
+    expect(copyControls(m).status, "the observed live region stays mounted").toBe(status);
+    expect(m.doc.activeElement).toBe(copy);
+    expect(m.clipboardWrites).toEqual([COPY_FILE.sha256, COPY_FILE.sha256]);
+  });
+
+  // Catches a slow older promise overwriting a newer completed attempt.
+  it.each([true, false])("ignores reverse completion after the newer outcome (latest success=%s)", async (latestSuccess) => {
+    const clipboard = controlledClipboard();
+    const newerFile = { ...manifestFile("other.txt", "text", 23), sha256: "fedcba9876543210".repeat(4) };
+    const m = await mount({ liveFiles: [COPY_FILE, newerFile], writeClipboard: clipboard.write });
+    const { copy, status } = copyControls(m);
+    const newerCopy = copyControls(m, 1).copy;
+    m.press(copy, "Enter");
+    m.press(newerCopy, " ");
+    clipboard.finish(1, latestSuccess);
+    await m.waitFor(() => (latestSuccess ? COPY_SUCCESS : COPY_FAILURE).test(status.textContent), "newer copy outcome");
+    const latestOutcome = status.textContent;
+    const mutations = m.doc.observeText(status);
+    clipboard.finish(0, !latestSuccess);
+    await m.settled();
+    expect(status.textContent, "an older completion cannot replace newer feedback").toBe(latestOutcome);
+    expect(mutations, "no stale announcement is delivered").toEqual([]);
+    expect(m.clipboardWrites).toEqual([COPY_FILE.sha256, newerFile.sha256]);
+    expect(m.doc.activeElement).toBe(newerCopy);
+  });
+
+  // Catches fencing only after the latest promise settles: the newer attempt
+  // already owns the region while its clipboard operation is still pending.
+  it.each([true, false])("suppresses an older result while the newer copy is pending (older success=%s)", async (olderSuccess) => {
+    const clipboard = controlledClipboard();
+    const m = await mount({ liveFiles: [COPY_FILE], writeClipboard: clipboard.write });
+    const { copy, status } = copyControls(m);
+    const mutations = m.doc.observeText(status);
+    m.click(copy);
+    m.click(copy);
+    clipboard.finish(0, olderSuccess);
+    await m.settled();
+    expect(status.textContent, "pending newer copy must not announce the older result").toBe("");
+    expect(mutations).toEqual([]);
+    clipboard.finish(1, !olderSuccess);
+    await m.waitFor(() => (olderSuccess ? COPY_FAILURE : COPY_SUCCESS).test(status.textContent), "newer pending copy outcome");
+  });
+
+  it("supersedes an already queued announcement when another copy starts", async () => {
+    const clipboard = controlledClipboard();
+    const m = await mount({ liveFiles: [COPY_FILE], writeClipboard: clipboard.write });
+    const { copy, status } = copyControls(m);
+    m.click(copy);
+    clipboard.finish(0, true);
+    await copyMicrotasks();
+    // The first clipboard operation is finished, but its later-task announcement
+    // has not run. Starting another attempt must invalidate that queued callback.
+    m.click(copy);
+    await copyMicrotasks();
+    const mutations = m.doc.observeText(status);
+    await m.settled();
+    expect(status.textContent, "queued stale success stays silent while the next attempt is pending").toBe("");
+    expect(mutations).toEqual([]);
+    clipboard.finish(1, false);
+    await m.waitFor(() => COPY_FAILURE.test(status.textContent), "latest failure announcement");
+    expect(status.textContent).not.toMatch(/^copied/i);
+  });
+
+  it("preserves the full manual checksum, keyboard focus and metadata-only copy behavior", async () => {
+    const clipboard = controlledClipboard();
+    const m = await mount({ liveFiles: [COPY_FILE], writeClipboard: clipboard.write });
+    const { row, copy, status } = copyControls(m);
+    const callsBefore = [...m.calls];
+    const writesBefore = [...m.storageWrites];
+    for (const [index, success] of [true, false].entries()) {
+      m.press(copy, index === 0 ? "Enter" : " ");
+      clipboard.finish(index, success);
+      await m.waitFor(() => (success ? COPY_SUCCESS : COPY_FAILURE).test(status.textContent), "truthful copy result");
+      expect(row.textContent).toContain(COPY_FILE.sha256);
+      const manualChecksum = must(row.querySelector("code"), "manual checksum text");
+      expect(manualChecksum.textContent).toBe(COPY_FILE.sha256);
+      expect(isHidden(manualChecksum), "manual fallback stays visible after success or failure").toBe(false);
+      expect(m.doc.activeElement).toBe(copy);
+    }
+    expect(m.clipboardWrites).toEqual([COPY_FILE.sha256, COPY_FILE.sha256]);
+    expect(m.calls, "no content or metadata refetch for explicit checksum copy").toEqual(callsBefore);
+    expect(m.storageWrites).toEqual(writesBefore);
   });
 });
 
