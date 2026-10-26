@@ -1368,6 +1368,27 @@ export function dropwayClient() {
         duplicateDialog = null;
         duplicateButton.focus();
       });
+      // Native modal Tab handling still cycles through the browser UI, which
+      // leaves focus on the page body between the last and first controls.
+      // Keep the cycle among this dialog's enabled, tabbable controls instead.
+      dlg.addEventListener("keydown", function (event) {
+        if (event.key !== "Tab") return;
+        var focusable = $$("a[href], button, input, textarea, select, [tabindex]", dlg).filter(function (el) {
+          return !el.disabled && el.tabIndex >= 0;
+        });
+        if (!focusable.length) {
+          event.preventDefault();
+          return;
+        }
+        var active = d.activeElement;
+        if (event.shiftKey && (active === focusable[0] || focusable.indexOf(active) < 0)) {
+          event.preventDefault();
+          focusable[focusable.length - 1].focus();
+        } else if (!event.shiftKey && (active === focusable[focusable.length - 1] || focusable.indexOf(active) < 0)) {
+          event.preventDefault();
+          focusable[0].focus();
+        }
+      });
       function setBusy(value) {
         busy = value;
         dlg.setAttribute("aria-busy", String(value));
