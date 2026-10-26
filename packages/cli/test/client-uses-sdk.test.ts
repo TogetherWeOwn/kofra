@@ -35,6 +35,22 @@ describe("CLI client uses @dropway/client", () => {
     expect(err.code).toBe("gone");
   });
 
+  it("preserves server recovery metadata through conversion with the exit for its status", async () => {
+    const next = [{ tool: "get_version", args: { site: "s" }, why: "inspect" }];
+    const err = await errorFromResponse(
+      new Response(JSON.stringify({ error: { code: "version_conflict", message: "moved", retryable: true, retryAfterSeconds: 0, docs: "/docs/errors", next } }), { status: 409 }),
+    );
+    expect(err.exitCode).toBe(EXIT.conflict);
+    expect(err.retryable).toBe(true);
+    expect(err.toJSON()).toEqual({ code: "version_conflict", message: "moved", status: 409, retryable: true, retryAfterSeconds: 0, docs: "/docs/errors", next });
+  });
+
+  it("derives retryable from the exit code for locally constructed errors", () => {
+    expect(new CliError({ code: "x", message: "y", exitCode: EXIT.unavailable }).retryable).toBe(true);
+    expect(new CliError({ code: "x", message: "y", exitCode: EXIT.conflict }).retryable).toBe(false);
+    expect(new CliError({ code: "x", message: "y", exitCode: EXIT.conflict, retryable: true }).retryable).toBe(true);
+  });
+
   it("throws CliError from typed methods too", async () => {
     const client = new DropwayClient({ api: "https://kofra.test", token: null });
     const err = await client.getSite({} as unknown as { slug: string }).then(

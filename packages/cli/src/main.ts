@@ -542,6 +542,17 @@ Without --version, the live version's files are listed.`,
   },
 };
 
+/**
+ * A response versionId is only a safe continuation when the server resolves
+ * it as an id: never live, numeric, vN or blank (mirror of resolveVersionRef
+ * in site-ops, which trims and matches "live" and /^v?(\d{1,9})$/i first).
+ */
+function isImmutableVersionId(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const id = value.trim();
+  return id !== "" && id.toLowerCase() !== "live" && !/^v?\d{1,9}$/i.test(id);
+}
+
 interface ReadFilePage {
   path: string;
   versionId: string;
@@ -579,7 +590,9 @@ nextOffset, content, url, rawUrl). Without --json, stdout carries only
 the page content byte-for-byte (no added newline; base64 stays base64,
 so redirection is safe) and the page metadata goes to stderr, so
 pipes get clean content and truncation is never silent (shown even with
---quiet).
+--quiet). A truncated page prints a continuation pinned to the returned
+immutable version id, so the next page reads the same version even
+after live moves; a page without one fails instead of guessing.
 
 Examples:
   kofra read-file my-site index.html
@@ -615,6 +628,17 @@ Examples:
     if (out.json) {
       out.result(data as unknown as Record<string, unknown>, () => data.content);
     } else {
+      // A requested "live"/"v3"/"3" (or no --version at all) may resolve to
+      // a different version by the time the agent continues, so the
+      // continuation always pins the id this page was actually read from.
+      if (data.truncated && data.nextOffset !== null && !isImmutableVersionId(data.versionId)) {
+        throw new CliError({
+          code: "bad_read_file_version",
+          message: `The read-file response for ${slug} ${filePath} carries no immutable version id; refusing to print a continuation that could read another version.`,
+          hint: "Re-run with an explicit version id (`kofra versions <site>` lists them). If this repeats, report the response to the instance operator.",
+          exitCode: EXIT.error,
+        });
+      }
       // Human output is the content byte-for-byte: no added newline, so
       // redirection stays safe and base64 can be decoded as-is.
       io.stdout(data.content);
@@ -623,7 +647,7 @@ Examples:
       let line = `${data.path} — ${formatBytes(data.size)} (${data.contentType}), encoding ${data.encoding}, version ${data.versionId}, ${range}. SHA-256: ${data.sha256}`;
       if (data.truncated && data.nextOffset !== null) {
         const cont = [`kofra read-file ${shellQuote(slug)} ${shellQuote(data.path)}`, `--offset ${data.nextOffset}`];
-        if (version !== undefined) cont.push(`--version ${shellQuote(version)}`);
+        cont.push(`--version ${shellQuote(data.versionId)}`);
         if (length !== undefined) cont.push(`--length ${length}`);
         if (encoding !== undefined) cont.push(`--encoding ${encoding}`);
         line += `\nTruncated: continue with: ${cont.join(" ")}`;

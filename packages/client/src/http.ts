@@ -8,6 +8,13 @@ import { VERSION } from "./version.ts";
 /** Prefix of the request headers before the rename; old instances read only these. */
 const LEGACY_HEADER_PREFIX = "X-Dropway-"; // rebrand:keep
 
+/** One suggested follow-up call from the server error envelope. Data only: never executed. */
+export interface DropwayNextCall {
+  tool: string;
+  args: Record<string, unknown>;
+  why: string;
+}
+
 /** An error with a stable code, a hint for the caller and whether to retry. */
 export class DropwayError extends Error {
   readonly code: string;
@@ -16,6 +23,12 @@ export class DropwayError extends Error {
   readonly status: number | undefined;
   readonly requestId: string | undefined;
   readonly details: Record<string, unknown> | undefined;
+  /** Optional server delay guidance (null = no guidance); scheduling still uses Retry-After/backoff. */
+  readonly retryAfterSeconds: number | null | undefined;
+  /** Optional server docs reference; informational, never fetched. */
+  readonly docs: string | undefined;
+  /** Optional suggested follow-up calls; informational, never executed. */
+  readonly next: DropwayNextCall[] | undefined;
 
   constructor(opts: {
     code: string;
@@ -25,6 +38,9 @@ export class DropwayError extends Error {
     status?: number;
     requestId?: string;
     details?: Record<string, unknown>;
+    retryAfterSeconds?: number | null;
+    docs?: string;
+    next?: DropwayNextCall[];
   }) {
     super(opts.message);
     this.name = "DropwayError";
@@ -34,6 +50,9 @@ export class DropwayError extends Error {
     this.status = opts.status;
     this.requestId = opts.requestId;
     this.details = opts.details;
+    this.retryAfterSeconds = opts.retryAfterSeconds;
+    this.docs = opts.docs;
+    this.next = opts.next;
   }
 
   toJSON() {
@@ -43,6 +62,9 @@ export class DropwayError extends Error {
       ...(this.hint ? { hint: this.hint } : {}),
       ...(this.status !== undefined ? { status: this.status } : {}),
       retryable: this.retryable,
+      ...(this.retryAfterSeconds !== undefined ? { retryAfterSeconds: this.retryAfterSeconds } : {}),
+      ...(this.docs !== undefined ? { docs: this.docs } : {}),
+      ...(this.next !== undefined ? { next: this.next } : {}),
       ...(this.details ? { details: this.details } : {}),
       ...(this.requestId ? { requestId: this.requestId } : {}),
     };
@@ -366,9 +388,53 @@ async function parseBody(res: Response): Promise<unknown> {
   }
 }
 
+/** Optional envelope delay: null (no guidance) or a safe non-negative integer. Anything else is dropped. */
+function validRetryAfterSeconds(value: unknown): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+/** Optional docs reference: kept only when it is a plain string. */
+function validDocs(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * Optional suggested calls: kept only when every entry allowlists to
+ * {tool, args, why}. Anything else (including extra fields on an entry)
+ * drops the whole field rather than copying raw envelope data.
+ */
+function validNext(value: unknown): DropwayNextCall[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return undefined;
+  const calls: DropwayNextCall[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return undefined;
+    const { tool, args, why } = item as Record<string, unknown>;
+    if (typeof tool !== "string" || typeof why !== "string") return undefined;
+    if (!args || typeof args !== "object" || Array.isArray(args)) return undefined;
+    calls.push({ tool, args: args as Record<string, unknown>, why });
+  }
+  return calls;
+}
+
 /** Turn an error response (the API's {error:{code,message,hint,details}} envelope or anything else) into a DropwayError. */
 export async function errorFromResponse(res: Response): Promise<DropwayError> {
-  const body = (await parseBody(res)) as { error?: { code?: string; message?: string; hint?: string; details?: Record<string, unknown> }; requestId?: string; text?: string };
+  const body = (await parseBody(res)) as {
+    error?: {
+      code?: string;
+      message?: string;
+      hint?: string;
+      details?: Record<string, unknown>;
+      retryable?: unknown;
+      retryAfterSeconds?: unknown;
+      docs?: unknown;
+      next?: unknown;
+    };
+    requestId?: string;
+    text?: string;
+  };
   const e = body?.error;
   const requestId = body?.requestId ?? res.headers.get("x-request-id") ?? undefined;
   if (e && typeof e === "object" && e.code) {
@@ -379,7 +445,10 @@ export async function errorFromResponse(res: Response): Promise<DropwayError> {
       details: e.details,
       status: res.status,
       requestId,
-      retryable: res.status === 429 || res.status >= 500,
+      retryable: typeof e.retryable === "boolean" ? e.retryable : res.status === 429 || res.status >= 500,
+      retryAfterSeconds: validRetryAfterSeconds(e.retryAfterSeconds),
+      docs: validDocs(e.docs),
+      next: validNext(e.next),
     });
   }
   const snippet = (body?.text ?? "").replace(/\s+/g, " ").slice(0, 200);

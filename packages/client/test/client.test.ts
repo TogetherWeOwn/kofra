@@ -74,6 +74,22 @@ describe("DropwayError", () => {
       requestId: "r1",
     });
   });
+
+  it("omits recovery metadata it was not constructed with", () => {
+    const e = new DropwayError({ code: "site_not_found", message: "gone", status: 404, retryable: false });
+    expect(e.retryAfterSeconds).toBeUndefined();
+    expect(e.docs).toBeUndefined();
+    expect(e.next).toBeUndefined();
+    expect(e.toJSON()).toEqual({ code: "site_not_found", message: "gone", status: 404, retryable: false });
+  });
+
+  it("keeps explicit recovery metadata in toJSON, including null delay, zero and an empty next array", () => {
+    const next = [{ tool: "get_version", args: { site: "s" }, why: "inspect" }];
+    const full = new DropwayError({ code: "c", message: "m", status: 409, retryable: false, retryAfterSeconds: 0, docs: "/docs/errors#c", next });
+    expect(full.toJSON()).toEqual({ code: "c", message: "m", status: 409, retryable: false, retryAfterSeconds: 0, docs: "/docs/errors#c", next });
+    const empty = new DropwayError({ code: "c", message: "m", status: 404, retryable: false, retryAfterSeconds: null, docs: "/docs/errors", next: [] });
+    expect(JSON.parse(JSON.stringify(empty))).toEqual({ code: "c", message: "m", status: 404, retryable: false, retryAfterSeconds: null, docs: "/docs/errors", next: [] });
+  });
 });
 
 describe("DropwayClient transport", () => {
