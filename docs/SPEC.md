@@ -154,6 +154,7 @@ Full matrix in section 10.
 | VER-03 | Diff two versions (added, removed, changed; unified text diffs for small text files) | P1 | R-20 |
 | VER-04 | Thumbnail per version | P1 | R-20 |
 | VER-05 | Admin-set retention (keep last N versions or N days per site; default keep all) | P2 | R-42 |
+| VER-06 | Authenticated immutable-version ZIP export; dashboard Download ZIP for known ready versions up to 16 MiB stored bytes and 1,000 files, with a 32 MiB streamed response bound and REST/CLI fallback | P1 | Done |
 
 The dashboard Versions list loads only the newest 100 versions. **Filter loaded
 versions** matches literal, case-insensitive text in the number (`73` or `v73`),

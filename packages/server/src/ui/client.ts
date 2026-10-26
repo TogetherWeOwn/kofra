@@ -3398,6 +3398,28 @@ export function dropwayClient() {
         button.disabled = pending;
       });
     }
+    function versionDownload(v) {
+      var path = "/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id) + "/export";
+      var limits = "Browser ZIP downloads support at most 16 MiB of stored version bytes and 1,000 files; archive responses are limited to 32 MiB.";
+      var pending = v.status === "pending" || !v.finalizedAt;
+      var eligible = !pending && Number.isSafeInteger(v.totalBytes) && v.totalBytes >= 0 && v.totalBytes <= 16 * 1024 * 1024
+        && Number.isSafeInteger(v.fileCount) && v.fileCount >= 0 && v.fileCount <= 1000;
+      var fallback = h("p", { class: "dw-help" }, "For larger or unknown sizes, use the authenticated REST/CLI export route: ", h("code", { text: "GET " + boot.api + path }), ". Use your API client with a sites:read credential; server export limits still apply.");
+      var result = h("div");
+      var btn = h("button", {
+        type: "button", class: "dw-btn small", text: "Download ZIP",
+        onclick: function () { downloadVersionZip(path, v.id, btn, result); },
+      });
+      btn.disabled = !eligible;
+      return h("div", { class: "dw-pad" },
+        btn,
+        h("p", { class: "dw-help", text: limits }),
+        pending ? h("p", { class: "dw-help", text: "This version is pending. Upload missing files and finalize it, then reload versions before downloading." }) : null,
+        !eligible && !pending ? h("p", { class: "dw-help", text: "This version exceeds the browser limits or its stored size/file count is unknown. No archive has been requested." }) : null,
+        fallback, result,
+      );
+    }
+
     var vBody = h("tbody");
     versions.forEach(function (v) {
       vBody.appendChild(
@@ -3677,6 +3699,7 @@ export function dropwayClient() {
         add(
           filesSection,
           h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", "aria-live": "polite", "aria-atomic": "true", text: plural(rows.length, "loaded file") + " in this selected version · " + exactBytes(0) }), filter)),
+          versionDownload(v),
           h("div", { class: "dw-empty" }, h("h3", { text: "No files in this version" }), h("p", { class: "dw-small", text: "This version has an empty manifest." })),
         );
         commitSelection(mv, opts, my);
@@ -3870,6 +3893,7 @@ export function dropwayClient() {
       add(
         filesSection,
         h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, filterStatus, sortBar, filter, clearFilter)),
+        versionDownload(v),
         h("p", { class: "dw-pad dw-small dw-muted", style: "margin:0", text: "SHA-256 manifest checksums for the selected version (v" + mv.number + ", " + mv.id + "). A checksum is not proof of authenticity, provenance, safe content, or independent verification, and does not show the current live download matches — compare it against a trusted source you already have." }),
         h("div", { class: "dw-scroll" }, h("table", { class: "dw-table" }, h("thead", {}, h("tr", {}, sortTh("path", "Path"), sortTh("kind", "Kind", "dw-hide-sm"), sortTh("size", "Size", "num"), h("th", { scope: "col", text: "SHA-256" }), h("th", { scope: "col" }))), tb)),
         noMatch,
@@ -4077,6 +4101,80 @@ export function dropwayClient() {
       else filesSection.hidden = true;
     }
   };
+
+  async function downloadVersionZip(path, versionId, btn, result) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+    clear(result);
+    var controller = new AbortController();
+    var reader, res, objectUrl, a;
+    var complete = false;
+    try {
+      var headers = new Headers({ "Accept": "application/zip", "X-Kofra-Client": "dashboard/1" });
+      var key = getKey();
+      if (key) headers.set("Authorization", "Bearer " + key);
+      res = await fetch(boot.api + path, { method: "GET", headers: headers, credentials: "same-origin", redirect: "error", signal: controller.signal });
+      if (res.ok) {
+        if (res.headers.get("X-Kofra-Version") !== versionId) throw new Error("Archive version identity did not match the selected version. Reload versions and retry.");
+        if ((res.headers.get("Content-Type") || "").split(";")[0].trim().toLowerCase() !== "application/zip") throw new Error("The server did not return a ZIP response. Retry or use the authenticated REST/CLI export.");
+      }
+      var disposition = res.headers.get("Content-Disposition") || "";
+      // Only the server's inert slug-vN.zip attachment contract is accepted.
+      var filename = /^attachment;\s*filename="([a-z0-9][a-z0-9-]*-v[1-9][0-9]*\.zip)"$/i.exec(disposition);
+      if (res.ok && !filename) throw new Error("The ZIP attachment filename is missing or invalid. Reload versions and retry.");
+      var limit = res.ok ? 32 * 1024 * 1024 : 64 * 1024;
+      var length = res.headers.get("Content-Length");
+      var expected = length === null ? null : Number(length);
+      if (expected !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(expected) || expected > limit)) {
+        throw new Error("The response exceeds the browser download limit (32 MiB) or has an invalid length. Use the authenticated REST/CLI export.");
+      }
+      if (!res.body) throw new Error("The archive response is incomplete. Retry the download.");
+      reader = res.body.getReader();
+      var chunks = [], size = 0;
+      while (true) {
+        var next = await reader.read();
+        if (next.done) break;
+        size += next.value.byteLength;
+        // Check before retaining each chunk, even without a truthful Content-Length.
+        if (size > limit) throw new Error("The response exceeds the browser download limit (32 MiB). Use the authenticated REST/CLI export or read files file-by-file.");
+        chunks.push(next.value);
+      }
+      if (expected !== null && size !== expected) throw new Error("The archive response was truncated or its length did not match. Retry the download.");
+      if (!res.ok) {
+        var data = null;
+        try { data = JSON.parse(await new Blob(chunks).text()); } catch (parseError) {}
+        throw apiError(res.status, data);
+      }
+      if (!size) throw new Error("The archive response is empty. Retry the download.");
+      // Never navigate to user bytes on the app origin, or offer a partial stream.
+      objectUrl = URL.createObjectURL(new Blob(chunks, { type: "application/zip" }));
+      a = h("a", { href: objectUrl, download: filename[1] });
+      d.body.appendChild(a);
+      a.click();
+      complete = true;
+    } catch (e) {
+      add(result, errorBox({
+        message: e.name === "AbortError" ? "ZIP download cancelled." : e.message || "ZIP download failed.",
+        hint: (e.hint ? e.hint + " " : "") + "Retry, reload versions, or use the authenticated REST/CLI export route above.",
+      }, "Could not download ZIP"));
+    } finally {
+      if (!complete) {
+        controller.abort();
+        try {
+          if (reader) await reader.cancel();
+          else if (res && res.body) await res.body.cancel();
+        } catch (cancelError) {}
+      }
+      if (reader) reader.releaseLock();
+      if (objectUrl) {
+        // Keep the URL alive for the browser's attachment handoff, then release it.
+        setTimeout(function () { URL.revokeObjectURL(objectUrl); a.remove(); }, 1000);
+      }
+      btn.disabled = false;
+      btn.removeAttribute("aria-busy");
+    }
+  }
 
   async function downloadFile(slug, path, versionId, btn) {
     if (btn) btn.disabled = true;
