@@ -4,12 +4,13 @@ import { appOrigin, siteFileUrl, siteUrl } from "../context";
 import { ApiError, badRequest, conflict, notFound, tooLarge, unauthorized, forbidden } from "../errors";
 import { PENDING_VERSION_TTL_MS, uploadExpired } from "./upload-tokens";
 import { newId, sha256Hex, SHA256_RE } from "../lib/crypto";
-import { extname, normaliseContentType } from "../lib/mime";
+import { extname, isTextual, normaliseContentType } from "../lib/mime";
 import { encodePath, normaliseFilePath } from "../lib/paths";
+import { findSecrets, lineAt } from "../lib/secrets";
 import { detectFileKind } from "../lib/filetypes";
 import { stringField } from "../lib/input";
 import { hasScope, type Principal } from "../principal";
-import { blobScope, putVerifiedBlob } from "./blobs";
+import { blobKey, blobScope, putVerifiedBlob } from "./blobs";
 import { emit, meter } from "./events";
 import { refreshLive } from "./live";
 import { createSite, discardNewSite, getSiteFor, getVersion, serializeVersion, type SiteRow, type SiteSettingsInput, type VersionRow } from "./sites";
@@ -34,6 +35,12 @@ export interface NormalisedEntry {
 export interface Warning {
   code: string;
   message: string;
+  /** File the warning is about, when it concerns one file. */
+  path?: string;
+  /** 1-based line inside `path`, when the exact location is known. */
+  line?: number;
+  /** What to change so the warning goes away. */
+  fix?: string;
 }
 
 export interface DeployOptions {
@@ -90,6 +97,10 @@ export function validateManifest(files: unknown, lim: Limits): { entries: Normal
       path = String(f.path ?? "");
       path = normaliseFilePath(path);
       if (seen.has(path)) invalid(badRequest("duplicate_path", `The path "${path}" appears more than once.`), `${field}.path`);
+      // __dropway/ is the server's own namespace inside a site (password form, report link).
+      if (path === "__dropway" || path.startsWith("__dropway/")) {
+        invalid(badRequest("reserved_path", `Paths under __dropway/ are reserved for the server ("${path}").`, "Rename the folder, for example to _dropway/ or assets/."), `${field}.path`);
+      }
       seen.add(path);
     } catch (error) {
       invalid(error instanceof ApiError ? error : badRequest("invalid_path", "File path must be a string."), `${field}.path`);
@@ -441,7 +452,7 @@ export async function finalizeDeploy(dc: DropwayContext, p: Principal, site: Sit
   const version = await getVersion(dc, site.id, versionId);
   if (!version) throw notFound("deploy_not_found", `No version ${versionId} on site ${site.slug}.`, "Start one with POST /api/v1/sites/:slug/versions (alias: /deploys).");
   if (version.status === "ready") {
-    return { version, replayed: true, live: version.id === site.current_version_id, warnings: [] as Warning[] };
+    return { version, replayed: true, live: version.id === site.current_version_id, warnings: await deployWarnings(dc, site, version.id) };
   }
   const scope = blobScope(siteOwner(site));
   const missingPredicate = `FROM version_files vf
@@ -484,7 +495,7 @@ export async function finalizeDeploy(dc: DropwayContext, p: Principal, site: Sit
   if (!upd?.meta.changes) {
     const fresh = await getSiteFor(dc, p, site.slug, "sites:write");
     const latest = await getVersion(dc, site.id, version.id);
-    if (latest?.status === "ready") return { version: latest, replayed: true, live: latest.id === fresh.current_version_id, warnings: [] as Warning[] };
+    if (latest?.status === "ready") return { version: latest, replayed: true, live: latest.id === fresh.current_version_id, warnings: await deployWarnings(dc, site, version.id) };
     if (version.base_version_id && fresh.current_version_id !== version.base_version_id) throw await versionConflict(dc, fresh);
     if (storageQuota !== null) throw quotaExceeded("storage_bytes", storageQuota);
     throw await versionConflict(dc, fresh);
@@ -503,24 +514,186 @@ export async function finalizeDeploy(dc: DropwayContext, p: Principal, site: Sit
   return { version: finalized, replayed: false, live: true, warnings: await deployWarnings(dc, site, version.id) };
 }
 
-async function deployWarnings(dc: DropwayContext, site: SiteRow, versionId: string): Promise<Warning[]> {
+/** Bounds for the finalize-time content scan: small text files only, capped counts per warning kind. */
+const WARN_SCAN_MAX_BYTES = 256 * 1024;
+const WARN_SCAN_MAX_FILES = 50;
+const WARN_MAX_PER_CODE = 10;
+const WARN_MAX_SECRETS = 20;
+
+const WARN_HTML_RE = /\.html?$/i;
+const WARN_CSS_RE = /\.css$/i;
+const WARN_JS_RE = /\.(?:mjs|cjs|js)$/i;
+/** Root-relative URLs (`/x`, but not protocol-relative `//x`) in markup, styles and scripts. */
+const ROOT_ABS_HTML_RE = /\b(?:src|href|action|poster)\s*=\s*["']\/(?!\/)|\burl\(\s*["']?\/(?!\/)/;
+const ROOT_ABS_CSS_RE = /\burl\(\s*["']?\/(?!\/)|@import\s+["']\/(?!\/)/;
+const ROOT_ABS_JS_RE = /\b(?:fetch|importScripts)\(\s*["'`]\/(?!\/)|\bimport\s*\(\s*["']\/(?!\/)|\bfrom\s+["']\/(?!\/)|\bimport\s+["']\/(?!\/)|\bnew\s+(?:Request|EventSource|WebSocket)\(\s*["'`]\/(?!\/)/;
+const BROWSER_STORAGE_RE = /\b(?:localStorage|sessionStorage|indexedDB)\b|document\.cookie\b/;
+
+/**
+ * Publish warnings (PUB-12): computed from the stored bytes at finalize, so one-shot publish,
+ * manifest finalize and the agent publish paths all return the same list. Warnings never
+ * include matched secret values. Content scanning is bounded (text files up to
+ * {@link WARN_SCAN_MAX_BYTES}, at most {@link WARN_SCAN_MAX_FILES} files read, per-code caps),
+ * so a huge version pays a constant, small extra cost at finalize.
+ */
+export async function deployWarnings(dc: DropwayContext, site: SiteRow, versionId: string): Promise<Warning[]> {
   const warnings: Warning[] = [];
-  const { results } = await dc.env.DB.prepare(
-    `SELECT path FROM version_files WHERE version_id = ?
-       AND (path IN ('index.html','index.htm','index.md','README.md','readme.md') OR path LIKE '%.wasm' OR path LIKE '%.wasm.br' OR path LIKE '%.wasm.gz') LIMIT 10`,
+  // Advisory reads must not turn an already-published version into an API failure.
+  // Keep this guard local to the scan: authorization and finalization still fail normally.
+  const files = await dc.env.DB.prepare(
+    "SELECT path, sha256, size, content_type AS contentType FROM version_files WHERE version_id = ? ORDER BY path",
   )
     .bind(versionId)
-    .all<{ path: string }>();
-  const count = await dc.env.DB.prepare("SELECT file_count FROM versions WHERE id = ?").bind(versionId).first<{ file_count: number }>();
-  const hasIndex = results.some((r) => /^(index\.html?|index\.md|readme\.md)$/i.test(r.path));
-  if (!hasIndex && (count?.file_count ?? 0) > 1) {
-    warnings.push({ code: "no_index", message: "There is no index.html (or index.md / README.md) at the root, so the site root shows a file listing. Link to files by path." });
-  }
-  if (results.some((r) => /\.wasm(\.br|\.gz)?$/.test(r.path)) && site.cross_origin_isolation !== 1) {
+    .all<NormalisedEntry>()
+    .then((result) => result.results)
+    .catch(() => null);
+  if (files === null) return warnings;
+
+  const hasIndex = files.some((f) => /^(index\.html?|index\.md|readme\.md)$/i.test(f.path));
+  if (!hasIndex && files.length > 1) {
     warnings.push({
-      code: "wasm_without_cross_origin_isolation",
-      message: 'This version ships WebAssembly. If it uses threads (SharedArrayBuffer), PATCH the site with {"crossOriginIsolation": true}. Single-threaded builds need nothing.',
+      code: "no_index",
+      message: "There is no index.html (or index.md / README.md) at the root, so the site root shows a file listing. Link to files by path.",
+      fix: "Add an index.html (or index.md / README.md) at the root of the published folder.",
     });
+  }
+  const wasm = files.find((f) => /\.wasm(\.br|\.gz)?$/i.test(f.path));
+  if (wasm && site.cross_origin_isolation !== 1) {
+    warnings.push({
+      code: "wasm_without_coi",
+      path: wasm.path,
+      message: "This version ships WebAssembly without cross-origin isolation, so SharedArrayBuffer (WASM threads) will not be available. Single-threaded builds need nothing.",
+      fix: 'If the module uses threads, PATCH the site with {"crossOriginIsolation": true} and republish.',
+    });
+  }
+
+  // Bounded text access, shared across the checks below (one read per blob at most).
+  // Direct R2 range reads, deliberately not readBlob: the scan must not write hot blobs
+  // into the shared edge cache as a side effect of publishing.
+  const texts = new Map<string, Promise<string | null>>();
+  let scanned = 0;
+  const textFor = (f: NormalisedEntry): Promise<string | null> => {
+    let pending = texts.get(f.sha256);
+    if (!pending) {
+      pending =
+        f.size > WARN_SCAN_MAX_BYTES || scanned >= WARN_SCAN_MAX_FILES
+          ? Promise.resolve(null)
+          : ((scanned += 1),
+            dc.env.FILES.get(blobKey(f.sha256), { range: { offset: 0, length: f.size } })
+              .then((obj) => (obj ? obj.text() : null))
+              .catch(() => null));
+      texts.set(f.sha256, pending);
+    }
+    return pending;
+  };
+
+  // invalid_config: `.dropway/*.json` is the site's config namespace (stored, never served);
+  // a file there that is not valid JSON can never take effect.
+  const configFiles = files.filter((f) => /^\.dropway\/[^/]+\.json$/i.test(f.path));
+  // textFor reserves its shared read budget synchronously in file order, so parallel
+  // reads keep the same deterministic ceiling; warnings are still emitted in order.
+  const configTexts = await Promise.all(configFiles.map(textFor));
+  let configWarnings = 0;
+  for (const [i, f] of configFiles.entries()) {
+    if (configWarnings >= WARN_MAX_PER_CODE) break;
+    const text = configTexts[i]!;
+    if (text === null) continue;
+    try {
+      JSON.parse(text);
+    } catch {
+      configWarnings++;
+      warnings.push({
+        code: "invalid_config",
+        path: f.path,
+        message: `"${f.path}" is not valid JSON, so it is ignored as configuration.`,
+        fix: "Fix the JSON syntax (for example with `jq . <file>`), or remove the file, and republish.",
+      });
+    }
+  }
+
+  const pathMode = dc.config.sitesMode === "path";
+  // Effective sandbox for this site, mirroring serve-time behaviour: the configured
+  // sandbox (forced on when sites share the app origin), plus anonymous sites under
+  // SITES_SANDBOX=auto on a dedicated sites origin.
+  const sandboxed = dc.config.sitesSandbox || (site.tenant_id === null && dc.config.sitesSandboxAnonymous);
+  const siteBase = dc.config.sitesOrigin ? `/${site.slug}/` : `${dc.config.sitesPathPrefix}/${site.slug}/`;
+
+  // spa_without_base: in path mode an SPA served under /<slug>/ needs a <base> (or fully
+  // relative URLs) so client-side routes resolve assets inside the site prefix.
+  if (pathMode && site.spa === 1) {
+    const index = files.find((f) => /^index\.html?$/i.test(f.path));
+    if (index) {
+      const text = await textFor(index);
+      if (text !== null && !/<base[\s>]/i.test(text)) {
+        warnings.push({
+          code: "spa_without_base",
+          path: index.path,
+          message: "This SPA has no <base> element. In path mode the site lives under a prefix, so deep client-side routes can resolve relative asset URLs outside the site.",
+          fix: `Add <base href="${siteBase}"> to <head>, or build with a relative base (Vite: base: "./", Angular: --base-href ${siteBase}).`,
+        });
+      }
+    }
+  }
+
+  const scanFiles = files.map((f) => ({
+    f,
+    isHtml: WARN_HTML_RE.test(f.path),
+    isCss: WARN_CSS_RE.test(f.path),
+    isJs: WARN_JS_RE.test(f.path),
+    maybeSecret: isTextual(f.contentType) || (f.path.split("/").pop() ?? f.path).startsWith(".env"),
+  })).filter(({ isHtml, isCss, isJs, maybeSecret }) =>
+    (pathMode && (isHtml || isCss || isJs)) || (sandboxed && (isHtml || isJs)) || maybeSecret);
+  const scanTexts = await Promise.all(scanFiles.map(({ f }) => textFor(f)));
+  let rootAbsWarnings = 0;
+  let storageWarnings = 0;
+  let secretWarnings = 0;
+  for (const [i, { f, isHtml, isCss, isJs, maybeSecret }] of scanFiles.entries()) {
+    const wantRootAbs = pathMode && rootAbsWarnings < WARN_MAX_PER_CODE && (isHtml || isCss || isJs);
+    const wantStorage = sandboxed && storageWarnings < WARN_MAX_PER_CODE && (isHtml || isJs);
+    const wantSecret = secretWarnings < WARN_MAX_SECRETS && maybeSecret;
+    if (!wantRootAbs && !wantStorage && !wantSecret) continue;
+    const text = scanTexts[i]!;
+    if (text === null) continue;
+
+    if (wantRootAbs) {
+      const m = (isCss ? ROOT_ABS_CSS_RE : isJs ? ROOT_ABS_JS_RE : ROOT_ABS_HTML_RE).exec(text) ?? (isHtml ? ROOT_ABS_JS_RE.exec(text) : null);
+      if (m) {
+        rootAbsWarnings++;
+        warnings.push({
+          code: "root_absolute_paths",
+          path: f.path,
+          line: lineAt(text, m.index),
+          message: `"${f.path}" uses root-absolute URLs (starting with /). In path mode they point outside this site's prefix; HTML/CSS references and common runtime calls are rewritten for you, but import specifiers, location.href and history.pushState with root-relative URLs are not.`,
+          fix: `Use relative URLs (./assets/app.js), or set the framework base to ${siteBase} (Vite: base: "${siteBase}").`,
+        });
+      }
+    }
+    if (wantStorage) {
+      const m = BROWSER_STORAGE_RE.exec(text);
+      if (m) {
+        storageWarnings++;
+        warnings.push({
+          code: "uses_browser_storage",
+          path: f.path,
+          line: lineAt(text, m.index),
+          message: `"${f.path}" uses browser storage (localStorage/sessionStorage/IndexedDB/cookies), but this site is served sandboxed with an opaque origin, so storage is unavailable and these calls will throw or lose data.`,
+          fix: "Guard storage access (try/catch with an in-memory fallback), or serve the site unsandboxed: subdomain mode, or SITES_SANDBOX=false on a dedicated sites origin for non-anonymous sites.",
+        });
+      }
+    }
+    if (wantSecret) {
+      for (const finding of findSecrets(f.path, text)) {
+        if (secretWarnings >= WARN_MAX_SECRETS) break;
+        secretWarnings++;
+        warnings.push({
+          code: "possible_secret",
+          path: finding.path,
+          line: finding.line,
+          message: `"${finding.path}" line ${finding.line} looks like a ${finding.kind} credential. Published files are public to anyone with the link.`,
+          fix: "Remove the credential from the file, revoke or rotate it (assume it is leaked), republish, then delete this version with delete_version so the leaked copy is gone.",
+        });
+      }
+    }
   }
   return warnings;
 }
