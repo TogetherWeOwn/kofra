@@ -8,7 +8,7 @@ import { stringField } from "../lib/input";
 import { normaliseFilePath } from "../lib/paths";
 import type { Principal } from "../principal";
 import { blobScope, putVerifiedBlob } from "./blobs";
-import { createDeploy, finalizeDeploy, parseDeployOptions, versionConflict, type Warning } from "./deploys";
+import { createDeploy, deployWarnings, finalizeDeploy, parseDeployOptions, versionConflict, type Warning } from "./deploys";
 import { discardNewSite, findSite, getVersion, serializeSite, serializeVersion, type SiteRow, type VersionRow } from "./sites";
 import { resolvePublishTarget } from "./publish";
 import { getSiteByRef, resolveSiteSlug, resolveVersionRef } from "./site-ops";
@@ -480,6 +480,7 @@ async function completeVersion(
   if (deploy.unchanged) {
     status = "unchanged";
     version = site.current_version_id ? await getVersion(dc, site.id, site.current_version_id) : null;
+    warnings = await deployWarnings(dc, site, deploy.deploy.id);
   } else {
     const missing = new Set(deploy.missing);
     const scope = blobScope({ tenantId: site.tenant_id, siteId: site.id });

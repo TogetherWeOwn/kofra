@@ -145,12 +145,14 @@ export function createDropway(opts: CreateDropwayOptions = {}): Dropway {
   async function handle(request: Request, env: ServerBindings, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const dw = context(env, ctx, url);
+    let preview = false;
     try {
       // A former app origin (config.legacyAppOrigins): pages move, the API and MCP keep answering.
       const successor = legacyAppSuccessor(dw, url);
       const moved = successor ? legacyAppRedirect(request, url, successor) : null;
       if (moved) return moved;
       const route = await routeSiteRequest(dw, request);
+      preview = route.kind === "preview" || route.kind === "gone" || (route.kind === "redirect" && route.preview === true);
       switch (route.kind) {
         case "site":
           return await serveSite(request, dw, route.slug, route.path, route.mode, viewers);
@@ -172,7 +174,8 @@ export function createDropway(opts: CreateDropwayOptions = {}): Dropway {
       }
     } catch (e) {
       console.error(JSON.stringify({ event: "serve_error", ...requestErrorDetails(request, e) }));
-      return new Response("Internal error", { status: 500, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } });
+      const response = new Response("Internal error", { status: 500, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } });
+      return preview ? previewResponse(response) : response;
     }
   }
 
