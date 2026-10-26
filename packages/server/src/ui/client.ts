@@ -297,9 +297,14 @@ export function dropwayClient() {
     });
   }
 
+  /** Keep receipt fields on one line; reject unsafe values rather than sanitizing them. */
+  function publicReceiptField(value) {
+    return typeof value === "string" && value && !/[\s\u0000-\u001f\u007f-\u009f]/.test(value) ? value : null;
+  }
+
   /** A publish response URL that is safe to share, or null. Never stripped or rebuilt. */
   function publicReceiptUrl(url) {
-    if (typeof url !== "string" || !url) return null;
+    if (!publicReceiptField(url)) return null;
     var u;
     try {
       u = new URL(url);
@@ -316,7 +321,7 @@ export function dropwayClient() {
     var lines = [];
     var clean = publicReceiptUrl(siteUrl);
     if (clean) lines.push("Site URL: " + clean);
-    if (version && typeof version.id === "string" && version.id) lines.push("Version ID: " + version.id);
+    if (version && publicReceiptField(version.id)) lines.push("Version ID: " + version.id);
     if (version && typeof version.number === "number") lines.push("Version: " + version.number);
     if (version && typeof version.fileCount === "number") lines.push("Files: " + version.fileCount);
     if (version && typeof version.totalBytes === "number") lines.push("Total bytes: " + version.totalBytes);
