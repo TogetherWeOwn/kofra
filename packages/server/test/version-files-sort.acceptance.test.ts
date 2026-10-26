@@ -1334,7 +1334,9 @@ describe("version-files panel harness controls", () => {
     await m.waitFor(() => m.calls.length > before, "the download request");
     const last = m.calls[m.calls.length - 1]!;
     expect(last.url).toContain(`/api/v1/sites/test-site/files/${encodePath("docs/guide.md")}`);
-    expect(last.url).not.toContain("version=");
+    // Even a live-marked row describes an immutable manifest: a later publish
+    // must not change the bytes of this individual download.
+    expect(new URL(last.url, "https://test/").searchParams.get("version")).toBe("v-live");
   });
 
   it("switching versions swaps rows and link semantics without losing the panel", async () => {
