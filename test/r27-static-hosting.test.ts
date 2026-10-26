@@ -146,6 +146,85 @@ describe("_redirects and _headers (SRV-09)", () => {
     expect(onCopy.status).toBe(301);
     expect(onCopy.headers.get("location")).toBe("/s/restore-config-copy/new.html");
   });
+
+  it("warns on redirect destinations that cannot be HTTP header values, and never serves a 500 for them", async () => {
+    const pub = await publish(
+      {
+        "index.html": "<p>x</p>",
+        _redirects: "/old /new-💩 302\n/ext https://example.com/中文 307\n",
+      },
+      { slug: "bad-dest" },
+    );
+    expect(pub.status, JSON.stringify(pub.body)).toBe(201);
+    const invalid = (pub.body.warnings as Array<{ code: string; message: string }>).filter((w) => w.code === "invalid_config");
+    expect(invalid).toHaveLength(2);
+    expect((await dw.call("/s/bad-dest/old")).status).toBe(404);
+    expect((await dw.call("/s/bad-dest/ext")).status).toBe(404);
+  });
+
+  it("skips a self-looping redirect rule and continues to the next matching rule", async () => {
+    const pub = await publish(
+      {
+        "index.html": "<p>home</p>",
+        "other.html": "<p>other</p>",
+        _redirects: "/* /index.html 301\n/index.html /other.html 301\n",
+      },
+      { slug: "self-loop" },
+    );
+    expect(pub.status, JSON.stringify(pub.body)).toBe(201);
+    const looped = await dw.call("/s/self-loop/index.html");
+    expect(looped.status).toBe(301);
+    expect(looped.headers.get("location")).toBe("/s/self-loop/other.html");
+
+    const solo = await publish({ "index.html": "<p>home</p>", _redirects: "/* /index.html 301\n" }, { slug: "self-loop-solo" });
+    expect(solo.status).toBe(201);
+    expect((await dw.call("/s/self-loop-solo/index.html")).status).toBe(200);
+  });
+
+  it("replays stored config warnings on a byte-identical REST republish", async () => {
+    const files = { "index.html": "<p>x</p>", _redirects: "/ok /index.html 301\nnonsense-line\n" };
+    const first = await publish(files, { slug: "replay-warn" });
+    expect(first.status).toBe(201);
+    const firstInvalid = (first.body.warnings as Array<{ code: string; message: string }>).filter((w) => w.code === "invalid_config");
+    expect(firstInvalid).toHaveLength(1);
+    const second = await publish(files, { slug: "replay-warn" });
+    expect(second.status).toBe(200);
+    expect(second.body.unchanged).toBe(true);
+    const secondInvalid = (second.body.warnings as Array<{ code: string; message: string }>).filter((w) => w.code === "invalid_config");
+    expect(secondInvalid).toHaveLength(1);
+    expect(secondInvalid[0]!.message).toBe(firstInvalid[0]!.message);
+  });
+
+  it("reports the path-pattern cap and the header cap independently", async () => {
+    const chunks: string[] = [];
+    for (let i = 0; i < 99; i++) {
+      chunks.push(`/p${i}/*`);
+      for (let j = 0; j < 10; j++) chunks.push(`  X-H-${i}-${j}: v`);
+    }
+    chunks.push("/p99/*");
+    for (let j = 0; j < 20; j++) chunks.push(`  X-Fill-${j}: v`);
+    chunks.push("/overflow/*", "  X-Overflow: v");
+    const pub = await publish({ "index.html": "<p>x</p>", _headers: chunks.join("\n") }, { slug: "cap-warn" });
+    expect(pub.status, JSON.stringify(pub.body)).toBe(201);
+    const invalid = (pub.body.warnings as Array<{ code: string; message: string }>).filter((w) => w.code === "invalid_config");
+    expect(invalid.some((w) => w.message.includes("more than 1000 headers"))).toBe(true);
+    expect(invalid.some((w) => w.message.includes("more than 100 path patterns"))).toBe(true);
+  });
+
+  it("rejects a from-pattern that combines a :splat placeholder with a trailing splat", async () => {
+    const pub = await publish(
+      { "index.html": "<p>x</p>", _redirects: "/files/:splat/* /x/:splat 301\n" },
+      { slug: "splat-clash" },
+    );
+    expect(pub.status, JSON.stringify(pub.body)).toBe(201);
+    const invalid = (pub.body.warnings as Array<{ code: string; message: string }>).filter((w) => w.code === "invalid_config");
+    expect(invalid).toHaveLength(1);
+    expect(invalid[0]!.message).toContain("splat");
+    const row = await env.DB.prepare("SELECT config_json FROM versions WHERE id = ?")
+      .bind(pub.body.version.id as string)
+      .first<{ config_json: string | null }>();
+    expect(JSON.parse(row!.config_json!).redirects).toHaveLength(0);
+  });
 });
 
 describe("cache policy matrix (SRV-05)", () => {
@@ -274,5 +353,27 @@ describe("ttlSeconds, noindex, viewers and robots.txt (PUB-16, SRV-12, VIEW-06)"
     const anon = await freshInstance({ anonymous: { enabled: true } });
     const res = await anon.json("/api/v1/publish", { method: "POST", body: form({ "index.html": "<p>x</p>" }, { ttlSeconds: "3600" }) });
     expect(res.status).toBe(403);
+  });
+
+  it("treats ttlSeconds:null as no change on anonymous sites", async () => {
+    const anon = await freshInstance({ anonymous: { enabled: true } });
+    const pub = await anon.json("/api/v1/publish", { method: "POST", body: form({ "index.html": "<p>x</p>" }) });
+    expect(pub.status, JSON.stringify(pub.body)).toBe(201);
+    expect(pub.body.expiresAt).toBeTruthy();
+    const patched = await anon.json(`/api/v1/sites/${pub.body.slug}`, {
+      method: "PATCH",
+      key: pub.body.claimToken,
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ ttlSeconds: null }),
+    });
+    expect(patched.status, JSON.stringify(patched.body)).toBe(200);
+    expect(patched.body.site.expiresAt).toBe(pub.body.expiresAt);
+    const numbered = await anon.json(`/api/v1/sites/${pub.body.slug}`, {
+      method: "PATCH",
+      key: pub.body.claimToken,
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ ttlSeconds: 60 }),
+    });
+    expect(numbered.status).toBe(403);
   });
 });

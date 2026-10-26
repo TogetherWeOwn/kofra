@@ -260,7 +260,9 @@ export async function createSite(
     await requireCapability(dc, p, "anonymous_publish");
     if (input.slug) throw forbidden("Choosing a site name needs an API key.", "Omit slug to get a generated name.");
     if (input.password) throw forbidden("Password protection needs an API key.");
-    if (input.ttlSeconds !== undefined) throw forbidden("ttlSeconds is for keyed sites; anonymous sites use this instance's expiry.", "Omit ttlSeconds, or publish with an API key.");
+    if (input.ttlSeconds !== undefined && input.ttlSeconds !== null) {
+      throw forbidden("ttlSeconds is for keyed sites; anonymous sites use this instance's expiry.", "Omit ttlSeconds, or publish with an API key.");
+    }
     creatorIp = await ipHash(dc, p.ip);
     const recent = await dc.env.DB.prepare("SELECT COUNT(*) AS n FROM sites WHERE creator_ip_hash = ? AND created_at > ?")
       .bind(creatorIp, now - 3600_000)
@@ -409,7 +411,11 @@ export async function updateSite(dc: DropwayContext, p: Principal, slug: string,
   if (site.mode === "transfer") throw conflict("transfer_immutable", "Use update_transfer to change delivery settings.", "Transfer passwords need current-password proof in the same call.");
   if (input.password && site.tenant_id === null) throw forbidden("Password protection needs an account. Claim the site first.");
   assertTtlSeconds(input.ttlSeconds);
-  if (input.ttlSeconds !== undefined && site.tenant_id === null) {
+  // Explicit null means "no change" on anonymous sites: they always use the
+  // instance expiry, so clearing is a no-op rather than an error (and must
+  // not wipe expires_at below).
+  const ttlSeconds = site.tenant_id === null && input.ttlSeconds === null ? undefined : input.ttlSeconds;
+  if (ttlSeconds !== undefined && site.tenant_id === null) {
     throw forbidden("ttlSeconds is for keyed sites; anonymous sites use this instance's expiry.", "Claim the site with an API key first, then set ttlSeconds.");
   }
   if (input.password) await requireCapability(dc, p, "site_password", { siteId: site.id, tenantId: site.tenant_id });
@@ -427,9 +433,9 @@ export async function updateSite(dc: DropwayContext, p: Principal, slug: string,
   if (input.crossOriginIsolation !== undefined) set("cross_origin_isolation", input.crossOriginIsolation ? 1 : 0);
   if (input.noindex !== undefined) set("noindex", input.noindex ? 1 : 0);
   if (input.viewers !== undefined) set("viewers", input.viewers ? 1 : 0);
-  if (input.ttlSeconds !== undefined) {
-    set("ttl_seconds", input.ttlSeconds);
-    set("expires_at", input.ttlSeconds === null ? null : now + input.ttlSeconds * 1000);
+  if (ttlSeconds !== undefined) {
+    set("ttl_seconds", ttlSeconds);
+    set("expires_at", ttlSeconds === null ? null : now + ttlSeconds * 1000);
   }
   if (input.password !== undefined) set("password_hash", input.password ? await hashPassword(input.password) : null);
   if (!sets.length) return site;

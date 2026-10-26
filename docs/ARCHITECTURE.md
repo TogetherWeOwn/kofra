@@ -118,13 +118,14 @@ Path mode is interim. Root-relative URLs (`/assets/app.js`) would escape the
    `history.pushState("/x")`. Use relative URLs there, or subdomain mode.
 
 Site-config patterns use whole-segment `:placeholders` and one trailing `*` splat;
-adjacent captures are rejected to keep request matching bounded. Header values must
-fit HTTP's byte-string representation; invalid Unicode values become warnings.
+adjacent captures are rejected to keep request matching bounded, as is a `:splat`
+placeholder combined with a trailing splat. Header values and redirect destinations
+must fit HTTP's byte-string representation; anything else becomes a warning.
 
 Site-config files: after the password gate, `_redirects` rules run before
-file resolution (first match wins; a rule pointing at its own path is skipped
-so catch-alls cannot loop), and `_redirects`/`_headers` themselves always
-answer 404. `_headers` entries apply to file and rendered-viewer responses (including configured
+file resolution (first non-self match wins; a rule pointing at its own path is
+skipped so later rules still apply and catch-alls cannot loop), and
+`_redirects`/`_headers` themselves always answer 404. `_headers` entries apply to file and rendered-viewer responses (including configured
 redirect responses), under the platform security headers, which are applied afterwards
 and win; platform-owned headers (cookies, length, type, validators, CSP, framing,
 `X-Kofra-*`) cannot be set at all, and a gated site's `Cache-Control` stays

@@ -20,8 +20,8 @@
   verbatim), `viewers: false` (always serve the stored bytes), and
   `ttlSeconds` for keyed sites: the site expires that long after its latest
   finalize, and `null` clears the lifetime. Anonymous sites keep the
-  instance expiry and cannot set `ttlSeconds` (400 `invalid_ttl` for values
-  outside 1 to 315360000).
+  instance expiry and cannot set `ttlSeconds` (an explicit `null` is
+  ignored; 400 `invalid_ttl` for values outside 1 to 315360000).
 
 ### Versions naming
 

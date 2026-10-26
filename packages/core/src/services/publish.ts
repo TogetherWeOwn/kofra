@@ -9,7 +9,8 @@ import { normaliseFilePath, stripCommonRoot } from "../lib/paths";
 import type { Principal } from "../principal";
 import { blobScope, putVerifiedBlob } from "./blobs";
 import { createDeploy, finalizeDeploy, parseDeployOptions, precheckManifest } from "./deploys";
-import { createSite, discardNewSite, findSite, getSiteFor, parseSettings, serializeSite, updateSite, type SiteRow, type VersionRow } from "./sites";
+import { createSite, discardNewSite, findSite, getSiteFor, getVersion, parseSettings, serializeSite, updateSite, type SiteRow, type VersionRow } from "./sites";
+import { parseSiteConfigJson } from "./site-config";
 
 /** A file held in memory for one-shot publishing. */
 export interface InlineFile {
@@ -232,7 +233,11 @@ async function publishToTarget(
   let uploaded = 0;
   let warnings: Array<{ code: string; message: string }> = [];
   let versionId = deploy.deploy.id;
-  if (!deploy.unchanged) {
+  if (deploy.unchanged) {
+    // The same files mean the same parsed site config, so its warnings still apply.
+    const current = site.current_version_id ? await getVersion(dc, site.id, site.current_version_id) : null;
+    warnings = parseSiteConfigJson(current?.config_json).warnings;
+  } else {
     const missing = new Set(deploy.missing);
     const toStore = new Map<string, (typeof hashed)[number]>();
     for (const f of hashed) if (missing.has(f.sha256) && !toStore.has(f.sha256)) toStore.set(f.sha256, f);

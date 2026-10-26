@@ -383,22 +383,19 @@ export async function serveSite(
     return response;
   }
 
-  // `_redirects` rules run before file resolution; the first match wins. A
-  // rule pointing at its own path is skipped, so `/* /index.html` style
-  // catch-alls cannot loop on their destination.
+  // `_redirects` rules run before file resolution; the first non-self match
+  // wins (self-looping rules are skipped, so `/* /index.html` style
+  // catch-alls cannot loop on their destination).
   const redirect = findSiteRedirect(live.config, requestPath);
   if (redirect) {
-    const destinationPath = redirect.destination.startsWith("/") ? redirect.destination.split("?")[0] : null;
-    if (destinationPath !== requestPath) {
-      let location = redirect.destination.startsWith("/") ? `${mode.base}${redirect.destination.slice(1)}` : redirect.destination;
-      if (!redirect.destination.includes("?") && url.search) location += url.search;
-      const h = new Headers({ Location: location, "Cache-Control": cacheControlFor(filePath, live) });
-      applySiteHeaders(h, live, requestPath);
-      securityHeaders(h, live, mode);
-      const response = new Response(null, { status: redirect.rule.status, headers: h });
-      recordHit(dw, req, live, filePath, response.status, 0, Date.now() - started);
-      return response;
-    }
+    let location = redirect.destination.startsWith("/") ? `${mode.base}${redirect.destination.slice(1)}` : redirect.destination;
+    if (!redirect.destination.includes("?") && url.search) location += url.search;
+    const h = new Headers({ Location: location, "Cache-Control": cacheControlFor(filePath, live) });
+    applySiteHeaders(h, live, requestPath);
+    securityHeaders(h, live, mode);
+    const response = new Response(null, { status: redirect.rule.status, headers: h });
+    recordHit(dw, req, live, filePath, response.status, 0, Date.now() - started);
+    return response;
   }
 
   // A site's own robots.txt is served verbatim; without one, noindex sites

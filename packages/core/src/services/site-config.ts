@@ -131,6 +131,9 @@ function patternError(pattern: string): string | null {
   }
   const names = placeholdersIn(pattern);
   if (new Set(names).size !== names.length) return `"${pattern}" repeats a placeholder name.`;
+  if (pattern.includes("*") && names.includes("splat")) {
+    return `"${pattern}" uses both a ":splat" placeholder and a "*" splat; rename the placeholder so ":splat" is unambiguous.`;
+  }
   return null;
 }
 
@@ -139,8 +142,12 @@ function destinationError(to: string, from: string): string | null {
   if (to.startsWith("//") || to.startsWith("/\\") || to.includes("\\")) {
     return `destination "${to}" must be a plain path or an absolute http(s) URL (protocol-relative destinations are not supported).`;
   }
+  // Destinations become Location header values at serve time, so anything
+  // outside the HTTP ByteString range is refused here instead of throwing a 500.
   // eslint-disable-next-line no-control-regex
-  if (/[\u0000- \u007f]/.test(to)) return `destination "${to}" contains spaces or control characters.`;
+  if (/[\u0000- \u007f\u0100-\uffff]/.test(to)) {
+    return `destination "${to}" contains spaces or control characters, or cannot be represented as an HTTP header.`;
+  }
   if (!to.startsWith("/")) {
     let url: URL;
     try {
@@ -215,7 +222,8 @@ export function parseHeadersFile(text: string): { rules: SiteHeaderRule[]; warni
   const rules: SiteHeaderRule[] = [];
   let current: SiteHeaderRule | null = null;
   let totalHeaders = 0;
-  let capNoted = false;
+  let patternsCapNoted = false;
+  let headersCapNoted = false;
   const lines = text.split(/\r\n|\n|\r/);
   for (let i = 0; i < lines.length; i++) {
     const lineNo = i + 1;
@@ -231,8 +239,8 @@ export function parseHeadersFile(text: string): { rules: SiteHeaderRule[]; warni
         continue;
       }
       if (rules.length >= SITE_CONFIG_MAX_HEADER_RULES) {
-        if (!capNoted) sink.add(lineNo, `more than ${SITE_CONFIG_MAX_HEADER_RULES} path patterns; the rest of the file was ignored.`);
-        capNoted = true;
+        if (!patternsCapNoted) sink.add(lineNo, `more than ${SITE_CONFIG_MAX_HEADER_RULES} path patterns; the rest of the file was ignored.`);
+        patternsCapNoted = true;
         current = null;
         continue;
       }
@@ -262,8 +270,8 @@ export function parseHeadersFile(text: string): { rules: SiteHeaderRule[]; warni
       continue;
     }
     if (totalHeaders >= SITE_CONFIG_MAX_HEADERS) {
-      if (!capNoted) sink.add(lineNo, `more than ${SITE_CONFIG_MAX_HEADERS} headers; the rest of the file was ignored.`);
-      capNoted = true;
+      if (!headersCapNoted) sink.add(lineNo, `more than ${SITE_CONFIG_MAX_HEADERS} headers; the rest of the file was ignored.`);
+      headersCapNoted = true;
       continue;
     }
     current.headers.push({ name, value });
@@ -396,7 +404,11 @@ export function substituteSitePattern(template: string, match: SitePatternMatch)
   });
 }
 
-/** The first redirect rule matching `path` (leading "/"), with its substituted destination. */
+/**
+ * The first redirect rule matching `path` (leading "/"), with its substituted
+ * destination. A rule pointing at its own path is skipped so later rules still
+ * apply, and `/* /index.html` style catch-alls cannot loop on their destination.
+ */
 export function findSiteRedirect(
   config: SiteConfig | null | undefined,
   path: string,
@@ -404,7 +416,11 @@ export function findSiteRedirect(
   if (!config) return null;
   for (const rule of config.redirects) {
     const match = matchSitePattern(rule.from, path);
-    if (match) return { rule, destination: substituteSitePattern(rule.to, match) };
+    if (!match) continue;
+    const destination = substituteSitePattern(rule.to, match);
+    const destinationPath = destination.startsWith("/") ? destination.split("?")[0] : null;
+    if (destinationPath === path) continue;
+    return { rule, destination };
   }
   return null;
 }
