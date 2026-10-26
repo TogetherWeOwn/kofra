@@ -297,6 +297,87 @@ export function dropwayClient() {
     });
   }
 
+  /** A publish response URL that is safe to share, or null. Never stripped or rebuilt. */
+  function publicReceiptUrl(url) {
+    if (typeof url !== "string" || !url) return null;
+    var u;
+    try {
+      u = new URL(url);
+    } catch (e) {
+      return null;
+    }
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    if (u.username || u.password || u.search || u.hash) return null;
+    return url;
+  }
+
+  /** Plain-text public receipt: allowlisted response fields only, never secrets. */
+  function publicReceiptText(siteUrl, version) {
+    var lines = [];
+    var clean = publicReceiptUrl(siteUrl);
+    if (clean) lines.push("Site URL: " + clean);
+    if (version && typeof version.id === "string" && version.id) lines.push("Version ID: " + version.id);
+    if (version && typeof version.number === "number") lines.push("Version: " + version.number);
+    if (version && typeof version.fileCount === "number") lines.push("Files: " + version.fileCount);
+    if (version && typeof version.totalBytes === "number") lines.push("Total bytes: " + version.totalBytes);
+    return lines.join("\n");
+  }
+
+  /** Copyable public receipt for a publish result. Local only: no requests, no persistence. */
+  function receiptBlock(r) {
+    var text = publicReceiptText(r.url, r.version);
+    if (!text) return null;
+    var busy = false;
+    var label = "Copy public details";
+    var note = h("div", { class: "dw-small", role: "status", text: "" });
+    var area = h("textarea", {
+      class: "dw-input dw-mono",
+      readonly: true,
+      rows: String(text.split("\n").length),
+      spellcheck: "false",
+      "aria-label": "Public details",
+      value: text,
+    });
+    var btn = h("button", {
+      type: "button",
+      class: "dw-btn small",
+      text: label,
+      onclick: function () {
+        if (busy) return;
+        busy = true;
+        btn.disabled = true;
+        btn.textContent = "Copying…";
+        var after = function (ok) {
+          busy = false;
+          btn.disabled = false;
+          btn.textContent = label;
+          note.textContent = ok
+            ? "Public details copied."
+            : "Could not copy automatically. Select the text above and copy it manually.";
+        };
+        try {
+          var p = navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(text) : null;
+          if (p && p.then) p.then(function () { after(true); }, function () { after(false); });
+          else after(false);
+        } catch (e) {
+          after(false);
+        }
+      },
+    });
+    return h(
+      "div",
+      { style: "margin-top:.6rem" },
+      h("div", { class: "dw-label", text: "Public details" }),
+      area,
+      h("div", { class: "dw-row", style: "margin-top:.4rem" }, btn),
+      note,
+      h("p", {
+        class: "dw-small dw-muted",
+        text: "The live site URL can change when a new version is published. This version receipt records what was published; it is not an immutable or pinned preview, and sharing it does not change access restrictions or passwords.",
+      }),
+    );
+  }
+
   /** Modal confirmation. typeToConfirm: the user must type this value. Resolves true or false. */
   function confirmBox(opts) {
     return new Promise(function (resolve) {
@@ -1079,6 +1160,7 @@ export function dropwayClient() {
             h("a", { class: "dw-btn", href: "/v/" + encodeURIComponent(r.slug) + "/", text: "Browse files" }),
             key ? h("a", { class: "dw-btn", href: "/dashboard/sites/" + encodeURIComponent(r.slug), text: "Manage" }) : null,
           ),
+          receiptBlock(r),
           r.warnings && r.warnings.length
             ? h("ul", { class: "dw-small" }, r.warnings.map(function (w) {
                 return h("li", { text: w.message });
