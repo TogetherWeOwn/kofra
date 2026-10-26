@@ -382,7 +382,10 @@ async function serveFile(
   // Rendered views: see ./viewers (one per file kind, plus ?view=source).
   if (viewer && viewMode) {
     const embed = flag(sp, "embed");
-    const etag = `W/"${viewer.id}@${viewer.version ?? 1}-${sha256}${viewer.etagExtra?.(file, live) ?? ""}${embed ? "-e" : ""}${reportVariant}"`;
+    // The shared bar links live siblings even when this file's bytes are unchanged.
+    // Images/SVG have their own validator; embeds do not render the shared bar.
+    const folderVariant = !embed && viewer.id !== "image" && viewer.id !== "svg" ? `-folder${live.versionId}` : "";
+    const etag = `W/"${viewer.id}@${viewer.version ?? 1}-${sha256}${viewer.etagExtra?.(file, live) ?? ""}${folderVariant}${embed ? "-e" : ""}${reportVariant}"`;
     const h = new Headers();
     if (etagMatches(req, etag)) {
       h.set("ETag", etag);

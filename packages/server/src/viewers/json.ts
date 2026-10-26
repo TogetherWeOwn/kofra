@@ -10,7 +10,7 @@ import type { Viewer } from "./index";
  * key counts and typed values, plus a pretty-printed, highlighted view.
  * Invalid JSON shows the parse error above the highlighted source.
  */
-const JSON_VERSION = 1;
+const JSON_VERSION = 2;
 /** Nodes rendered in the tree before the rest is summarised. */
 const MAX_NODES = 20_000;
 /** Strings longer than this are cut in the tree (the pretty view has them whole). */

@@ -15,7 +15,7 @@ import type { Viewer, ViewerContext } from "./index";
 /** At most this much text is shown; the rest is one click away (Raw, Download). */
 export const SHOW_MAX_BYTES = 1024 * 1024;
 
-const CODE_VERSION = 1;
+const CODE_VERSION = 2;
 
 /** The highlighting language for a file of this kind, or null for plain text. */
 export function codeLanguage(path: string, kind: FileKind): string | null {

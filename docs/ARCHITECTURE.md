@@ -135,6 +135,12 @@ and has its own toolbar).
 
 Every view shares one bar (`viewers/chrome.ts`: kind, path, size, type; view
 tabs; Download; Files) built from plain links, so it works with JavaScript off.
+Except for image/SVG viewers and embeds, the bar also links to the previous
+and next direct files in the same folder, in listing name order, without
+wrapping. These default-view links use the loaded live manifest, never the
+request query. Their HTTP validators include the live version id so republishing
+siblings cannot revalidate stale navigation; content-only render fragments stay
+independent of the manifest. Image/SVG viewers retain their own stage navigation.
 View pages get `VIEWER_CSP` (no scripts). The code view adds one static inline
 script (Copy, `#L10-L20` ranges) allowed by its SHA-256 hash, which stays valid
 across 304 responses, unlike a nonce. User markup (Markdown, notebook HTML)
