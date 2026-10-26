@@ -90,7 +90,7 @@ afterAll(async () => {
 
 const fileUrl = (name = slug, path = "notes.md") => `${origin}/s/${name}/${path.split("/").map(encodeURIComponent).join("/")}`;
 
-async function visit(url: string, options: { js?: boolean; width?: number; cookie?: string } = {}) {
+async function visit(url: string, options: { js?: boolean; width?: number; cookie?: string; expectedStatus?: number } = {}) {
   const context = await browser.newContext({ javaScriptEnabled: options.js ?? false, viewport: { width: options.width ?? 360, height: 800 } });
   if (options.cookie) await context.addCookies([{ name: options.cookie.split("=")[0]!, value: options.cookie.slice(options.cookie.indexOf("=") + 1), url: origin }]);
   const wire: string[] = [];
@@ -104,7 +104,7 @@ async function visit(url: string, options: { js?: boolean; width?: number; cooki
   page.setDefaultTimeout(3000);
   page.on("pageerror", error => errors.push(error.message));
   const response = await page.goto(url);
-  expect(response!.status()).toBe(200);
+  expect(response!.status()).toBe(options.expectedStatus ?? 200);
   return { context, page, wire, errors, response: response! };
 }
 
@@ -312,7 +312,7 @@ it("unlocked desktop encodes only the public URL and a fresh phone still encount
     const decoded = await decodeSvg(await svg.evaluate(el => (el as any).outerHTML));
     expect(decoded).toBe(clean);
     expect(await view.page.content()).not.toContain(password);
-    const phone = await visit(decoded);
+    const phone = await visit(decoded, { expectedStatus: 401 });
     try {
       expect(await phone.page.locator('input[type="password"]').count()).toBe(1);
       expect(await phone.page.locator(".dw-vbar svg").count()).toBe(0);
