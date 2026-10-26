@@ -182,6 +182,13 @@ describe("helpers", () => {
     expect(parseCsv("a\nb\nc\nd\n", ",", 2)).toEqual({ rows: [["a"], ["b"]], complete: false });
   });
 
+  it("csv detection: blank lines between records cast no vote", () => {
+    // Pin the nonempty-record rule: an empty record voting [0,0,0,0] would
+    // drop the semicolon minimum to 0 and fall back to comma.
+    expect(detectDelimiter("a;b\n\n1;2\n3;4\n", "x.csv")).toBe(";");
+    expect(detectDelimiter("\n\na;b\n1;2\n3;4\n", "x.csv")).toBe(";");
+  });
+
   it("tells text from binary", () => {
     expect(looksLikeText(new TextEncoder().encode("MIT License\n\nCopyright ünïcode"))).toBe(true);
     expect(looksLikeText(new Uint8Array([0x50, 0x4b, 3, 4, 0, 0, 1]))).toBe(false);
@@ -283,6 +290,23 @@ describe("viewer pages", () => {
     expect(html).toContain("2 rows · 2 columns · comma-separated");
     expect(html).toContain("<td>Paris, FR</td>");
     expect(html).toContain('<td class="n">2100000</td>');
+  });
+
+  it("csv: the render path discards a record cut by the detection budget", async () => {
+    // The detector must see the whole sample so it can tell a 64 Ki budget
+    // cut from EOF; a pre-sliced sample would vote the cut tail and pick comma.
+    const prefix = "name;note\n";
+    const cut = "cut.csv";
+    const body = prefix + "a,b,c," + "x".repeat(64 * 1024 - prefix.length - 6) + ",late\n";
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST",
+      key: dw.ownerKey,
+      body: form({ [cut]: body }),
+    });
+    expect(published.status).toBe(201);
+    const html = await (await dw.call(`/s/${published.body.slug}/${cut}`, { headers: NAV })).text();
+    expect(html).toContain("1 rows · 2 columns · semicolon-separated");
+    expect(html).not.toContain("comma-separated");
   });
 
   it("images: zoomable with dimensions; sub-resources and iframes get the bytes", async () => {
