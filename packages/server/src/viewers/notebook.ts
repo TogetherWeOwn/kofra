@@ -9,9 +9,11 @@ import { sanitizeHtml } from "./sanitize";
 /**
  * Jupyter notebooks (.ipynb): Markdown cells rendered, code cells highlighted
  * with their execution count, outputs shown (text, errors, PNG/JPEG/GIF/SVG
- * images, HTML and Markdown through the sanitizer). Nothing executes.
+ * images, HTML and Markdown through the sanitizer), grouped per cell in a
+ * native initially-open <details> so a reader can fold a long result without
+ * hiding the code that produced it. Nothing executes.
  */
-const NB_VERSION = 1;
+const NB_VERSION = 2;
 const MAX_OUTPUT_TEXT = 100_000;
 
 const NB_CSS = `
@@ -20,6 +22,7 @@ const NB_CSS = `
 .dw-prompt{font:.75rem/1.9 ui-monospace,monospace;color:var(--muted);text-align:right;padding-top:.45rem}
 .dw-cell pre{margin:0;background:var(--code);border-radius:8px;padding:.7rem .9rem;overflow:auto;font-size:.84rem;line-height:1.5}
 .dw-out{margin-top:.4rem}
+.dw-out>summary{cursor:pointer;color:var(--muted);font-size:.8rem;padding:.2rem 0}
 .dw-out pre{background:transparent;border-left:3px solid var(--line);border-radius:0}
 .dw-out pre.err{border-left-color:#cf222e;color:#cf222e}
 .dw-out img{max-width:100%;height:auto;background:#fff;border-radius:4px}
@@ -74,7 +77,7 @@ export function renderNotebook(nb: Json): string {
       const n = cell.execution_count == null ? " " : String(cell.execution_count);
       const outs = Array.isArray(cell.outputs) ? (cell.outputs as Json[]).map(output).filter(Boolean) : [];
       return `<div class="dw-cell"><div class="dw-prompt">In [${escapeHtml(n)}]:</div><div><pre><code class="hljs">${highlight(src, lang)}</code></pre>${
-        outs.length ? `<div class="dw-out">${outs.join("")}</div>` : ""
+        outs.length ? `<details class="dw-out" open><summary>Outputs (${outs.length})</summary>${outs.join("")}</details>` : ""
       }</div></div>`;
     })
     .join("");
