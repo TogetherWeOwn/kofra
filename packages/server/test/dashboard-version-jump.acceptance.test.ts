@@ -353,3 +353,156 @@ describe("single-file attachment downloads are pinned to inspected immutable byt
     expect(downloadButton(m).disabled).toBe(false);
   });
 });
+
+describe("checksum copy-status across version jumps", () => {
+  const copyButton = (m: Mounted) => {
+    const btn = m.doc.querySelectorAll("#files button").find(b => /copy.*sha/i.test(b.getAttribute("aria-label") ?? b.textContent));
+    expect(btn, "Copy SHA-256 button in inspected files").not.toBeUndefined();
+    return btn!;
+  };
+  const copyStatus = (m: Mounted) => m.doc.querySelector('#files [role="status"]')!;
+  function controlledClipboard() {
+    const pending: Array<{ resolve(): void; reject(reason: Error): void }> = [];
+    return {
+      pending,
+      write: (_text: string) => new Promise<void>((resolve, reject) => { pending.push({ resolve, reject }); }),
+      finish(index: number, success: boolean) {
+        const attempt = pending[index]!;
+        expect(attempt, `clipboard attempt ${index}`).not.toBeUndefined();
+        if (success) attempt.resolve(); else attempt.reject(new Error("Clipboard denied"));
+      },
+    };
+  }
+
+  it.each([
+    ["invalid reference", "..", null],
+    ["missing lookup", "missing", null],
+    ["pending version", "ver_pending", "pending"],
+    ["refused manifest", "live", "manifest-fail"],
+  ] as const)("retains copy announcements after %s that preserves the view", async (_label, ref, setup) => {
+    const f = fixture();
+    if (setup === "pending") {
+      f.versions.unshift(version("ver_pending", 106, false, "pending"));
+      f.files.set("ver_pending", [file("unfinished.txt")]);
+    }
+    const m = await mount(f, { requested: OLD });
+    copyButton(m).click();
+    await waitFor(() => /copied/i.test(copyStatus(m).textContent), "baseline copy announcement");
+    expect(m.clipboardWrites).toEqual(["1".repeat(64)]);
+    if (setup === "manifest-fail") {
+      m.intercept(u => u.pathname === `${BASE}/files` && u.searchParams.get("version") === CURRENT ? failure(403) : undefined);
+    }
+    submit(m, ref);
+    await settle(); await settle();
+    expect(m.paths()).toEqual([FILE]);
+    expect(selectedUrl(m)).toBe(OLD);
+    const writesBefore = m.clipboardWrites.length;
+    copyButton(m).click();
+    await waitFor(() => /copied/i.test(copyStatus(m).textContent), "copy announcement after retained failure");
+    expect(m.clipboardWrites).toHaveLength(writesBefore + 1);
+    expect(m.clipboardWrites.at(-1)).toBe("1".repeat(64));
+    expect(m.paths()).toEqual([FILE]);
+    expect(m.deletes()).toEqual([]);
+  });
+
+  it("fences late copy callbacks from a replaced view", async () => {
+    const clipboard = controlledClipboard();
+    const m = await mount(fixture(), { requested: OLD, writeClipboard: clipboard.write });
+    const oldStatus = copyStatus(m);
+    copyButton(m).click();
+    await settle();
+    expect(oldStatus.textContent, "pending copy clears status").toBe("");
+    expect(clipboard.pending).toHaveLength(1);
+    submit(m, "live");
+    await expectSelection(m, CURRENT, 105);
+    await settle();
+    const newStatus = copyStatus(m);
+    expect(newStatus, "replaced view mounts its own status").not.toBe(oldStatus);
+    expect(newStatus.textContent).toBe("");
+    clipboard.finish(0, true);
+    await settle(); await settle(); await settle();
+    expect(newStatus.textContent, "late old-view success stays fenced").toBe("");
+    expect(oldStatus.textContent, "detached old status stays silent").toBe("");
+    expect(m.clipboardWrites).toEqual(["1".repeat(64)]);
+    copyButton(m).click();
+    await settle();
+    expect(clipboard.pending).toHaveLength(2);
+    clipboard.finish(1, true);
+    await waitFor(() => /copied/i.test(newStatus.textContent), "new view copy announcement");
+  });
+});
+
+describe("history traversal cancellation and failure", () => {
+  it("Forward to already-displayed B cancels in-flight Back lookup to A", async () => {
+    const m = await mount(fixture(), { requested: CURRENT, prior: OLD });
+    await expectSelection(m, CURRENT, 105);
+    const length = m.history.length;
+    const gate = deferred<Response>();
+    m.intercept(u => u.pathname === `${BASE}/versions/${OLD}` ? gate.promise : undefined);
+    m.history.back();
+    await settle();
+    expect(m.paths()).toEqual(["release-105.txt"]);
+    expect(m.location.searchParams.get("version")).toBe(OLD);
+    m.history.forward();
+    await settle(); await settle();
+    expect(m.paths()).toEqual(["release-105.txt"]);
+    expect(selectedUrl(m)).toBe(CURRENT);
+    expect(m.history.length).toBe(length);
+    gate.resolve(resolved(m.f.versions.find(v => v.id === OLD)!));
+    await settle(); await settle();
+    expect(m.paths()).toEqual(["release-105.txt"]);
+    expect(selectedUrl(m)).toBe(CURRENT);
+    expect(m.history.length).toBe(length);
+    expect(m.manifests().map(c => new URL(c.url, m.location).searchParams.get("version"))).not.toContain(OLD);
+  });
+
+  it("failed Back traversal retains B and reconciles URL without new entry", async () => {
+    const m = await mount(fixture(), { requested: CURRENT, prior: OLD });
+    await expectSelection(m, CURRENT, 105);
+    const length = m.history.length;
+    m.intercept(u => u.pathname === `${BASE}/versions/${OLD}` ? failure(404) : undefined);
+    m.history.back();
+    await settle(); await settle(); await settle();
+    expect(m.paths()).toEqual(["release-105.txt"]);
+    expect(selectedUrl(m)).toBe(CURRENT);
+    expect(m.history.length).toBe(length);
+    expect(m.location.href).toContain(`version=${CURRENT}`);
+  });
+});
+
+describe("deletion of inspected versions", () => {
+  async function confirmDelete(m: Mounted, index: number) {
+    const del = rowButtons(m, "Delete")[index]!;
+    del.click();
+    await settle();
+    const dialog = m.doc.querySelector("dialog")!;
+    expect((dialog as unknown as { open: boolean }).open, "Delete confirm dialog opens").toBe(true);
+    const confirm = dialog.querySelectorAll("button").find(b => /delete version/i.test(b.textContent))!;
+    confirm.click();
+    await settle(); await settle(); await settle(); await settle();
+    expect((dialog as unknown as { open: boolean }).open, "Delete confirm closes").toBe(false);
+  }
+
+  it("deleting inspected non-live version clears its ?version and renders live", async () => {
+    const m = await mount(fixture(), { requested: SECOND });
+    await expectSelection(m, SECOND, 104);
+    expect(rowButtons(m, "Delete")).toHaveLength(99);
+    await confirmDelete(m, 0);
+    expect(m.deletes().map(c => new URL(c.url, m.location).pathname)).toEqual([`${BASE}/versions/${SECOND}`]);
+    expect(m.location.searchParams.get("version")).toBeNull();
+    await expectSelection(m, CURRENT, 105);
+    expect(m.paths()).toEqual(["release-105.txt"]);
+    expect(rowButtons(m, "Files")).toHaveLength(100);
+    expect(rowButtons(m, "Delete")).toHaveLength(99);
+  });
+
+  it("deleting another version retains current selection", async () => {
+    const m = await mount(fixture(), { requested: SECOND });
+    await expectSelection(m, SECOND, 104);
+    await confirmDelete(m, 1);
+    expect(m.deletes()).toHaveLength(1);
+    expect(m.location.searchParams.get("version")).toBe(SECOND);
+    await expectSelection(m, SECOND, 104);
+    expect(m.paths()).toEqual(["release-104.txt"]);
+  });
+});
