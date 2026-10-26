@@ -1,3 +1,4 @@
+// rebrand:keep-file (intentional DROPWAY_* legacy fixtures; scripts/rebrand.mjs never edits this file.)
 /**
  * Acceptance contract: docs/CLI_DIAGNOSTICS.md, matrix rows 1–36.
  * Security bounds tighten the document: custom config selectors never expose
