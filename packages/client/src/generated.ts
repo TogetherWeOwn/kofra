@@ -635,6 +635,33 @@ export interface GetVersionOutput {
     [key: string]: unknown;
   };
   missing?: string[];
+  upload?: {
+    versionId?: string;
+    expiresAt?: string;
+    items?: {
+      path?: string;
+      paths?: string[];
+      sha256?: string;
+      size?: number;
+      method?: "PUT";
+      url?: string;
+      headers?: Record<string, string>;
+      curl?: string;
+      [key: string]: unknown;
+    }[];
+    [key: string]: unknown;
+  };
+  uploads?: {
+    path?: string;
+    paths?: string[];
+    sha256?: string;
+    size?: number;
+    method?: "PUT";
+    url?: string;
+    headers?: Record<string, string>;
+    curl?: string;
+    [key: string]: unknown;
+  }[];
   [key: string]: unknown;
 }
 
@@ -1065,7 +1092,7 @@ export const OPERATIONS = {
   "whoami": { method: "GET", path: "/api/v1/me", summary: "Who am I" },
   "publish_site": { method: "POST", path: "/api/v1/publish-sources", summary: "Publish a site" },
   "update_site_files": { method: "PATCH", path: "/api/v1/sites/{slug}/files", summary: "Change some files" },
-  "finalize_version": { method: "POST", path: "/api/v1/sites/{slug}/deploys/{id}/finalize", summary: "Make an uploaded version live" },
+  "finalize_version": { method: "POST", path: "/api/v1/sites/{slug}/versions/{id}/finalize", summary: "Make an uploaded version live" },
   "get_site": { method: "GET", path: "/api/v1/sites/{slug}", summary: "Get a site" },
   "list_sites": { method: "GET", path: "/api/v1/sites", summary: "List sites" },
   "list_files": { method: "GET", path: "/api/v1/sites/{slug}/files", summary: "List files" },
@@ -1095,7 +1122,7 @@ export const OPERATIONS = {
   "setup_instance": { method: "POST", path: "/api/v1/setup", summary: "First run: create the owner (bootstrap key only)" },
   "recover_owner_key": { method: "POST", path: "/api/v1/setup/recover", summary: "Mint a new owner key (bootstrap key only)" },
   "publish_upload": { method: "POST", path: "/api/v1/publish", summary: "Publish files in one call and get a live URL" },
-  "create_version": { method: "POST", path: "/api/v1/sites/{slug}/deploys", summary: "Start a version from a file manifest (upload only what is missing)" },
+  "create_version": { method: "POST", path: "/api/v1/sites/{slug}/versions", summary: "Start a version from a file manifest (upload only what is missing)" },
   "get_deploy": { method: "GET", path: "/api/v1/sites/{slug}/deploys/{id}", summary: "Pending version status (missing files)" },
   "upload_blob": { method: "PUT", path: "/api/v1/blobs/{sha256}", summary: "Upload one file's raw bytes" },
   "get_file_bytes": { method: "GET", path: "/api/v1/sites/{slug}/files/{path}", summary: "Read one file's raw bytes (ETag = sha256)" },

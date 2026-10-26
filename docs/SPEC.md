@@ -93,16 +93,16 @@ What Kofra is not:
 | ID | Feature | Pri | Status |
 |---|---|---|---|
 | PUB-01 | One-call publish `POST /api/v1/publish`: multipart (`-F path=@file`), a `.zip` body, one raw file, or JSON with inline files. Creates a site or, with `?slug=`/`site`, replaces all files of an existing one | P0 | Done |
-| PUB-02 | Manifest publish: send `{path, size, sha256, contentType?}` for every file; the server answers with only the hashes it still needs; upload those; finalize atomically | P0 | Done (as `/deploys`; renamed `/versions` in R-05) |
+| PUB-02 | Manifest publish: send `{path, size, sha256, contentType?}` for every file; the server answers with only the hashes it still needs; upload those; finalize atomically | P0 | Done (`/versions`; `/deploys` kept as an alias) |
 | PUB-03 | File sources in JSON and MCP, one per file: `content` (utf8), `content`+`encoding:"base64"` (small binaries), `url` (server fetches it, SSRF-guarded), `sha256`+`size` (already stored), `copyFrom` (another site, version or path) | P0 | Implemented (R-04); deployment verification pending |
 | PUB-04 | Upload links: the response lists `PUT <app>/api/v1/blobs/<sha256>` targets with a ready `curl` line and a short-lived upload token scoped to the pending version. One egress host; no R2 credentials needed | P0 | Implemented for JSON/MCP file sources (R-04); deployment verification pending |
 | PUB-05 | Byte-identical republish returns `status: "unchanged"` and mints no version; settings in the same call still apply | P0 | Done |
 | PUB-06 | Stale-write protection: `baseVersionId` returns `409 version_conflict` naming the live version, who published it and when | P0 | Done |
-| PUB-07 | Partial update `PATCH /api/v1/sites/{site}/files` (`update_site_files`): write, delete and move paths relative to a base version; everything else carries over by hash | P0 | R-05 |
+| PUB-07 | Partial update `PATCH /api/v1/sites/{site}/files` (`update_site_files`): write, delete and move paths relative to a base version; everything else carries over by hash | P0 | Done |
 | PUB-08 | `Idempotency-Key` on every create (24 h); finalize, restore and delete are idempotent | P0 | JSON publish and registered keyed writes use atomic D1 replay; legacy raw/multipart/ZIP publishing is not keyed. Finalize replay done |
 | PUB-09 | Client attribution: `X-Kofra-Client: <harness>/<detail>` header or MCP `clientInfo`, stored per version | P0 | Done (header); MCP in R-06 |
 | PUB-10 | Version message (like a commit message, up to 200 chars) | P0 | Done |
-| PUB-11 | Pending versions expire after 1 hour; finalizing with missing bytes returns `409 missing_blobs` with fresh upload links | P0 | Partial (expiry done); R-05 |
+| PUB-11 | Pending versions expire after 1 hour; finalizing with missing bytes returns `409 missing_blobs` with fresh upload links | P0 | Done |
 | PUB-12 | Publish warnings: root-absolute paths in path mode, SPA without a base path, browser storage on a sandboxed origin, `.wasm` without cross-origin isolation, possible secrets, invalid config files | P0 | R-12 |
 | PUB-13 | Files larger than one request (above about 95 MB): multipart upload through the Worker, resumable | P1 | R-35 |
 | PUB-14 | `archiveUrl` (publish a zip from a URL) and chat-client attachments (`{download_url, file_name}`) as sources | P1 | R-35 |
@@ -1194,10 +1194,10 @@ Codes are stable forever.
 
 | Method | Path | Tool | Scope | Pri | Status |
 |---|---|---|---|---|---|
-| POST | `/api/v1/sites/{site}/versions` (alias `/deploys`) | - (`publish_site` covers it) | `sites:write` | P0 | Done as `/deploys` |
+| POST | `/api/v1/sites/{site}/versions` (alias `/deploys`) | - (`publish_site` covers it) | `sites:write` | P0 | Done |
 | GET | `/api/v1/sites/{site}/versions` | `list_versions` | `sites:read` | P0 | Done |
-| GET | `/api/v1/sites/{site}/versions/{version}` | `get_version` | `sites:read` | P0 | Partial (`/deploys/{id}`); R-05 |
-| POST | `/api/v1/sites/{site}/versions/{version}/finalize` | `finalize_version` | `sites:write` | P0 | Done as `/deploys/{id}/finalize` |
+| GET | `/api/v1/sites/{site}/versions/{version}` | `get_version` | `sites:read` | P0 | Done (status, counts, missing files; write keys also get fresh upload items) |
+| POST | `/api/v1/sites/{site}/versions/{version}/finalize` (alias `/deploys/{id}/finalize`) | `finalize_version` | `sites:write` | P0 | Done |
 | POST | `/api/v1/sites/{site}/versions/{version}/restore` | `restore_version` | `sites:write` | P0 | Done |
 | DELETE | `/api/v1/sites/{site}/versions/{version}` | `delete_version` | `sites:delete` | P1 | Done |
 | GET | `/api/v1/sites/{site}/diff?from=&to=` | `diff_versions` | `sites:read` | P1 | R-20 |

@@ -39,3 +39,4 @@ export * from "./services/sources";
 export * from "./services/transfers";
 export * from "./services/transfer-downloads";
 export * from "./services/version-export";
+export * from "./services/uploads";

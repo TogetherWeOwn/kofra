@@ -25,7 +25,6 @@ import {
   siteUrl,
   updateSite,
   updateSiteFiles,
-  finalizeDeploy,
   getSiteFor,
   idempotencyScope,
   validateIdempotencyKey,
@@ -369,7 +368,8 @@ export const CORE_API_OPERATIONS = [
   defineOperation({
     id: "finalize_version",
     method: "POST",
-    path: "/api/v1/sites/{slug}/deploys/{id}/finalize",
+    path: "/api/v1/sites/{slug}/versions/{id}/finalize",
+    aliases: [{ method: "POST", path: "/api/v1/sites/{slug}/deploys/{id}/finalize" }],
     summary: "Make an uploaded version live",
     toolset: "core",
     scopes: ["sites:write"],
@@ -395,12 +395,13 @@ export const CORE_API_OPERATIONS = [
       output: fromSchema({ type: "object" }),
       handler: async (c) => {
         const dw = D(c);
-        const site = await getSiteFor(dw, P(c), c.req.param("slug")!, "sites:write");
-        const result = await finalizeDeploy(dw, P(c), site, c.req.param("id")!);
-        const fresh = await getSiteFor(dw, P(c), site.slug);
+        // Resolve refs and enrich missing_blobs with fresh upload items, exactly
+        // like the MCP tool; map back to the unchanged REST success shape.
+        const result = await finalizeVersionByRef(dw, P(c), c.req.param("slug")!, c.req.param("id")!);
+        const fresh = await getSiteFor(dw, P(c), result.slug);
         return c.json({
-          url: siteUrl(dw, site.slug),
-          live: result.live,
+          url: siteUrl(dw, fresh.slug),
+          live: result.status === "live",
           replayed: result.replayed,
           site: await describeSite(dw, fresh),
           warnings: result.warnings,
@@ -854,8 +855,9 @@ export const CORE_API_OPERATIONS = [
       output: fromSchema({ type: "object" }),
       handler: async (c) => {
         const dw = D(c);
-        const site = await getSiteFor(dw, P(c), c.req.param("slug")!, "sites:write");
-        const out = await restoreVersion(dw, P(c), site, c.req.param("id")!);
+        const site = await getSiteByRef(dw, P(c), c.req.param("slug")!, "sites:write");
+        const version = await resolveVersionRef(dw, site, c.req.param("id")!);
+        const out = await restoreVersion(dw, P(c), site, version.id);
         return c.json({ ...out, url: siteUrl(dw, site.slug) });
       },
     },

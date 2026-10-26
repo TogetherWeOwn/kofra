@@ -181,7 +181,7 @@ URLs: share the \`url\` from responses exactly as returned (site URLs look like 
 - Publish: \`curl ${origin}/api/v1/publish -H "Authorization: Bearer $KEY" -F "index.html=@index.html" -F "assets/app.js=@assets/app.js"\` (form field name = file path). Also accepts a .zip body, JSON \`{"files":[{"path","content"}]}\`, or one raw file with \`?path=name.ext\`.
 - Same site again: add \`slug=<slug>\`. Identical content returns \`unchanged\`.
 - Change some files: \`PATCH ${origin}/api/v1/sites/{slug}/files\` with \`files\`, \`delete\`, \`move\`, \`baseVersionId\`.
-- Large sites: \`POST /api/v1/sites/{slug}/deploys\` with \`{path,size,sha256}\` for every file, \`PUT /api/v1/blobs/{sha256}\` only for the missing ones, then \`POST .../deploys/{id}/finalize\`.
+- Large sites: \`POST /api/v1/sites/{slug}/versions\` with \`{path,size,sha256}\` for every file, \`PUT /api/v1/blobs/{sha256}\` only for the missing ones, then \`POST .../versions/{id}/finalize\`. The old \`/deploys\` paths still work as aliases.
 - Viewing: browsers get rendered views (HTML is the real page, Markdown rendered); \`?raw=1\` returns raw bytes, \`?download=1\` downloads.
 
 ## MCP
