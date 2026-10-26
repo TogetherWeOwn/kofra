@@ -140,6 +140,42 @@ describe("duplicate dashboard outcome contract", () => {
     expect(form.destination.value).toBe(slug);
   });
 
+  it.each([
+    ["double hyphen", "bad--name", "Snapshot", /slug|name/i],
+    ["two-character slug", "ab", "Snapshot", /slug|name/i],
+    ["57-character slug", "a".repeat(57), "Snapshot", /slug|name/i],
+    ["501-character message", "requested-copy", "m".repeat(501), /message/i],
+  ] as const)("rejects %s in the served submit handler with a field-specific error", async (_case, slug, message, error) => {
+    const view = await visit(async () => response(fixture.destinationResponse));
+    const form = open(view);
+    enter(form, slug, message);
+    // Bypass native constraint validation: the served handler must enforce bounds
+    // even when programmatic input exceeds maxlength (as this VM permits).
+    const submitForm = form.destination.closest("form");
+    expect(submitForm).not.toBeNull();
+    submitForm!.dispatch("submit");
+    await until(() => error.test(announcements(view)), "invalid field is named in an actionable error");
+    expect(announcements(view)).toMatch(/choose|enter|must|between|at most|characters|valid/i);
+    expect(mutations(view.wire)).toEqual([]);
+    expect(form.destination.value).toBe(slug);
+    expect(form.message.value).toBe(message);
+    noGuessedSuccess(view);
+  });
+
+  it.each([
+    [3, 499], [3, 500], [56, 499], [56, 500],
+  ] as const)("submits valid slug length %s and message length %s unchanged", async (slugLength, messageLength) => {
+    const view = await visit(async () => response(fixture.destinationResponse));
+    const form = open(view);
+    const slug = "a".repeat(slugLength);
+    const message = "m".repeat(messageLength);
+    enter(form, slug, message);
+    form.submit.click();
+    await expectReceipt(view);
+    assertDuplicateOnly(view, 1);
+    expect(JSON.parse(mutations(view.wire)[0]!.body)).toEqual({ newSlug: slug, message });
+  });
+
   it("submits source identity, explicit destination and literal message only through duplicate_site", async () => {
     const before = await fixture.snapshot();
     const view = await visit(async () => refusal("slug_taken", "Choose another destination slug."));
@@ -226,6 +262,73 @@ describe("duplicate dashboard outcome contract", () => {
     expect(retry!.headers.get("Idempotency-Key")).toBe(first!.headers.get("Idempotency-Key"));
     expect(retry!.path).toBe(first!.path);
     expect(retry!.body).toBe(first!.body);
+  });
+
+  it("restores both inputs and the original attempt after an ambiguous failure, Cancel and reopen", async () => {
+    let attempts = 0;
+    const view = await visit(async () => {
+      if (++attempts === 1) throw new TypeError("Network disconnected after submission");
+      return response(fixture.destinationResponse);
+    });
+    const form = open(view);
+    enter(form);
+    form.submit.click();
+    await until(() => /network|connect|retry|fetch/i.test(announcements(view)), "ambiguous failure announces recovery");
+    noGuessedSuccess(view);
+    assertDuplicateOnly(view, 1);
+    const first = mutations(view.wire)[0]!;
+    form.cancel.click();
+    await settle();
+    expect(!form.panel.isConnected || !visible(form.panel)).toBe(true);
+    const reopened = open(view);
+    expect(reopened.destination.value).toBe("requested-copy");
+    expect(reopened.message.value).toBe("Snapshot for a colleague");
+    expect(mutations(view.wire)).toHaveLength(1);
+    reopened.submit.click();
+    await expectReceipt(view);
+    assertDuplicateOnly(view, 2);
+    const retry = mutations(view.wire)[1]!;
+    expect(retry.path).toBe(first.path);
+    expect(retry.body).toBe(first.body);
+    expect(retry.headers.get("Idempotency-Key")).toBe(first.headers.get("Idempotency-Key"));
+  });
+
+  it.each([
+    ["javascript URL", { url: "javascript:alert(1)" }],
+    ["data URL", { url: "data:text/html,<script>alert(1)</script>" }],
+    ["relative URL", { url: "/s/dashboard-returned-copy/" }],
+    ["malformed URL", { url: "https://[invalid" }],
+    ["missing URL", { url: undefined }],
+    ["missing slug", { site: { slug: undefined } }],
+    ["empty slug", { site: { slug: "" } }],
+    ["non-string slug", { site: { slug: 123 } }],
+  ])("rejects a successful HTTP receipt with %s and preserves the unchanged retry", async (_case, invalid) => {
+    let attempts = 0;
+    const view = await visit(async () => response(++attempts === 1
+      ? { ...fixture.destinationResponse, ...invalid, ...("site" in invalid ? { site: { ...fixture.destinationResponse.site, ...invalid.site } } : {}) }
+      : fixture.destinationResponse));
+    const form = open(view);
+    enter(form);
+    form.submit.click();
+    await until(() => /retry|try again|reload|check/i.test(announcements(view)), "invalid receipt announces actionable recovery");
+    noGuessedSuccess(view);
+    expect(announcements(view)).not.toMatch(/successfully|duplicate created|site duplicated|copy created/i);
+    expect(links(view).filter(link => {
+      const href = link.getAttribute("href") ?? "";
+      return /^(?:javascript|data):/i.test(href) || href.includes("dashboard-returned-copy") || href.includes("/dashboard/sites/123");
+    }), "invalid response supplies neither a live link nor a destination management link").toEqual([]);
+    expect(form.destination.value).toBe("requested-copy");
+    expect(form.message.value).toBe("Snapshot for a colleague");
+    expect(form.submit.disabled).toBe(false);
+    assertDuplicateOnly(view, 1);
+    const first = mutations(view.wire)[0]!;
+    form.submit.click();
+    await expectReceipt(view);
+    assertDuplicateOnly(view, 2);
+    const retry = mutations(view.wire)[1]!;
+    expect(retry.path).toBe(first.path);
+    expect(retry.body).toBe(first.body);
+    expect(retry.headers.get("Idempotency-Key")).toBe(first.headers.get("Idempotency-Key"));
   });
 
   it.each(["slug", "message"] as const)("replaces the idempotency key when the %s changes after a refusal", async changed => {

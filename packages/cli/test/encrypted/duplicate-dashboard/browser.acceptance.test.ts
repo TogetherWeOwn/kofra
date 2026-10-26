@@ -7,7 +7,7 @@
 import { createRequire } from "node:module";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import type { Browser, BrowserContext, Locator, Page } from "playwright";
-import { sourceSlug, startFixture, type Fixture } from "./fixture";
+import { deferred, sourceSlug, startFixture, type Fixture } from "./fixture";
 
 const require = createRequire(import.meta.url);
 let fixture: Fixture;
@@ -76,6 +76,60 @@ it("opens and cancels by keyboard, labels both fields, and restores focus withou
   expect(await isFocused(action)).toBe(true);
   expect(writes).toEqual([]);
   expect(errors).toEqual([]);
+});
+
+it("ignores native Escape while duplication is busy and completes the held receipt", async () => {
+  const { page, writes, errors } = await visit();
+  const gate = deferred();
+  const completed = deferred();
+  let requests = 0;
+  await page.route(`${fixture.origin}/api/v1/sites/*/duplicate`, async route => {
+    try {
+      const request = route.request();
+      expect(request.method()).toBe("POST");
+      expect([`/api/v1/sites/${sourceSlug}/duplicate`, `/api/v1/sites/${fixture.source.id}/duplicate`]).toContain(new URL(request.url()).pathname);
+      expect(request.postDataJSON()).toEqual({ newSlug: "requested-copy", message: "Busy keyboard copy" });
+      requests++;
+      await gate.promise;
+      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(fixture.destinationResponse) });
+    } finally { completed.resolve(); }
+  });
+  try {
+    await opener(page).click();
+    await destination(page).fill("requested-copy");
+    const form = await panel(page);
+    const message = form.getByLabel(/message/i);
+    const submit = form.locator('button[type="submit"]');
+    const cancel = form.getByRole("button", { name: /^cancel$/i });
+    await message.fill("Busy keyboard copy");
+    await submit.click();
+    await expect.poll(() => requests).toBe(1);
+    expect(await form.getAttribute("aria-busy")).toBe("true");
+    for (const control of [destination(page), message, submit, cancel]) expect(await control.isDisabled()).toBe(true);
+    await page.keyboard.press("Escape");
+    // Allow the native cancel event/default action to complete before checking.
+    await page.evaluate(() => new Promise<void>(resolve => {
+      const browser = globalThis as any;
+      browser.requestAnimationFrame(() => browser.requestAnimationFrame(() => resolve()));
+    }));
+    expect(await form.isVisible(), "Escape must not dismiss an in-flight duplicate").toBe(true);
+    expect(await form.getAttribute("aria-busy")).toBe("true");
+    for (const control of [destination(page), message, submit, cancel]) expect(await control.isDisabled()).toBe(true);
+    expect(page.url()).toBe(`${fixture.origin}/dashboard/sites/${sourceSlug}`);
+    gate.resolve();
+    const receipt = page.getByRole("link", { name: `${fixture.origin}/s/dashboard-returned-copy/`, exact: true });
+    await receipt.waitFor();
+    expect(await receipt.getAttribute("href")).toBe(`${fixture.origin}/s/dashboard-returned-copy/`);
+    expect(await page.locator('a[href^="/dashboard/sites/dashboard-returned-copy"]').count()).toBe(1);
+    expect(requests).toBe(1);
+    expect(writes, "the intercepted duplicate must not trigger any other mutation").toEqual([]);
+    expect(errors).toEqual([]);
+  } finally {
+    gate.resolve();
+    // Never leave a route waiting across context/Worker cleanup, even on failure.
+    await page.unrouteAll({ behavior: "wait" });
+    if (requests) await completed.promise;
+  }
 });
 
 it("keeps modal tab focus inside the dialog, when a modal is used", async () => {
