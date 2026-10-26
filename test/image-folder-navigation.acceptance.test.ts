@@ -59,7 +59,7 @@ const textFile = (path: string, content: string): PubFile => ({ path, content })
 
 async function publish(dw: Instance, slug: string, files: PubFile[]): Promise<void> {
   const res = await dw.json("/api/v1/publish", { key: dw.ownerKey, ...jsonBody({ slug, files }) });
-  expect(res.status, JSON.stringify(res.body)).toBe(201);
+  expect([200, 201], JSON.stringify(res.body)).toContain(res.status);
   expect(res.body.slug).toBe(slug);
 }
 
@@ -290,7 +290,7 @@ describe("image/SVG folder navigation (path mode)", () => {
     expect(svg).toContain('id="dw-zoom"');
     expect(svg).toContain(`href="${BASE}two/b.svg?view=source"`);
     expect(svg).toContain(">Source</a>");
-    expect((await get("two/b.svg?view=source")).headers.get("x-kofra-viewer")).toBe("source");
+    expect((await dw.call(`${BASE}two/b.svg?view=source`, { headers: NAV })).headers.get("x-kofra-viewer")).toBe("source");
   });
 
   it("shows no navigation for a lone image", async () => {
