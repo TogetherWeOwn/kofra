@@ -29,6 +29,7 @@ Zero runtime dependencies. Node.js 20 or newer.
 | `versions <name>` | Newest 500 versions, newest first, live marked — or `versions <name> <ref>` to inspect one directly |
 | `restore <name> [v3]` | Make an older version live again. Without a version: the one before the live version. Alias `rollback` |
 | `delete <name> --yes` | Delete a site. `--version v3` deletes one non-live version instead |
+| `access <site> --mode <mode> --yes` | Set who can open a site: `public` or `password` (password from piped stdin or one no-echo prompt; `--dry-run` plans offline). Changing a password signs everyone out |
 | `whoami` | The instance, your identity and your key's scopes |
 | `keys ls [--all]` | Your API keys as safe metadata (never the secrets); `--all` adds other members' keys when your key has `members:write` |
 | `login` / `logout` | Save or forget an API key for an instance |

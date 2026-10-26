@@ -273,6 +273,31 @@ async function readSecretInput(io: Io, question: string): Promise<string> {
   return "";
 }
 
+/** Remove exactly one trailing line terminator (`\r\n` or `\n`), nothing else. */
+function stripLineTerminator(v: string): string {
+  if (v.endsWith("\r\n")) return v.slice(0, -2);
+  if (v.endsWith("\n")) return v.slice(0, -1);
+  return v;
+}
+
+/**
+ * Read a visitor password without changing it: the instance hashes and
+ * verifies passwords byte-exactly, so (unlike API/bootstrap keys above)
+ * surrounding spaces are part of the password. Only the one trailing line
+ * terminator from the pipe/prompt is removed. Empty or whitespace-only
+ * input still reads as "no password" and is refused before networking.
+ */
+async function readPasswordInput(io: Io, question: string): Promise<string> {
+  if (!io.stdinIsTTY) {
+    const v = stripLineTerminator(await io.readStdin());
+    if (v.trim()) return v;
+  } else if (io.stderrIsTTY) {
+    const v = stripLineTerminator(await io.prompt(question, { hidden: true }));
+    if (v.trim()) return v;
+  }
+  return "";
+}
+
 const versionLabel = (v: VersionInfo | null | undefined) => (v ? `v${v.number}` : "-");
 
 // ---------------------------------------------------------------- commands
@@ -731,6 +756,90 @@ const deleteCmd: Command = {
   },
 };
 
+const accessCmd: Command = {
+  summary: "Set who can open a site (public or password-protected)",
+  usage: "kofra access <site> --mode <public|password|restricted|private> --yes [--json]",
+  flags: {
+    mode: { kind: "string" },
+    yes: { kind: "boolean", short: "y" },
+    "dry-run": { kind: "boolean" },
+  },
+  details: `The site is explicit: pass its slug, id or URL (never inferred from ./dropway.json).
+
+Options:
+  --mode <mode>   public (anyone with the link) or password (visitors must
+                  enter the password). restricted and private are not available
+                  on this edition yet: the server answers 501 feature_unavailable.
+  --yes, -y       Required: confirm the change (never prompts, even in a terminal).
+  --dry-run       Print the plan without contacting the instance (no --yes or
+                  key needed): one JSON object with planVersion, site, mode and
+                  passwordSupplied. The password itself never appears.
+  --json          Print exactly one JSON object on stdout.
+
+With --mode password the visitor password comes from piped stdin, or from one
+no-echo prompt in a terminal; empty input is refused before anything is sent.
+Only the trailing newline is removed: surrounding spaces are part of the
+password and are sent exactly as entered.
+Changing the password signs everyone out. The password is never printed, logged
+or echoed back in errors.
+
+Examples:
+  kofra access my-site --mode public --yes
+  echo "$PASSWORD" | kofra access my-site --mode password --yes --json
+  kofra access my-site --mode password --dry-run --json`,
+  async run(p, io, out) {
+    if (p.positionals.length > 1) throw new UsageError(`Too many arguments. Usage: ${this.usage}`);
+    const site = positional(p, 0, "site", this.usage);
+    const mode = str(p, "mode");
+    if (!mode) throw new UsageError(`Missing --mode. Usage: ${this.usage}`);
+    if (mode !== "public" && mode !== "password" && mode !== "restricted" && mode !== "private") {
+      throw new UsageError(`--mode must be public, password, restricted or private (got ${JSON.stringify(mode)}).`);
+    }
+    if (bool(p, "dry-run") === true) {
+      // Offline plan: no instance resolution, no key, no requests, no writes.
+      // Never prompts and never fails for a missing password.
+      let passwordSupplied = false;
+      if (mode === "password" && !io.stdinIsTTY) passwordSupplied = stripLineTerminator(await io.readStdin()).trim() !== "";
+      out.result({ dryRun: true, planVersion: 1, site, mode, passwordSupplied }, () =>
+        mode === "password"
+          ? `Dry run: would set ${site} access to password (${passwordSupplied ? "password supplied" : "no password supplied"}).`
+          : `Dry run: would set ${site} access to ${mode}${mode === "public" ? " (visitors would not need a password)" : ""}.`,
+      );
+      return EXIT.ok;
+    }
+    if (bool(p, "yes") !== true) {
+      throw new CliError({
+        code: "confirmation_required",
+        message: `Refusing to change ${site} access without confirmation.`,
+        hint: "Re-run with --yes.",
+        exitCode: EXIT.usage,
+      });
+    }
+    let password = "";
+    if (mode === "password") {
+      password = await readPasswordInput(io, "Visitor password: ");
+      if (!password) {
+        throw new CliError({
+          code: "missing_password",
+          message: "Missing the visitor password.",
+          hint: "Pipe the visitor password on stdin or run in a terminal to be prompted.",
+          exitCode: EXIT.usage,
+        });
+      }
+    }
+    const inst = await resolveInstance(p, io);
+    const client = makeClient(io, inst.api, requireKey(inst, "Setting site access"));
+    const typedMode = mode as "public" | "password" | "restricted" | "private";
+    const data = await client.setSiteAccess(mode === "password" ? { slug: site, mode: typedMode, password } : { slug: site, mode: typedMode });
+    out.result({ site: data.site, access: data.access }, () => {
+      if (mode === "password") return `${site} is now password-protected: visitors need the password to open it.\nChanging the password signs everyone out.`;
+      if (mode === "public") return `${site} is now public: visitors do not need a password to open it.\nChanging the password signs everyone out.`;
+      return `${site} access mode is now ${mode}.`;
+    });
+    return EXIT.ok;
+  },
+};
+
 const whoamiCmd: Command = {
   summary: "Show the instance and the identity of your key",
   usage: "kofra whoami",
@@ -1177,6 +1286,7 @@ const COMMANDS: Record<string, Command> = {
   versions: versionsCmd,
   restore: restoreCmd,
   delete: deleteCmd,
+  access: accessCmd,
   whoami: whoamiCmd,
   keys: keysCmd,
   login: loginCmd,
