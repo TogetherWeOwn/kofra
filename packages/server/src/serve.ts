@@ -76,7 +76,8 @@ function hasChildren(files: LiveSite["files"], dir: string): boolean {
  * `__proto__` ordinary manifest data.
  */
 function nearestManifestAncestor(files: LiveSite["files"], filePath: string): string | null {
-  const segments = filePath.replace(/\/+$/, "").split("/").filter(Boolean);
+  // Empty segments (leading, trailing or repeated "/") are filtered out below.
+  const segments = filePath.split("/").filter(Boolean);
   const paths = Object.keys(files);
   for (let len = segments.length - 1; len >= 1; len--) {
     const dir = `${segments.slice(0, len).join("/")}/`;
