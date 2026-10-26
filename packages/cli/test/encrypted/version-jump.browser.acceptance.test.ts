@@ -96,7 +96,10 @@ async function visit(mobile = false) {
 function input(page: Page) { return page.getByRole("textbox", { name: /version/i }).filter({ visible: true }); }
 function open(page: Page) { return page.getByRole("button", { name: /^(open|go)(\s+version)?$/i }); }
 async function selected(page: Page, number: number) {
-  await expect.poll(() => page.locator("#files").innerText()).toContain(`Files in v${number}`);
+  // Exact version boundary: "Files in v1" is a substring of "Files in v105",
+  // so a plain toContain would pass while still showing v105. \b after the
+  // number only matches when no further digit follows.
+  await expect.poll(() => page.locator("#files").innerText()).toMatch(new RegExp(`Files in v${number}\\b`));
 }
 async function frames(page: Page) {
   await page.evaluate(() => new Promise<void>(resolve => {
@@ -111,11 +114,15 @@ it.each([false, true])("Enter opens a version outside the 100-row window, with u
     await input(view.page).fill("v1"); await frames(view.page);
     expect(view.calls.filter(u => new URL(u).pathname.startsWith(`${base}/versions/`))).toEqual([]);
     await input(view.page).press("Enter"); await selected(view.page, 1);
-    expect(new URL(view.page.url()).searchParams.get("version")).toBe(versions[0]!.id);
+    // page.url() is Node-side CDP-cached frame state; poll so the
+    // navigatedWithinDocument event can land before asserting.
+    await expect.poll(() => new URL(view.page.url()).searchParams.get("version")).toBe(versions[0]!.id);
     expect(view.calls.filter(u => new URL(u).pathname.startsWith(`${base}/versions/`)).map(u => new URL(u).pathname)).toEqual([`${base}/versions/v1`]);
     expect(view.calls.filter(u => new URL(u).pathname === `${base}/files`).map(u => new URL(u).searchParams.get("version"))).toEqual([versions[104]!.id, versions[0]!.id]);
     expect(await view.page.getByRole("button", { name: /^restore$/i }).count()).toBe(99);
-    expect(await view.page.getByRole("button", { name: /^delete$/i }).count()).toBe(99);
+    // Existing history controls carry aria-label="Delete version N" (visible
+    // text stays "Delete"); match that accessible naming, not /^delete$/i.
+    expect(await view.page.getByRole("button", { name: /^delete version \d+$/i }).count()).toBe(99);
     expect(await view.page.evaluate(() => {
       const doc = (globalThis as any).document;
       return !!doc.activeElement && doc.activeElement !== doc.body && doc.activeElement.isConnected;
@@ -133,6 +140,16 @@ it("invalid and missing references announce recovery without replacing the last 
   try {
     expect(await input(view.page).count(), "labelled version-reference input").toBe(1);
     await input(view.page).fill("v1"); await open(view.page).click(); await selected(view.page, 1);
+    // The open-v1 flow's route events can lag the DOM poll; settle them before
+    // capturing the baseline so the invalid submit below is measured alone.
+    await expect.poll(() => view.calls.some(u => new URL(u).pathname === `${base}/versions/v1`)).toBe(true);
+    await expect.poll(() => view.calls.some(u => {
+      const req = new URL(u);
+      return req.pathname === `${base}/files` && req.searchParams.get("version") === versions[0]!.id;
+    })).toBe(true);
+    // page.url() is Node-side CDP-cached frame state; settle it before
+    // capturing the baseline URL the invalid submit must preserve.
+    await expect.poll(() => new URL(view.page.url()).searchParams.get("version")).toBe(versions[0]!.id);
     const url = view.page.url(); const count = view.calls.length;
     await input(view.page).fill(".."); await input(view.page).press("Enter"); await frames(view.page);
     expect(view.calls).toHaveLength(count);

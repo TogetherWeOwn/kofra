@@ -48,6 +48,9 @@ export class FakeElement {
   // The dashboard assigns `tr.hidden = q && ...` (string-or-boolean); accept both.
   hidden: unknown = false;
   explicitTabIndex: number | null = null;
+  // Native <dialog> state for the existing Delete confirm flow.
+  open = false;
+  returnValue = "";
   private doc: FakeDocument;
 
   constructor(doc: FakeDocument, readonly tag: string) {
@@ -170,7 +173,15 @@ export class FakeElement {
       const form = this.closest("form");
       if (form && ((type === "keydown" && init.key === "Enter" && this.tag === "input") ||
           (type === "click" && this.tag === "button" && this.getAttribute("type") !== "button"))) {
-        form.dispatch("submit");
+        // Native <form method="dialog"> closes its dialog with the button's
+        // value instead of submitting. The dashboard Delete confirm uses this
+        // (button.value is set to "ok"/"cancel" as a property, not an attribute).
+        if (form.getAttribute("method") === "dialog") {
+          const dialog = form.closest("dialog");
+          if (dialog) dialog.close(this.value ?? "");
+        } else {
+          form.dispatch("submit");
+        }
       }
     }
   }
@@ -193,6 +204,14 @@ export class FakeElement {
   requestSubmit(): void { this.dispatch("submit"); }
   focus(): void {
     this.doc.activeElement = this;
+  }
+  showModal(): void {
+    this.open = true;
+  }
+  close(returnValue?: string): void {
+    if (returnValue !== undefined) this.returnValue = String(returnValue);
+    this.open = false;
+    this.dispatch("close", {});
   }
   scrollIntoView(_opts?: unknown): void {}
   select(): void {}

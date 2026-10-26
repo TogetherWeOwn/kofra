@@ -63,7 +63,7 @@ export const resolved = (v: Version) => json({ site: "test-site", version: v, mi
 export const manifest = (v: Version, files: ManifestFile[]) => json({ version: v, files, total: files.length, nextCursor: null });
 export type Intercept = (url: URL, init: RequestInit) => Response | Promise<Response> | undefined;
 
-export async function mount(f = fixture(), options: { requested?: string; prior?: string; intercept?: Intercept } = {}) {
+export async function mount(f = fixture(), options: { requested?: string; prior?: string; intercept?: Intercept; writeClipboard?: (text: string) => Promise<void> } = {}) {
   const doc = new FakeDocument();
   doc.body.setAttribute("data-page", "site");
   const boot = doc.createElement("script");
@@ -101,13 +101,28 @@ export async function mount(f = fixture(), options: { requested?: string; prior?
   const session = new Storage(); session.setItem("dropway.key", "dw_disposable_fixture");
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const unexpected: string[] = [];
+  const clipboardWrites: string[] = [];
   let intercept = options.intercept;
   const fetch = async (input: unknown, init: RequestInit = {}) => {
     const raw = String(input); calls.push({ url: raw, init });
     const u = new URL(raw, location);
     const overridden = intercept?.(u, init);
     if (overridden !== undefined) return overridden;
-    if (init.method && init.method.toUpperCase() !== "GET") {
+    const method = (init.method ?? "GET").toUpperCase();
+    if (method === "DELETE" && u.pathname.startsWith(`${BASE}/versions/`)) {
+      // Disposable authorized delete: live cannot be deleted (409), missing is
+      // 404, otherwise remove the version so later list/lookup/manifest reads
+      // observe the deletion. Only the existing history Delete controls use this.
+      const id = decodeURIComponent(u.pathname.slice(`${BASE}/versions/`.length).split("/")[0]!);
+      if (id === f.liveId) return json({ error: { code: "version_is_live", message: "Live version cannot be deleted", hint: "Restore another version first." } }, 409);
+      const index = f.versions.findIndex(v => v.id === id);
+      if (index < 0) return failure();
+      f.versions.splice(index, 1);
+      f.files.delete(id);
+      f.bytes.delete(id);
+      return json({ deleted: true });
+    }
+    if (method !== "GET") {
       unexpected.push(`${init.method} ${raw}`);
       return failure(405, "Unexpected mutation", "This test is read-only.");
     }
@@ -148,7 +163,10 @@ export async function mount(f = fixture(), options: { requested?: string; prior?
   }
   const sandbox: Record<string, unknown> = {
     document: doc, location, history, sessionStorage: session, localStorage: new Storage(), fetch,
-    navigator: { clipboard: { writeText: async () => {} } },
+    navigator: { clipboard: { writeText: async (text: string) => {
+      clipboardWrites.push(text);
+      await options.writeClipboard?.(text);
+    } } },
     URL: ObjectURL, URLSearchParams, Headers, Response, Blob, AbortController, DOMException,
     setTimeout, clearTimeout, queueMicrotask, console,
     addEventListener(type: string, fn: (event: unknown) => void) {
@@ -165,14 +183,15 @@ export async function mount(f = fixture(), options: { requested?: string; prior?
   await waitFor(() => !!doc.querySelector("#files table, #files .dw-error, #dw-site .dw-error"), "initial dashboard render");
   await settle();
   return {
-    doc, calls, unexpected, f, location, history, blobs, revoked,
+    doc, calls, unexpected, f, location, history, blobs, revoked, clipboardWrites,
     intercept(fn?: Intercept) { intercept = fn; },
     paths() { return doc.querySelectorAll("#files tbody tr").filter(r => !isHidden(r)).map(r => r.querySelector("td")!.textContent); },
     files() { return doc.querySelector("#files")!; },
-    lookups() { return calls.filter(c => new URL(c.url, location).pathname.startsWith(`${BASE}/versions/`)); },
+    lookups() { return calls.filter(c => new URL(c.url, location).pathname.startsWith(`${BASE}/versions/`) && (c.init.method ?? "GET").toUpperCase() === "GET"); },
     manifests() { return calls.filter(c => new URL(c.url, location).pathname === `${BASE}/files`); },
-    lists() { return calls.filter(c => new URL(c.url, location).pathname === `${BASE}/versions`); },
+    lists() { return calls.filter(c => new URL(c.url, location).pathname === `${BASE}/versions` && (c.init.method ?? "GET").toUpperCase() === "GET"); },
     downloads() { return calls.filter(c => new URL(c.url, location).pathname.startsWith(`${BASE}/files/`)); },
+    deletes() { return calls.filter(c => (c.init.method ?? "").toUpperCase() === "DELETE" && new URL(c.url, location).pathname.startsWith(`${BASE}/versions/`)); },
   };
 }
 export type Mounted = Awaited<ReturnType<typeof mount>>;

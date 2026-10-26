@@ -1405,6 +1405,13 @@ export function dropwayClient() {
                     try {
                       await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id), { method: "DELETE" });
                       toast("v" + v.number + " deleted.");
+                      // A successful deletion must not reload its now-invalid
+                      // explicit link; unrelated inspected versions stay put.
+                      var url = new URL(location.href);
+                      if (url.searchParams.get("version") === v.id) {
+                        url.searchParams.delete("version");
+                        history.replaceState(null, "", url.pathname + url.search + url.hash);
+                      }
                       pages.site();
                     } catch (e) {
                       toast(e.message, true);
@@ -1448,10 +1455,14 @@ export function dropwayClient() {
     // version jump, traversal): a completion holding a stale token must not
     // touch the view, the URL, or the announced state.
     var selectionReq = 0;
+    var displayedReq = 0;
     var currentSelection = null;
-    function setJumpError(message, hint) {
+    function setJumpError(message, hint, opts) {
       clear(jumpErrorBox);
       add(jumpErrorBox, errorBox({ message: message, hint: hint }, null));
+      // A refused traversal retains the manifest: reconcile this entry's URL
+      // with that view, without pushing another history entry.
+      if (opts && opts.history === "replace" && currentSelection) recordSelection(currentSelection.id, "replace");
     }
     function clearJumpError() {
       clear(jumpErrorBox);
@@ -1481,7 +1492,8 @@ export function dropwayClient() {
         else if (typeof history.pushState === "function") history.pushState({ v: id }, "", url);
       } catch (e) {}
     }
-    function commitSelection(mv, opts) {
+    function commitSelection(mv, opts, my) {
+      displayedReq = my;
       currentSelection = { id: mv.id, number: mv.number };
       setJumpLoading(false);
       clearJumpError();
@@ -1502,7 +1514,7 @@ export function dropwayClient() {
       var ref = (raw || "").trim();
       if (!validVersionRef(ref)) {
         setJumpLoading(false);
-        setJumpError("Enter a version reference: live, v3, 3, or a version id.", "Check the reference and try again.");
+        setJumpError("Enter a version reference: live, v3, 3, or a version id.", "Check the reference and try again.", opts);
         // Explicit submits return focus for correction; traversal must not
         // steal it while the person is moving through history.
         if (opts.focus !== false) jumpInput.focus();
@@ -1516,15 +1528,15 @@ export function dropwayClient() {
       } catch (e) {
         if (my !== selectionReq) return;
         setJumpLoading(false);
-        setJumpError(e.message || "Could not open that version.", e.hint);
+        setJumpError(e.message || "Could not open that version.", "Check the reference and try again." + (e.hint ? " " + e.hint : ""), opts);
         return;
       }
       if (my !== selectionReq) return;
       var v = found && found.version;
       if (!v || v.status === "pending") {
         setJumpLoading(false);
-        if (!v) setJumpError("That version reference did not resolve.", "Check the reference and try again.");
-        else setJumpError("Version v" + v.number + " is not ready yet.", "Choose a ready version from the history, or retry once its upload finishes.");
+        if (!v) setJumpError("That version reference did not resolve.", "Check the reference and try again.", opts);
+        else setJumpError("Version v" + v.number + " is not ready yet.", "Choose a ready version from the history, or retry once its upload finishes.", opts);
         return;
       }
       // showFiles takes the next token and loads the manifest pinned to the
@@ -1554,7 +1566,7 @@ export function dropwayClient() {
           clear(filesSection);
           add(filesSection, h("div", { class: "dw-pad" }, errorBox(e, "Could not load files")));
         } else {
-          setJumpError(e.message || "Could not load files.", e.hint);
+          setJumpError(e.message || "Could not load files.", e.hint, opts);
         }
         return;
       }
@@ -1569,7 +1581,7 @@ export function dropwayClient() {
           clear(filesSection);
           add(filesSection, h("div", { class: "dw-pad" }, errorBox(notReady, "Version not ready")));
         } else {
-          setJumpError(notReady.message, notReady.hint);
+          setJumpError(notReady.message, notReady.hint, opts);
         }
         return;
       }
@@ -1582,7 +1594,7 @@ export function dropwayClient() {
           h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", text: "0 files" }), filter)),
           h("div", { class: "dw-empty" }, h("h3", { text: "No files in this version" }), h("p", { class: "dw-small", text: "This version has an empty manifest." })),
         );
-        commitSelection(mv, opts);
+        commitSelection(mv, opts, my);
         return;
       }
       var copyStatus = h("p", { class: "dw-pad dw-small", style: "margin:0", role: "status", text: "" });
@@ -1615,10 +1627,10 @@ export function dropwayClient() {
                 clearTimeout(copyTimer);
                 copyStatus.textContent = "";
                 copyText(f.sha256, btn).then(function (ok) {
-                  if (attempt !== copyReq || my !== selectionReq) return;
+                  if (attempt !== copyReq || my !== displayedReq) return;
                   // A separate task makes identical results observable again.
                   copyTimer = setTimeout(function () {
-                    if (attempt !== copyReq || my !== selectionReq) return;
+                    if (attempt !== copyReq || my !== displayedReq) return;
                     copyStatus.textContent = ok
                       ? "Copied SHA-256 for " + f.path + "."
                       : "Copy failed for " + f.path + ". Select the checksum and copy it yourself.";
@@ -1740,7 +1752,7 @@ export function dropwayClient() {
         mv.live ? null : h("p", { class: "dw-pad dw-small dw-muted", style: "margin:0", text: "Older versions are not served publicly. Restore this version to view it on the site, or download single files." }),
       );
       applySort();
-      commitSelection(mv, opts);
+      commitSelection(mv, opts, my);
     }
 
     var s = site.settings;
@@ -1818,7 +1830,14 @@ export function dropwayClient() {
         try {
           ref = new URL(location.href).searchParams.get("version");
         } catch (e) {}
-        if (ref && currentSelection && ref === currentSelection.id) return;
+        if (ref && currentSelection && ref === currentSelection.id) {
+          // Forward can return to the displayed view while Back's request is
+          // still pending. Even this no-op navigation supersedes that request.
+          ++selectionReq;
+          setJumpLoading(false);
+          clearJumpError();
+          return;
+        }
         if (ref) openVersionRef(ref, { history: "replace", focus: false });
         else if (live) showFiles(live, { history: "replace" });
       };
