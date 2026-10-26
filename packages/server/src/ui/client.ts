@@ -1409,14 +1409,16 @@ export function dropwayClient() {
           var result = await api("/sites/" + encodeURIComponent(site.slug) + "/duplicate", { method: "POST", body: duplicateAttempt.body, headers: { "Idempotency-Key": duplicateAttempt.key } });
           // Links and receipt use only the returned identity, never the requested name.
           var copy = result && result.site;
-          if (!copy || !copy.slug || !result.url) throw new Error("The server did not return the copy's identity. Retry this submission to recover its result.");
+          var copyUrl = null;
+          try { if (result && typeof result.url === "string") copyUrl = new URL(result.url); } catch (e) {}
+          if (!copy || typeof copy.slug !== "string" || !copy.slug || !copyUrl || ["http:", "https:"].indexOf(copyUrl.protocol) < 0) throw new Error("The server did not return a valid copy identity and URL. Retry this submission to recover its result.");
           clear(form);
           add(form,
             h("h2", { id: "dw-duplicate-title", text: "Site duplicated" }),
             h("div", { role: "status", style: "overflow-wrap:anywhere" },
               h("p", { text: "Created a separate site: " + copy.slug }),
               h("p", {}, h("a", { href: result.url, target: "_blank", rel: "noopener", text: result.url }))),
-            h("p", { class: "dw-callout", text: "Passwords and access protection were not copied. Re-apply protection before sharing the new site." }),
+            h("p", { id: "dw-duplicate-warning", class: "dw-callout", text: "Passwords and access protection were not copied. Re-apply protection before sharing the new site." }),
             h("div", { class: "dw-row" },
               h("button", { type: "button", class: "dw-btn", text: "Close", onclick: function () { dlg.close(); } }),
               h("a", { class: "dw-btn primary", href: "/dashboard/sites/" + encodeURIComponent(copy.slug), text: "Manage copy" })),
