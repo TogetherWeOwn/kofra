@@ -470,6 +470,9 @@ async function serveFile(
     const h = new Headers();
     if (etagMatches(req, etag)) {
       h.set("ETag", etag);
+      h.set("Cache-Control", live.passwordHash ? "private, no-store" : "public, max-age=0, must-revalidate");
+      h.set("Vary", "Accept, Sec-Fetch-Dest");
+      applySiteHeaders(h, live, opts.requestPath);
       securityHeaders(h, live, mode);
       return new Response(null, { status: 304, headers: h });
     }
@@ -508,9 +511,10 @@ async function serveFile(
     // withhold the success ETag: revalidating the fallback as if it were
     // the healthy render would strand browsers on it after recovery.
     const viewerCacheControl = out.get("Cache-Control");
+    applySiteHeaders(out, live, opts.requestPath);
     if (viewerCacheControl?.includes("no-store")) out.delete("ETag");
     else out.set("ETag", etag);
-    out.set("Cache-Control", live.passwordHash ? "private, no-store" : viewerCacheControl ?? "public, max-age=0, must-revalidate");
+    out.set("Cache-Control", live.passwordHash ? "private, no-store" : viewerCacheControl?.includes("no-store") ? viewerCacheControl : out.get("Cache-Control") ?? "public, max-age=0, must-revalidate");
     out.set("Vary", "Accept, Sec-Fetch-Dest");
     out.set("X-Kofra-Viewer", viewer.id);
     out.delete("Content-Length");

@@ -61,7 +61,9 @@ const BLOCKED_HEADERS = new Set([
   "content-encoding",
   "content-length",
   "content-range",
+  "content-security-policy",
   "content-type",
+  "x-frame-options",
   "date",
   "etag",
   "expect",
@@ -119,6 +121,13 @@ function patternError(pattern: string): string | null {
   for (let i = 0; i < pattern.length; i++) {
     if (pattern[i] !== ":") continue;
     if (!/^:[A-Za-z_][A-Za-z0-9_]*/.test(pattern.slice(i))) return `"${pattern}" has a ":" that does not start a placeholder name.`;
+  }
+  // One complete segment per placeholder prevents overlapping [^/]+ captures
+  // from causing combinatorial backtracking on an untrusted request path.
+  for (const segment of pattern.split("/")) {
+    if (segment.includes(":") && !/^:[A-Za-z_][A-Za-z0-9_]*$/.test(segment)) {
+      return `"${pattern}" must use each placeholder as a whole path segment.`;
+    }
   }
   const names = placeholdersIn(pattern);
   if (new Set(names).size !== names.length) return `"${pattern}" repeats a placeholder name.`;
@@ -248,8 +257,8 @@ export function parseHeadersFile(text: string): { rules: SiteHeaderRule[]; warni
       continue;
     }
     // eslint-disable-next-line no-control-regex
-    if (value.length > MAX_HEADER_VALUE_LENGTH || /[\u0000-\u0008\u000b-\u001f\u007f]/.test(value)) {
-      sink.add(lineNo, `the value of "${name}" is too long or contains control characters.`);
+    if (value.length > MAX_HEADER_VALUE_LENGTH || /[\u0000-\u0008\u000b-\u001f\u007fĀ-￿]/.test(value)) {
+      sink.add(lineNo, `the value of "${name}" is too long, contains control characters, or cannot be represented as an HTTP header.`);
       continue;
     }
     if (totalHeaders >= SITE_CONFIG_MAX_HEADERS) {
@@ -340,6 +349,7 @@ const escapeRegExpChar = (ch: string) => (/[\\^$+?.()|[\]{}]/.test(ch) ? `\\${ch
 
 /** Match a site-relative URL path (leading "/") against a pattern with `:placeholders` and one trailing `*`. */
 export function matchSitePattern(pattern: string, path: string): SitePatternMatch | null {
+  if (patternError(pattern)) return null;
   let source = "^";
   const groups: Array<{ name: string } | { splat: true }> = [];
   for (let i = 0; i < pattern.length; i++) {
