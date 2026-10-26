@@ -325,7 +325,9 @@ describe("compare: collector parity, count-only secrets and metadata warnings", 
     const offline = object(publish);
     expect(publish.seen, "publish --dry-run remains offline").toEqual([]);
     expect(body.ignored).toEqual(offline.ignored);
-    expect(body.skippedLinks).toEqual(offline.skippedLinks);
+    expect(body.skippedLinks).toEqual(offline.omissions
+      .filter((o: any) => o.reason === "symlink_directory")
+      .map((o: any) => o.path));
     expect(body.skippedLinks).toContain("linked");
     expect(body.counts).toMatchObject({ localTotal: 1, remoteTotal: 1, unchanged: 1 });
     expect(body.records).toEqual([]);
