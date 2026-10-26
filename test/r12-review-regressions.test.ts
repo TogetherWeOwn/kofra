@@ -197,6 +197,39 @@ describe("SPA Referer routing boundaries", () => {
     expect(await referred.text()).not.toContain("<title>SPA A</title>");
   });
 
+  it("does not let SPA A capture a renamed-away slug address", async () => {
+    dw = await freshInstance({ appOrigin: ORIGIN, sitesOrigin: SITES });
+    const spa = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey,
+      body: form({ "index.html": "<!doctype html><title>SPA A</title>" }, { slug: "site-a", spa: "true" }),
+    });
+    expect(spa.status).toBe(201);
+    const plain = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey,
+      body: form({
+        "index.html": "<!doctype html><title>B home</title>",
+        "deep/link": "B deep link",
+      }, { slug: "site-b" }),
+    });
+    expect(plain.status).toBe(201);
+    const renamed = await dw.json("/api/v1/sites/site-b/rename", { key: dw.ownerKey, ...jsonBody({ newSlug: "site-c" }) });
+    expect(renamed.status).toBe(200);
+    for (const [oldPath, location] of [
+      ["/site-b/", `${SITES}/site-c/`],
+      ["/site-b/deep/link", `${SITES}/site-c/deep/link`],
+    ]) {
+      const baseline = await dw.call(`${SITES}${oldPath}`, { headers: NAV });
+      expect(baseline.status).toBe(308);
+      expect(baseline.headers.get("location")).toBe(location);
+      const referred = await dw.call(`${SITES}${oldPath}`, { headers: { ...NAV, Referer: `${SITES}/site-a/` } });
+      expect(referred.status).toBe(baseline.status);
+      expect(referred.headers.get("location")).toBe(baseline.headers.get("location"));
+      expect(referred.status).toBe(308);
+      expect(referred.headers.get("location")).toBe(location);
+      expect(referred.headers.get("location")).not.toContain("/site-a/");
+    }
+  });
+
   it("still redirects an unknown slug-shaped deep navigation into the referring SPA", async () => {
     dw = await freshInstance({ appOrigin: ORIGIN, sitesOrigin: SITES });
     const published = await dw.json("/api/v1/publish", {
