@@ -1,7 +1,7 @@
-import { extname } from "@dropway/core";
+import { detectFileKind, encodePath, extname, type LiveSite } from "@dropway/core";
 import { escapeHtml, formatBytes } from "../html";
 import { standardTabs, viewerCsp, viewerPage, type ViewerTab } from "./chrome";
-import type { ViewMode, Viewer, ViewerContext } from "./index";
+import type { ViewMode, Viewer, ViewerContext, ViewerFile } from "./index";
 
 /**
  * Images, SVG, PDF, video, audio and fonts. None of these read the whole file:
@@ -20,6 +20,8 @@ const MEDIA_CSS = `
 #dw-zoom:checked~.dw-mediabar label{border-color:var(--accent);color:var(--accent)}
 #dw-zoom:focus-visible~.dw-mediabar label{outline:2px solid var(--accent);outline-offset:2px}
 .dw-mediabar{display:flex;gap:.6rem;align-items:center;justify-content:center;flex-wrap:wrap}
+.dw-fnav{display:flex;gap:.6rem;align-items:center;justify-content:center;flex-wrap:wrap}
+.dw-fnav .dw-fname{display:inline-block;max-width:14rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .dw-pdf{width:100%;height:calc(100vh - 3.2rem);border:0;display:block}
 .dw-video{max-width:100%;max-height:calc(100vh - 9rem);border-radius:10px;background:#000}
 .dw-audio{width:min(40rem,100%);margin-top:18vh}
@@ -72,9 +74,84 @@ function mediaTabs(vc: ViewerContext, label: string): ViewerTab[] {
 
 const topLevelOnly = (mode: ViewMode | undefined) => mode === "document" || mode === "view" || mode === undefined;
 
+/**
+ * The image/SVG files sharing `path`'s folder, in the listing's name order.
+ * Only direct children of the folder count (no recursion into subfolders),
+ * matching the folder gallery in ./listing.
+ */
+function folderImagePool(live: LiveSite, path: string): string[] {
+  const slash = path.lastIndexOf("/");
+  const dir = slash === -1 ? "" : path.slice(0, slash + 1);
+  const names: string[] = [];
+  for (const [p, [, , type]] of Object.entries(live.files)) {
+    if (!p.startsWith(dir)) continue;
+    const name = p.slice(dir.length);
+    if (!name || name.includes("/")) continue;
+    const kind = detectFileKind(p, type);
+    if (kind === "image" || kind === "svg") names.push(name);
+  }
+  names.sort((a, b) => a.localeCompare(b));
+  return names.map((n) => dir + n);
+}
+
+interface FolderNav {
+  prev?: string;
+  next?: string;
+  position: number;
+  total: number;
+}
+
+/** Previous/next neighbours of `path` within its folder pool, or null when it is alone (or not in the pool). */
+function folderNav(live: LiveSite, path: string): FolderNav | null {
+  const pool = folderImagePool(live, path);
+  const i = pool.indexOf(path);
+  if (i === -1 || pool.length < 2) return null;
+  return {
+    ...(i > 0 ? { prev: pool[i - 1] } : {}),
+    ...(i < pool.length - 1 ? { next: pool[i + 1] } : {}),
+    position: i + 1,
+    total: pool.length,
+  };
+}
+
+/**
+ * Pool identity for the ETag: any change to the ordered pool (a sibling
+ * added, removed, renamed or reordered by a republish) changes it, so a
+ * conditional request never revalidates stale Previous/Next links.
+ */
+function folderNavEtag(file: ViewerFile, live: LiveSite): string {
+  const pool = folderImagePool(live, file.path);
+  if (pool.length < 2 || !pool.includes(file.path)) return "";
+  let h = 0x811c9dc5;
+  const s = pool.join("\n");
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return `-nav${(h >>> 0).toString(36)}`;
+}
+
+/**
+ * Plain-link Previous/Next controls for flipping through a folder's images
+ * from the image you opened. No JavaScript: each link is an ordinary file
+ * URL, so the neighbour renders in its own viewer. Hidden in embed mode,
+ * where the app-origin file browser owns navigation.
+ */
+function folderNavHtml(vc: ViewerContext): string {
+  if (vc.embed) return "";
+  const nav = folderNav(vc.live, vc.file.path);
+  if (!nav) return "";
+  const href = (p: string) => escapeHtml(vc.siteBase + encodePath(p));
+  const name = (p: string) => escapeHtml(p.split("/").pop() ?? p);
+  const prev = nav.prev ? `<a class="dw-btn" rel="prev" href="${href(nav.prev)}"><span aria-hidden="true">←</span> Previous: <span class="dw-fname">${name(nav.prev)}</span></a>` : "";
+  const next = nav.next ? `<a class="dw-btn" rel="next" href="${href(nav.next)}">Next: <span class="dw-fname">${name(nav.next)}</span> <span aria-hidden="true">→</span></a>` : "";
+  return `<nav class="dw-fnav" aria-label="Other images in this folder">${prev}<span class="dw-meta" style="margin:0">${nav.position} of ${nav.total} in this folder</span>${next}</nav>`;
+}
+
 export const imageViewer: Viewer = {
   id: "image",
-  version: 2,
+  version: 3,
+  etagExtra: folderNavEtag,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "image" && topLevelOnly(mode),
   async render(vc) {
@@ -88,7 +165,7 @@ export const imageViewer: Viewer = {
       tabs: mediaTabs(vc, "Image"),
       css: MEDIA_CSS,
       body: `<main class="dw-media"><input type="checkbox" id="dw-zoom" class="dw-toggle">
-<div class="dw-mediabar"><span class="dw-meta" style="margin:0">${escapeHtml(meta)}</span><label for="dw-zoom" class="dw-btn">Actual size</label></div>
+<div class="dw-mediabar">${folderNavHtml(vc)}<span class="dw-meta" style="margin:0">${escapeHtml(meta)}</span><label for="dw-zoom" class="dw-btn">Actual size</label></div>
 <label for="dw-zoom" class="dw-stage dw-checker"><img src="${escapeHtml(vc.fileUrl)}" alt="${escapeHtml(name)}"${dim ? ` width="${dim.width}" height="${dim.height}"` : ""}></label></main>`,
       headers: dim ? { "X-Kofra-Image-Size": `${dim.width}x${dim.height}` } : {},
     });
@@ -97,7 +174,8 @@ export const imageViewer: Viewer = {
 
 export const svgViewer: Viewer = {
   id: "svg",
-  version: 2,
+  version: 3,
+  etagExtra: folderNavEtag,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "svg" && topLevelOnly(mode),
   async render(vc) {
@@ -105,9 +183,11 @@ export const svgViewer: Viewer = {
     // Shown through <img>, so scripts inside the SVG never run.
     return viewerPage(vc, {
       tabs: standardTabs(vc, { rendered: "Image", source: true }),
-      css: MEDIA_CSS + ".dw-stage img{min-width:min(16rem,100%)}",
+      // Order-independent (MEDIA_CSS sets no min-width); kept ahead of it so the
+      // style block's rule order matches the body's bar-then-stage order.
+      css: ".dw-stage img{min-width:min(16rem,100%)}" + MEDIA_CSS,
       body: `<main class="dw-media"><input type="checkbox" id="dw-zoom" class="dw-toggle">
-<div class="dw-mediabar"><span class="dw-meta" style="margin:0">${escapeHtml(`${formatBytes(vc.file.size)} · SVG (scripts inside it do not run here)`)}</span><label for="dw-zoom" class="dw-btn">Actual size</label></div>
+<div class="dw-mediabar">${folderNavHtml(vc)}<span class="dw-meta" style="margin:0">${escapeHtml(`${formatBytes(vc.file.size)} · SVG (scripts inside it do not run here)`)}</span><label for="dw-zoom" class="dw-btn">Actual size</label></div>
 <label for="dw-zoom" class="dw-stage dw-checker"><img src="${escapeHtml(vc.fileUrl)}" alt="${escapeHtml(name)}"></label></main>`,
     });
   },
