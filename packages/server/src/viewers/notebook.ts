@@ -39,6 +39,41 @@ const text = (v: unknown): string => (Array.isArray(v) ? v.join("") : typeof v =
 const stripAnsi = (s: string) => s.replace(/\u001b\[[0-9;]*[A-Za-z]/g, "");
 const clip = (s: string) => (s.length > MAX_OUTPUT_TEXT ? `${s.slice(0, MAX_OUTPUT_TEXT)}\n…` : s);
 
+/**
+ * Escape details/summary tags in an output fragment so they cannot close the
+ * generated per-cell fold. The outer sanitizer keeps those tags (they are the
+ * fold itself), so a text/html or text/markdown output containing `</details>`
+ * would otherwise break containment and leave later outputs outside the fold.
+ * Other markup passes through for the sanitizer; only the `<` that would open
+ * a details/summary tag becomes text. Character scan, no tag-strip regex.
+ */
+function neutralizeFoldTags(html: string): string {
+  const isWord = (c: string | undefined): boolean =>
+    c !== undefined && ((c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c === "_");
+  let out = "";
+  let i = 0;
+  while (i < html.length) {
+    if (html[i] === "<") {
+      let j = i + 1;
+      if (html[j] === "/") j++;
+      const nameStart = j;
+      while (j < html.length) {
+        const c = html[j]!;
+        if (!((c >= "a" && c <= "z") || (c >= "A" && c <= "Z"))) break;
+        j++;
+      }
+      const name = html.slice(nameStart, j).toLowerCase();
+      if ((name === "details" || name === "summary") && !isWord(html[j])) {
+        out += "&lt;" + html.slice(i + 1, j);
+        i = j;
+        continue;
+      }
+    }
+    out += html[i++]!;
+  }
+  return out;
+}
+
 function output(o: Json): string {
   const type = o.output_type;
   if (type === "stream") return `<pre>${escapeHtml(clip(stripAnsi(text(o.text))))}</pre>`;
@@ -57,8 +92,8 @@ function output(o: Json): string {
     for (const b of bytes) bin += String.fromCharCode(b);
     return `<img src="data:image/svg+xml;base64,${btoa(bin)}" alt="output">`;
   }
-  if (data["text/html"]) return `<div>${text(data["text/html"])}</div>`;
-  if (data["text/markdown"]) return `<div>${renderMarkdown(text(data["text/markdown"]), "output.md").html}</div>`;
+  if (data["text/html"]) return `<div>${neutralizeFoldTags(text(data["text/html"]))}</div>`;
+  if (data["text/markdown"]) return `<div>${neutralizeFoldTags(renderMarkdown(text(data["text/markdown"]), "output.md").html)}</div>`;
   if (data["text/plain"]) return `<pre>${escapeHtml(clip(text(data["text/plain"])))}</pre>`;
   if (data["application/json"]) return `<pre>${escapeHtml(clip(JSON.stringify(data["application/json"], null, 2)))}</pre>`;
   return "";

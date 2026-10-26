@@ -170,7 +170,9 @@ outputs that render a fragment; the code and its `In [n]:` prompt stay outside,
 so folding a long result never hides them. Cells with no rendered outputs get
 no control, controls toggle independently with no script, and the existing
 output rendering, sanitizer, 100,000-character clip and 20 MiB cap are
-unchanged inside the fold. The render version bump retires cached pre-fold
+unchanged inside the fold; HTML/Markdown output fragments have their
+details/summary tags escaped so they cannot close the generated fold.
+The render version bump retires cached pre-fold
 fragments and their conditional ETags; Raw, Download and Source bytes are
 untouched.
 
