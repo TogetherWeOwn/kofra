@@ -139,7 +139,8 @@ describe("CLI large-file upload through the actual Worker", () => {
       const res = await fetch(`${api}${path}`, { method, body, headers: {
         Authorization: `Bearer ${token}`, "Content-Type": method === "PUT" ? "application/octet-stream" : "application/json",
       } });
-      const value = await res.json() as any;
+      const text = await res.text();
+      const value = text ? JSON.parse(text) : {};
       expect(res.ok, JSON.stringify(value)).toBe(true);
       return value;
     };

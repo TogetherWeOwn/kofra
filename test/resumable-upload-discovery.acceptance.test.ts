@@ -11,6 +11,14 @@ const routes = [
   { method: "POST", shape: "/api/v1/uploads/{}/complete" },
 ];
 
+function schemaText(doc: any, value: any, seen = new Set<unknown>()): string {
+  if (!value || typeof value !== "object") return "";
+  const resolved = resolveRef(doc, value);
+  if (seen.has(resolved)) return "";
+  seen.add(resolved);
+  return JSON.stringify(resolved) + Object.values(resolved).map((item) => schemaText(doc, item, seen)).join("");
+}
+
 describe("resumable upload public operation/discovery contract", () => {
   it("registers every upload route in REST, OpenAPI, command discovery and MCP or an explicit exclusion", async () => {
     const dw = await freshInstance();
@@ -67,7 +75,7 @@ describe("resumable upload public operation/discovery contract", () => {
     const publish = apiOperations(doc).find(({ op: item }) => item.operationId === "publish_site")!;
     const request = resolveRef(doc, publish.op.requestBody);
     const schema = resolveRef(doc, request.content["application/json"].schema);
-    expect(JSON.stringify(schema)).toContain("archiveUrl");
-    expect(JSON.stringify(schema)).toContain("download_url");
+    expect(schemaText(doc, schema)).toContain("archiveUrl");
+    expect(schemaText(doc, schema)).toContain("download_url");
   });
 });

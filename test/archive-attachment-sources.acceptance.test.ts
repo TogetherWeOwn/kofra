@@ -325,6 +325,7 @@ describe("chat-client attachments as file sources", () => {
     const conflicts: Record<string, unknown>[] = [
       { download_url: "https://93.184.216.34/a", file_name: "a.txt", content: "inline" },
       { download_url: "https://93.184.216.34/a", file_name: "a.txt", url: "https://93.184.216.34/a" },
+      { download_url: "https://93.184.216.34/a", file_name: "a.txt", path: "different.txt" },
     ];
     for (const file of conflicts) {
       const rest = await publishRest({ files: [file] });
