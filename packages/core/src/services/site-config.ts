@@ -252,7 +252,7 @@ export function parseHeadersFile(text: string): { rules: SiteHeaderRule[]; warni
     const name = m[1]!;
     const value = m[2]!.trim();
     const lower = name.toLowerCase();
-    if (BLOCKED_HEADERS.has(lower) || lower.startsWith("x-kofra-") || lower.startsWith("x-dropway-")) {
+    if (BLOCKED_HEADERS.has(lower) || lower.startsWith("x-kofra-")) {
       sink.add(lineNo, `"${name}" is set by the platform and cannot be set in _headers.`);
       continue;
     }
