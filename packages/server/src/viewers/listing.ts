@@ -69,14 +69,15 @@ export function renderListing(live: LiveSite, dir: string, mode: ServeMode, orig
     acc += `${s}/`;
     return `<a href="${escapeHtml(mode.base + encodePath(acc))}">${escapeHtml(s)}</a>`;
   })].join(" / ");
-  const summary = `${dirs.size ? `${dirs.size} folder${dirs.size === 1 ? "" : "s"}, ` : ""}${files.length} file${files.length === 1 ? "" : "s"} · ${formatBytes(total)}`;
+  const counts = (withFolders: boolean) => `${withFolders ? `${dirs.size} folder${dirs.size === 1 ? "" : "s"}, ` : ""}${files.length} file${files.length === 1 ? "" : "s"} · ${formatBytes(total)}`;
+  const summary = counts(dirs.size > 0);
   const title = `${live.slug}/${dir}`;
   const page = htmlPage({
     title,
     css: LISTING_CSS,
     head: unfurlHead({
       title,
-      description: `Folder listing · ${dirs.size ? "" : "0 folders, "}${summary}`,
+      description: `Folder listing · ${counts(true)}`,
       url: origin + base,
     }),
     body: `<main class="dw-ls"><header><h1>${crumb} /</h1><span class="sum">${summary}${appViewerUrl ? `<a href="${escapeHtml(appViewerUrl)}" rel="nofollow">Browse files</a>` : ""}</span></header><ul>${items.join("")}</ul>${gallery}</main>`,

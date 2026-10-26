@@ -4,7 +4,9 @@ import { escapeHtml } from "../html";
 export function unfurlHead(opts: { title: string; description: string; url: string; image?: boolean }): string {
   const title = escapeHtml(opts.title);
   const description = escapeHtml(opts.description);
-  const url = escapeHtml(opts.url);
+  // Enforce the query-free contract here: emitted URLs are percent-encoded, so a
+  // literal ? or # can only be a query/fragment (never cite request tokens).
+  const url = escapeHtml(opts.url.split(/[?#]/, 1)[0]!);
   return `<meta name="robots" content="noindex">
 <meta property="og:title" content="${title}">
 <meta property="og:type" content="website">
