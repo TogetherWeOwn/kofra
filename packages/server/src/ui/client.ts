@@ -1033,6 +1033,9 @@ export function dropwayClient() {
   // Latest site-page traversal handler: pages.site() re-runs after restore,
   // delete and settings saves, and must replace (not stack) its listener.
   var sitePopstate = null;
+  // Generation of the latest pages.site() run: work started by an earlier
+  // run must not commit (view, URL or history) over its replacement.
+  var siteRun = 0;
 
   pages.home = async function () {
     wireTabs(d);
@@ -1311,6 +1314,7 @@ export function dropwayClient() {
 
   pages.site = async function () {
     if (!requireAuth()) return;
+    var mySiteRun = ++siteRun;
     renderAccount();
     var slug = P.slug;
     var root = d.getElementById("dw-site");
@@ -1330,7 +1334,10 @@ export function dropwayClient() {
       site = r[0].site;
       versions = r[1].versions;
       linkedVersion = r[2] && r[2].version;
+      // A newer re-run already owns this page; rendering now would replace it.
+      if (mySiteRun !== siteRun) return;
     } catch (e) {
+      if (mySiteRun !== siteRun) return;
       clear(root);
       add(root, errorBox(e, "Could not load " + slug), h("a", { class: "dw-btn", href: "/dashboard", text: "Back to sites" }));
       return;
@@ -1453,7 +1460,9 @@ export function dropwayClient() {
 
     // One token per selection attempt, whatever its source (history row,
     // version jump, traversal): a completion holding a stale token must not
-    // touch the view, the URL, or the announced state.
+    // touch the view, the URL, or the announced state. The token is per
+    // page run, so completions also check mySiteRun: a selection still in
+    // flight when this page re-runs belongs to a replaced closure.
     var selectionReq = 0;
     var displayedReq = 0;
     var currentSelection = null;
@@ -1462,7 +1471,7 @@ export function dropwayClient() {
       add(jumpErrorBox, errorBox({ message: message, hint: hint }, null));
       // A refused traversal retains the manifest: reconcile this entry's URL
       // with that view, without pushing another history entry.
-      if (opts && opts.history === "replace" && currentSelection) recordSelection(currentSelection.id, "replace");
+      if (opts && opts.history === "replace" && currentSelection && mySiteRun === siteRun) recordSelection(currentSelection.id, "replace");
     }
     function clearJumpError() {
       clear(jumpErrorBox);
@@ -1493,6 +1502,7 @@ export function dropwayClient() {
       } catch (e) {}
     }
     function commitSelection(mv, opts, my) {
+      if (mySiteRun !== siteRun) return;
       displayedReq = my;
       currentSelection = { id: mv.id, number: mv.number };
       setJumpLoading(false);
@@ -1526,12 +1536,12 @@ export function dropwayClient() {
       try {
         found = await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(ref));
       } catch (e) {
-        if (my !== selectionReq) return;
+        if (my !== selectionReq || mySiteRun !== siteRun) return;
         setJumpLoading(false);
         setJumpError(e.message || "Could not open that version.", "Check the reference and try again." + (e.hint ? " " + e.hint : ""), opts);
         return;
       }
-      if (my !== selectionReq) return;
+      if (my !== selectionReq || mySiteRun !== siteRun) return;
       var v = found && found.version;
       if (!v || v.status === "pending") {
         setJumpLoading(false);
@@ -1560,7 +1570,7 @@ export function dropwayClient() {
         // may already be stale by the time this request lands.
         data = await api("/sites/" + encodeURIComponent(slug) + "/files?version=" + encodeURIComponent(v.id));
       } catch (e) {
-        if (my !== selectionReq) return;
+        if (my !== selectionReq || mySiteRun !== siteRun) return;
         setJumpLoading(false);
         if (!hadSelection || opts.clearFirst) {
           clear(filesSection);
@@ -1570,7 +1580,7 @@ export function dropwayClient() {
         }
         return;
       }
-      if (my !== selectionReq) return;
+      if (my !== selectionReq || mySiteRun !== siteRun) return;
       // Identity comes from the response, never the clicked row: the live
       // pointer may have moved between selection and retrieval.
       var mv = (data && data.version) || { id: v.id, number: v.number, live: v.live };
