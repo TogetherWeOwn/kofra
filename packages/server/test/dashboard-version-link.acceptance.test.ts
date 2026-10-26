@@ -6,10 +6,10 @@
  * including awaiting_upload results whose version is still pending. The site
  * page loads GET /sites/<slug>/versions?limit=100, which lists ready versions
  * only, newest first — so a pending version never appears in it, and a ready
- * version older than the newest 100 does not either. The files panel must
- * still render for the requested version (the API can serve it directly:
- * GET /sites/<slug>/versions/<id> and GET /sites/<slug>/files?version=<id>
- * both accept any version id), not hide itself.
+ * version older than the newest 100 does not either. Ready links still render
+ * their pinned manifest directly. Pending links now show an actionable not-ready
+ * error rather than treating unfinished content as a valid inspected version;
+ * see dashboard-version-jump.acceptance.test.ts for selection-preservation tests.
  *
  * Drives the real dashboard script (CLIENT_SCRIPT) in Node's vm with the same
  * fake-DOM harness as version-files-sort.acceptance.test.ts. Fixture fetch
@@ -662,7 +662,7 @@ describe("dashboard version links", () => {
     expect(fileRequests.every((url) => new URL(url, "https://test").searchParams.get("version") === missingId)).toBe(true);
   });
 
-  it("renders the files panel for a pending version named by ?version= (awaiting_upload versionUrl)", async () => {
+  it("reports an actionable pending-version error rather than presenting unfinished bytes as inspected files", async () => {
     const liveFiles = [manifestFile("index.html", "html", 12, "text/html")];
     const pendingFiles = [manifestFile("pending.txt", "text", 7)];
     const live = versionFixture("v-live", 2, true, "ready", liveFiles.length);
@@ -671,7 +671,12 @@ describe("dashboard version links", () => {
       versions: [pending, live],
       filesByVersion: new Map([["v-live", liveFiles], ["v-pending", pendingFiles]]),
     });
-    expectFilesPanel(m, pending, pendingFiles);
+    // Supersedes the old awaiting_upload link behavior: an explicit pending
+    // result is not a ready inspection, and must not silently select live.
+    expect(isHidden(m.filesSection)).toBe(false);
+    expect(m.filesSection.textContent).toMatch(/pending|not ready|unfinished/i);
+    expect(m.visiblePaths()).toEqual([]);
+    expect(m.calls.filter(url => url.split("?")[0] === "/api/v1/sites/test-site/files")).toEqual([]);
   });
 
   it("renders the files panel for a ready version older than the newest 100", async () => {
