@@ -209,6 +209,18 @@ remain excluded (an unreadable folder's contents are not listed); other read
 failures block publishing until the selection is reselected. The displayed
 selection stays bound to the in-flight publish.
 
+The update picker lists only the first page of sites, so an explicit update
+destination (the `?site=` target, or a slug entered in the update panel's
+lookup field) is verified with the single-site `GET /api/v1/sites/:slug`
+instead of paging through every site: the reference is encoded as one path
+segment, the returned slug is added to the picker and selected, and
+publishing stays disabled until that verification succeeds — a failed or
+superseded lookup never falls back to another listed site or a new site.
+Typing in the lookup field makes no request; Enter or the lookup button
+submits it. A sequence fence makes the newest explicit choice win over
+late list or lookup responses, and a verified destination stays selected
+through the list refresh after a successful publish.
+
 ## Data model (D1, `packages/core/migrations`)
 
 - `tenants`: exactly one in this build (created by `POST /api/v1/setup`).
