@@ -294,8 +294,8 @@ delay (`null` means no guidance), a `docs` reference and a `next` array of sugge
 `{tool, args, why}` calls. Malformed optional fields are omitted independently, and
 unknown envelope fields are never copied. `next` and `docs` are informational only: the
 client never executes a suggested call or fetches a docs URL, and retry scheduling is
-unchanged (only `GET`/`HEAD` retry on 429/5xx and network errors, `Retry-After` drives
-429 waits, idempotency keys never authorize unsafe retries).
+unchanged (any method retries 429 within the `Retry-After` cap, 5xx and network errors
+retry only for `GET`/`HEAD`, idempotency keys never authorize unsafe retries).
 
 `read-file` without `--json` prints exactly the page content to stdout; a truncated page
 adds a stderr continuation pinned to the successful response's immutable `versionId`, so

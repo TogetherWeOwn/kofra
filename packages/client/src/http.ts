@@ -401,9 +401,10 @@ function validDocs(value: unknown): string | undefined {
 }
 
 /**
- * Optional suggested calls: kept only when every entry allowlists to
- * {tool, args, why}. Anything else (including extra fields on an entry)
- * drops the whole field rather than copying raw envelope data.
+ * Optional suggested calls: kept only when it is an array whose every entry
+ * has a string tool/why and a plain-object args; unknown entry fields are
+ * stripped. Any other shape drops the whole field rather than copying raw
+ * envelope data.
  */
 function validNext(value: unknown): DropwayNextCall[] | undefined {
   if (value === undefined) return undefined;

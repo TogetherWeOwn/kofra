@@ -158,6 +158,27 @@ describe("DropwayClient transport", () => {
     expect(capped.requests.length).toBe(1);
   });
 
+  it("retries 429s for unsafe methods too, within the cap (5xx/network stay safe-only)", async () => {
+    let posts = 0;
+    const fetch = stubFetch(() => {
+      posts++;
+      return posts < 2
+        ? json({ error: { code: "rate_limited", message: "slow down" } }, 429, { "Retry-After": "0" })
+        : json({ ok: true });
+    });
+    const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch, attempts: 3, backoffMs: 1 });
+    await expect(client.post("/sites", {})).resolves.toMatchObject({ status: 200 });
+    expect(posts).toBe(2);
+
+    let unsafe = 0;
+    const failing = stubFetch(() => {
+      unsafe++;
+      return json({ error: { code: "internal_error", message: "boom" } }, 503);
+    });
+    await new DropwayClient({ api: "https://kofra.test", token: null, fetch: failing, attempts: 3, backoffMs: 1 }).post("/sites", {}).catch(() => {});
+    expect(unsafe).toBe(1);
+  });
+
   it("retries network failures on safe methods only", async () => {
     const getFetch = stubFetch(() => {
       throw new Error("boom");
