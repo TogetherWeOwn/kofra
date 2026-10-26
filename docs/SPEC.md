@@ -1177,7 +1177,7 @@ Codes are stable forever.
 | DELETE | `/api/v1/sites/{site}` | `delete_site` | `sites:delete` | P0 | Done (scope R-17; freed name held per R-59) |
 | POST | `/api/v1/sites/{site}/claim` | `claim_site` | `sites:write` | P0 | Done |
 | POST | `/api/v1/sites/{site}/duplicate` | `duplicate_site` | `sites:write` | P1 | Done |
-| POST | `/api/v1/sites/{site}/rename` | `rename_site` | `sites:write` | P2 | Done (R-59: old name 308s + redirectUntil; vanity and gallery stay R-50) |
+| POST | `/api/v1/sites/{site}/rename` | `rename_site` | `sites:write` | P2 | Done (R-59: old name 308s + redirectUntil; dashboard rename and configured name-retention guidance included; vanity and gallery stay R-50) |
 
 **Versions**
 
