@@ -50,14 +50,21 @@ beforeAll(async () => {
   });
   expect(setup.status, "disposable owner setup").toBe(201);
   const key = (await setup.json() as any).apiKey.key;
-  const upload = new FormData();
-  upload.set("slug", slug);
-  for (const [path, bytes] of Object.entries({
+  const files = Object.entries({
     [`docs/${unicode}`]: "last\n", [`docs/${current}`]: "name,value\nfixture,7\n", [`docs/${hostile}`]: "# First\n",
     "docs/nested/ignore.txt": "never a direct sibling\n",
-  })) upload.append(path, new File([bytes], path));
-  const published = await fetch(`${origin}/api/v1/publish`, { method: "POST", headers: { Authorization: `Bearer ${key}` }, body: upload });
+  }).map(([path, content]) => ({ path, content }));
+  // JSON preserves literal quotes in the live paths, unlike multipart filenames.
+  const published = await fetch(`${origin}/api/v1/publish`, {
+    method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ site: slug, files }),
+  });
   expect(published.status, "disposable folder publishes").toBe(201);
+  await published.arrayBuffer();
+  const live = await fetch(`${origin}/api/v1/sites/${slug}/files`, { headers: { Authorization: `Bearer ${key}` } });
+  expect(live.status, "disposable live manifest loads").toBe(200);
+  const result = await live.json() as { files: { path: string }[] };
+  expect(result.files.map(file => file.path).sort(), "live manifest preserves literal fixture names").toEqual(files.map(file => file.path).sort());
   const { chromium } = require("playwright");
   browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : {}) });
 }, 120_000);

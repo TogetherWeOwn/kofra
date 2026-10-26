@@ -4,7 +4,7 @@ import { clearLiveMemoryCache } from "@dropway/core";
 import { zipSync, strToU8 } from "fflate";
 import { beforeAll, describe, expect, it } from "vitest";
 import { databaseBoundary, request } from "./delivery-review-fixtures";
-import { form, freshInstance, ORIGIN, type Instance } from "./helpers";
+import { freshInstance, jsonBody, ORIGIN, type Instance } from "./helpers";
 import { create, instance as transferInstance, recipientFile, SITES } from "./transfer-fixtures";
 
 const NAV = { Accept: "text/html", "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate" };
@@ -28,8 +28,17 @@ const files: Record<string, string | Uint8Array> = {
 let dw: Instance;
 
 async function publish(instance: Instance, name: string, content: Record<string, string | Uint8Array>) {
-  const result = await instance.json("/api/v1/publish", { method: "POST", key: instance.ownerKey, body: form(content, { slug: name }) });
+  // Multipart filename serialization escapes literal quotes before the Worker sees them.
+  const result = await instance.json("/api/v1/publish", { key: instance.ownerKey, ...jsonBody({
+    site: name,
+    files: Object.entries(content).map(([path, bytes]) => typeof bytes === "string"
+      ? { path, content: bytes }
+      : { path, content: btoa(String.fromCharCode(...bytes)), encoding: "base64" }),
+  }) });
   expect([200, 201], `local publish ${name}: ${result.status}`).toContain(result.status);
+  const live = await instance.json(`/api/v1/sites/${name}/files`, { key: instance.ownerKey });
+  expect(live.status).toBe(200);
+  expect(live.body.files.map((file: { path: string }) => file.path).sort(), "live manifest preserves literal fixture names").toEqual(Object.keys(content).sort());
   return result;
 }
 
