@@ -64,6 +64,7 @@ const MAGIC: Array<[RegExp, string]> = [
 
 export const binaryViewer: Viewer = {
   id: "binary",
+  version: 2, // The UTF-8 fallback uses the printable code page.
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => mode === "view" && BINARY_KINDS.has(file.kind),
   async render(vc) {

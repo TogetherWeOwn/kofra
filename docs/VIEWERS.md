@@ -122,6 +122,28 @@ only while the shown text is at most `HIGHLIGHT_MAX_BYTES = 512 * 1024`
 [`packages/server/src/viewers/highlight.ts`](../packages/server/src/viewers/highlight.ts));
 above that the same text is shown escaped as plain text with a note.
 
+## Printing reports
+
+Markdown, code/text (including Source), JSON, CSV/TSV and notebook documents
+have an inline, print-only stylesheet. Browser Print / Save as PDF uses black
+text on white, hides viewer navigation and action controls, and keeps the file
+path as context, including in embedded documents. Long code and table cells
+wrap; exposed content is not limited to a scrolling viewport. CSV headers repeat
+across pages and rows avoid splitting when they fit on a page. Table widths
+adapt to the paper; exceptionally tall rows may span pages.
+
+Printing preserves closed details, folded notebook outputs and the selected
+JSON Tree or Pretty pane. It does **not** recover data omitted by any of the
+limits above: truncation notices and ellipses remain. Use Raw or Download for
+the complete stored bytes. No new print button, script or network request is
+needed; screen styles, CSP and access gates are unchanged. HTML applications
+and their embedded pages keep their own printing behavior.
+
+Printed path context does not include request URLs or append link destinations.
+The browser's optional URL headers/footers are a separate print-dialog setting:
+disable them when printing a sensitive URL. Document-authored text is not
+redacted.
+
 ## Agent verification matrix
 
 Linking existing tests; this page does not assert they were run. Run them
