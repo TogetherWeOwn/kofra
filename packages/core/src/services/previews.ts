@@ -11,10 +11,40 @@ const payload = (siteId: string, versionId: string, expiresAt: number) => `dw-pr
 
 /** A bearer capability for one version, independent of the eventually consistent live pointer. */
 export async function versionPreviewUrl(dc: DropwayContext, principal: Principal, site: Pick<SiteRow, "id" | "slug" | "tenant_id">, version: Pick<VersionRow, "id" | "number">): Promise<string | undefined> {
-  if (!(await capabilityDecision(dc, principal, "version_previews", { siteId: site.id, tenantId: site.tenant_id })).allowed) return undefined;
-  const expiresAt = Date.now() + PREVIEW_TTL_MS;
-  const signature = await hmacHex(dc.config.signingSecret, payload(site.id, version.id, expiresAt));
-  return `${siteUrl(dc, `${site.slug}--v${version.number}`)}?dw_preview=${expiresAt}.${signature}`;
+  try {
+    if (!(await capabilityDecision(dc, principal, "version_previews", { siteId: site.id, tenantId: site.tenant_id })).allowed) return undefined;
+    const expiresAt = Date.now() + PREVIEW_TTL_MS;
+    const signature = await hmacHex(dc.config.signingSecret, payload(site.id, version.id, expiresAt));
+    return `${siteUrl(dc, `${site.slug}--v${version.number}`)}?dw_preview=${expiresAt}.${signature}`;
+  } catch {
+    // Callers invoke this after the version is already committed live. Preserve
+    // that success response without the optional link rather than reporting a
+    // false failure; log only the event, never the secret or signed URL.
+    console.error(JSON.stringify({ event: "version_preview_url_failed", operation: "versionPreviewUrl" }));
+    return undefined;
+  }
+}
+
+/**
+ * Per-isolate cache of immutable ready-version file maps: one preview page
+ * load fetches many assets from the same version, and each load would
+ * otherwise re-read every manifest row from D1. Only the file map is reused;
+ * authorization and ready-status checks run on every request before it.
+ */
+const FILES_TTL_MS = 5_000;
+const FILES_MAX = 32;
+const filesMemory = new Map<string, { at: number; files: LiveSite["files"] }>();
+
+async function versionFiles(dc: DropwayContext, versionId: string): Promise<LiveSite["files"]> {
+  const hit = filesMemory.get(versionId);
+  if (hit && Date.now() - hit.at < FILES_TTL_MS) return hit.files;
+  const files: LiveSite["files"] = Object.create(null);
+  const { results } = await dc.env.DB.prepare("SELECT path, sha256, size, content_type FROM version_files WHERE version_id = ?")
+    .bind(versionId).all<{ path: string; sha256: string; size: number; content_type: string }>();
+  for (const file of results) files[file.path] = [file.sha256, file.size, file.content_type];
+  if (filesMemory.size >= FILES_MAX) filesMemory.delete(filesMemory.keys().next().value!);
+  filesMemory.set(versionId, { at: Date.now(), files });
+  return files;
 }
 
 /** Read a ready version from D1 only, after checking its owner or exact signed capability. */
@@ -41,10 +71,7 @@ export async function readVersionPreview(
     )) return null;
   } else if (!canAccess(principal, site, "sites:read")) return null;
 
-  const files: LiveSite["files"] = Object.create(null);
-  const { results } = await dc.env.DB.prepare("SELECT path, sha256, size, content_type FROM version_files WHERE version_id = ?")
-    .bind(version.id).all<{ path: string; sha256: string; size: number; content_type: string }>();
-  for (const file of results) files[file.path] = [file.sha256, file.size, file.content_type];
+  const files = await versionFiles(dc, version.id);
   return {
     expiresAt,
     live: {
