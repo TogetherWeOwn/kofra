@@ -143,7 +143,8 @@ describe("read-file", () => {
     const h = await harness(() => okPage(page({ path: "big.txt", size: 70000, offset: 0, length: 65536, truncated: true, nextOffset: 65536 })));
     const code = await run(["read-file", "my-site", "big.txt", ...BASE, "--length", "65536", "--version", "v2"], h.io);
     expect(code).toBe(EXIT.ok);
-    expect(h.stderr()).toContain("Truncated: continue with: kofra read-file my-site big.txt --offset 65536 --version v2 --length 65536");
+    // A requested alias is not a stable continuation: pin the response identity.
+    expect(h.stderr()).toContain("Truncated: continue with: kofra read-file my-site big.txt --offset 65536 --version ver_3 --length 65536");
   });
 
   it("shell-quotes paths with metacharacters in the continuation command", async () => {

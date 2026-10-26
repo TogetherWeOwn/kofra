@@ -162,7 +162,8 @@ Without `--json`, stdout carries only the page content byte-for-byte (no added n
 base64 stays base64, so redirection is safe) and the page metadata (size, encoding, byte range,
 SHA-256, truncation and the continuation command) goes to stderr, so pipes get clean content and
 truncation is never silent (shown even with `--quiet`). With `--json`, stdout is exactly the API
-page object; see "Output for agents".
+page object; see "Output for agents". A truncated page's continuation pins the returned immutable
+version id; see [Recovery metadata](#recovery-metadata).
 
 Local check:
 
@@ -281,6 +282,25 @@ Errors (also on stdout with `--json`):
 | 6 | Invalid or over a limit (file too large, too many files) | Change the content |
 | 7 | Retryable: rate limited, server error, network error | Retry later |
 | 8 | `--wait` timed out before the URL served the new version | The publish succeeded; retry the check |
+
+### Recovery metadata
+
+This section is the canonical client/CLI recovery note; other surfaces link here rather
+than restating it.
+
+Error objects preserve the server's optional recovery metadata alongside the stable
+`code`/`message`/`hint`/`details`: an explicit boolean `retryable`, a `retryAfterSeconds`
+delay (`null` means no guidance), a `docs` reference and a `next` array of suggested
+`{tool, args, why}` calls. Malformed optional fields are omitted independently, and
+unknown envelope fields are never copied. `next` and `docs` are informational only: the
+client never executes a suggested call or fetches a docs URL, and retry scheduling is
+unchanged (any method retries 429 within the `Retry-After` cap, 5xx and network errors
+retry only for `GET`/`HEAD`, idempotency keys never authorize unsafe retries).
+
+`read-file` without `--json` prints exactly the page content to stdout; a truncated page
+adds a stderr continuation pinned to the successful response's immutable `versionId`, so
+the next page reads the same version even after live moves. A truncated page without a
+usable immutable id fails (`bad_read_file_version`, exit 1) instead of guessing.
 
 ## Configuration
 
