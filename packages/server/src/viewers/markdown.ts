@@ -139,22 +139,37 @@ function decodeLabelEntities(s: string): string {
     .replace(/&amp;/g, "&");
 }
 
-/** Plain readable text of one rendered heading, without its trailing "#" anchor link. */
+/**
+ * Label content for one already-sanitized heading, without its trailing "#"
+ * anchor link. The input is sanitizer output, whose text is already
+ * entity-encoded (&copy; stays &copy;, a literal < is &lt;), so the text is
+ * kept verbatim instead of decoded and re-escaped — it renders exactly what
+ * the heading renders, and carries no markup once the tags are stripped.
+ */
 function plainHeadingText(inner: string): string {
   const withoutAnchor = inner.replace(/<a\b[^>]*class="[^"]*dw-anchor[^"]*"[^>]*>[\s\S]*?<\/a>/g, "");
-  return decodeLabelEntities(withoutAnchor.replace(/<[^>]*>/g, "")).replace(/\s+/g, " ").trim();
+  // codeql[js/incomplete-multi-character-sanitization] — not a sanitizer: this
+  // only flattens already-sanitized HTML to label text, and the outline built
+  // from it passes through sanitizeHtml() again before serving.
+  return withoutAnchor.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
 }
 
 /**
- * The label a reader sees for each heading id in already-sanitized HTML, so
- * outline labels match the served body exactly (markup the sanitizer dropped
- * never reappears as outline text). First heading wins for a repeated id.
+ * The label a reader sees for each collected heading, read from the
+ * already-sanitized body so labels match the served headings exactly
+ * (markup the sanitizer dropped never reappears as outline text). Headings
+ * are paired in document order, not by id alone: two Markdown headings can
+ * share an id when a base slug collides with another heading's suffixed
+ * slug ("A", "A-1", "A"), and each still gets its own label. Raw-HTML
+ * headings pair only if they exactly match the next collected heading.
  */
-function renderedHeadingLabels(html: string): Map<string, string> {
-  const labels = new Map<string, string>();
-  for (const m of html.matchAll(/<h[1-6]\b[^>]*\bid="([^"]*)"[^>]*>([\s\S]*?)<\/h[1-6]>/g)) {
-    const id = decodeLabelEntities(m[1]!);
-    if (!labels.has(id)) labels.set(id, plainHeadingText(m[2]!));
+function renderedHeadingLabels(html: string, headings: MarkdownHeading[]): string[] {
+  const labels = headings.map(() => "");
+  let next = 0;
+  for (const m of html.matchAll(/<h([1-6])\b[^>]*\bid="([^"]*)"[^>]*>([\s\S]*?)<\/h[1-6]>/g)) {
+    const h = headings[next];
+    if (!h) break;
+    if (Number(m[1]) === h.depth && decodeLabelEntities(m[2]!) === h.id) labels[next++] = plainHeadingText(m[3]!);
   }
   return labels;
 }
@@ -166,13 +181,15 @@ function renderedHeadingLabels(html: string): Map<string, string> {
  * plain escaped text, and the list is capped with a truthful note. Returns
  * "" for documents with fewer than two rendered headings.
  */
-function contentsOutline(headings: MarkdownHeading[], labels: Map<string, string>): string {
+function contentsOutline(headings: MarkdownHeading[], labels: string[]): string {
   if (headings.length < 2) return "";
   const shown = headings.slice(0, MAX_OUTLINE_HEADINGS);
+  // Labels arrive as entity-encoded sanitizer text (no tags); only the
+  // id fallback for a heading with no readable text needs escaping here.
   const items = shown
     .map(
-      (h) =>
-        `<li class="dw-contents-item dw-contents-level-${h.depth}"><a href="#${escapeHtml(h.id)}">${escapeHtml(labels.get(h.id) || h.id)}</a></li>`,
+      (h, i) =>
+        `<li class="dw-contents-item dw-contents-level-${h.depth}"><a href="#${escapeHtml(h.id)}">${labels[i] || escapeHtml(h.id)}</a></li>`,
     )
     .join("");
   const note =
@@ -199,7 +216,7 @@ export const markdownViewer: Viewer = {
       // listing previews) never gains this outline. The outline is generated
       // markup with escaped plain-text labels; it goes through the same
       // sanitizer as the body before either is served.
-      const outline = contentsOutline(out.headings, renderedHeadingLabels(bodyHtml));
+      const outline = contentsOutline(out.headings, renderedHeadingLabels(bodyHtml, out.headings));
       // The title travels with the cached fragment so a hit needs no re-parse.
       return `<!--title:${escapeHtml(out.title)}-->${fm}${outline ? await sanitizeHtml(outline) : ""}${bodyHtml}`;
     });
