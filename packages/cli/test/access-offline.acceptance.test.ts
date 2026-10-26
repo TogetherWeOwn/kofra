@@ -38,6 +38,12 @@ import { run, type Io } from "../src/main.ts";
 
 const SENTINEL = "access-sentinel-pw-9f8e7d6c5b4a9137845f6a7b8c9d0e1f2a3b4";
 const SENTINEL_TTY = "access-tty-sentinel-pw-1a2b3c4d5e6f708192a3b4c5d6e7f8091a2";
+// Byte-exact passwords: the server hashes/verifies exactly what it receives,
+// so surrounding/interior whitespace is part of the password, not padding.
+const SPACED = "  padded pass phrase 9f8e  ";
+const SPACED_CORE = "padded pass phrase 9f8e";
+const SPACED_TTY = "  tty padded phrase 1a2b  ";
+const TABBED = "\ttabbed\tpass phrase 3c4d\t";
 const API = "https://access-stub.invalid";
 const KEY = "dw_synthetic_not_a_credential";
 
@@ -490,5 +496,61 @@ describe("stable exits for missing, refused and failed requests", () => {
     expect(result.ok).toBe(false);
     expect(result.error.code).not.toBe("unknown_command");
     expect(result.stderr ?? r.stderr).not.toMatch(/at .*\(.*:\d+:\d+\)/);
+  });
+});
+
+describe("visitor password is byte-exact: only one trailing line terminator is removed", () => {
+  function assertNoSpaced(text: string, what: string) {
+    expect(text.includes(SPACED), `${what} must not contain the spaced password`).toBe(false);
+    expect(text.includes(SPACED_CORE), `${what} must not contain the spaced password's core`).toBe(false);
+    expect(text.includes(SPACED_TTY), `${what} must not contain the spaced TTY password`).toBe(false);
+    expect(text.includes("tty padded phrase 1a2b"), `${what} must not contain the TTY password's core`).toBe(false);
+    expect(text.includes("tabbed"), `${what} must not contain the tabbed password`).toBe(false);
+  }
+
+  it.each([
+    ["LF terminator", `${SPACED}\n`, SPACED],
+    ["CRLF terminator", `${SPACED}\r\n`, SPACED],
+    ["no terminator", SPACED, SPACED],
+    ["tabs with LF terminator", `${TABBED}\n`, TABBED],
+    ["exactly one terminator: double newline keeps the inner one", `${SPACED}\n\n`, `${SPACED}\n`],
+  ])("sends the exact spaced password over piped stdin (%s)", async (_name, stdin, expected) => {
+    const r = await cli(["access", "explicit-site", "--mode", "password", "--yes", "--json"], {
+      stdin,
+      fetchImpl: stubJson(200, successBody("password")),
+    });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.prompts).toBe(0);
+    expect(r.wire).toHaveLength(1);
+    expect(r.wire[0]!.method).toBe("PUT");
+    expect(r.wire[0]!.url.pathname).toBe("/api/v1/sites/explicit-site/access");
+    expect(r.wire[0]!.body).toEqual({ mode: "password", password: expected });
+    expect(object(r)).toMatchObject({ ok: true, access: { mode: "password" } });
+    assertNoSpaced(r.stdout + r.stderr, "spaced password success");
+  });
+
+  it("sends the exact spaced password from the no-echo TTY prompt", async () => {
+    const r = await cli(["access", "explicit-site", "--mode", "password", "--yes", "--json"], {
+      stdinIsTTY: true,
+      stderrIsTTY: true,
+      promptImpl: async () => SPACED_TTY,
+      fetchImpl: stubJson(200, successBody("password")),
+    });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.promptHidden).toEqual([true]);
+    expect(r.wire).toHaveLength(1);
+    expect(r.wire[0]!.body).toEqual({ mode: "password", password: SPACED_TTY });
+    assertNoSpaced(r.stdout + r.stderr, "spaced TTY password success");
+  });
+
+  it("reports dry-run passwordSupplied:true for a spaced password without placing it in the plan", async () => {
+    const r = await cli(["access", "explicit-site", "--mode", "password", "--dry-run", "--json"], {
+      env: { KOFRA_CONFIG_DIR: configDir, HOME: home },
+      stdin: `${SPACED}\r\n`,
+    });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.wire).toEqual([]);
+    expect(object(r)).toEqual({ ok: true, dryRun: true, planVersion: 1, site: "explicit-site", mode: "password", passwordSupplied: true });
+    assertNoSpaced(r.stdout + r.stderr, "spaced dry-run plan");
   });
 });

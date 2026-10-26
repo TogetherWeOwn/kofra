@@ -29,6 +29,10 @@ const bootstrap = "access-live-local-bootstrap-0123456789abcdef";
 const sentinel1 = "live-sentinel-one-pw-9f8e7d6c5b4a9137845f6a7b8c9d0e1f2";
 const sentinel2 = "live-sentinel-two-pw-1a2b3c4d5e6f708192a3b4c5d6e7f8091a2";
 const wrongPw = "live-wrong-pw-0000000000000000000000000000000000000000";
+// Byte-exact: surrounding spaces are part of the password; the trimmed
+// variant is a different (wrong) password at the visitor gate.
+const spacedPw = "  live spaced pass phrase 5e6f  ";
+const spacedPwTrimmed = "live spaced pass phrase 5e6f";
 
 type Wire = { method: string; url: URL };
 type Ran = { code: number; stdout: string; stderr: string; wire: Wire[]; prompts: number };
@@ -137,7 +141,7 @@ async function snapshot(dir = home): Promise<Record<string, string>> {
 }
 
 function assertNoSecrets(output: string) {
-  for (const secret of [bootstrap, ownerKey, readerKey, restrictedKey, sentinel1, sentinel2]) {
+  for (const secret of [bootstrap, ownerKey, readerKey, restrictedKey, sentinel1, sentinel2, spacedPw, spacedPwTrimmed]) {
     expect(output.includes(secret), "credentials and visitor passwords must not appear in output").toBe(false);
   }
 }
@@ -319,6 +323,32 @@ describe("live public/password round-trip on a disposable Worker", () => {
     expect(r.code).toBe(0);
     expect(r.wire).toEqual([]);
     expect(object(r)).toEqual({ ok: true, dryRun: true, planVersion: 1, site: mainSlug, mode: "password", passwordSupplied: true });
+  });
+});
+
+describe("live byte-exact visitor password", () => {
+  it("stores the exact spaced password: exact login succeeds, trimmed login fails", async () => {
+    await ensurePublic(mainSlug);
+    const locked = await cli(["access", mainSlug, "--mode", "password", "--yes", "--json"], { stdin: `${spacedPw}\n` });
+    expect(locked.code, locked.stdout + locked.stderr).toBe(0);
+    expect(locked.wire).toHaveLength(1);
+    expect(object(locked)).toMatchObject({ ok: true, site: { slug: mainSlug }, access: { mode: "password" } });
+    expect(await passwordProtected(mainSlug)).toBe(true);
+    expect((await liveGet(mainSlug)).status).toBe(401);
+
+    // The trimmed variant is a different password and must be refused.
+    const trimmed = await tryPassword(mainSlug, spacedPwTrimmed);
+    expect(trimmed.status).toBe(401);
+    expect(trimmed.text).toMatch(/not right/i);
+
+    // The exact spaced value the operator supplied must open the gate.
+    const exact = await tryPassword(mainSlug, spacedPw);
+    expect(exact.status).toBe(303);
+    expect(exact.cookie).toBeTruthy();
+    expect((await liveGet(mainSlug, exact.cookie!)).status).toBe(200);
+
+    await ensurePublic(mainSlug);
+    expect(await passwordProtected(mainSlug)).toBe(false);
   });
 });
 
