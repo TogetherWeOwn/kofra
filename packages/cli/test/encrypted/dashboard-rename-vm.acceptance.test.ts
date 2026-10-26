@@ -103,6 +103,17 @@ async function mount(options: { allowDelete?: boolean } = {}) {
   await expect.poll(() => root.querySelectorAll("button").some(button => /delete site/i.test(button.textContent)), {
     message: "served dashboard script renders real fixture settings before feature assertions", timeout: 5000,
   }).toBe(true);
+  // The initial files GET settles after settings render. Wait for its complete
+  // rendering (both the file-browser link and the live file URL) before any
+  // link snapshot, so Cancel assertions compare settled state to settled state.
+  await expect.poll(() => {
+    const hrefs = root.querySelectorAll("a").map(link => link.getAttribute("href") ?? "");
+    const browser = hrefs.includes(`/v/${site.slug}/index.html`);
+    const live = hrefs.some(href => /^https?:\/\//.test(href) && href.endsWith("/index.html"));
+    return browser && live;
+  }, {
+    message: "initial files rendering settles before link snapshot", timeout: 5000,
+  }).toBe(true);
   expect(violations).toEqual([]);
   expect(writes).toEqual([]);
   return { doc, root, site, writes, violations, location };
