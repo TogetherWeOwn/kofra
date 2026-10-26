@@ -79,10 +79,18 @@ async function expectReceipt(view: View) {
 describe("disposable dashboard harness controls", () => {
   it("executes the served script, loads real site data, and preserves Browse/Publish/Open", async () => {
     const view = await visit();
-    for (const action of [/^browse(?: files)?$/i, /^publish(?: update)?$/i, /^open(?: site)?$/i]) {
-      expect(links(view).filter(link => action.test(accessibleName(link)))).toHaveLength(1);
+    const pageHead = view.doc.body.querySelector(".dw-pagehead");
+    expect(pageHead, "the original site actions remain in the page head").not.toBeNull();
+    const actions = find(pageHead!, node => node.tag === "a");
+    for (const [name, href] of [
+      [/^browse(?: files)?$/i, `/v/${sourceSlug}/`],
+      [/^publish(?: update)?$/i, `/dashboard/publish?site=${sourceSlug}`],
+      [/^open(?: site)?$/i, `${fixture.origin}/s/${sourceSlug}/`],
+    ] as const) {
+      const matches = actions.filter(link => name.test(accessibleName(link)));
+      expect(matches).toHaveLength(1);
+      expect(matches[0]!.getAttribute("href")).toBe(href);
     }
-    expect(links(view).find(link => /^browse(?: files)?$/i.test(accessibleName(link)))?.getAttribute("href")).toBe(`/v/${sourceSlug}/`);
     expect(view.wire.some(call => call.path === `/api/v1/sites/${sourceSlug}`)).toBe(true);
     expect(view.doc.body.textContent).toContain("Original title");
     expect(mutations(view.wire)).toEqual([]);
@@ -271,7 +279,11 @@ describe("duplicate dashboard outcome contract", () => {
     assertDuplicateOnly(view, 1);
     expect(await fixture.snapshot()).toEqual(before);
     const copy = (await fixture.json("/api/v1/sites/dashboard-live-copy")).site;
-    expect(copy.id).not.toBe(fixture.source.id);
+    expect(copy.slug).toBe("dashboard-live-copy");
+    expect(copy.slug).not.toBe(before.site.slug);
+    expect(before.site.currentVersionId).toMatch(/\S+/);
+    expect(copy.currentVersionId).toMatch(/\S+/);
+    expect(copy.currentVersionId).not.toBe(before.site.currentVersionId);
     expect(copy.settings).toMatchObject({ spa: true, passwordProtected: false });
     expect(copy.currentVersion.message).toBe("Literal dashboard copy");
     expect(view.navigation.every(url => new URL(url, fixture.origin).pathname === "/dashboard/sites/dashboard-live-copy")).toBe(true);
