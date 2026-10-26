@@ -17,6 +17,24 @@ the first viewer whose `maxBytes` is at least `file.size`
 (`file.size <= maxBytes`) and whose `matches` accepts the file kind and view
 mode wins. The response names the winner in `X-Kofra-Viewer`.
 
+## Phone handoff
+
+File viewer bars include a native **Phone** disclosure, operable by keyboard
+with JavaScript disabled. It shows an inline SVG QR plus a selectable full link
+for the request origin and already-encoded public file path. Query strings and
+fragments are never included. Password protection still applies when the phone
+opens that address; no desktop grant is transferred.
+
+Embeds, folder listings and version-preview addresses omit Phone. Raw, Source
+and Download retain their existing representation and access rules. The shared
+vendored encoder also serves the dashboard, whose QR output is unchanged.
+
+The server limits QR input to 1,273 UTF-8 bytes (version 40, H correction), SVG
+output to 128 KiB and display width to 256 CSS pixels with a four-module quiet
+zone. Above capacity or on an encoder failure, the full link remains without a
+QR. URL-specific chrome is generated outside cached body fragments; built-in
+viewer versions advance so conditional responses refresh the markup.
+
 ## At a glance
 
 | Format | Accepted input cap (`maxBytes`) | Read budget for the rendered view | Rendered-output limits | Above the input cap |

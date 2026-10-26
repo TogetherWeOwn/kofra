@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Viewer phone handoff
+
+- File viewer bars offer a keyboard-operable Phone disclosure without JavaScript.
+  Its inline SVG QR and full link use the public file address without query or
+  fragment; opening a password-protected file on a phone still requires its password.
+  Embeds, folder listings and version-preview addresses omit the control.
+- Over-capacity URLs retain the full link without a QR. Server rendering and the
+  dashboard share the existing vendored encoder; dashboard QR pixels are unchanged.
+  Built-in viewer versions advance to refresh cached validators.
+
 ### Versions naming
 
 - Version creation and finalize move under `/versions`

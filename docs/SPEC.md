@@ -209,7 +209,7 @@ the local filter.
 | ORG-01 | Folders: flat, one per site, invisible to visitors; agents must not invent folder names | P1 | Table done; R-28 |
 | ORG-02 | Search over slug, title, description, file paths and extracted text | P1 | R-28 |
 | ORG-03 | Titles and descriptions: caller value, then HTML metadata, then Workers AI when bound (switchable off) | P1 | R-19 |
-| ORG-04 | QR code per site in the dashboard and viewer bar | P1 | R-22 |
+| ORG-04 | QR code per site in the dashboard and viewer bar | P1 | Implemented: dashboard site QR and no-script viewer Phone disclosure for the public file URL, with full-link fallback; omitted on embeds, folder listings and version-preview addresses. See [VIEWERS.md](VIEWERS.md#phone-handoff) |
 | ORG-05 | Opt-in public gallery of the instance's public sites with a JSON feed | P2 | R-50 |
 | ORG-06 | Dashboard version files: sort the loaded manifest by path, kind or exact byte size, ascending/descending, composed with the path filter; client-side only, default Path ascending | P1 | Done |
 | ORG-07 | Dashboard version jump: labelled reference input (live, vN, N or immutable id) with explicit Open submit; one bounded direct lookup per submit, never on typing; history lists the newest 100 only; the management URL records the displayed manifest by immutable id (explicit selections push, traversal and initial load replace; refused traversal restores the displayed id without adding an entry); deleting the inspected version clears its link before reloading live; every file download is pinned to the inspected manifest id | P1 | Done |
