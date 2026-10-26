@@ -68,9 +68,9 @@ async function request(path: string, init: RequestInit = {}, key = ownerKey) {
   return fetch(url, { ...init, headers, redirect: "error" });
 }
 
-async function publish(content: string) {
+async function publish(content: string, fixtureSlug = slug) {
   const body = new FormData();
-  body.set("slug", slug);
+  body.set("slug", fixtureSlug);
   for (const [path, bytes, type] of [
     [textPath, Buffer.from(content), "text/plain; charset=utf-8"],
     ["bytes.bin", binary, "application/octet-stream"],
@@ -508,6 +508,53 @@ describe("bounded read-file CLI acceptance", () => {
     expect(r.code).toBe(0);
     expect(r.wire).toEqual([]);
     for (const command of ["read-file", "files", "versions", "restore", "publish", "api"]) expect(r.stdout).toContain(command);
+  });
+
+  it("retains the disposable Worker's complete allowlisted recovery envelope in CLI JSON", async () => {
+    const r = await read("missing-recovery-fixture.txt");
+    expect(r.code).toBe(4);
+    expect(r.wire).toHaveLength(1);
+    const envelope = r.wire[0]!.body;
+    expect(envelope.error).toMatchObject({ retryable: false, retryAfterSeconds: null, docs: expect.any(String), next: [] });
+    expect(object(r)).toEqual({ ok: false, exitCode: 4, error: {
+      code: envelope.error.code, message: envelope.error.message, hint: envelope.error.hint,
+      retryable: false, retryAfterSeconds: null, docs: envelope.error.docs, next: [], status: 404,
+      ...(envelope.requestId ? { requestId: envelope.requestId } : {}),
+      ...(envelope.error.details ? { details: envelope.error.details } : {}),
+    } });
+  });
+
+  it.each(["omitted", "live", "1", "v1", "id"])("continues the exact immutable Worker version after live moves (%s)", async reference => {
+    const recoverySlug = `recovery-${reference}`;
+    const original = await publish("ABCDEold", recoverySlug);
+    const initial = reference === "omitted" ? [] : ["--version", reference === "id" ? original : reference];
+    const first = await cli(["read-file", recoverySlug, textPath, "--length", "5", "--encoding", "text", ...initial]);
+    expect(first.code).toBe(0);
+    expect(first.stdout).toBe("ABCDE");
+    expect(first.wire).toHaveLength(1);
+    expect(first.wire[0]!.body.versionId).toBe(original);
+    const command = first.stderr.match(/Truncated: continue with: (.+)/)?.[1];
+    expect(command, first.stderr).toBeDefined();
+    expect(command).toContain(`--version ${original}`);
+    const moved = await publish("VWXYZnew", recoverySlug);
+    expect(moved).not.toBe(original);
+    // Execute the emitted shell arguments against the built CLI and local Worker.
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    const shell = command!.replace(/^kofra /, `${quote(process.execPath)} ${quote(bundle)} `);
+    const second = await promisify(execFile)("/bin/sh", ["-c", shell], {
+      cwd: home, timeout: 15_000,
+      env: { PATH: process.env.PATH, HOME: home, KOFRA_CONFIG_DIR: join(home, "config"), KOFRA_API: cliApi, KOFRA_API_KEY: readerKey },
+    });
+    expect(second.stdout).toBe("old");
+    expect(first.stdout + second.stdout).toBe("ABCDEold");
+    expect(observed).toHaveLength(2);
+    expect(observed[1]!.url.searchParams.get("version")).toBe(original);
+    expect(observed[1]!.body.versionId).toBe(original);
+    expect(observed[1]!.url.searchParams.get("offset")).toBe("5");
+    expect(observed[1]!.url.searchParams.get("length")).toBe("5");
+    expect(observed[1]!.url.searchParams.get("encoding")).toBe("text");
+    expect(violations).toEqual([]);
+    assertNoSecrets(first.stdout + first.stderr + second.stdout + second.stderr);
   });
 
   it("runs the bundled CLI as a non-TTY process with exactly one JSON page and no config writes", async () => {
