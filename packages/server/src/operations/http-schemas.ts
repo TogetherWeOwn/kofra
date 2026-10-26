@@ -178,7 +178,13 @@ export const HTTP_PUBLISH_RESULT: Record<string, any> = {
       type: "array",
       items: {
         type: "object",
-        properties: { code: { type: "string" }, message: { type: "string" } },
+        properties: {
+          code: { type: "string" },
+          message: { type: "string" },
+          path: { type: "string" },
+          line: { type: "integer" },
+          fix: { type: "string" },
+        },
       },
     },
     claimToken: {
@@ -218,7 +224,19 @@ export const HTTP_AGENT_PUBLISH_RESULT: Record<string, any> = {
       },
     },
     changes: { type: "object" },
-    warnings: { type: "array", items: { type: "object" } },
+    warnings: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          code: { type: "string" },
+          message: { type: "string" },
+          path: { type: "string" },
+          line: { type: "integer" },
+          fix: { type: "string" },
+        },
+      },
+    },
     next: { type: "array", items: { type: "object" } },
   },
 };

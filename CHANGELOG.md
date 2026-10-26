@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Path-mode hardening and publish warnings (R-12)
+
+- Publish and finalize return warnings with `fix` text (and `path`/`line` where known),
+  computed from the stored bytes over a bounded scan: `root_absolute_paths` (path mode),
+  `spa_without_base`, `uses_browser_storage` (when the site will be sandboxed),
+  `wasm_without_coi` (renamed from `wasm_without_cross_origin_isolation`),
+  `possible_secret` (file and line; matched values are never included) and
+  `invalid_config` (a `.dropway/*.json` file that is not valid JSON). `no_index` now
+  carries fix text too. Replayed finalizes and unchanged republishes return the same
+  warnings instead of an empty list.
+- A page navigation with a same-origin `Referer` inside an SPA site to a path the site
+  lacks now 307-redirects to that path inside the site (SRV-02), where the SPA fallback
+  serves it; app routes, paths with a file extension and sub-resource requests are
+  untouched.
+- Publishing a path under `__dropway/` is refused with the new `reserved_path` error on
+  every publish path (the manifest, one-shot and file-source flows share the check).
+- `.dropway/*` files are stored with the version (owner read-back works) but are never
+  served from the sites origin and no longer appear in folder listings.
+
 ### Publish v2
 
 - REST JSON publishing now uses the same flat file sources as MCP: content,

@@ -93,7 +93,19 @@ export const PUBLISH_OUT: Schema = {
     version: { type: ["object", "null"] },
     files: { type: "object" },
     upload: { type: "object", description: "Only when status is awaiting_upload: items to PUT, then finalize." },
-    warnings: { type: "array" },
+    warnings: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          code: { type: "string" },
+          message: { type: "string" },
+          path: { type: "string" },
+          line: { type: "integer" },
+          fix: { type: "string" },
+        },
+      },
+    },
     next: { type: "array" },
   },
   required: ["status", "url", "slug"],

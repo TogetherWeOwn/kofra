@@ -8,7 +8,7 @@ import { contentTypeFor, normaliseContentType } from "../lib/mime";
 import { normaliseFilePath, stripCommonRoot } from "../lib/paths";
 import type { Principal } from "../principal";
 import { blobScope, putVerifiedBlob } from "./blobs";
-import { createDeploy, finalizeDeploy, parseDeployOptions, precheckManifest } from "./deploys";
+import { createDeploy, deployWarnings, finalizeDeploy, parseDeployOptions, precheckManifest, type Warning } from "./deploys";
 import { createSite, discardNewSite, findSite, getSiteFor, parseSettings, serializeSite, updateSite, type SiteRow, type VersionRow } from "./sites";
 
 /** A file held in memory for one-shot publishing. */
@@ -230,7 +230,8 @@ async function publishToTarget(
   });
 
   let uploaded = 0;
-  let warnings: Array<{ code: string; message: string }> = [];
+  // An unchanged republish still reports the live version's warnings, like finalize does.
+  let warnings: Warning[] = deploy.unchanged ? await deployWarnings(dc, site, deploy.deploy.id) : [];
   let versionId = deploy.deploy.id;
   if (!deploy.unchanged) {
     const missing = new Set(deploy.missing);

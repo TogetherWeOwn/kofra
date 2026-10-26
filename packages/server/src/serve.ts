@@ -75,11 +75,14 @@ function hasChildren(files: LiveSite["files"], dir: string): boolean {
 export function resolvePath(live: LiveSite, p: string, req: Request, mode: ServeMode, fallbacks = true): Resolved {
   const files = live.files;
   const search = new URL(req.url).search;
+  // .dropway/* is stored with the version (site configuration) but never served:
+  // not as a file, not raw, not as a listing, and not through the SPA fallback.
+  if (p === ".dropway" || p.startsWith(".dropway/")) return { kind: "not_found" };
   if (p === "" || p.endsWith("/")) {
     for (const name of INDEX_NAMES) if (files[p + name]) return { kind: "file", path: p + name, status: 200 };
     if (p === "") {
       const keys = Object.keys(files);
-      if (keys.length === 1) return { kind: "file", path: keys[0]!, status: 200 };
+      if (keys.length === 1 && !keys[0]!.startsWith(".dropway/")) return { kind: "file", path: keys[0]!, status: 200 };
     }
     if (hasChildren(files, p)) return { kind: "listing", dir: p };
   } else {

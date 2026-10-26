@@ -93,6 +93,7 @@ Extension adapters can add codes and override guidance without changing built-in
 | `rate_limited` | 429 | true | Wait retryAfterSeconds before retrying; update an existing anonymous site using its claim token. |
 | `reason_required` | 400 | false | Provide a non-empty reason for releasing the held name, such as a trademark dispute reference. |
 | `request_too_large` | 413 | false | Split the request or use manifest/upload/finalize instead of embedding file bytes. |
+| `reserved_path` | 400 | false | Rename the __dropway/ folder: paths under __dropway/ belong to the server (password form, report link). |
 | `route_not_found` | 404 | false | See /openapi.json for supported methods and endpoints. |
 | `scope_not_grantable` | 403 | false | Request only scopes held by both the caller and the target member's role. |
 | `site_changed` | 409 | false | Reload the site, reconcile the change, and retry manually. |

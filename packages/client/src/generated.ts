@@ -81,7 +81,14 @@ export interface PublishSiteOutput {
   files?: Record<string, unknown>;
   /** Only when status is awaiting_upload: items to PUT, then finalize. */
   upload?: Record<string, unknown>;
-  warnings?: unknown[];
+  warnings?: {
+    code?: string;
+    message?: string;
+    path?: string;
+    line?: number;
+    fix?: string;
+    [key: string]: unknown;
+  }[];
   next?: unknown[];
   [key: string]: unknown;
 }
@@ -184,7 +191,14 @@ export interface UpdateSiteFilesOutput {
     [key: string]: unknown;
   };
   changes?: Record<string, unknown>;
-  warnings?: Record<string, unknown>[];
+  warnings?: {
+    code?: string;
+    message?: string;
+    path?: string;
+    line?: number;
+    fix?: string;
+    [key: string]: unknown;
+  }[];
   next?: Record<string, unknown>[];
   [key: string]: unknown;
 }
@@ -839,7 +853,14 @@ export type PublishUploadOutput = {
     [key: string]: unknown;
   };
   changes?: Record<string, unknown>;
-  warnings?: Record<string, unknown>[];
+  warnings?: {
+    code?: string;
+    message?: string;
+    path?: string;
+    line?: number;
+    fix?: string;
+    [key: string]: unknown;
+  }[];
   next?: Record<string, unknown>[];
   [key: string]: unknown;
 } | {
@@ -896,6 +917,9 @@ export type PublishUploadOutput = {
   warnings?: {
     code?: string;
     message?: string;
+    path?: string;
+    line?: number;
+    fix?: string;
     [key: string]: unknown;
   }[];
   /** Anonymous publishes only; shown once. */

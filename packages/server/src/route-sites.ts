@@ -1,6 +1,7 @@
 import {
   RESERVED_SLUGS,
   appOrigin,
+  extname,
   getLiveSite,
   looksLikeSlug,
   requestPathToFilePath,
@@ -8,7 +9,7 @@ import {
   siteUrl,
   type DropwayContext,
 } from "@dropway/core";
-import { resolvePath, type ServeMode } from "./serve";
+import { isNavigation, resolvePath, type ServeMode } from "./serve";
 
 /**
  * Decide whether a request is for a published site or for the app.
@@ -91,6 +92,30 @@ async function siteHasPath(dw: DropwayContext, slug: string, pathname: string, r
 }
 
 /**
+ * App routes a Referer redirect must never steal: extensionful paths (an SPA route never
+ * looks like a file name) and the app's own top-level routes. Container routes (dashboard,
+ * file browser) are matched by first segment: a real app link from inside a site must reach
+ * the app, and SPA routes under those prefixes keep today's behaviour (they stay app paths).
+ */
+const APP_NAV_EXACT = new Set(["/", "/health", "/login", "/connect", "/claim", "/mcp", "/api", "/dashboard", "/view"]);
+const APP_NAV_PREFIXES = ["dashboard", "v", "view", "api", "mcp", "docs", ".well-known", "__dropway"];
+
+/**
+ * SPA navigation fallback by Referer (SRV-02): site X is an SPA and this is a page navigation
+ * (not a sub-resource) from inside X to a path X itself lacks. The redirect target is then
+ * served by the SPA fallback of X, so root-relative client routes keep working in path mode.
+ */
+async function spaNavigationRedirect(dw: DropwayContext, slug: string, req: Request, pathname: string): Promise<boolean> {
+  if (!isNavigation(req) || extname(pathname) || pathname.includes("//")) return false;
+  if (APP_NAV_EXACT.has(pathname) || APP_NAV_PREFIXES.includes(pathname.split("/")[1] ?? "")) return false;
+  const p = requestPathToFilePath(pathname);
+  if (p === null || p === "" || p.endsWith("/")) return false;
+  const live = await getLiveSite(dw, slug);
+  if (!live || !live.versionId || (live.expiresAt && live.expiresAt < Date.now())) return false;
+  return live.spa && !!live.files["index.html"];
+}
+
+/**
  * A former path-mode sites origin (config.legacySitesOrigins): <origin>/<slug>/<rest>?q answers
  * 308 to <current site URL><rest>?q, so old links, embeds and bookmarks keep working. An absolute
  * path from a page of site X there (Referer) goes to X. Never cached: a rollback works at once.
@@ -158,6 +183,9 @@ export async function routeSiteRequest(dw: DropwayContext, req: Request): Promis
     if (readOnly && ref && ref !== first && (await siteHasPath(dw, ref, url.pathname, req, `/${ref}/`))) {
       return { kind: "redirect", location: `/${ref}${url.pathname}${url.search}`, status: 307, byReferer: true };
     }
+    if (readOnly && ref && ref !== first && (await spaNavigationRedirect(dw, ref, req, url.pathname))) {
+      return { kind: "redirect", location: `/${ref}${url.pathname}${url.search}`, status: 307, byReferer: true };
+    }
     if (isSiteSlug(first)) {
       if (url.pathname === `/${first}`) return { kind: "redirect", location: `/${first}/${url.search}`, status: 301, byReferer: false };
       return { kind: "site", slug: first, path: url.pathname.slice(first.length + 1), mode: { kind: "path", base: `/${first}/`, sandbox: c.sitesSandbox, rewrite: { base: `/${first}/`, keep: [] } } };
@@ -206,6 +234,9 @@ export async function routeSiteRequest(dw: DropwayContext, req: Request): Promis
   if (!c.sitesOrigin && readOnly) {
     const ref = refererSlug(req, url, prefix);
     if (ref && (await siteHasPath(dw, ref, url.pathname, req, `${prefix}/${ref}/`))) {
+      return { kind: "redirect", location: `${prefix}/${ref}${url.pathname}${url.search}`, status: 307, byReferer: true };
+    }
+    if (ref && (await spaNavigationRedirect(dw, ref, req, url.pathname))) {
       return { kind: "redirect", location: `${prefix}/${ref}${url.pathname}${url.search}`, status: 307, byReferer: true };
     }
   }

@@ -103,7 +103,7 @@ What Kofra is not:
 | PUB-09 | Client attribution: `X-Kofra-Client: <harness>/<detail>` header or MCP `clientInfo`, stored per version | P0 | Done (header); MCP in R-06 |
 | PUB-10 | Version message (like a commit message, up to 200 chars) | P0 | Done |
 | PUB-11 | Pending versions expire after 1 hour; finalizing with missing bytes returns `409 missing_blobs` with fresh upload links | P0 | Partial (expiry done); R-05 |
-| PUB-12 | Publish warnings: root-absolute paths in path mode, SPA without a base path, browser storage on a sandboxed origin, `.wasm` without cross-origin isolation, possible secrets, invalid config files | P0 | R-12 |
+| PUB-12 | Publish warnings: root-absolute paths in path mode, SPA without a base path, browser storage on a sandboxed origin, `.wasm` without cross-origin isolation, possible secrets, invalid config files | P0 | Done (R-12) |
 | PUB-13 | Files larger than one request (above about 95 MB): multipart upload through the Worker, resumable | P1 | R-35 |
 | PUB-14 | `archiveUrl` (publish a zip from a URL) and chat-client attachments (`{download_url, file_name}`) as sources | P1 | R-35 |
 | PUB-15 | Duplicate a site server-side (immediately live) | P1 | Done |
@@ -118,7 +118,7 @@ What Kofra is not:
 | ID | Feature | Pri | Status |
 |---|---|---|---|
 | SRV-01 | Three serving modes: subdomain (each site its own origin), path on a dedicated sites origin, path on the app origin (always sandboxed). Section 11.2 | P0 | Done |
-| SRV-02 | Path mode keeps sites inside `/<slug>/`: HTML and CSS root-relative URLs are rewritten; URLs built at runtime are resolved by `Referer` with a 307 (unsandboxed pages) or by an injected run-time shim (sandboxed pages, which send no Referer); navigations inside an SPA fall back to the SPA. Interim until an instance has a domain | P0 | Done (SPA navigation fallback in R-12) |
+| SRV-02 | Path mode keeps sites inside `/<slug>/`: HTML and CSS root-relative URLs are rewritten; URLs built at runtime are resolved by `Referer` with a 307 (unsandboxed pages) or by an injected run-time shim (sandboxed pages, which send no Referer); navigations inside an SPA fall back to the SPA. Interim until an instance has a domain | P0 | Done |
 | SRV-03 | Index resolution: `index.html`, `index.htm`, `index.md`, `README.md`; a one-file site serves that file at `/`; folders without an index get a listing; `404.html`; SPA fallback | P0 | Done |
 | SRV-04 | Headers: `ETag` (sha256), `Range`/206, pre-compressed `.br`/`.gz` with `Content-Encoding`, `X-Kofra-Version`, `X-Robots-Tag: noindex` on expiring sites, `X-Content-Type-Options: nosniff` | P0 | Done |
 | SRV-05 | Cache policy matrix (HTML and unfingerprinted files revalidate; fingerprinted files immutable; gated sites `private, no-store`; sites with `.wasm` revalidate) | P0 | Partial; R-27 |
@@ -1597,7 +1597,7 @@ Path mode is interim. It exists so an instance works on `workers.dev` with no do
   `SITES_SANDBOX=true`.
 - Root-absolute URLs are handled by HTML/CSS rewriting, `Referer` redirects (unsandboxed pages) and an
   injected run-time shim (sandboxed pages: no Referer is ever sent from an opaque origin). Import
-  specifiers, `location.href` and `pushState` with root-relative URLs should be relative. Publish warnings (R-12) say this with the exact framework fix.
+  specifiers, `location.href` and `pushState` with root-relative URLs should be relative. Publish warnings say this with the exact framework fix.
 
 `SITES_SANDBOX` (default `auto` since 2026-10-22):
 
@@ -1802,7 +1802,7 @@ Workspaces 24, Variables 3, Billing 4, Support 1.
 | Byte-identical republish `unchanged` | Same | P0 | Done |
 | Update in place, settings as patches | `publish_site` with `site`, `update_site_settings` | P0 | Done |
 | `baseVersionId` -> 409 | Same, with `next` | P0 | Done |
-| Finalize `warnings[]` | Publish warnings (more kinds) | P0 | R-12 |
+| Finalize `warnings[]` | Publish warnings (more kinds) | P0 | Done (R-12) |
 | Client attribution header and badge | `X-Kofra-Client`, MCP `clientInfo` | P0 | Done / R-06 |
 | `urls[]` (slug, domain, label...) | `site.urls[]` (slug, domain, mount) | P1 | R-33 |
 | TTL | `ttlSeconds` | P1 | R-27 |
@@ -1823,7 +1823,7 @@ Workspaces 24, Variables 3, Billing 4, Support 1.
 | Serving precedence, listings, gallery | Same, plus README under listings | P0 | Done / R-08 |
 | Markdown render + toggle + `?raw=1` | Same | P0 | Done |
 | JSON, CSV, code, text, SVG served raw | Rendered viewers for all of them, with raw toggle | P0 | R-07, R-08 |
-| Headers, Range, edge compression, WASM handling, COOP/COEP, pre-compressed files | Same | P0 / P1 | Done (warning R-12) |
+| Headers, Range, edge compression, WASM handling, COOP/COEP, pre-compressed files | Same | P0 / P1 | Done |
 | New version live in about 10 s | Version URL at once; live URL within about 60 s; `--wait` confirms | P0 | R-13, R-14 |
 | Owner-only preview hosts `{versionId}--{slug}` | `<slug>--v<N>` with signed links | P0 | R-13 |
 | Thumbnails and OG cards | Browser Run screenshots | P1 | R-20 |
