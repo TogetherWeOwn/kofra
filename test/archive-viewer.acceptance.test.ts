@@ -249,7 +249,7 @@ describe("archive viewer pages", () => {
     // Compare whole cells, not substring positions: "a/" is also in "a/b/c/deep.txt".
     const expected = MIXED_NAMES.map((name) => name.replaceAll("<", "&lt;").replaceAll(">", "&gt;"));
     const paths = [...html.matchAll(/<tr\b[^>]*>[\s\S]*?<\/tr>/gi)].flatMap(([row]) => {
-      const cells = [...row.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)].map(([, cell]) => cell!.replace(/<[^>]*>/g, "").trim());
+      const cells = [...row.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)].map(([, cell]) => cell!);
       return cells.filter((cell) => expected.includes(cell));
     });
     expect(paths).toEqual(expected); // Central-directory insertion order, including directories.
