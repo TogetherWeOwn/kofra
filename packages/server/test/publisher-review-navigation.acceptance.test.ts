@@ -332,11 +332,11 @@ describe.each(["publish", "home"] as const)("%s publisher review navigation", (p
     await query(nav, "empty.bin");
     expect(paths(nav.body)).toEqual(["empty.bin"]);
     expect(rows(nav.body).find((r) => r.textContent.includes("empty.bin"))?.textContent).toContain("0 B");
-    await pickFolder(h, [dirFile("dist/index.html", 1), dirFile("dist/.env<img onerror=boom>", 2)]);
+    await pickFolder(h, [dirFile("dist/index.html", 1), dirFile("dist/.env.<img onerror=boom>", 2)]);
     const excludedNav = navigation(h);
     await choose(excludedNav.category, "Excluded");
     await query(excludedNav, "<IMG ONERROR=BOOM>");
-    expect(paths(excludedNav.body, [".env<img onerror=boom>"])).toEqual([".env<img onerror=boom>"]);
+    expect(paths(excludedNav.body, [".env.<img onerror=boom>"])).toEqual([".env.<img onerror=boom>"]);
     expect(rows(excludedNav.body)[0]!.textContent).toContain("may contain secrets");
     expect(allElements(excludedNav.body).some((e) => ["img", "script", "iframe"].includes(e.tagName))).toBe(false);
     expect(allElements(excludedNav.body).some((e) => Object.keys(e.attributes).some((a) => /^on/i.test(a)))).toBe(false);
