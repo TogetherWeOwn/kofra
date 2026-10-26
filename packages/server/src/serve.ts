@@ -63,8 +63,14 @@ export function isNavigation(req: Request): boolean {
   return (req.headers.get("accept") ?? "").includes("text/html");
 }
 
-function hasChildren(files: LiveSite["files"], dir: string): boolean {
-  for (const k in files) if (k.startsWith(dir)) return true;
+/** Private configuration paths are stored with the version but never served. */
+function isPrivatePath(p: string): boolean {
+  return p === ".dropway" || p.startsWith(".dropway/");
+}
+
+/** A directory counts for serving only when it holds at least one non-private entry. */
+function hasVisibleChildren(files: LiveSite["files"], dir: string): boolean {
+  for (const k in files) if (k.startsWith(dir) && !isPrivatePath(k)) return true;
   return false;
 }
 
@@ -75,19 +81,20 @@ function hasChildren(files: LiveSite["files"], dir: string): boolean {
 export function resolvePath(live: LiveSite, p: string, req: Request, mode: ServeMode, fallbacks = true): Resolved {
   const files = live.files;
   const search = new URL(req.url).search;
-  // .dropway/* is stored with the version (site configuration) but never served:
-  // not as a file, not raw, not as a listing, and not through the SPA fallback.
-  if (p === ".dropway" || p.startsWith(".dropway/")) return { kind: "not_found" };
+  // .dropway and .dropway/* are stored with the version (site configuration) but never
+  // served: not as a file, not raw, not as a listing, and not through the SPA fallback.
+  // A directory holding only private entries therefore answers as if it were absent.
+  if (isPrivatePath(p)) return { kind: "not_found" };
   if (p === "" || p.endsWith("/")) {
     for (const name of INDEX_NAMES) if (files[p + name]) return { kind: "file", path: p + name, status: 200 };
     if (p === "") {
       const keys = Object.keys(files);
       if (keys.length === 1 && keys[0] !== ".dropway" && !keys[0]!.startsWith(".dropway/")) return { kind: "file", path: keys[0]!, status: 200 };
     }
-    if (hasChildren(files, p)) return { kind: "listing", dir: p };
+    if (hasVisibleChildren(files, p)) return { kind: "listing", dir: p };
   } else {
     if (files[p]) return { kind: "file", path: p, status: 200 };
-    if (hasChildren(files, `${p}/`)) return { kind: "redirect", location: `${mode.base}${encodePath(p)}/${search}` };
+    if (hasVisibleChildren(files, `${p}/`)) return { kind: "redirect", location: `${mode.base}${encodePath(p)}/${search}` };
     if (files[`${p}.html`]) return { kind: "file", path: `${p}.html`, status: 200 };
     if (files[`${p}.htm`]) return { kind: "file", path: `${p}.htm`, status: 200 };
   }

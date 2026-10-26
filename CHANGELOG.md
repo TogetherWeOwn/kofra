@@ -24,7 +24,8 @@
   every publish path (the manifest, one-shot and file-source flows share the check).
 - `.dropway` and `.dropway/*` files are stored with the version (owner read-back works)
   but are never served from the sites origin, including through the single-file root
-  shortcut, and no longer appear in folder listings.
+  shortcut, and no longer appear in folder listings. A directory holding only private
+  entries answers 404 instead of an empty listing or a redirect.
 
 ### Versions naming
 
