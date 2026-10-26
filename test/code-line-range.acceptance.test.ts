@@ -51,7 +51,7 @@ function scanTags(html: string): Tag[] {
 }
 
 const stripTags = (s: string) => s.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-const visibleText = (html: string) => stripTags(html.replace(/<script>[\s\S]*?<\/script>/g, " ").replace(/<style>[\s\S]*?<\/style>/g, " "));
+const visibleText = (html: string) => stripTags(html.replace(/<script>[\s\S]*?<\/script>/gi, " ").replace(/<style>[\s\S]*?<\/style>/gi, " "));
 
 /** The existing code toolbar: from its opening tag to the source block. */
 function toolbarRegion(html: string): string {
@@ -145,7 +145,7 @@ describe("served code viewer: line-range selection contract", () => {
     expect(html).toContain('id="dw-wrap"');
     // Hostile source stays inert text: exactly one real script element (the
     // viewer's) and no element smuggled out of the file content.
-    expect(html.match(/<script>/g)).toHaveLength(1);
+    expect(html.match(/<script>/gi)).toHaveLength(1);
     expect(html).not.toContain("<img");
     expect(html).toContain("&lt;/script&gt;");
     // Raw / Download links stay fragment-free plain links.
@@ -170,7 +170,7 @@ describe("served code viewer: line-range selection contract", () => {
   it("CSP allows exactly the served script by its static hash, across a 304 round-trip", async () => {
     const first = await get("src/app.ts");
     const html = await first.text();
-    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
+    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/gi)].map((m) => m[1]!);
     expect(scripts).toHaveLength(1);
     const expected = await scriptHashSource(scripts[0]!);
     const csp = first.headers.get("content-security-policy")!;
@@ -187,7 +187,7 @@ describe("served code viewer: line-range selection contract", () => {
     // The hash is static (not a per-response nonce): a fresh 200 after the
     // conditional request serves the identical script and hash.
     const again = await (await get("src/app.ts")).text();
-    const againScripts = [...again.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
+    const againScripts = [...again.matchAll(/<script>([\s\S]*?)<\/script>/gi)].map((m) => m[1]!);
     expect(againScripts).toEqual(scripts);
   });
 
