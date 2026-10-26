@@ -5,7 +5,7 @@ import { missingForScope } from "./deploys";
 import { blobScope, putVerifiedBlob } from "./blobs";
 import { createUploadToken, PENDING_VERSION_TTL_MS, uploadExpired } from "./upload-tokens";
 import { hasScope, type Principal } from "../principal";
-import { ApiError, badRequest, conflict, forbidden, notFound, unauthorized } from "../errors";
+import { ApiError, badRequest, conflict, forbidden, isApiError, notFound, unauthorized } from "../errors";
 import { newId, sha256Hex, SHA256_RE, toHex } from "../lib/crypto";
 import { meter } from "./events";
 
@@ -144,7 +144,9 @@ async function pendingTarget(dc: DropwayContext, p: Principal, versionId: string
   const now = Date.now();
   if (p.kind === "upload") {
     if (now >= p.expiresAt) throw uploadExpired();
-    if (p.versionId !== versionId) throw forbidden("This upload token does not authorize that pending version.", "Use this version's upload.items headers.");
+    // A foreign session reads exactly like an unknown id: 403 here would let
+    // an upload-only token probe which sessions exist. The message echoes no ids.
+    if (p.versionId !== versionId) throw notFound("upload_not_found", "No upload session this upload token can access.", "Start one with POST /api/v1/uploads using this token's pending version.");
   } else if (p.kind !== "member" && p.kind !== "claim") {
     throw unauthorized("Resumable uploads need an API key, claim token or version-scoped upload token.");
   }
@@ -177,10 +179,27 @@ async function pendingTarget(dc: DropwayContext, p: Principal, versionId: string
 }
 
 async function sessionParts(dc: DropwayContext, sessionId: string): Promise<Array<MultipartPartView & { sha256: string }>> {
-  const { results } = await dc.env.DB.prepare("SELECT part_number, size, etag, sha256 FROM upload_parts WHERE session_id = ? ORDER BY part_number")
+  // Only acknowledged parts (a real R2 etag) resume or complete. Claimed
+  // rows with an empty etag are in-flight uploads, not resumable state.
+  const { results } = await dc.env.DB.prepare("SELECT part_number, size, etag, sha256 FROM upload_parts WHERE session_id = ? AND etag <> '' ORDER BY part_number")
     .bind(sessionId)
     .all<{ part_number: number; size: number; etag: string; sha256: string }>();
   return results.map((r) => ({ partNumber: r.part_number, size: r.size, etag: r.etag, sha256: r.sha256 }));
+}
+
+/** One part's claim row, acknowledged or still in flight, if any. */
+async function sessionClaim(dc: DropwayContext, sessionId: string, partNumber: number): Promise<{ partNumber: number; size: number; etag: string; sha256: string } | null> {
+  const row = await dc.env.DB.prepare("SELECT part_number, size, etag, sha256 FROM upload_parts WHERE session_id = ? AND part_number = ?")
+    .bind(sessionId, partNumber)
+    .first<{ part_number: number; size: number; etag: string; sha256: string }>();
+  return row ? { partNumber: row.part_number, size: row.size, etag: row.etag, sha256: row.sha256 } : null;
+}
+
+/** True when R2 reports the multipart upload itself no longer exists (aborted/expired), as opposed to a failed part write. */
+function isClosedMultipartUpload(e: unknown): boolean {
+  const code = (e as { code?: unknown } | null)?.code;
+  if (code === 10024 || code === "NoSuchUpload") return true;
+  return /NoSuchUpload|specified multipart upload does not exist/.test(String((e as Error | null)?.message ?? e));
 }
 
 async function sessionView(dc: DropwayContext, session: SessionRow): Promise<MultipartUploadView> {
@@ -347,20 +366,49 @@ export async function uploadMultipartPart(
     throw conflict("part_conflict", `Part ${partNumber} was already acknowledged with different bytes.`, "Resume with the acknowledged bytes, or start a new upload session to change them.");
   }
   // The target or session may have closed while the part streamed in; check
-  // again before any byte reaches R2, then record the part only if the
-  // session is still active, so a concurrent complete never sees torn state.
+  // again before any byte reaches R2, then claim the part before uploading,
+  // so concurrent first PUTs cannot both mutate R2 and then disagree about
+  // whose etag won. The claim row carries an empty etag until R2 confirms.
   session = (await authorizedSession(dc, p, sessionId)).session;
   if (session.status !== "active") throw conflict("upload_closed", "This upload session accepts no more parts.", "Start a new upload session for this pending version.");
-  const uploaded = await dc.env.FILES.resumeMultipartUpload(session.r2_key, session.r2_upload_id).uploadPart(partNumber, bytes);
   const now = Date.now();
-  const inserted = await dc.env.DB.prepare(
+  const claimed = await dc.env.DB.prepare(
     `INSERT OR IGNORE INTO upload_parts (session_id, part_number, size, etag, sha256, created_at)
-     SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM upload_sessions WHERE id = ? AND status = 'active')`,
-  ).bind(session.id, partNumber, expected, uploaded.etag, digest, now, session.id).run();
-  if (!inserted.meta.changes) {
-    const raced = (await sessionParts(dc, session.id)).find((part) => part.partNumber === partNumber);
-    if (raced && raced.sha256 === digest) return { partNumber, size: expected, etag: raced.etag };
-    if (raced) throw conflict("part_conflict", `Part ${partNumber} was already acknowledged with different bytes.`, "Resume with the acknowledged bytes, or start a new upload session to change them.");
+     SELECT ?, ?, ?, '', ?, ? WHERE EXISTS (SELECT 1 FROM upload_sessions WHERE id = ? AND status = 'active')`,
+  ).bind(session.id, partNumber, expected, digest, now, session.id).run();
+  if (!claimed.meta.changes) {
+    const raced = await sessionClaim(dc, session.id, partNumber);
+    if (raced?.etag && raced.sha256 === digest) return { partNumber, size: expected, etag: raced.etag };
+    if (raced && !raced.etag && raced.sha256 === digest) {
+      // An identical upload is still in flight; same bytes mean the same
+      // R2 etag, so uploading again below converges instead of conflicting.
+    } else if (raced) {
+      // Another writer owns this part (acknowledged or still uploading):
+      // refuse before R2 so the winner's bytes stay intact. Retryable: the
+      // caller can resume with the acknowledged bytes once they land.
+      throw new ApiError(409, "part_conflict", `Part ${partNumber} was already claimed with different bytes.`, "Resume with the acknowledged bytes, or start a new upload session to change them.", undefined, { retryable: true });
+    } else {
+      throw conflict("upload_closed", "This upload session accepts no more parts.", "Start a new upload session for this pending version.");
+    }
+  }
+  let uploaded: { etag: string };
+  try {
+    uploaded = await dc.env.FILES.resumeMultipartUpload(session.r2_key, session.r2_upload_id).uploadPart(partNumber, bytes);
+  } catch (e) {
+    // The session may have been aborted after the final authority check
+    // above. A closed R2 handle is a 409, never a 500; genuine storage
+    // failures still propagate. The unacknowledged claim row stays out of
+    // resume/complete views and dies with the session.
+    if (!isApiError(e) && isClosedMultipartUpload(e)) {
+      throw conflict("upload_closed", "This upload session was closed before the part reached storage.", "Start a new upload session for this pending version.");
+    }
+    throw e;
+  }
+  const acknowledged = await dc.env.DB.prepare("UPDATE upload_parts SET etag = ? WHERE session_id = ? AND part_number = ? AND etag = ''")
+    .bind(uploaded.etag, session.id, partNumber).run();
+  if (!acknowledged.meta.changes) {
+    const raced = await sessionClaim(dc, session.id, partNumber);
+    if (raced?.etag) return { partNumber, size: expected, etag: raced.etag };
     throw conflict("upload_closed", "This upload session accepts no more parts.", "Start a new upload session for this pending version.");
   }
   return { partNumber, size: expected, etag: uploaded.etag };
