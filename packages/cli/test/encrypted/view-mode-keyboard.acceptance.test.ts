@@ -296,7 +296,7 @@ for (const separate of [false, true]) describe(`manual View mode tabs (${separat
         const page = await raw.newPage();
         const response = await page.goto(`${fixture.sites}${fixture.sites === fixture.origin ? "/s" : ""}/${slug}/index.html?view=1`, { waitUntil: "networkidle" });
         expect(response?.status()).toBe(200);
-        const csp = response!.headers()["content-security-policy"];
+        const csp = response!.headers()["content-security-policy"] ?? "";
         expect(csp).toContain("default-src 'none'");
         expect(csp).toContain("base-uri 'none'");
         // Code viewers already allow a fixed hash for their line-range script;
