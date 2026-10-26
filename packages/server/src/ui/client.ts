@@ -1030,6 +1030,9 @@ export function dropwayClient() {
   // ------------------------------------------------------------------ pages
 
   var pages = {};
+  // Latest site-page traversal handler: pages.site() re-runs after restore,
+  // delete and settings saves, and must replace (not stack) its listener.
+  var sitePopstate = null;
 
   pages.home = async function () {
     wireTabs(d);
@@ -1500,7 +1503,9 @@ export function dropwayClient() {
       if (!validVersionRef(ref)) {
         setJumpLoading(false);
         setJumpError("Enter a version reference: live, v3, 3, or a version id.", "Check the reference and try again.");
-        jumpInput.focus();
+        // Explicit submits return focus for correction; traversal must not
+        // steal it while the person is moving through history.
+        if (opts.focus !== false) jumpInput.focus();
         return;
       }
       clearJumpError();
@@ -1803,15 +1808,21 @@ export function dropwayClient() {
       return v.live;
     })[0];
     if (typeof window !== "undefined" && window.addEventListener) {
-      window.addEventListener("popstate", function () {
+      if (sitePopstate && typeof window.removeEventListener === "function") {
+        try {
+          window.removeEventListener("popstate", sitePopstate);
+        } catch (e) {}
+      }
+      sitePopstate = function () {
         var ref = null;
         try {
           ref = new URL(location.href).searchParams.get("version");
         } catch (e) {}
         if (ref && currentSelection && ref === currentSelection.id) return;
-        if (ref) openVersionRef(ref, { history: "replace" });
+        if (ref) openVersionRef(ref, { history: "replace", focus: false });
         else if (live) showFiles(live, { history: "replace" });
-      });
+      };
+      window.addEventListener("popstate", sitePopstate);
     }
     if (requestedVersion && linkedVersion && linkedVersion.status === "pending") {
       // A pending link names unfinished bytes: report it, never render it as
