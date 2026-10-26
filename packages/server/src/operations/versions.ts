@@ -3,6 +3,7 @@ import { deleteVersion, exportVersionZip, getDeployStatus, getSiteByRef, require
 import { CONFIRM_SLUG, SITE_REF, VERSION_OUT, VERSION_REF, obj } from "../mcp/schemas";
 import { defineOperation } from "../operations";
 import { fromSchema, RO, DESTROY, P, D } from "./shared";
+import { attachmentDisposition } from "../content-disposition";
 
 export const VERSION_OPERATIONS = [
   defineOperation({
@@ -169,7 +170,9 @@ export const VERSION_OPERATIONS = [
         const out = await exportVersionZip(D(c), P(c), c.req.param("slug")!, version);
         const headers = {
           "Content-Type": "application/zip",
-          "Content-Disposition": `attachment; filename="${out.filename}"`,
+          // out.filename is slug-derived (`<slug>-v<n>.zip`; slugs are
+          // [a-z0-9-]), so the helper returns its plain ASCII form unchanged.
+          "Content-Disposition": attachmentDisposition(out.filename),
           "Cache-Control": version === "" || version.toLowerCase() === "live"
             ? "private, no-cache"
             : "private, max-age=31536000, immutable",

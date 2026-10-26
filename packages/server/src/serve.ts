@@ -26,6 +26,7 @@ import { MAX_CSS_REWRITE_BYTES, rewriteCss, rewriteHtml, type PathRewrite } from
 import { PATH_SHIM_VERSION, pathShimScript } from "./path-shim";
 import { injectReportLink, REPORT_LINK_VERSION } from "./report-link";
 import { serveTransfer } from "./transfers";
+import { attachmentDisposition } from "./content-disposition";
 
 /**
  * How a site is being served.
@@ -475,7 +476,7 @@ async function serveFile(
   } else {
     h.set("Content-Type", contentType);
   }
-  if (download) h.set("Content-Disposition", `attachment; filename="${(path.split("/").pop() ?? "file").replace(/["\\\r\n]/g, "_")}"`);
+  if (download) h.set("Content-Disposition", attachmentDisposition(path.split("/").pop() ?? "file"));
   securityHeaders(h, live, mode);
 
   if (etagMatches(req, etag)) return new Response(null, { status: 304, headers: h });
