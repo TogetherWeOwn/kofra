@@ -398,7 +398,7 @@ export const CORE_API_OPERATIONS = [
         // Resolve refs and enrich missing_blobs with fresh upload items, exactly
         // like the MCP tool; map back to the unchanged REST success shape.
         const result = await finalizeVersionByRef(dw, P(c), c.req.param("slug")!, c.req.param("id")!);
-        const fresh = await getSiteFor(dw, P(c), c.req.param("slug")!);
+        const fresh = await getSiteFor(dw, P(c), result.slug);
         return c.json({
           url: siteUrl(dw, fresh.slug),
           live: result.status === "live",

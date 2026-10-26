@@ -1,3 +1,4 @@
+import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { form, freshInstance, jsonBody, manifestEntry, type Instance } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
@@ -107,6 +108,42 @@ describe("versions naming: canonical /versions routes with /deploys aliases", ()
     expect(deleted.status).toBe(200);
     expect(deleted.body.deleted).toBe(true);
     expect((await dw.json("/api/v1/sites/named/versions/v2", { key: dw.ownerKey })).status).toBe(404);
+  });
+
+  it("finalizes via a site id in the slug segment and answers 200 with the live site", async () => {
+    expect((await dw.json("/api/v1/sites", { key: dw.ownerKey, ...jsonBody({ slug: "by-site-id" }) })).status).toBe(201);
+    const row = await env.DB.prepare("SELECT id FROM sites WHERE slug = ?").bind("by-site-id").first<{ id: string }>();
+    expect(row?.id).toMatch(/^site_/);
+    const e = await manifestEntry("index.html", "<h1>by id</h1>");
+    const created = await dw.json("/api/v1/sites/by-site-id/versions", {
+      key: dw.ownerKey,
+      ...jsonBody({ files: [{ path: e.path, size: e.size, sha256: e.sha256 }] }),
+    });
+    expect(created.status).toBe(201);
+    const up = await dw.json(`/api/v1/blobs/${e.sha256}`, { method: "PUT", key: dw.ownerKey, body: e.bytes, headers: { "Content-Length": String(e.size) } });
+    expect(up.status).toBe(201);
+    const fin = await dw.json(`/api/v1/sites/${row!.id}/versions/${created.body.deploy.id}/finalize`, { method: "POST", key: dw.ownerKey });
+    expect(fin.status).toBe(200);
+    expect(fin.body.live).toBe(true);
+    expect(fin.body.site.slug).toBe("by-site-id");
+    expect(await (await dw.call("/s/by-site-id/")).text()).toBe("<h1>by id</h1>");
+  });
+
+  it("reports the true total when more than 200 blobs are missing", async () => {
+    expect((await dw.json("/api/v1/sites", { key: dw.ownerKey, ...jsonBody({ slug: "many-missing" }) })).status).toBe(201);
+    const entries = await Promise.all(Array.from({ length: 201 }, (_, i) => manifestEntry(`f${i}.txt`, `file-${i}`)));
+    const created = await dw.json("/api/v1/sites/many-missing/versions", {
+      key: dw.ownerKey,
+      ...jsonBody({ files: entries.map(({ bytes: _bytes, ...e }) => e) }),
+    });
+    expect(created.status).toBe(201);
+    const fin = await dw.json(`/api/v1/sites/many-missing/versions/${created.body.deploy.id}/finalize`, { method: "POST", key: dw.ownerKey });
+    expect(fin.status).toBe(409);
+    expect(fin.body.error.code).toBe("missing_blobs");
+    expect(fin.body.error.details.missing).toHaveLength(200);
+    expect(fin.body.error.details.totalMissing).toBe(201);
+    expect(fin.body.error.message).toContain("201");
+    expect(fin.body.error.message).toContain("(first 200 listed)");
   });
 
   it("gives MCP get_version the same fresh upload items for a pending version", async () => {
