@@ -114,8 +114,8 @@ describe("viewer selection", () => {
     expect(pick("a.mp4", "frame")).toBeNull();
     expect(pick("a.png", "frame")).toBeNull();
     expect(pick("a.md", "frame")).toBe("markdown");
-    expect(pick("a.zip", "document")).toBeNull();
-    expect(pick("a.zip", "view")).toBe("binary");
+    expect(pick("a.zip", "document")).toBe("archive");
+    expect(pick("a.zip", "view")).toBe("archive");
     expect(pick("a.wasm", "view")).toBe("binary");
     expect(pick("a.png", "source")).toBeNull();
   });
