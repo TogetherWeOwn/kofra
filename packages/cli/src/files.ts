@@ -22,6 +22,12 @@ export interface CollectOptions {
   allowSecrets?: boolean;
   /** Parallel hashing. Default 16. */
   concurrency?: number;
+  /** Refuse an oversized eligible set before reading any file content. */
+  maxFiles?: number;
+  maxBytes?: number;
+  /** Refuse files whose size or mtime changes between enumeration and hashing. */
+  verifyUnchanged?: boolean;
+  signal?: AbortSignal;
 }
 
 /** Why one relative path was left out of the publish payload. Stable wire values. */
@@ -50,14 +56,17 @@ export interface Collected {
 interface Entry {
   abs: string;
   rel: string;
+  snapshot?: { size: number; mtimeMs: number };
 }
 
 const toPosix = (p: string) => p.split(sep).join("/");
 
-async function walk(root: string, matcher: IgnoreMatcher, exclude: Set<string>, out: Entry[], ignored: string[], links: string[], omissions: Omission[], relDir = "") {
+async function walk(root: string, matcher: IgnoreMatcher, exclude: Set<string>, out: Entry[], ignored: string[], links: string[], omissions: Omission[], signal?: AbortSignal, relDir = "") {
+  signal?.throwIfAborted();
   const dirents = await readdir(join(root, relDir), { withFileTypes: true });
   dirents.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   for (const d of dirents) {
+    signal?.throwIfAborted();
     const rel = relDir ? `${relDir}/${d.name}` : d.name;
     const abs = join(root, rel);
     if (exclude.has(abs)) {
@@ -87,24 +96,40 @@ async function walk(root: string, matcher: IgnoreMatcher, exclude: Set<string>, 
       omissions.push({ path: shown, reason: "ignored" });
       continue;
     }
-    if (isDir) await walk(root, matcher, exclude, out, ignored, links, omissions, rel);
+    if (isDir) await walk(root, matcher, exclude, out, ignored, links, omissions, signal, rel);
     else if (isFile) out.push({ abs, rel });
     else omissions.push({ path: rel, reason: "special_file" }); // FIFO, socket or device (or a link to one)
   }
 }
 
-async function hashFile(e: Entry, scan: boolean, secrets: SecretFinding[]): Promise<SourceFile> {
+function sourceChanged(path: string): never {
+  throw new CliError({ code: "source_changed", message: `Local file changed while collecting: ${path}`,
+    hint: "Re-run when the tree is quiet.", exitCode: EXIT.usage });
+}
+
+async function hashFile(e: Entry, opts: CollectOptions, secrets: SecretFinding[]): Promise<SourceFile> {
+  opts.signal?.throwIfAborted();
   const s = await stat(e.abs);
   const size = s.size;
+  if (e.snapshot && (size !== e.snapshot.size || s.mtimeMs !== e.snapshot.mtimeMs)) sourceChanged(e.rel);
   let sha256: string;
   if (size <= IN_MEMORY_MAX) {
-    const bytes = new Uint8Array(await readFile(e.abs));
+    const bytes = new Uint8Array(await readFile(e.abs, { signal: opts.signal }));
+    opts.signal?.throwIfAborted();
     sha256 = createHash("sha256").update(bytes).digest("hex");
-    if (scan && looksTextual(bytes)) secrets.push(...findSecrets(e.rel, new TextDecoder("latin1").decode(bytes)));
+    if (!opts.allowSecrets && looksTextual(bytes)) secrets.push(...findSecrets(e.rel, new TextDecoder("latin1").decode(bytes)));
   } else {
     const h = createHash("sha256");
-    for await (const chunk of createReadStream(e.abs)) h.update(chunk as Buffer);
+    for await (const chunk of createReadStream(e.abs, { signal: opts.signal })) {
+      opts.signal?.throwIfAborted();
+      h.update(chunk as Buffer);
+    }
     sha256 = h.digest("hex");
+  }
+  opts.signal?.throwIfAborted();
+  if (opts.verifyUnchanged) {
+    const after = await stat(e.abs).catch(() => null);
+    if (!after || after.size !== size || after.mtimeMs !== s.mtimeMs) sourceChanged(e.rel);
   }
   return {
     path: e.rel,
@@ -131,7 +156,7 @@ export async function collectFiles(path: string, opts: CollectOptions = {}): Pro
     kind = "dir";
     const ignoreFile = await readFile(join(root, ".dropwayignore"), "utf8").catch(() => "");
     const matcher = new IgnoreMatcher(ignoreFile.split("\n"));
-    await walk(root, matcher, exclude, entries, ignored, links, omissions);
+    await walk(root, matcher, exclude, entries, ignored, links, omissions, opts.signal);
   } else if (st.isFile()) {
     kind = "file";
     const name = basename(root);
@@ -148,13 +173,38 @@ export async function collectFiles(path: string, opts: CollectOptions = {}): Pro
     throw new CliError({ code: "path_not_supported", message: `${path} is not a regular file or directory.`, exitCode: EXIT.usage });
   }
 
+  if (opts.maxFiles !== undefined && entries.length > opts.maxFiles) {
+    throw new CliError({ code: "collection_cap_exceeded", message: `Eligible file count ${entries.length} exceeds --max-files ${opts.maxFiles}.`,
+      hint: "Raise --max-files or narrow the directory.", exitCode: EXIT.usage });
+  }
+  if (opts.maxBytes !== undefined || opts.verifyUnchanged) {
+    let bytes = 0;
+    for (const entry of entries) {
+      opts.signal?.throwIfAborted();
+      const s = await stat(entry.abs);
+      entry.snapshot = { size: s.size, mtimeMs: s.mtimeMs };
+      bytes += s.size;
+    }
+    if (opts.maxBytes !== undefined && bytes > opts.maxBytes) {
+      throw new CliError({ code: "collection_cap_exceeded", message: `Eligible bytes ${bytes} exceeds --max-bytes ${opts.maxBytes}.`,
+        hint: "Raise --max-bytes or narrow the directory.", exitCode: EXIT.usage });
+    }
+  }
+
   const secrets: SecretFinding[] = [];
   const files: SourceFile[] = new Array(entries.length);
   let next = 0;
+  let failure: unknown;
   const worker = async () => {
-    for (let i = next++; i < entries.length; i = next++) files[i] = await hashFile(entries[i]!, !opts.allowSecrets, secrets);
+    try {
+      for (let i = next++; i < entries.length && failure === undefined; i = next++) files[i] = await hashFile(entries[i]!, opts, secrets);
+    } catch (error) {
+      failure ??= error;
+    }
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(opts.concurrency ?? 16, entries.length)) }, worker));
+  opts.signal?.throwIfAborted();
+  if (failure !== undefined) throw failure;
   secrets.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : a.line - b.line));
 
   omissions.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
