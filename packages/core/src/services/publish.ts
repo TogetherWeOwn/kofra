@@ -44,7 +44,7 @@ function isZip(bytes: Uint8Array): boolean {
 export async function parsePublishRequest(dc: DropwayContext, req: Request, maxBytes: number): Promise<PublishInput> {
   const url = new URL(req.url);
   const len = Number(req.headers.get("content-length") ?? "0");
-  const hint = "Use the manifest flow for bigger sites: POST /api/v1/sites/:slug/deploys, PUT /api/v1/blobs/:sha256, POST .../finalize.";
+  const hint = "Use the manifest flow for bigger sites: POST /api/v1/sites/:slug/versions, PUT /api/v1/blobs/:sha256, POST .../finalize.";
   if (len > maxBytes) throw tooLarge("request_too_large", `One-shot publish accepts up to ${maxBytes} bytes per request.`, hint, { limit: maxBytes });
   const fields: Record<string, unknown> = {};
   for (const k of META_FIELDS) {
