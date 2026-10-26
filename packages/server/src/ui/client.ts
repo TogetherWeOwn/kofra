@@ -1209,6 +1209,10 @@ export function dropwayClient() {
             : null,
         ),
       );
+      if (opts && opts.restoreFocus) {
+        var nextAction = linkRetry || $("a.dw-btn", result);
+        if (nextAction) nextAction.focus();
+      }
       if (key && !(opts && opts.keepDestination)) {
         modeUpd.checked = true;
         slugInput.value = "";
@@ -1224,7 +1228,7 @@ export function dropwayClient() {
      * never a URL rebuilt from the slug. A failed or unusable read keeps the
      * successful "nothing changed" result and offers a retry of the read only.
      */
-    async function showUnchangedResult(slug, version, auth) {
+    async function showUnchangedResult(slug, version, auth, restoreFocus) {
       // A retry runs after run() has finished: hold the same in-flight locks
       // while it reads, so a new selection cannot race its result rendering.
       var holdBusy = !state.busy;
@@ -1243,7 +1247,7 @@ export function dropwayClient() {
           url = null;
         }
         if (url) {
-          showResult({ slug: slug, unchanged: true, version: version, url: url }, { keepDestination: true });
+          showResult({ slug: slug, unchanged: true, version: version, url: url }, { keepDestination: true, restoreFocus: restoreFocus });
           return;
         }
         showResult(
@@ -1253,10 +1257,10 @@ export function dropwayClient() {
             version: version,
             linkUnavailable: true,
             onLinkRetry: function () {
-              return showUnchangedResult(slug, version, auth);
+              return showUnchangedResult(slug, version, auth, true);
             },
           },
-          { keepDestination: true },
+          { keepDestination: true, restoreFocus: restoreFocus },
         );
       } finally {
         if (holdBusy) {
