@@ -150,10 +150,20 @@ Full matrix in section 10.
 | ID | Feature | Pri | Status |
 |---|---|---|---|
 | VER-01 | Immutable, numbered versions (`v1`, `v2`, ...) with source, client, message, file count, bytes | P0 | Done |
-| VER-02 | List, get, restore (pointer flip; restoring the live version is a no-op success), delete one non-live version (for leaked secrets) | P0 | Done (get in R-05) |
+| VER-02 | List, get, restore (pointer flip; restoring the live version is a no-op success), delete one non-live version (for leaked secrets) | P0 | Done (get in R-05; dashboard loaded-version filter) |
 | VER-03 | Diff two versions (added, removed, changed; unified text diffs for small text files) | P1 | R-20 |
 | VER-04 | Thumbnail per version | P1 | R-20 |
 | VER-05 | Admin-set retention (keep last N versions or N days per site; default keep all) | P2 | R-42 |
+
+The dashboard Versions list loads only the newest 100 versions. **Filter loaded
+versions** matches literal, case-insensitive text in the number (`73` or `v73`),
+immutable version id, message, client and source, preserving server order. Its
+status reports matching/loaded counts and distinguishes no matches from nothing
+published yet. Filtering and Clear make no requests and do not change the
+selected version or files; row actions keep their immutable version id. A direct
+historical version link still loads that version separately, even outside the
+loaded page. This is not full-history search or pagination; Clear resets only
+the local filter.
 
 ### 4.5 Identity and access to the instance (ID)
 
