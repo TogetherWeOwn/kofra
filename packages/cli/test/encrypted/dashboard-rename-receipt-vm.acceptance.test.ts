@@ -192,9 +192,12 @@ it("rejects a non-HTTP(S) rename receipt without changing identity", async () =>
     .toContain("Could not confirm the rename response");
   expect(view.doc.getElementById("dw-rename-result"), "no success receipt on a rejected response").toBeNull();
   expect(
-    anchors(view).some(href => href?.startsWith("javascript:")),
+    anchors(view).every((href) => {
+      const parsed = new URL(href ?? "", origin);
+      return parsed.protocol === "https:" || parsed.protocol === "http:";
+    }),
     "rejected URL never becomes a link",
-  ).toBe(false);
+  ).toBe(true);
   expect(proposedInput(view).value, "proposal preserved for correction").toBe("receipt-target");
   expect(proposedInput(view).disabled, "form re-armed after the error").toBe(false);
   expect(anchors(view)).toEqual(linksBefore);
