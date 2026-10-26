@@ -19,20 +19,6 @@ import { api, fixtureFetch, fixtureSite, origin, startWorker, stop, type Site } 
 beforeAll(startWorker, 120_000);
 afterAll(stop);
 
-// The fake DOM predates the rename flow's `root.contains(form)` focus guard in
-// the submit handler's finally-block. Augment the prototype at runtime here so
-// these submit-path tests observe the same containment semantics a browser
-// provides; the protected helper file itself stays untouched.
-(FakeElement.prototype as unknown as { contains?: (node: unknown) => boolean }).contains ??= function (
-  this: FakeElement, node: unknown,
-): boolean {
-  let current: FakeElement | null = node as FakeElement | null;
-  while (current) {
-    if (current === this) return true;
-    current = current.parentNode;
-  }
-  return false;
-};
 const cleanups: Array<() => void> = [];
 const recordedViolations: string[][] = [];
 afterEach(() => {
@@ -206,10 +192,20 @@ it("rejects a non-HTTP(S) rename receipt without changing identity", async () =>
   expect((await api(`/api/v1/sites/${view.site.slug}`)).slug).toBe(view.site.slug);
 });
 
-// Break: a malformed receipt shape (non-boolean renamed, missing url) claims success.
-it("rejects a malformed rename receipt shape without claiming success", async () => {
+// Break: deleting only the shape guard accepts invalid identity fields with a valid URL.
+it.each([
+  { name: "non-boolean renamed", invalid: { renamed: 1 } },
+  { name: "missing renamed", invalid: { renamed: undefined } },
+  { name: "missing slug", invalid: { slug: undefined } },
+  { name: "non-string slug", invalid: { slug: 123 } },
+  { name: "empty slug", invalid: { slug: "" } },
+  { name: "non-string URL", invalid: { url: ["https://receipt.example.test/shape-target/"] } },
+])("rejects $name with otherwise valid receipt fields", async ({ invalid }) => {
   const view = await mount();
-  view.interceptRename(() => ({ renamed: 1, oldSlug: view.site.slug, slug: "shape-target" }));
+  view.interceptRename(() => ({
+    renamed: true, oldSlug: view.site.slug, slug: "shape-target",
+    url: "https://receipt.example.test/shape-target/", ...invalid,
+  }));
   const linksBefore = anchors(view);
   submitRename(view, "shape-target");
   const box = feedback(view);

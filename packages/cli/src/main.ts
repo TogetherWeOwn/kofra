@@ -542,6 +542,17 @@ Without --version, the live version's files are listed.`,
   },
 };
 
+/**
+ * A response versionId is only a safe continuation when the server resolves
+ * it as an id: never live, numeric, vN or blank (mirror of resolveVersionRef
+ * in site-ops, which trims and matches "live" and /^v?(\d{1,9})$/i first).
+ */
+function isImmutableVersionId(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const id = value.trim();
+  return id !== "" && id.toLowerCase() !== "live" && !/^v?\d{1,9}$/i.test(id);
+}
+
 interface ReadFilePage {
   path: string;
   versionId: string;
@@ -579,7 +590,9 @@ nextOffset, content, url, rawUrl). Without --json, stdout carries only
 the page content byte-for-byte (no added newline; base64 stays base64,
 so redirection is safe) and the page metadata goes to stderr, so
 pipes get clean content and truncation is never silent (shown even with
---quiet).
+--quiet). A truncated page prints a continuation pinned to the returned
+immutable version id, so the next page reads the same version even
+after live moves; a page without one fails instead of guessing.
 
 Examples:
   kofra read-file my-site index.html
@@ -615,6 +628,17 @@ Examples:
     if (out.json) {
       out.result(data as unknown as Record<string, unknown>, () => data.content);
     } else {
+      // A requested "live"/"v3"/"3" (or no --version at all) may resolve to
+      // a different version by the time the agent continues, so the
+      // continuation always pins the id this page was actually read from.
+      if (data.truncated && data.nextOffset !== null && !isImmutableVersionId(data.versionId)) {
+        throw new CliError({
+          code: "bad_read_file_version",
+          message: `The read-file response for ${slug} ${filePath} carries no immutable version id; refusing to print a continuation that could read another version.`,
+          hint: "Re-run with an explicit version id (`kofra versions <site>` lists them). If this repeats, report the response to the instance operator.",
+          exitCode: EXIT.error,
+        });
+      }
       // Human output is the content byte-for-byte: no added newline, so
       // redirection stays safe and base64 can be decoded as-is.
       io.stdout(data.content);
@@ -623,7 +647,7 @@ Examples:
       let line = `${data.path} — ${formatBytes(data.size)} (${data.contentType}), encoding ${data.encoding}, version ${data.versionId}, ${range}. SHA-256: ${data.sha256}`;
       if (data.truncated && data.nextOffset !== null) {
         const cont = [`kofra read-file ${shellQuote(slug)} ${shellQuote(data.path)}`, `--offset ${data.nextOffset}`];
-        if (version !== undefined) cont.push(`--version ${shellQuote(version)}`);
+        cont.push(`--version ${shellQuote(data.versionId)}`);
         if (length !== undefined) cont.push(`--length ${length}`);
         if (encoding !== undefined) cont.push(`--encoding ${encoding}`);
         line += `\nTruncated: continue with: ${cont.join(" ")}`;
@@ -958,6 +982,68 @@ function operationDetail(row: Record<string, unknown>, withSchema: boolean): str
   return lines.join("\n");
 }
 
+const duplicateCmd: Command = {
+  summary: "Duplicate a live site: duplicate <source> <new-slug>",
+  usage: "kofra duplicate <source> <new-slug> [--message <text>] [--idempotency-key <key>] [--dry-run] [--json]",
+  flags: {
+    message: { kind: "string", short: "m" },
+    "idempotency-key": { kind: "string" },
+    "dry-run": { kind: "boolean" },
+  },
+  details: `Both targets are required: source is a slug, site id or site URL. Neither
+is inferred from a local project mapping. The existing live manifest becomes
+version 1 of a new site; no local files are read or uploaded and no links are saved.
+Only SPA mode is copied. Passwords/access gates and other settings are not copied;
+re-apply protection explicitly. The destination is live immediately, not opened
+in a browser or automatically protected.
+
+--dry-run emits one schemaVersion: 1 JSON plan even without --json. It is entirely
+offline: no instance, credentials or files are read, and no source id is resolved.
+--idempotency-key preserves an explicit key (1-255 printable ASCII characters,
+no spaces); otherwise one is generated per invocation. Invalid keys are rejected
+before any I/O, including with --dry-run. To recover an unknown outcome, repeat
+the identical source, new slug and message with the same explicit key (within the
+server's 24h window).
+Mutations retry only rate-limit refusals, not network failures or server errors.
+
+Examples:
+  kofra duplicate template template-copy --message "Template snapshot"
+  kofra duplicate site_abc123 template-copy --idempotency-key copy-01 --json
+  kofra duplicate template template-copy --dry-run`,
+  async run(p, io, out) {
+    const source = positional(p, 0, "source", this.usage);
+    const newSlug = positional(p, 1, "new-slug", this.usage);
+    if (!source.trim() || !newSlug.trim() || p.positionals.length !== 2) {
+      throw new UsageError(`Exactly two nonempty targets are required. Usage: ${this.usage}`);
+    }
+    const explicitKey = str(p, "idempotency-key");
+    if (explicitKey !== undefined && !/^[\x21-\x7e]{1,255}$/.test(explicitKey)) {
+      throw new UsageError("--idempotency-key must be 1-255 printable ASCII characters without spaces.");
+    }
+    const message = str(p, "message");
+    if (bool(p, "dry-run")) {
+      io.stdout(`${JSON.stringify({ schemaVersion: 1, operation: "duplicate_site", source, newSlug, ...(message !== undefined ? { message } : {}) }, null, 2)}\n`);
+      return EXIT.ok;
+    }
+    const inst = await resolveInstance(p, io);
+    const client = makeClient(io, inst.api, requireKey(inst));
+    // Generate once, outside the SDK's bounded rate-limit retry loop.
+    const idempotencyKey = explicitKey ?? crypto.randomUUID();
+    const result = await client.duplicateSite({ site: source, newSlug, ...(message !== undefined ? { message } : {}) }, { idempotencyKey });
+    out.result(result, () => `${result.url}\nDuplicated into ${result.slug} (${plural(result.fileCount, "file")}, ${formatBytes(result.totalBytes)}).`);
+    out.note("Only SPA mode is copied. Passwords/access gates and other settings are not copied; re-apply protection explicitly.");
+    if (result.note) out.note(result.note);
+    if (Array.isArray(result.warnings)) {
+      for (const warning of result.warnings) {
+        if (warning && typeof warning === "object" && typeof warning.message === "string") {
+          out.note(`Warning (${warning.code}): ${warning.message}${typeof warning.fix === "string" ? ` ${warning.fix}` : ""}`);
+        }
+      }
+    }
+    return EXIT.ok;
+  },
+};
+
 const operationsCmd: Command = {
   summary: "List API operations, or inspect one, without running anything",
   usage: "kofra operations [operationId] [--schema] [--json]",
@@ -1083,6 +1169,7 @@ const apiCmd: Command = {
 
 const COMMANDS: Record<string, Command> = {
   publish: publishCmd,
+  duplicate: duplicateCmd,
   list: listCmd,
   site: siteCmd,
   files: filesCmd,

@@ -21,6 +21,7 @@ Zero runtime dependencies. Node.js 20 or newer.
 | Command | What it does |
 |---|---|
 | `publish <path>` | Publish a folder, a single file or a `.zip`. Creates a site, or updates one with `--site <name>` |
+| `duplicate <source> <new-slug>` | Copy an explicit live site into a new slug (`--message`, `--idempotency-key`, offline `--dry-run`) |
 | `list` | Your sites (`--all` for every page) |
 | `site <name>` | One site: URL, live version, settings |
 | `files <name>` | Files of the live version (or `--version <ref>` with `live`, `v3`, `3` or a version id, read directly) with their URLs |
@@ -65,6 +66,61 @@ Runnable local check (from a repo clone, against your own instance):
 
 ```sh
 node packages/cli/bin/dropway.mjs versions team-report v1 --api https://<your-instance> --json
+```
+
+## Duplicating a live site
+
+```sh
+kofra duplicate template template-copy --message "Template snapshot"
+kofra duplicate site_abc123 template-copy --idempotency-key copy-01 --json
+kofra duplicate https://sites.example/template/ template-copy --dry-run
+```
+
+Both the source (slug, site id or site URL) and destination slug are required explicitly;
+project mappings never supply either target. This calls only the existing `duplicate_site`
+operation: the source's live manifest becomes version 1 of a new site with no file upload or
+source changes. The destination is **live immediately**. Only SPA mode is carried over;
+**passwords/access gates and other settings are not copied**. Re-apply protection explicitly
+if needed. The CLI never opens a browser, publishes local files, protects the destination
+or saves/updates a local project link.
+
+`--dry-run` is entirely offline, without an instance or credentials. It emits exactly one JSON
+plan even without `--json`, reads no project, credential or content files, and writes nothing:
+
+```json
+{
+  "schemaVersion": 1,
+  "operation": "duplicate_site",
+  "source": "template",
+  "newSlug": "template-copy",
+  "message": "Template snapshot"
+}
+```
+
+`message` is omitted when absent. `source` stays unresolved; no site/version id is invented.
+This plan does not validate source visibility, a live version, destination availability or
+server policy/limits.
+
+An explicit `--idempotency-key` must contain 1-255 printable ASCII characters without spaces.
+Invalid keys return a usage error (exit 2) before any file/credential reads or networking,
+including with `--dry-run`. Valid keys are sent unchanged; otherwise a fresh key is generated
+once per invocation and retained across the SDK's bounded 429 retries. There are no automatic
+retries on conflicts, server errors or network failures. **To recover an unknown outcome**, choose
+an explicit key before the first attempt, then repeat the identical source reference, destination
+and message with that same key within the server's 24-hour idempotency window. A new invocation
+without an explicit key cannot recover the previous invocation's result; do not blindly retry
+an uncertain mutation with a new key. Reusing a key with a different payload is refused by the server.
+
+`--json` preserves the backend receipt (returned destination slug/site/version, clean public URL,
+file/byte counters, note, warnings and replay marker when supplied). Identities are never guessed;
+fields the backend does not supply remain absent. Progress and access-reset advice go to stderr,
+not JSON stdout. Keys and claim/upload credentials are not added to the receipt. Existing error
+codes, hints, details and status-to-exit mapping apply: refusal or network failure is never success.
+
+Disposable local integration check (no deploy):
+
+```sh
+npm run test:cli -- test/duplicate.acceptance.test.ts test/duplicate-worker.acceptance.test.ts
 ```
 
 ## Discovering operations
@@ -162,7 +218,8 @@ Without `--json`, stdout carries only the page content byte-for-byte (no added n
 base64 stays base64, so redirection is safe) and the page metadata (size, encoding, byte range,
 SHA-256, truncation and the continuation command) goes to stderr, so pipes get clean content and
 truncation is never silent (shown even with `--quiet`). With `--json`, stdout is exactly the API
-page object; see "Output for agents".
+page object; see "Output for agents". A truncated page's continuation pins the returned immutable
+version id; see [Recovery metadata](#recovery-metadata).
 
 Local check:
 
@@ -281,6 +338,25 @@ Errors (also on stdout with `--json`):
 | 6 | Invalid or over a limit (file too large, too many files) | Change the content |
 | 7 | Retryable: rate limited, server error, network error | Retry later |
 | 8 | `--wait` timed out before the URL served the new version | The publish succeeded; retry the check |
+
+### Recovery metadata
+
+This section is the canonical client/CLI recovery note; other surfaces link here rather
+than restating it.
+
+Error objects preserve the server's optional recovery metadata alongside the stable
+`code`/`message`/`hint`/`details`: an explicit boolean `retryable`, a `retryAfterSeconds`
+delay (`null` means no guidance), a `docs` reference and a `next` array of suggested
+`{tool, args, why}` calls. Malformed optional fields are omitted independently, and
+unknown envelope fields are never copied. `next` and `docs` are informational only: the
+client never executes a suggested call or fetches a docs URL, and retry scheduling is
+unchanged (any method retries 429 within the `Retry-After` cap, 5xx and network errors
+retry only for `GET`/`HEAD`, idempotency keys never authorize unsafe retries).
+
+`read-file` without `--json` prints exactly the page content to stdout; a truncated page
+adds a stderr continuation pinned to the successful response's immutable `versionId`, so
+the next page reads the same version even after live moves. A truncated page without a
+usable immutable id fails (`bad_read_file_version`, exit 1) instead of guessing.
 
 ## Configuration
 

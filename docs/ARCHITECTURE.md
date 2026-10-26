@@ -187,7 +187,14 @@ server reports missing (4 at a time, retried on 429/5xx), then finalizes. A
 single `.zip` goes to `POST /api/v1/publish` instead. `.git/`, `node_modules/`,
 `.env*` and OS clutter are skipped and listed. Before publishing, the browser
 shows a review of every included path with its byte size and every excluded
-path with its ignore reason. Unreadable paths covered by those same ignore rules
+path with its ignore reason. The review has a literal case-insensitive path
+search, an All/Included/Excluded visibility switch and Path/Size ordering;
+these only change the display, and every included file is still uploaded.
+Path order is ascending code-unit order; Size orders included bytes descending
+with Path order breaking ties; exclusions always stay Path-ordered after the
+included group, and an unreadable exclusion keeps its "unreadable" note
+instead of a guessed size. Clear restores the full review in Path order.
+Unreadable paths covered by those same ignore rules
 remain excluded (an unreadable folder's contents are not listed); other read
 failures block publishing until the selection is reselected. The displayed
 selection stays bound to the in-flight publish.

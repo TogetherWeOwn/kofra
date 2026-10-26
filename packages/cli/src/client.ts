@@ -13,6 +13,7 @@ import {
   type BytesResult,
   type CallOptions,
   type ClientOptions,
+  type DropwayNextCall,
   type OperationMeta,
   type RequestOptions,
 } from "@dropway/client";
@@ -62,8 +63,13 @@ export class CliError extends DropwayError {
     status?: number;
     requestId?: string;
     details?: Record<string, unknown>;
+    /** Server retryability when this error came from a response; otherwise derived from the exit code. */
+    retryable?: boolean;
+    retryAfterSeconds?: number | null;
+    docs?: string;
+    next?: DropwayNextCall[];
   }) {
-    super({ ...opts, retryable: opts.exitCode === EXIT.unavailable });
+    super({ ...opts, retryable: opts.retryable ?? opts.exitCode === EXIT.unavailable });
     this.name = "CliError";
     this.exitCode = opts.exitCode;
   }
@@ -72,6 +78,7 @@ export class CliError extends DropwayError {
 export type {
   ApiResponse,
   ClientOptions,
+  DropwayNextCall,
   FetchLike,
   OperationMeta,
   RequestOptions,
@@ -105,6 +112,10 @@ function toCliError(error: DropwayError, fallback: ExitCode = EXIT.error): CliEr
     details: error.details,
     status: error.status,
     requestId: error.requestId,
+    retryable: error.retryable,
+    retryAfterSeconds: error.retryAfterSeconds,
+    docs: error.docs,
+    next: error.next,
     exitCode: exitCodeFor(error, fallback),
   });
 }
