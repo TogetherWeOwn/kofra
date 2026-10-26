@@ -48,10 +48,11 @@ export const HTTP_MANIFEST_ENTRY: Record<string, any> = {
 };
 export const HTTP_FILE_INPUT: Record<string, any> = {
   type: "object",
-  required: ["path"],
-  description: "A path plus exactly one source: content (+encoding), url (+headers), sha256 (+size) or copyFrom.",
+  description: "A path plus exactly one source: content (+encoding), url (+headers), sha256 (+size) or copyFrom; or an attachment (download_url + file_name, no path).",
   properties: {
     path: { type: "string" },
+    download_url: { type: "string", format: "uri", description: "Chat attachment URL fetched like url; pair with file_name." },
+    file_name: { type: "string", description: "Chat attachment file name; becomes the path." },
     content: { type: "string" },
     encoding: { enum: ["utf8", "base64"] },
     url: {

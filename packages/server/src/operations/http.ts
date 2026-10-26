@@ -183,14 +183,14 @@ export const HTTP_OPERATIONS = [
     scopes: ["sites:write"],
     summary: "Publish files in one call and get a live URL",
     description:
-      'Accepts multipart/form-data (field name = file path, e.g. -F "assets/app.js=@dist/assets/app.js"; or field `files[]` with filenames; a single .zip is unpacked), application/json ({"files":[{"path","content","encoding?":"base64"}]}), a .zip body, or one raw file body named by ?path= or X-Kofra-Path. Settings and `slug` may be sent as form fields, JSON fields or query parameters. With an existing `slug` you own, publishes a new version of it. Byte-identical content returns unchanged:true. JSON uses the same flat content, url, sha256+size and copyFrom sources as MCP publish_site, and returns PublishResult with versionUrl, counters and upload capabilities. Idempotency-Key replays JSON requests. Multipart, ZIP and raw bodies retain their original response shape.',
+      'Accepts multipart/form-data (field name = file path, e.g. -F "assets/app.js=@dist/assets/app.js"; or field `files[]` with filenames; a single .zip is unpacked), application/json ({"files":[{"path","content","encoding?":"base64"}]}), a .zip body, or one raw file body named by ?path= or X-Kofra-Path. Settings and `slug` may be sent as form fields, JSON fields or query parameters. With an existing `slug` you own, publishes a new version of it. Byte-identical content returns unchanged:true. JSON uses the same flat content, url, sha256+size, copyFrom and chat-attachment (download_url+file_name) sources as MCP publish_site, or archiveUrl alone for a public https .zip, and returns PublishResult with versionUrl, counters and upload capabilities. Idempotency-Key replays JSON requests. Multipart, ZIP and raw bodies retain their original response shape.',
     input: fromSchema({
       type: "object",
-      required: ["files"],
       properties: {
         slug: { type: "string", description: "Legacy alias for site." },
         site: { type: "string", description: "Existing site ref or new slug." },
         files: { type: "array", items: HTTP_FILE_INPUT },
+        archiveUrl: { type: "string", description: "JSON only: public https .zip URL to publish instead of files." },
         message: { type: "string" },
         baseVersionId: { type: "string" },
         title: { type: ["string", "null"], maxLength: 200 },

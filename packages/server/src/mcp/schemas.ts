@@ -26,26 +26,27 @@ const COPY_FROM: Schema = {
 
 export const FILE_INPUT: Schema = {
   type: "object",
-  description: "One file: a path plus exactly one source (content, url, sha256 or copyFrom).",
+  description: "One file: path + one source, or download_url + file_name.",
   properties: {
-    path: { type: "string", minLength: 1, description: 'Path inside the site, e.g. "index.html", "docs/guide.md", "assets/app.js".' },
+    path: { type: "string", minLength: 1, description: 'Path in the site, e.g. "index.html", "assets/app.js". Omit for attachments.' },
+    download_url: { type: "string", description: "Attachment URL (public https, like url); pair with file_name." },
+    file_name: { type: "string", description: "Attachment name; becomes the path." },
     content: {
       type: "string",
-      description: 'The file itself: text (encoding "utf8", up to 1 MB) or base64 bytes (encoding "base64", up to 256 KB). For bigger or binary files prefer url or sha256.',
+      description: 'Inline: "utf8" up to 1 MB, "base64" up to 256 KB; prefer url/sha256 when bigger or binary.',
     },
-    encoding: { type: "string", enum: ["utf8", "base64"], description: 'How content is encoded. Default "utf8".' },
-    url: { type: "string", description: "Public https URL to download. URL_FETCH_MAX_BYTES (default 100 MiB), 30 s, 3 redirects; file/request caps also apply." },
-    headers: { type: "object", additionalProperties: { type: "string" }, description: "Request headers for the url download, e.g. Authorization. Used once, never stored." },
+    encoding: { type: "string", enum: ["utf8", "base64"], description: 'Content encoding. Default "utf8".' },
+    url: { type: "string", description: "Public https URL to download (100 MiB, 30 s, 3 redirects; file caps also apply)." },
+    headers: { type: "object", additionalProperties: { type: "string" }, description: "Headers for the url download; used once, never stored." },
     sha256: {
       type: "string",
       pattern: "^[a-fA-F0-9]{64}$",
-      description: "Hex SHA-256 of the bytes. Already stored: reused at once. Not stored: the result lists an upload link (PUT the bytes, then finalize_version).",
+      description: "Hex SHA-256. Stored bytes are reused; otherwise an upload link is returned (PUT, then finalize_version).",
     },
-    size: { type: "integer", minimum: 0, description: "Size in bytes. Required with sha256 when the bytes are not stored yet." },
+    size: { type: "integer", minimum: 0, description: "Bytes; required with an unstored sha256." },
     copyFrom: COPY_FROM,
     contentType: { type: "string", description: "MIME type. Default: from the file extension." },
   },
-  required: ["path"],
   additionalProperties: false,
 };
 

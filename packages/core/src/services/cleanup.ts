@@ -6,6 +6,7 @@ import { dropLive } from "./live";
 import { convertRedirectsStatements, insertTombstone, purgeExpiredHolds } from "./slug-holds";
 import { cleanupTransfers } from "./transfer-cleanup";
 import { assertSiteDeletionState, siteDeletionStateChanged } from "./atomic-write";
+import { cleanupExpiredMultipartUploads } from "./uploads";
 import type { SiteRow } from "./sites";
 
 const HOUR = 3600_000;
@@ -18,6 +19,7 @@ export interface CleanupReport {
   purgedSites: number;
   abandonedDeploys: number;
   deletedBlobs: number;
+  expiredUploads: number;
 }
 
 /**
@@ -31,7 +33,7 @@ export interface CleanupReport {
  * Each step is bounded so one run stays well inside Worker limits.
  */
 export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<CleanupReport> {
-  const report: CleanupReport = { expiredSites: 0, purgedSites: 0, abandonedDeploys: 0, deletedBlobs: 0, ...await cleanupTransfers(dc, now) };
+  const report: CleanupReport = { expiredSites: 0, purgedSites: 0, abandonedDeploys: 0, deletedBlobs: 0, expiredUploads: 0, ...await cleanupTransfers(dc, now) };
   const db = dc.env.DB;
 
   // 1. Expire anonymous sites.
@@ -82,6 +84,10 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
   // 5. Expired holds.
   const purgedHolds = await purgeExpiredHolds(dc, now);
 
+  // Expired resumable uploads: abort their R2 multipart uploads and drop the
+  // session rows (at most 500 per run; staged bytes go with them).
+  report.expiredUploads = await cleanupExpiredMultipartUploads(dc, now);
+
   // 3. Abandoned uploads. Transfer references belong to cleanupTransfers, even
   // before publication: its live retention fence and purge accounting must win.
   const abandoned = `status = 'pending' AND created_at < ?
@@ -129,7 +135,7 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
     )`,
   ).bind(now, now).run();
   const purgedIdempotencyKeys = Number(purgedKeys.meta.changes ?? 0);
-  if (report.expiredSites || report.purgedSites || report.abandonedDeploys || report.deletedBlobs || purgedHolds.tombstones || purgedHolds.redirects || purgedIdempotencyKeys) {
+  if (report.expiredSites || report.purgedSites || report.abandonedDeploys || report.deletedBlobs || report.expiredUploads || purgedHolds.tombstones || purgedHolds.redirects || purgedIdempotencyKeys) {
     console.log(JSON.stringify({ event: "cleanup", ...report, purgedHolds, purgedIdempotencyKeys }));
   }
   return report;

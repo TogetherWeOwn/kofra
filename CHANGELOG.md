@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Resumable large uploads and URL archive sources
+
+- Large files stage through a resumable R2 multipart protocol bound to one
+  pending manifest file: `POST /api/v1/uploads` (`partSize` 10-95 MiB, default
+  50 MiB), `PUT /api/v1/uploads/{id}/parts/{n}`, `GET /api/v1/uploads/{id}`
+  (acknowledged parts for resume) and `POST /api/v1/uploads/{id}/complete`,
+  which stream-hashes the assembled object before it becomes a verified blob.
+  Owner keys, claim tokens and the version's dwu_ token are accepted with the
+  same per-operation rechecks as blob uploads; sessions expire within a day
+  and hourly cleanup aborts them in bounded slices (migration
+  `0007_multipart_uploads.sql`). New error codes: `upload_not_found`,
+  `invalid_part`, `upload_incomplete`, `upload_closed`, `part_conflict`.
+- The CLI uses multipart above 95 MiB (the raw PUT at or below), resuming from
+  the server's acknowledged parts with the existing retries and dedupe.
+- `publish_site` and REST JSON publishing accept `archiveUrl` alone (a public
+  https .zip, fetched and unpacked like an uploaded zip) and chat-client
+  attachments `{download_url, file_name}` as file sources under the existing
+  URL fetch guards. A sha256 file source with an explicit size no longer needs
+  an API key merely to resolve, so an anonymous publish can return
+  `awaiting_upload`; owner-scoped dedupe is unchanged.
+
 ### Versions naming
 
 - Version creation and finalize move under `/versions`

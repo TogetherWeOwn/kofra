@@ -104,8 +104,8 @@ What Kofra is not:
 | PUB-10 | Version message (like a commit message, up to 200 chars) | P0 | Done |
 | PUB-11 | Pending versions expire after 1 hour; finalizing with missing bytes returns `409 missing_blobs` with fresh upload links | P0 | Done |
 | PUB-12 | Publish warnings: root-absolute paths in path mode, SPA without a base path, browser storage on a sandboxed origin, `.wasm` without cross-origin isolation, possible secrets, invalid config files | P0 | R-12 |
-| PUB-13 | Files larger than one request (above about 95 MB): multipart upload through the Worker, resumable | P1 | R-35 |
-| PUB-14 | `archiveUrl` (publish a zip from a URL) and chat-client attachments (`{download_url, file_name}`) as sources | P1 | R-35 |
+| PUB-13 | Files larger than one request (above about 95 MB): multipart upload through the Worker, resumable | P1 | Implemented (R-35); workers.dev boundary measurement pending |
+| PUB-14 | `archiveUrl` (publish a zip from a URL) and chat-client attachments (`{download_url, file_name}`) as sources | P1 | Implemented (R-35); deployment verification pending |
 | PUB-15 | Duplicate a site server-side (immediately live) | P1 | Done |
 | PUB-16 | TTL for keyed sites (`ttlSeconds`, `null` clears) | P1 | R-27 |
 | PUB-17 | Dry run: `dryRun: true` returns added, changed, removed and skipped files and the resulting size without creating a version | P1 | R-20 |
@@ -429,7 +429,15 @@ URL in the publish response is correct at once; `X-Kofra-Version` on every site 
 2. Upload each missing blob: `PUT <app>/api/v1/blobs/<sha256>` with `Authorization: Bearer dwu_...`
    (upload token) or the caller's key. The Worker streams into
    `R2.put("blobs/<sha256>", body, { sha256 })`; R2 rejects bytes that do not match the hash. Bytes that
-   already exist physically are verified and not rewritten. Files above about 95 MB use multipart (R-35).
+   already exist physically are verified and not rewritten. Files above 95 MiB use resumable multipart
+   instead: `POST /api/v1/uploads` `{versionId, sha256, partSize?}` (10-95 MiB parts, default 50 MiB)
+   starts a real R2 multipart upload staged at `uploads/<session id>`, bound to that one pending
+   manifest file; `PUT /api/v1/uploads/{id}/parts/{n}` acknowledges exact part bytes (identical
+   retries replay, changed bytes are refused), `GET /api/v1/uploads/{id}` lists acknowledged parts for
+   resume, and `POST /api/v1/uploads/{id}/complete` assembles the parts, stream-hashes the result and
+   only then promotes it to `blobs/<sha256>` in the caller's scope. Sessions expire within a day (a
+   dwu_-created session keeps the token's earlier expiry) and the hourly cleanup aborts expired ones
+   in bounded slices. The CLI picks multipart above 95 MiB and the raw PUT at or below it.
 3. `POST .../versions/{version}/finalize`: check every hash, then flip the pointer with a conditional
    `UPDATE sites SET current_version_id = ? WHERE id = ? AND current_version_id IS ?` (the last value is
    `baseVersionId` when given; zero rows changed = `409 version_conflict`). Refresh KV, enqueue jobs,
@@ -750,7 +758,7 @@ run before core viewers. Section 10 lists core viewers.
 | Store | Keys and contents |
 |---|---|
 | D1 `DB` | All metadata (tables below). Times are unix epoch milliseconds |
-| R2 `FILES` | `blobs/<sha256>` file bytes (never overwritten); `thumbs/<versionId>.webp`, `og/<versionId>.png` (R-20); `uploads/<uploadId>/<part>` multipart staging (R-35, lifecycle 1 day); `manifests/<versionId>.json` (R-44) |
+| R2 `FILES` | `blobs/<sha256>` file bytes (never overwritten); `thumbs/<versionId>.webp`, `og/<versionId>.png` (R-20); `uploads/<session id>` multipart staging (R-35, lifecycle 1 day); `manifests/<versionId>.json` (R-44) |
 | KV `CACHE` | `live:<slug>` live pointer and manifest (exists); `host:<hostname>` mount map (R-33); `settings:instance` (R-42) |
 | KV `OAUTH_KV` | OAuth clients, grants and hashed tokens, owned by `workers-oauth-provider` (R-24) |
 | Durable Object `SITE_DATA` | One SQLite store per site with Site Data records (R-30) |
@@ -1172,9 +1180,10 @@ Codes are stable forever.
 | GET | `/api/v1/sites/{site}/files` | `list_files` | `sites:read` | P0 | Done |
 | GET, HEAD | `/api/v1/sites/{site}/files/{path}` | `read_file` | `sites:read` | P0 | Done (`as=markdown`, ranges in R-25/R-34) |
 | PUT | `/api/v1/blobs/{sha256}` | - (raw bytes) | `sites:write`, claim or upload token | P0 | Done (upload token R-04) |
-| POST | `/api/v1/uploads` | - (multipart start) | `sites:write` or upload token | P1 | R-35 |
-| PUT | `/api/v1/uploads/{id}/parts/{n}` | - | same | P1 | R-35 |
-| POST | `/api/v1/uploads/{id}/complete` | - | same | P1 | R-35 |
+| POST | `/api/v1/uploads` | - (multipart start) | `sites:write` or upload token | P1 | Implemented (R-35) |
+| GET | `/api/v1/uploads/{id}` | - (acknowledged parts) | same | P1 | Implemented (R-35) |
+| PUT | `/api/v1/uploads/{id}/parts/{n}` | - | same | P1 | Implemented (R-35) |
+| POST | `/api/v1/uploads/{id}/complete` | - | same | P1 | Implemented (R-35) |
 | POST | `/api/v1/sites/{site}/check` | `check_site` | `sites:read` | P1 | R-20 |
 
 **Sites**
@@ -1455,14 +1464,16 @@ type VersionRef = string;  // "live" | "v12" | "12" | version id
 
 // Exactly one source per file. Flat on purpose (some model APIs mishandle oneOf).
 interface FileInput {
-  path: string;                       // "index.html", "assets/app.js"; "/" and "./" prefixes accepted
+  path?: string;                      // "index.html", "assets/app.js"; "/" and "./" prefixes accepted; omitted for attachments
   content?: string; encoding?: "utf8" | "base64";   // inline; utf8 <= 1 MB/file, base64 <= 256 KB/file
   url?: string; headers?: Record<string, string>;   // server fetch; headers never stored
+  download_url?: string; file_name?: string;        // chat attachment: fetched like url, file_name is the path
   sha256?: string; size?: number;     // manifest entry (bytes stored or to be uploaded)
   copyFrom?: { site?: SiteRef; version?: VersionRef; path?: string };
   contentType?: string;
   localPath?: string;                 // local stdio MCP and CLI only
 }
+// publish_site also accepts archiveUrl (public https .zip) instead of files.
 
 // publish_site output (REST returns the same JSON)
 interface PublishResult {
@@ -1714,7 +1725,7 @@ The link alone is not an operational reporting channel.
 | Limit | Default | Setting |
 |---|---|---|
 | Largest file (single request) | 100 MB (Workers request body limit on Free/Pro zones) | `MAX_FILE_BYTES` |
-| Largest file (multipart, R-35) | 5 GB | `MAX_MULTIPART_FILE_BYTES` |
+| Largest file (multipart, R-35) | `MAX_FILE_BYTES` when an operator raises it above the single-request cap; parts are 10-95 MiB | `MAX_FILE_BYTES` |
 | Files per version | 2,500 | `MAX_FILES` |
 | Bytes per version | 10 GB | `MAX_SITE_BYTES` |
 | One-shot publish body | 25 MB | `ONESHOT_MAX_BYTES` |
@@ -1817,7 +1828,7 @@ Workspaces 24, Variables 3, Billing 4, Support 1.
 | Duplicate site | `duplicate_site` | P1 | Done |
 | Publish from Drive | `duplicate_site` from a drive | P1 | R-32 |
 | Delete site | `delete_site` (with `confirm`) | P0 | Done |
-| Caps: 2,500 files, 10 GB per version, 250 MB anonymous file, 5 GB keyed file | 2,500 / 10 GB / 25 MB anonymous (configurable) / 100 MB single request, 5 GB multipart | P0 / P1 | Done / R-35 |
+| Caps: 2,500 files, 10 GB per version, 250 MB anonymous file, 5 GB keyed file | 2,500 / 10 GB / 25 MB anonymous (configurable) / 100 MB single request, multipart up to the configured per-file cap | P0 / P1 | Done |
 | Anonymous publish 24 h + claim token/URL (Sites) | Same; off by default | P0 | Done |
 | Agent sign-up by email code (Auth 2) | Not in this edition (no strangers). Owner mints member keys; login links; email codes for existing members | P1 | R-21 |
 | Dashboard sign-in by magic link or Google | Login links, email codes (with an email binding), Cloudflare Access identity | P1 | R-21 |

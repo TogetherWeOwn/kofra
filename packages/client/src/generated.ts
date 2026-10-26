@@ -17,21 +17,25 @@ export interface WhoamiOutput {
 }
 
 export interface PublishSiteInput {
-  /** Every file of the site. */
-  files: ({
-    /** Path inside the site, e.g. "index.html", "docs/guide.md", "assets/app.js". */
-    path: string;
-    /** The file itself: text (encoding "utf8", up to 1 MB) or base64 bytes (encoding "base64", up to 256 KB). For bigger or binary files prefer url or sha256. */
+  /** Every file of the site. Omit when archiveUrl is given. */
+  files?: ({
+    /** Path in the site, e.g. "index.html", "assets/app.js". Omit for attachments. */
+    path?: string;
+    /** Attachment URL (public https, like url); pair with file_name. */
+    download_url?: string;
+    /** Attachment name; becomes the path. */
+    file_name?: string;
+    /** Inline: "utf8" up to 1 MB, "base64" up to 256 KB; prefer url/sha256 when bigger or binary. */
     content?: string;
-    /** How content is encoded. Default "utf8". */
+    /** Content encoding. Default "utf8". */
     encoding?: "utf8" | "base64";
-    /** Public https URL to download. URL_FETCH_MAX_BYTES (default 100 MiB), 30 s, 3 redirects; file/request caps also apply. */
+    /** Public https URL to download (100 MiB, 30 s, 3 redirects; file caps also apply). */
     url?: string;
-    /** Request headers for the url download, e.g. Authorization. Used once, never stored. */
+    /** Headers for the url download; used once, never stored. */
     headers?: Record<string, string>;
-    /** Hex SHA-256 of the bytes. Already stored: reused at once. Not stored: the result lists an upload link (PUT the bytes, then finalize_version). */
+    /** Hex SHA-256. Stored bytes are reused; otherwise an upload link is returned (PUT, then finalize_version). */
     sha256?: string;
-    /** Size in bytes. Required with sha256 when the bytes are not stored yet. */
+    /** Bytes; required with an unstored sha256. */
     size?: number;
     /** Copy a file you already published: from a site you can read (default: this site), a version (default: live) and a path (default: the same path). */
     copyFrom?: {
@@ -44,6 +48,8 @@ export interface PublishSiteInput {
     /** MIME type. Default: from the file extension. */
     contentType?: string;
   })[];
+  /** Public https .zip to unpack, instead of files (never both). */
+  archiveUrl?: string;
   /** Optional. Slug, id or URL of your existing site to replace, or a new slug (3-56 chars: a-z, 0-9, single hyphens). */
   site?: string;
   /** Title shown in lists. */
@@ -88,7 +94,11 @@ export interface PublishSiteOutput {
 
 export interface UpdateSiteFilesInput {
   files?: ({
-    path: string;
+    path?: string;
+    /** Chat attachment URL fetched like url; pair with file_name. */
+    download_url?: string;
+    /** Chat attachment file name; becomes the path. */
+    file_name?: string;
     content?: string;
     encoding?: "utf8" | "base64";
     /** Public https URL the server downloads. */
@@ -681,6 +691,80 @@ export interface ExportVersionInput {
 
 export type ExportVersionOutput = Record<string, unknown>;
 
+export interface CreateMultipartUploadInput {
+  /** Pending version id returned with status awaiting_upload. */
+  versionId: string;
+  /** SHA-256 of the whole file, as listed in the pending manifest. */
+  sha256: string;
+  /** Part size in bytes, 10485760-99614720; default 52428800. */
+  partSize?: number;
+}
+
+export interface CreateMultipartUploadOutput {
+  id: string;
+  versionId?: string;
+  sha256: string;
+  size: number;
+  partSize: number;
+  parts: {
+    partNumber: number;
+    size: number;
+    etag: string;
+    [key: string]: unknown;
+  }[];
+  status?: string;
+  expiresAt?: string;
+  [key: string]: unknown;
+}
+
+export interface GetMultipartUploadInput {
+  /** Upload session id from POST /api/v1/uploads. */
+  id: string;
+}
+
+export interface GetMultipartUploadOutput {
+  id: string;
+  versionId?: string;
+  sha256: string;
+  size: number;
+  partSize: number;
+  parts: {
+    partNumber: number;
+    size: number;
+    etag: string;
+    [key: string]: unknown;
+  }[];
+  status?: string;
+  expiresAt?: string;
+  [key: string]: unknown;
+}
+
+export interface UploadMultipartPartInput {
+  id: string;
+  /** One-based part number. */
+  partNumber: number;
+}
+
+export interface UploadMultipartPartOutput {
+  partNumber: number;
+  size: number;
+  etag: string;
+  [key: string]: unknown;
+}
+
+export interface CompleteMultipartUploadInput {
+  id: string;
+  /** Ignored; the server uses its acknowledged parts. */
+  parts?: Record<string, unknown>[];
+}
+
+export interface CompleteMultipartUploadOutput {
+  sha256: string;
+  size: number;
+  stored?: boolean;
+  [key: string]: unknown;
+}
+
 export interface ListApiKeysInput {
   all?: "1" | "true";
   [key: string]: unknown;
@@ -766,8 +850,12 @@ export interface PublishUploadInput {
   slug?: string;
   /** Existing site ref or new slug. */
   site?: string;
-  files: ({
-    path: string;
+  files?: ({
+    path?: string;
+    /** Chat attachment URL fetched like url; pair with file_name. */
+    download_url?: string;
+    /** Chat attachment file name; becomes the path. */
+    file_name?: string;
     content?: string;
     encoding?: "utf8" | "base64";
     /** Public https URL the server downloads. */
@@ -784,6 +872,8 @@ export interface PublishUploadInput {
     contentType?: string;
     [key: string]: unknown;
   })[];
+  /** JSON only: public https .zip URL to publish instead of files. */
+  archiveUrl?: string;
   message?: string;
   baseVersionId?: string;
   title?: string | null;
@@ -1110,6 +1200,10 @@ export const OPERATIONS = {
   "get_version": { method: "GET", path: "/api/v1/sites/{slug}/versions/{id}", summary: "Get a version" },
   "delete_version": { method: "DELETE", path: "/api/v1/sites/{slug}/versions/{id}", summary: "Delete a version" },
   "export_version": { method: "GET", path: "/api/v1/sites/{slug}/versions/{version}/export", summary: "Download a version as a ZIP" },
+  "create_multipart_upload": { method: "POST", path: "/api/v1/uploads", summary: "Start a resumable multipart upload" },
+  "get_multipart_upload": { method: "GET", path: "/api/v1/uploads/{id}", summary: "Show a resumable upload's acknowledged parts" },
+  "upload_multipart_part": { method: "PUT", path: "/api/v1/uploads/{id}/parts/{partNumber}", summary: "Upload one part's raw bytes" },
+  "complete_multipart_upload": { method: "POST", path: "/api/v1/uploads/{id}/complete", summary: "Complete and verify a resumable upload" },
   "list_api_keys": { method: "GET", path: "/api/v1/keys", summary: "List API keys" },
   "create_api_key": { method: "POST", path: "/api/v1/keys", summary: "Create an API key" },
   "revoke_api_key": { method: "DELETE", path: "/api/v1/keys/{id}", summary: "Revoke an API key" },
@@ -1219,6 +1313,22 @@ export class DropwayClient extends DropwayHttpClient {
   /** Download a version as a ZIP */
   async exportVersion(input: ExportVersionInput, opts?: CallOptions): Promise<BytesResult> {
     return this.callBytes(OPERATIONS["export_version"], input, opts);
+  }
+  /** Start a resumable multipart upload */
+  async createMultipartUpload(input: CreateMultipartUploadInput, opts?: CallOptions): Promise<CreateMultipartUploadOutput> {
+    return this.call<CreateMultipartUploadInput, CreateMultipartUploadOutput>(OPERATIONS["create_multipart_upload"], input, opts);
+  }
+  /** Show a resumable upload's acknowledged parts */
+  async getMultipartUpload(input: GetMultipartUploadInput, opts?: CallOptions): Promise<GetMultipartUploadOutput> {
+    return this.call<GetMultipartUploadInput, GetMultipartUploadOutput>(OPERATIONS["get_multipart_upload"], input, opts);
+  }
+  /** Upload one part's raw bytes */
+  async uploadMultipartPart(input: UploadMultipartPartInput, body: Uint8Array | ArrayBuffer | Blob | string, opts?: CallOptions): Promise<UploadMultipartPartOutput> {
+    return this.callRaw<UploadMultipartPartInput, UploadMultipartPartOutput>(OPERATIONS["upload_multipart_part"], input, body, opts);
+  }
+  /** Complete and verify a resumable upload */
+  async completeMultipartUpload(input: CompleteMultipartUploadInput, opts?: CallOptions): Promise<CompleteMultipartUploadOutput> {
+    return this.call<CompleteMultipartUploadInput, CompleteMultipartUploadOutput>(OPERATIONS["complete_multipart_upload"], input, opts);
   }
   /** List API keys */
   async listApiKeys(input: ListApiKeysInput, opts?: CallOptions): Promise<ListApiKeysOutput> {

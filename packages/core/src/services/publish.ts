@@ -143,7 +143,8 @@ function defaultNameFor(ctype: string): string {
   throw badRequest("path_required", `Cannot pick a file name for a ${t} body.`, "Add ?path=<name.ext> (or an X-Kofra-Path header) to say what the file is called.");
 }
 
-function unzipFiles(bytes: Uint8Array, maxBytes: number): InlineFile[] {
+/** Unpack an in-memory zip into publishable files, refusing absolute or escaping entry names. */
+export function unzipFiles(bytes: Uint8Array, maxBytes: number): InlineFile[] {
   let total = 0;
   let entries: Record<string, Uint8Array>;
   try {
@@ -159,7 +160,10 @@ function unzipFiles(bytes: Uint8Array, maxBytes: number): InlineFile[] {
     if (e instanceof ApiError) throw e;
     throw badRequest("invalid_zip", "Could not read the zip file.", "Send a standard .zip (deflate or stored).");
   }
-  const files = Object.entries(entries).map(([name, data]) => ({ path: normaliseFilePath(name), bytes: data, contentType: contentTypeFor(name) }));
+  const files = Object.entries(entries).map(([name, data]) => {
+    if (/^[\\/]/.test(name)) throw badRequest("invalid_path", `Zip entry "${name}" is an absolute path.`, "Zip entries must use relative paths inside the site root.");
+    return { path: normaliseFilePath(name), bytes: data, contentType: contentTypeFor(name) };
+  });
   const hasRootIndex = files.some((f) => /^(index\.html?|index\.md|readme\.md)$/i.test(f.path));
   return hasRootIndex ? files : stripCommonRoot(files);
 }
