@@ -1,12 +1,15 @@
-import { beforeAll, describe, expect, it } from "vitest";
-import { detectFileKind, languageFor, contentTypeFor, type LiveSite } from "@dropway/core";
-import { findViewer, toViewerFile, VIEWERS, type ViewMode } from "@dropway/server";
+import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { detectFileKind, languageFor, contentTypeFor, sha256Hex, type LiveSite } from "@dropway/core";
+import { findViewer, toViewerFile, VIEWERS, type ServerBindings, type ViewMode } from "@dropway/server";
 import { sanitizeHtml, isSafeUrl } from "../packages/server/src/viewers/sanitize";
 import { splitHighlightedLines, highlight } from "../packages/server/src/viewers/highlight";
 import { imageSize } from "../packages/server/src/viewers/media";
 import { parseCsv, detectDelimiter } from "../packages/server/src/viewers/csv";
+import { cachedRender, clearRenderMemoryCache } from "../packages/server/src/viewers/cache";
+import { notebookViewer, renderNotebook } from "../packages/server/src/viewers/notebook";
 import { looksLikeText } from "../packages/server/src/viewers/binary";
-import { form, freshInstance, type Instance } from "./helpers";
+import { form, freshInstance, ORIGIN, type Instance } from "./helpers";
 
 const NAV = { Accept: "text/html,application/xhtml+xml,*/*;q=0.8", "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate" };
 const IFRAME = { Accept: "text/html,*/*", "Sec-Fetch-Dest": "iframe", "Sec-Fetch-Mode": "navigate" };
@@ -389,5 +392,342 @@ describe("viewer pages", () => {
     expect(html).toContain('class="dw-gal"');
     expect(html).toContain(">SVG image<");
     expect(html).toContain(`href="https://dropway.test/v/${slug}/img/"`);
+  });
+});
+
+/**
+ * Notebook output folding: paired acceptance contract (keep this file
+ * unchanged in the implementation change).
+ *
+ * - Each code cell with at least one rendered output wraps exactly those
+ *   outputs, in order, in one native initially-open <details> whose
+ *   <summary> text is "Outputs (N)", N counting only outputs that render a
+ *   fragment under the existing output rules (unsupported MIME-only outputs
+ *   render nothing and are not counted).
+ * - The cell's code and its "In [n]:" prompt stay outside the <details>, so
+ *   collapsing it can never hide the code. Cells with zero rendered outputs
+ *   (empty, unsupported-only, markdown, raw) get no control.
+ * - Folding is native only: no script, no shared `name` (controls toggle
+ *   independently), the summary keeps its native keyboard behaviour, and
+ *   the summary/control survives the existing sanitizer.
+ * - All existing output rendering is preserved inside the fold: stream and
+ *   error text (ANSI stripped), PNG/JPEG/GIF/SVG images, sanitized HTML and
+ *   Markdown, plain text and JSON, the current MIME priority, the 100,000
+ *   character text clip with its ellipsis and the 20 MiB viewer cap.
+ * - The notebook render version is bumped past 1 so cached pre-fold
+ *   fragments and "notebook@1" conditional ETags retire; Raw, Download,
+ *   Source and sub-resource bytes stay identical to the stored file.
+ */
+describe("notebook output folding", () => {
+  const nbJson = (cells: unknown[]) => JSON.stringify({ metadata: { language_info: { name: "python" } }, cells });
+  const foldNb = nbJson([
+    { cell_type: "markdown", source: "# Fold fixture title\n\nintro-fold-sentinel" },
+    { cell_type: "code", execution_count: 1, source: "empty_cell_marker = 1", outputs: [] },
+    {
+      cell_type: "code", execution_count: 2, source: "alpha_cell_marker = compute_alpha()",
+      outputs: [{ output_type: "stream", name: "stdout", text: "alpha-stream-sentinel\n" }],
+    },
+    {
+      cell_type: "code", execution_count: 3, source: "mixed_cell_marker = compute_mixed()",
+      outputs: [
+        { output_type: "stream", name: "stdout", text: "mixed-stream-sentinel\n" },
+        { output_type: "stream", name: "stderr", text: "mixed-stderr-sentinel\n" },
+        {
+          output_type: "error", ename: "ValueError", evalue: "mixed-error-evalue",
+          traceback: ["\u001b[31mTraceback (most recent call last)\u001b[0m", "ValueError: mixed-error-sentinel"],
+        },
+        {
+          output_type: "execute_result", execution_count: 3,
+          data: {
+            "text/html": "<p>mixed-html-sentinel</p><script>alert(41)</script><img src=x onerror=alert(42)>",
+            "text/plain": "shadowed-plain-sentinel",
+          },
+        },
+        { output_type: "display_data", data: { "image/png": "iVBORw0KGgo=" } },
+        { output_type: "display_data", data: { "text/markdown": "**mixed-md-sentinel** <script>alert(43)</script>" } },
+        { output_type: "display_data", data: { "application/json": { foldKey: "mixed-json-sentinel" } } },
+        { output_type: "display_data", data: { "application/pdf": "JVBERi0xLjQK" } },
+        { output_type: "display_data", data: { "text/latex": "latex-sentinel-must-not-render" } },
+        { output_type: "stream", name: "stdout", text: "</summary></details><script>alert(44)</script>" },
+      ],
+    },
+    {
+      cell_type: "code", execution_count: 4, source: "unsupported_cell_marker = 2",
+      outputs: [{ output_type: "display_data", data: { "application/pdf": "JVBERi0xLjQK" } }],
+    },
+    { cell_type: "code", execution_count: null, source: "pending_cell_marker = 3", outputs: [] },
+    { cell_type: "raw", source: "raw-cell-sentinel" },
+    {
+      cell_type: "code", execution_count: 5, source: 'hostile_source_marker = "</details><script>alert(45)</script>"',
+      outputs: [{ output_type: "stream", name: "stdout", text: "hostile-source-output-sentinel\n" }],
+    },
+  ]);
+  const longNb = nbJson([
+    {
+      cell_type: "code", execution_count: 7, source: "long_stream_marker = emit_long()",
+      outputs: [{ output_type: "stream", name: "stdout", text: "LONG-START " + "x".repeat(100_500) + " LONG-END-SENTINEL" }],
+    },
+    {
+      cell_type: "code", execution_count: 8, source: "long_json_marker = emit_json()",
+      outputs: [{ output_type: "display_data", data: { "application/json": { pad: "y".repeat(100_500), tail: "JSON-END-SENTINEL" } } }],
+    },
+  ]);
+  const foldFiles: Record<string, string> = {
+    "nb/fold.ipynb": foldNb,
+    "nb/long.ipynb": longNb,
+    "nb/empty.ipynb": nbJson([]),
+    "nb/nocells.ipynb": JSON.stringify({ metadata: {} }),
+    "nb/broken.ipynb": "{not json",
+  };
+
+  const detailsBlocks = (html: string) => Array.from(html.matchAll(/<details\b[^>]*>[\s\S]*?<\/details>/g), (m) => m[0]);
+  const summaryText = (block: string) => (block.match(/<summary\b[^>]*>([\s\S]*?)<\/summary>/)?.[1] ?? "").replace(/<[^>]+>/g, "").trim();
+  const stripTags = (html: string) => html.replace(/<[^>]+>/g, "");
+  const withoutDetails = (html: string) => html.replace(/<details\b[^>]*>[\s\S]*?<\/details>/g, "");
+  const expectOrder = (haystack: string, needles: string[]) => {
+    let at = -1;
+    for (const needle of needles) {
+      const next = haystack.indexOf(needle, at + 1);
+      expect(next, `${needle} after offset ${at}`).toBeGreaterThan(at);
+      at = next;
+    }
+  };
+
+  let dw: Instance;
+  let slug: string;
+  beforeAll(async () => {
+    dw = await freshInstance();
+    const res = await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, body: form(foldFiles) });
+    expect(res.status).toBe(201);
+    slug = res.body.slug;
+  });
+  beforeEach(() => clearRenderMemoryCache());
+  const get = (path: string, headers: Record<string, string> = NAV) => dw.call(`/s/${slug}/${path}`, { headers });
+
+  it("wraps each nonempty output group in an initially-open details with a counted Outputs summary", async () => {
+    const res = await get("nb/fold.ipynb");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-kofra-viewer")).toBe("notebook");
+    const html = await res.text();
+    const blocks = detailsBlocks(html);
+    // Only the three code cells with rendered outputs get a control: the
+    // empty, unsupported-only, markdown and raw cells get none.
+    expect(blocks).toHaveLength(3);
+    expect(blocks.map(summaryText)).toEqual(["Outputs (1)", "Outputs (8)", "Outputs (1)"]);
+    for (const block of blocks) {
+      const tag = block.match(/^<details\b[^>]*>/)![0];
+      expect(tag).toMatch(/(?:^|\s)open(?:\s|=|>)/);
+      // A shared name would make the controls an exclusive accordion.
+      expect(tag).not.toMatch(/\sname=/);
+    }
+    expect(blocks[0]).toContain("alpha-stream-sentinel");
+    expect(blocks[2]).toContain("hostile-source-output-sentinel");
+  });
+
+  it("keeps every mixed output type, in order and sanitized, inside the fold", async () => {
+    const html = await (await get("nb/fold.ipynb")).text();
+    const blocks = detailsBlocks(html);
+    expect(blocks).toHaveLength(3);
+    const mixed = blocks[1]!;
+    expectOrder(stripTags(mixed), [
+      "Outputs (8)", "mixed-stream-sentinel", "mixed-stderr-sentinel", "mixed-error-sentinel",
+      "mixed-html-sentinel", "mixed-md-sentinel", "mixed-json-sentinel",
+    ]);
+    expect(mixed).toContain('<img src="data:image/png;base64,iVBORw0KGgo=" alt="output">');
+    expect(mixed).toContain("<strong>mixed-md-sentinel</strong>");
+    expect(mixed).toContain("foldKey");
+    // MIME priority is unchanged: HTML shadows the plain-text fallback, and
+    // a traceback shadows ename/evalue; unsupported outputs render nothing.
+    expect(html).not.toContain("shadowed-plain-sentinel");
+    expect(html).not.toContain("mixed-error-evalue");
+    expect(html).not.toContain("latex-sentinel-must-not-render");
+    expect(html).not.toContain("JVBERi0xLjQK");
+    // ANSI escapes are still stripped from stream/error text.
+    expect(html).not.toContain("\u001b[31m");
+    // Hostile markup is neutralized without forging or closing the fold:
+    // the escaped stream text stays visible as text inside its block.
+    expect(mixed).toContain("&lt;/summary&gt;&lt;/details&gt;");
+    expect(html).not.toMatch(/<script\b|onerror\s*=/);
+    expect(detailsBlocks(html)).toHaveLength(3);
+  });
+
+  it("keeps code and execution prompts outside the fold, in cell order", async () => {
+    const html = await (await get("nb/fold.ipynb")).text();
+    const outside = stripTags(withoutDetails(html));
+    for (const code of ["empty_cell_marker = 1", "alpha_cell_marker = compute_alpha()", "mixed_cell_marker = compute_mixed()", "unsupported_cell_marker = 2", "pending_cell_marker = 3"]) {
+      expect(outside).toContain(code);
+    }
+    for (const prompt of ["In [1]:", "In [2]:", "In [3]:", "In [4]:", "In [ ]:", "In [5]:"]) {
+      expect(outside).toContain(prompt);
+    }
+    // Nothing that belongs to an output group leaks outside its fold.
+    for (const out of ["alpha-stream-sentinel", "mixed-stream-sentinel", "mixed-json-sentinel", "hostile-source-output-sentinel"]) {
+      expect(outside).not.toContain(out);
+    }
+    expectOrder(stripTags(html), [
+      "intro-fold-sentinel", "empty_cell_marker", "alpha_cell_marker", "alpha-stream-sentinel",
+      "mixed_cell_marker", "unsupported_cell_marker", "pending_cell_marker", "raw-cell-sentinel", "hostile_source_marker",
+    ]);
+  });
+
+  it("folds with native no-script semantics and keeps the viewer CSP and narrow layout", async () => {
+    const res = await get("nb/fold.ipynb");
+    const html = await res.text();
+    const csp = res.headers.get("content-security-policy")!;
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("sandbox");
+    expect(csp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
+    expect(html).not.toMatch(/<script\b/);
+    // The existing single-column narrow layout still applies.
+    expect(html).toContain("@media (max-width:640px)");
+    // The bar still links the untouched views of the same file.
+    expect(html).toContain(`href="/s/${slug}/nb/fold.ipynb?raw=1"`);
+    expect(html).toContain(`href="/s/${slug}/nb/fold.ipynb?download=1"`);
+    expect(html).toContain(">Notebook</a>");
+    // Native <summary> is the keyboard/pointer toggle: it must not be
+    // removed from the tab order or replaced by script-driven controls.
+    expect(html).toMatch(/<summary\b/);
+    expect(html).not.toMatch(/<summary[^>]*tabindex="-1"/);
+  });
+
+  it("keeps the 100,000-character output clip inside the fold", async () => {
+    const html = await (await get("nb/long.ipynb")).text();
+    const blocks = detailsBlocks(html);
+    expect(blocks.map(summaryText)).toEqual(["Outputs (1)", "Outputs (1)"]);
+    expect(blocks[0]).toContain("LONG-START");
+    expect(blocks[0]).toContain("x".repeat(99_000));
+    expect(blocks[0]).not.toContain("x".repeat(100_001));
+    expect(blocks[0]).not.toContain("LONG-END-SENTINEL");
+    expect(blocks[0]).toContain("…");
+    expect(blocks[1]).not.toContain("JSON-END-SENTINEL");
+    expect(blocks[1]).toContain("…");
+  });
+
+  it("serves empty and invalid notebooks without inventing a control", async () => {
+    for (const path of ["nb/empty.ipynb", "nb/nocells.ipynb"]) {
+      const res = await get(path);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("x-kofra-viewer")).toBe("notebook");
+      const html = await res.text();
+      expect(detailsBlocks(html)).toEqual([]);
+      expect(html).not.toContain("In [");
+    }
+    const broken = await (await get("nb/broken.ipynb")).text();
+    expect(broken).toContain("This notebook is not valid JSON");
+    expect(broken).toContain("Use Source or Raw.");
+    expect(detailsBlocks(broken)).toEqual([]);
+  });
+
+  it("keeps Raw, Download, Source and sub-resource bytes identical", async () => {
+    const stored = new TextEncoder().encode(foldNb);
+    for (const [query, headers] of [
+      ["?raw=1", NAV],
+      ["?download=1", NAV],
+      ["", { Accept: "*/*", "Sec-Fetch-Dest": "empty" }],
+    ] as Array<[string, Record<string, string>]>) {
+      const res = await get(`nb/fold.ipynb${query}`, headers);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("x-kofra-viewer")).toBeNull();
+      expect(new Uint8Array(await res.arrayBuffer())).toEqual(stored);
+      if (query === "?download=1") expect(res.headers.get("content-disposition")).toContain("attachment");
+    }
+    const source = await get("nb/fold.ipynb?view=source");
+    expect(source.headers.get("x-kofra-viewer")).toBe("source");
+    const sourceHtml = await source.text();
+    expect(sourceHtml).toContain("mixed-stream-sentinel");
+    expect(detailsBlocks(sourceHtml)).toEqual([]);
+  });
+
+  it("renderNotebook folds rendered outputs only (plain text, JPEG and SVG included)", () => {
+    const html = renderNotebook({
+      metadata: { language_info: { name: "python" } },
+      cells: [
+        {
+          cell_type: "code", execution_count: 1, source: "unit_marker = 1",
+          outputs: [
+            { output_type: "execute_result", data: { "text/plain": "unit-plain-sentinel" } },
+            { output_type: "display_data", data: { "image/jpeg": "/9j/4AAQ" } },
+            { output_type: "display_data", data: { "image/svg+xml": '<svg xmlns="http://www.w3.org/2000/svg"></svg>' } },
+            { output_type: "display_data", data: { "application/pdf": "JVBERi0xLjQK" } },
+          ],
+        },
+        { cell_type: "code", execution_count: 2, source: "unit_empty_marker = 2", outputs: [] },
+      ],
+    });
+    const blocks = detailsBlocks(html);
+    expect(blocks.map(summaryText)).toEqual(["Outputs (3)"]);
+    expect(blocks[0]).toContain("unit-plain-sentinel");
+    expect(blocks[0]).toContain('<img src="data:image/jpeg;base64,/9j/4AAQ" alt="output">');
+    expect(blocks[0]).toContain('<img src="data:image/svg+xml;base64,');
+    expect(stripTags(withoutDetails(html))).toContain("unit_marker = 1");
+    expect(renderNotebook({})).toBe("");
+    expect(renderNotebook({ cells: "nope" })).toBe("");
+  });
+
+  it("the fold survives the existing sanitizer", async () => {
+    const out = await sanitizeHtml(renderNotebook(JSON.parse(foldNb)));
+    const blocks = detailsBlocks(out);
+    expect(blocks.map(summaryText)).toEqual(["Outputs (1)", "Outputs (8)", "Outputs (1)"]);
+    for (const block of blocks) expect(block.match(/^<details\b[^>]*>/)![0]).toMatch(/(?:^|\s)open(?:\s|=|>)/);
+    expect(out).not.toMatch(/<script\b|onerror\s*=/);
+  });
+
+  it("keeps the 20 MiB notebook viewer cap", () => {
+    const pick = (size: number) => findViewer(toViewerFile("a.ipynb", "0".repeat(64), size, contentTypeFor("a.ipynb")), live(), VIEWERS, "document")?.id ?? null;
+    expect(pick(20 * 1024 * 1024)).toBe("notebook");
+    expect(pick(20 * 1024 * 1024 + 1)).not.toBe("notebook");
+    expect(notebookViewer.maxBytes).toBe(20 * 1024 * 1024);
+  });
+
+  it.each(["memory", "edge"])("cannot reuse a pre-fold notebook@1 fragment from %s", async (tier) => {
+    expect(notebookViewer.version).toBeGreaterThan(1);
+    const hash = await sha256Hex(new TextEncoder().encode(foldNb));
+    const legacyKey = `notebook@1/${hash}`;
+    const url = `${ORIGIN}/s/${slug}/nb/fold.ipynb`;
+    const oldHtml = "<p>PRE_FOLD_LEGACY</p><pre>alpha-stream-sentinel</pre>";
+    await caches.default.delete(new Request(`${ORIGIN}/__dropway/render/${legacyKey}`));
+    await caches.default.delete(new Request(`${ORIGIN}/__dropway/render/notebook@${notebookViewer.version}/${hash}`));
+    if (tier === "memory") {
+      const ctx = createExecutionContext();
+      const dc = dw.dropway.context(env as unknown as ServerBindings, ctx, new URL(url));
+      await cachedRender(dc, legacyKey, async () => oldHtml);
+      await waitOnExecutionContext(ctx);
+    } else {
+      await caches.default.put(new Request(`${ORIGIN}/__dropway/render/${legacyKey}`), new Response(oldHtml, {
+        headers: { "Content-Type": "text/html", "Cache-Control": "public, max-age=2592000" },
+      }));
+      clearRenderMemoryCache();
+    }
+    const res = await dw.call(url, { headers: NAV });
+    const html = await res.text();
+    expect(html).not.toContain("PRE_FOLD_LEGACY");
+    expect(detailsBlocks(html).map(summaryText)).toEqual(["Outputs (1)", "Outputs (8)", "Outputs (1)"]);
+    expect(res.headers.get("x-kofra-render-cache")).toBe("miss");
+    const again = await dw.call(url, { headers: NAV });
+    expect(again.headers.get("x-kofra-render-cache")).toBe("memory");
+    expect(detailsBlocks(await again.text())).toHaveLength(3);
+  });
+
+  it("serves identical folded pages to concurrent cold requests", async () => {
+    const [a, b] = await Promise.all([get("nb/fold.ipynb"), get("nb/fold.ipynb")]);
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    const [htmlA, htmlB] = await Promise.all([a.text(), b.text()]);
+    expect(htmlB).toBe(htmlA);
+    expect(detailsBlocks(htmlA)).toHaveLength(3);
+  });
+
+  it("does not answer 304 to a notebook@1 ETag, but revalidates the new render", async () => {
+    const hash = await sha256Hex(new TextEncoder().encode(foldNb));
+    const legacy = `W/"notebook@1-${hash}"`;
+    const res = await get("nb/fold.ipynb", { ...NAV, "If-None-Match": legacy });
+    expect(res.status).toBe(200);
+    const etag = res.headers.get("etag")!;
+    expect(etag).not.toBe(legacy);
+    expect(etag).toMatch(/^W\/"notebook@\d+-[a-f0-9]{64}"$/);
+    expect(detailsBlocks(await res.text())).toHaveLength(3);
+    const fresh = await get("nb/fold.ipynb", { ...NAV, "If-None-Match": etag });
+    expect(fresh.status).toBe(304);
+    expect(await fresh.text()).toBe("");
   });
 });
