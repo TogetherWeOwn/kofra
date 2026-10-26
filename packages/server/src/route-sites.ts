@@ -5,6 +5,7 @@ import {
   getLiveSite,
   looksLikeSlug,
   requestPathToFilePath,
+  resolveSlugRedirect,
   resolveVersionAddress,
   siteUrl,
   type DropwayContext,
@@ -183,10 +184,12 @@ export async function routeSiteRequest(dw: DropwayContext, req: Request): Promis
     if (readOnly && ref && ref !== first && (await siteHasPath(dw, ref, url.pathname, req, `/${ref}/`))) {
       return { kind: "redirect", location: `/${ref}${url.pathname}${url.search}`, status: 307, byReferer: true };
     }
-    // SPA inference must yield to destination sites (including empty/expired ones)
-    // and version addresses, whose own routing decides 301/308/404/410 responses.
+    // SPA inference must yield to destination sites (including empty/expired ones),
+    // renamed-away slugs (their R-59 308 owns the address) and version addresses,
+    // whose own routing decides 301/308/404/410 responses.
     if (readOnly && ref && ref !== first && !parseVersionAddress(first) &&
-      (await spaNavigationRedirect(dw, ref, req, url.pathname)) && !(isSiteSlug(first) && (await getLiveSite(dw, first)))) {
+      (await spaNavigationRedirect(dw, ref, req, url.pathname)) && !(isSiteSlug(first) && (await getLiveSite(dw, first))) &&
+      !(first && (await resolveSlugRedirect(dw, first)))) {
       return { kind: "redirect", location: `/${ref}${url.pathname}${url.search}`, status: 307, byReferer: true };
     }
     if (isSiteSlug(first)) {

@@ -18,8 +18,8 @@
   lacks now 307-redirects to that path inside the site (SRV-02), where the SPA fallback
   serves it; app routes, paths with a file extension and sub-resource requests are
   untouched. On a separate sites origin, existing destination sites (even empty or
-  expired) and version addresses keep their own routing instead of being captured by
-  the referring SPA.
+  expired), renamed-away slugs (their 308 redirect) and version addresses keep their
+  own routing instead of being captured by the referring SPA.
 - Publishing a path under `__dropway/` is refused with the new `reserved_path` error on
   every publish path (the manifest, one-shot and file-source flows share the check).
 - `.dropway` and `.dropway/*` files are stored with the version (owner read-back works)
