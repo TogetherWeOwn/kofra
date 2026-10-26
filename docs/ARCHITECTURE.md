@@ -147,6 +147,18 @@ Syntax highlighting is highlight.js core plus about 80 languages registered in
 `viewers/hljs.js` (about 106 KB gzipped). That file is plain JavaScript with
 its own `hljs.d.ts` because highlight.js's types pull in the DOM lib.
 
+ZIP navigations, frames and `?view=1` list central-directory metadata only: paths,
+uncompressed sizes and compression methods in central-directory order, with totals
+for every entry and at most the first 1,000 rows. Archives over 2 MiB, invalid ZIPs,
+ZIP64/split ZIPs and non-ZIP archives get the binary info page with an explanation.
+No entry is inflated, extracted or linked, and entry contents are not verified.
+The ZIP fragment uses `archive@<version>/<sha256>`; bump the viewer version when
+its parser or output changes to invalidate both fragments and HTTP validators.
+A fallback caused by a transient short storage read is stored nowhere: no
+fragment is cached and the page itself is `no-store` without the listing ETag,
+so a reload recovers once storage does.
+Raw/download and sub-resource requests still serve the original complete bytes.
+
 **To add a viewer:** create `packages/server/src/viewers/<name>.ts` exporting a
 `Viewer` (`id`, `version`, `maxBytes`, `matches(file, live, mode)`, `render(vc)`),
 match on `file.kind` (from `detectFileKind` in `@dropway/core`) and the mode,

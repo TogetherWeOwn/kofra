@@ -2,7 +2,7 @@ import { KIND_LABELS, type FileKind } from "@dropway/core";
 import { escapeHtml, formatBytes } from "../html";
 import { decodeText, standardTabs, viewerPage } from "./chrome";
 import { codePage, readShownText } from "./code";
-import type { Viewer } from "./index";
+import type { Viewer, ViewerContext } from "./index";
 
 /**
  * Files no other viewer handles (unknown types, archives, WebAssembly, 3D
@@ -77,23 +77,29 @@ export const binaryViewer: Viewer = {
         note: `<p class="dw-note">This file has no known type, but it looks like text, so it is shown as text.</p>`,
       });
     }
-    const hex = Array.from(head.subarray(0, 16), (x) => x.toString(16).padStart(2, "0")).join("");
-    const magic = MAGIC.find(([re]) => re.test(hex))?.[1] ?? null;
-    const rows: Array<[string, string]> = [
-      ["Size", `${formatBytes(vc.file.size)} (${vc.file.size.toLocaleString("en-US")} bytes)`],
-      ["Type", vc.file.contentType],
-      ["Kind", KIND_LABELS[vc.file.kind]],
-      ...(magic ? ([["Looks like", magic]] as Array<[string, string]>) : []),
-      ["SHA-256", vc.file.sha256],
-    ];
-    const body = `<main style="max-width:52rem;margin:0 auto;padding:2rem 1.25rem 4rem">
+    return binaryInfoPage(vc, head);
+  },
+};
+
+/** Shared binary fallback; note is plain text, never trusted markup. */
+export function binaryInfoPage(vc: ViewerContext, head: Uint8Array, note?: string, headers?: Record<string, string>): Response {
+  const hex = Array.from(head.subarray(0, 16), (x) => x.toString(16).padStart(2, "0")).join("");
+  const magic = MAGIC.find(([re]) => re.test(hex))?.[1] ?? null;
+  const rows: Array<[string, string]> = [
+    ["Size", `${formatBytes(vc.file.size)} (${vc.file.size.toLocaleString("en-US")} bytes)`],
+    ["Type", vc.file.contentType],
+    ["Kind", KIND_LABELS[vc.file.kind]],
+    ...(magic ? ([["Looks like", magic]] as Array<[string, string]>) : []),
+    ["SHA-256", vc.file.sha256],
+  ];
+  const body = `<main style="max-width:52rem;margin:0 auto;padding:2rem 1.25rem 4rem">
 <h1 style="font-size:1.35rem;margin:0 0 1rem;word-break:break-all">${escapeHtml(vc.file.path.split("/").pop() ?? vc.file.path)}</h1>
+${note ? `<p class="dw-note">${escapeHtml(note)}</p>` : ""}
 <table style="border-collapse:collapse;width:100%;font-size:.9rem;margin-bottom:1.25rem">${rows
       .map(([k, v]) => `<tr><th scope="row" style="text-align:left;padding:.4rem 1rem .4rem 0;color:var(--muted);font-weight:500;width:8rem;vertical-align:top">${escapeHtml(k)}</th><td style="padding:.4rem 0;word-break:break-all;font-family:${k === "SHA-256" ? "ui-monospace,monospace" : "inherit"}">${escapeHtml(v)}</td></tr>`)
       .join("")}</table>
 <p><a class="dw-btn" href="${escapeHtml(vc.downloadUrl)}" rel="nofollow" download>Download</a></p>
 <h2 style="font-size:.95rem;margin:2rem 0 .5rem;color:var(--muted)">First ${Math.min(256, head.byteLength)} bytes</h2>
 <pre style="background:var(--code);padding:1rem;border-radius:8px;overflow:auto;font-size:.8rem;line-height:1.5">${escapeHtml(hexDump(head.subarray(0, 256)))}</pre></main>`;
-    return viewerPage(vc, { tabs: standardTabs(vc, { rendered: "Info", raw: false }), body });
-  },
-};
+  return viewerPage(vc, { tabs: standardTabs(vc, { rendered: "Info", raw: false }), body, headers });
+}
