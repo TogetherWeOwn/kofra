@@ -64,8 +64,10 @@ export async function checkPullDirectory(dir: string, force: boolean): Promise<v
 function pathSegments(path: string): string[] {
   const segments = path.split("/");
   // Refuse rather than normalize: Windows drives, alternate streams, UNC paths
-  // and dot/empty segments must not acquire a different local meaning.
-  if (!path || /[\\:\u0000-\u001f\u007f]/.test(path) || segments.some(s => !s || s === "." || s === ".." || /[. ]$/.test(s)
+  // and dot/empty segments must not acquire a different local meaning. A
+  // `.git` segment is never site content (publishing excludes it); materializing
+  // one would let server bytes become trusted Git configuration on this disk.
+  if (!path || /[\\:\u0000-\u001f\u007f]/.test(path) || segments.some(s => !s || s === "." || s === ".." || s.toLowerCase() === ".git" || /[. ]$/.test(s)
     || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(s))) {
     throw new CliError({ code: "unsafe_pull_path", message: "The listed path is not a safe relative file path.", hint: "Use paths with nonempty forward-slash-separated names, without dot segments or drive syntax.", exitCode: EXIT.invalid });
   }
@@ -162,6 +164,9 @@ async function download(client: DropwayClient, site: string, versionId: string, 
     if (offset !== file.size || digest.digest("hex") !== file.sha256) {
       throw new CliError({ code: "pull_integrity_mismatch", message: "Downloaded bytes did not match the server's size and SHA-256.", hint: "Retry the pinned version; do not use unverified bytes.", exitCode: EXIT.invalid });
     }
+    // The temporary stayed owner-only while unverified; a verified file gets
+    // the normal umask-adjusted mode a plain file creation would produce.
+    await handle.chmod(0o666 & ~process.umask());
     await handle.close();
     await rename(temporary, target);
   } finally {

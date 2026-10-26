@@ -217,7 +217,8 @@ access to the site. No project link or credentials are written.
 
 Files are downloaded as base64 pages of at most 1 MiB, decoded and hashed
 incrementally, then renamed from an exclusive temporary file only after the
-size and SHA-256 match the manifest. Binary, Unicode, empty, HTML and CSS files
+size and SHA-256 match the manifest. The temporary stays owner-only while
+unverified; the renamed file carries the normal umask-adjusted file mode. Binary, Unicode, empty, HTML and CSS files
 retain their original stored bytes, without viewer rendering or URL rewriting.
 A failed file is named in `failures`, never counted in `files`, and its temporary
 file is removed. An old same-path file is retained if its replacement fails.
@@ -230,7 +231,9 @@ An existing non-empty directory is refused with `pull_directory_not_empty`
 extra local files are **never deleted** and their names are reported on stderr
 (unless `--quiet`). Unsafe relative paths, symlinks and conflicting directories
 are refused rather than followed or removed. Windows drive/alternate-stream
-syntax and reserved names are also refused. A path that aliases an earlier
+syntax and reserved names are also refused, as is any `.git` path segment:
+publishing never includes `.git`, and server bytes must not become trusted
+Git configuration on the local disk. A path that aliases an earlier
 download or a differently named local extra on a case-insensitive filesystem
 fails with `pull_path_collision`, rather than overwriting it. Use a case-sensitive
 destination for manifests containing such names. Do not modify the destination
