@@ -325,11 +325,12 @@ describe("live public/password round-trip on a disposable Worker", () => {
 describe("built CLI subprocess against the disposable Worker", () => {
   it("runs dry-run offline as a non-TTY process with no config writes", async () => {
     const before = await snapshot();
-    const result = await promisify(execFile)(process.execPath, [bundle, "access", mainSlug, "--mode", "password", "--dry-run", "--json"], {
+    const execution = promisify(execFile)(process.execPath, [bundle, "access", mainSlug, "--mode", "password", "--dry-run", "--json"], {
       cwd: home, timeout: 15_000,
       env: { PATH: process.env.PATH, HOME: home, KOFRA_CONFIG_DIR: join(home, "config") },
-      input: sentinel1,
-    } as any).then(
+    });
+    execution.child.stdin!.end(sentinel1);
+    const result = await execution.then(
       (r) => ({ code: 0, stdout: String(r.stdout), stderr: String(r.stderr) }),
       (e: any) => ({ code: typeof e.code === "number" ? e.code : -1, stdout: String(e.stdout ?? ""), stderr: String(e.stderr ?? "") }),
     );
