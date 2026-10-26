@@ -398,7 +398,7 @@ export function dropwayClient() {
           opts.message ? h("p", { class: "dw-muted", text: opts.message }) : null,
           input ? h("label", { class: "dw-label", text: "Type " + opts.typeToConfirm + " to confirm" }) : null,
           input,
-          h("div", { class: "dw-row" }, h("button", { class: "dw-btn", value: "cancel", text: "Cancel" }), ok),
+          h("div", { class: "dw-row" }, h("button", { type: "button", class: "dw-btn", value: "cancel", text: "Cancel", onclick: function () { dlg.close("cancel"); } }), ok),
         ),
       );
       if (input)
@@ -3306,6 +3306,14 @@ export function dropwayClient() {
       ),
     );
 
+    // Mutations that reload this page must not detach another action's feedback.
+    var siteMutationPending = false;
+    function setSiteMutationPending(pending) {
+      siteMutationPending = pending;
+      $$("button[data-site-mutation]", root).forEach(function (button) {
+        button.disabled = pending;
+      });
+    }
     var vBody = h("tbody");
     versions.forEach(function (v) {
       vBody.appendChild(
@@ -3327,16 +3335,18 @@ export function dropwayClient() {
                   type: "button",
                   class: "dw-btn small",
                   text: "Restore",
-                  onclick: async function (ev) {
-                    var btn = ev.currentTarget;
-                    btn.disabled = true;
+                  "data-site-mutation": "",
+                  onclick: async function () {
+                    if (siteMutationPending) return;
+                    setSiteMutationPending(true);
                     try {
                       await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id) + "/restore", { method: "POST" });
                       toast("v" + v.number + " is live again.");
                       pages.site();
                     } catch (e) {
                       toast(e.message, true);
-                      btn.disabled = false;
+                    } finally {
+                      setSiteMutationPending(false);
                     }
                   },
                 }),
@@ -3348,10 +3358,14 @@ export function dropwayClient() {
                   class: "dw-btn small danger",
                   text: "Delete",
                   "aria-label": "Delete version " + v.number,
-                  onclick: async function () {
-                    var ok = await confirmBox({ title: "Delete v" + v.number + "?", message: "The version and its file list are removed for good (use this for a version that leaked something). Other versions are not affected.", confirmText: "Delete version" });
-                    if (!ok) return;
+                  "data-site-mutation": "",
+                  onclick: async function (ev) {
+                    if (siteMutationPending) return;
+                    var trigger = ev.currentTarget;
+                    setSiteMutationPending(true);
                     try {
+                      var ok = await confirmBox({ title: "Delete v" + v.number + "?", message: "The version and its file list are removed for good (use this for a version that leaked something). Other versions are not affected.", confirmText: "Delete version" });
+                      if (!ok) return;
                       await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id), { method: "DELETE" });
                       toast("v" + v.number + " deleted.");
                       // A successful deletion must not reload its now-invalid
@@ -3364,6 +3378,9 @@ export function dropwayClient() {
                       pages.site();
                     } catch (e) {
                       toast(e.message, true);
+                    } finally {
+                      setSiteMutationPending(false);
+                      if ($$("button", root).indexOf(trigger) >= 0) trigger.focus();
                     }
                   },
                 }),
@@ -3753,18 +3770,22 @@ export function dropwayClient() {
       h("div", { class: "dw-field", style: "margin-top:.9rem" },
         h("label", { class: "dw-label", for: "dw-s-pw", text: s.passwordProtected ? "Password (set; type a new one to change it)" : "Password (optional)" }),
         h("div", { class: "dw-row" }, h("input", { class: "dw-input", id: "dw-s-pw", name: "password", type: "password", autocomplete: "new-password", minlength: "4", maxlength: "200", style: "max-width:18rem" }),
-          s.passwordProtected ? h("button", { type: "button", class: "dw-btn", text: "Remove password", onclick: async function () { await saveSettings({ password: null }, "Password removed."); } }) : null),
+          s.passwordProtected ? h("button", { type: "button", class: "dw-btn", "data-site-mutation": "", text: "Remove password", onclick: async function () { await saveSettings({ password: null }, "Password removed."); } }) : null),
         h("p", { class: "dw-help", text: "Visitors must enter it. Changing it signs everyone out." }),
       ),
-      h("div", { class: "dw-row" }, h("button", { type: "submit", class: "dw-btn primary", text: "Save settings" })),
+      h("div", { class: "dw-row" }, h("button", { type: "submit", class: "dw-btn primary", "data-site-mutation": "", text: "Save settings" })),
     );
     async function saveSettings(body, msg) {
+      if (siteMutationPending) return;
+      setSiteMutationPending(true);
       try {
         await api("/sites/" + encodeURIComponent(slug), { method: "PATCH", body: body });
         toast(msg || "Saved.");
         pages.site();
       } catch (e) {
         toast(e.message + (e.hint ? " " + e.hint : ""), true);
+      } finally {
+        setSiteMutationPending(false);
       }
     }
     form.addEventListener("submit", function (e) {
@@ -3774,6 +3795,92 @@ export function dropwayClient() {
       if (f.password.value) body.password = f.password.value;
       saveSettings(body);
     });
+    var renamePending = false;
+    var renameInput = h("input", { class: "dw-input", id: "dw-s-new-slug", name: "newSlug", type: "text", autocomplete: "off", autocapitalize: "none", spellcheck: "false", "aria-describedby": "dw-s-rename-help dw-s-rename-feedback" });
+    var renameFeedback = h("div", { id: "dw-s-rename-feedback", role: "status", "aria-live": "polite" });
+    var renameSubmit = h("button", { type: "submit", class: "dw-btn primary", "data-site-mutation": "", text: "Rename site" });
+    var renameCancel = h("button", {
+      type: "button", class: "dw-btn", text: "Cancel",
+      onclick: function () {
+        if (renamePending) return;
+        renameInput.value = "";
+        renameInput.removeAttribute("aria-invalid");
+        clear(renameFeedback);
+        renameInput.focus();
+      },
+    });
+    var renameForm = h(
+      "form", { class: "dw-pad", "aria-label": "Rename site" },
+      h("p", { class: "dw-small" }, "Current slug: ", h("strong", { class: "dw-mono", text: site.slug })),
+      h("div", { class: "dw-field" },
+        h("label", { class: "dw-label", for: "dw-s-new-slug", text: "Proposed slug" }), renameInput,
+        h("p", { class: "dw-help", id: "dw-s-rename-help", text: "Use 3–56 characters: letters, digits and single hyphens. Renaming changes the site URL. The server decides whether the name is available and how long the old name stays bound." })),
+      h("div", { class: "dw-row" }, renameSubmit, renameCancel), renameFeedback,
+    );
+    renameForm.addEventListener("submit", async function (e) {
+      e.preventDefault();
+      if (siteMutationPending) return;
+      clear(renameFeedback);
+      renameInput.removeAttribute("aria-invalid");
+      if (renameInput.value.trim().toLowerCase() === site.slug) {
+        renameFeedback.textContent = "This site already has that name. Nothing changed.";
+        renameInput.focus();
+        return;
+      }
+      renamePending = true;
+      setSiteMutationPending(true);
+      renameForm.setAttribute("aria-busy", "true");
+      renameInput.disabled = renameSubmit.disabled = renameCancel.disabled = true;
+      renameSubmit.textContent = "Rename site…";
+      try {
+        var renamed = await api("/sites/" + encodeURIComponent(slug) + "/rename", { method: "POST", body: { newSlug: renameInput.value } });
+        var invalidReceipt = "Could not confirm the rename response. Reload this site before trying again.";
+        if (!renamed || typeof renamed.renamed !== "boolean" || typeof renamed.slug !== "string" || !renamed.slug || typeof renamed.url !== "string") throw new Error(invalidReceipt);
+        var returnedUrl;
+        try { returnedUrl = new URL(renamed.url); } catch (err) { throw new Error(invalidReceipt); }
+        if (["https:", "http:"].indexOf(returnedUrl.protocol) < 0 || returnedUrl.username || returnedUrl.password) throw new Error(invalidReceipt);
+        if (!renamed.renamed) {
+          renameFeedback.textContent = "This site already has that name. Nothing changed.";
+          renameInput.focus();
+          return;
+        }
+        var receipt = h("section", { class: "dw-section", tabindex: "-1", role: "status", "aria-live": "polite", "aria-labelledby": "dw-rename-result" },
+          h("header", {}, h("h2", { id: "dw-rename-result", text: "Renamed to " + renamed.slug })),
+        );
+        var details = h("div", { class: "dw-pad", style: "overflow-wrap:anywhere" },
+          h("p", {}, "Previous slug: ", h("strong", { class: "dw-mono", text: renamed.oldSlug || site.slug })),
+          h("p", {}, "Old URL: ", h("span", { text: site.url })),
+          h("p", {}, "New URL: ", h("a", { href: renamed.url, target: "_blank", rel: "noopener", text: renamed.url })),
+        );
+        var deadline = renamed.redirectUntil && new Date(renamed.redirectUntil);
+        if (deadline && Number.isFinite(deadline.getTime())) {
+          add(details, h("p", {}, "Returned redirect deadline: ", h("time", { datetime: renamed.redirectUntil, text: deadline.toLocaleString() }), "."),
+            h("p", { class: "dw-small dw-muted", text: deadline.getTime() > Date.now()
+              ? "The old URL redirects (308) to the new URL until this deadline. The old name remains bound to this site during that configured lifetime. Redirects are not promised after the deadline."
+              : "This redirect deadline has expired. No active 308 redirect is guaranteed. Name retention follows the configured policy." }));
+        } else {
+          add(details, h("p", { class: "dw-small dw-muted", text: "No redirect deadline was provided. An active 308 redirect from the old URL is not guaranteed. The old name remains subject to the configured retention policy." }));
+        }
+        add(details, h("a", { class: "dw-btn primary", href: "/dashboard/sites/" + encodeURIComponent(renamed.slug), text: "Manage " + renamed.slug }));
+        add(receipt, details);
+        // Retire old-slug controls; management resumes only with the confirmed identity.
+        clear(root);
+        add(root, receipt);
+        d.title = renamed.slug + " · " + boot.instanceName;
+        receipt.focus();
+      } catch (err) {
+        add(renameFeedback, errorBox(err, "Could not rename site"));
+        renameInput.setAttribute("aria-invalid", "true");
+      } finally {
+        renamePending = false;
+        setSiteMutationPending(false);
+        renameForm.removeAttribute("aria-busy");
+        renameInput.disabled = renameSubmit.disabled = renameCancel.disabled = false;
+        renameSubmit.textContent = "Rename site";
+        if ($$("form", root).indexOf(renameForm) >= 0) renameInput.focus();
+      }
+    });
+    var renameSection = h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "Rename site" })), renameForm);
     var danger = h(
       "section",
       { class: "dw-section" },
@@ -3781,26 +3888,33 @@ export function dropwayClient() {
       h(
         "div",
         { class: "dw-pad dw-row", style: "justify-content:space-between" },
-        h("span", { class: "dw-small dw-muted", text: "The URL stops working at once and the name is freed. Files no other site uses are removed by the hourly cleanup." }),
+        h("span", { class: "dw-small dw-muted", text: "The URL stops serving this site at once. Its name and any retained old names are held according to the configured name-retention policy. Deletion does not make a name immediately available to another tenant. Files no other site uses are removed by the hourly cleanup." }),
         h("button", {
           type: "button",
           class: "dw-btn danger",
           text: "Delete site",
-          onclick: async function () {
-            var ok = await confirmBox({ title: "Delete " + slug + "?", message: "Every version goes with it. This cannot be undone from the dashboard.", confirmText: "Delete site", typeToConfirm: slug });
-            if (!ok) return;
+          "data-site-mutation": "",
+          onclick: async function (ev) {
+            if (siteMutationPending) return;
+            var trigger = ev.currentTarget;
+            setSiteMutationPending(true);
             try {
-              await api("/sites/" + encodeURIComponent(slug), { method: "DELETE" });
+              var ok = await confirmBox({ title: "Delete " + slug + "?", message: "Every version goes with it. This cannot be undone from the dashboard.", confirmText: "Delete site", typeToConfirm: slug });
+              if (!ok) return;
+              await api("/sites/" + encodeURIComponent(slug), { method: "DELETE", body: { confirm: slug } });
               location.href = "/dashboard?deleted=" + encodeURIComponent(slug);
             } catch (e) {
               toast(e.message, true);
+            } finally {
+              setSiteMutationPending(false);
+              if ($$("button", root).indexOf(trigger) >= 0) trigger.focus();
             }
           },
         }),
       ),
     );
     var qrSection = siteQrSection(site.url, !!(site.settings && site.settings.passwordProtected));
-    add(root, head, qrSection, versionsSection, filesSection, h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "Settings" })), form), danger);
+    add(root, head, qrSection, versionsSection, filesSection, h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "Settings" })), form), renameSection, danger);
     var live = versions.filter(function (v) {
       return v.live;
     })[0];
