@@ -10,7 +10,7 @@ import type { Viewer } from "./index";
  * key counts and typed values, plus a pretty-printed, highlighted view.
  * Invalid JSON shows the parse error above the highlighted source.
  */
-const JSON_VERSION = 1;
+const JSON_VERSION = 2;
 /** Nodes rendered in the tree before the rest is summarised. */
 const MAX_NODES = 20_000;
 /** Strings longer than this are cut in the tree (the pretty view has them whole). */
@@ -23,6 +23,7 @@ const JSON_CSS = `
 .dw-jtabs{display:flex;gap:.4rem;margin:.4rem 0 .6rem}
 .dw-jtabs label{padding:.28rem .7rem;border:1px solid var(--line);border-radius:7px;cursor:pointer;font-size:.82rem;color:var(--muted);background:var(--card)}
 #dw-jt-tree:checked~.dw-jtabs label[for=dw-jt-tree],#dw-jt-pretty:checked~.dw-jtabs label[for=dw-jt-pretty]{color:var(--fg);border-color:var(--accent);font-weight:600}
+#dw-jt-tree:focus-visible~.dw-jtabs label[for=dw-jt-tree],#dw-jt-pretty:focus-visible~.dw-jtabs label[for=dw-jt-pretty]{outline:2px solid var(--accent);outline-offset:2px}
 .dw-jpane{display:none}
 #dw-jt-tree:checked~.dw-jtree,#dw-jt-pretty:checked~.dw-jpretty{display:block}
 .dw-jpretty .dw-src{margin:0}

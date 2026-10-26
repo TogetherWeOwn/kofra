@@ -18,6 +18,7 @@ const MEDIA_CSS = `
 #dw-zoom:checked~.dw-stage{align-items:flex-start;justify-content:flex-start}
 #dw-zoom:checked~.dw-stage img{max-width:none;max-height:none;cursor:zoom-out}
 #dw-zoom:checked~.dw-mediabar label{border-color:var(--accent);color:var(--accent)}
+#dw-zoom:focus-visible~.dw-mediabar label{outline:2px solid var(--accent);outline-offset:2px}
 .dw-mediabar{display:flex;gap:.6rem;align-items:center;justify-content:center;flex-wrap:wrap}
 .dw-pdf{width:100%;height:calc(100vh - 3.2rem);border:0;display:block}
 .dw-video{max-width:100%;max-height:calc(100vh - 9rem);border-radius:10px;background:#000}
@@ -73,6 +74,7 @@ const topLevelOnly = (mode: ViewMode | undefined) => mode === "document" || mode
 
 export const imageViewer: Viewer = {
   id: "image",
+  version: 2,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "image" && topLevelOnly(mode),
   async render(vc) {
@@ -95,6 +97,7 @@ export const imageViewer: Viewer = {
 
 export const svgViewer: Viewer = {
   id: "svg",
+  version: 2,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "svg" && topLevelOnly(mode),
   async render(vc) {
