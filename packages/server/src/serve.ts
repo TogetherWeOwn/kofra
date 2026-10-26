@@ -82,7 +82,7 @@ export function resolvePath(live: LiveSite, p: string, req: Request, mode: Serve
     for (const name of INDEX_NAMES) if (files[p + name]) return { kind: "file", path: p + name, status: 200 };
     if (p === "") {
       const keys = Object.keys(files);
-      if (keys.length === 1 && !keys[0]!.startsWith(".dropway/")) return { kind: "file", path: keys[0]!, status: 200 };
+      if (keys.length === 1 && keys[0] !== ".dropway" && !keys[0]!.startsWith(".dropway/")) return { kind: "file", path: keys[0]!, status: 200 };
     }
     if (hasChildren(files, p)) return { kind: "listing", dir: p };
   } else {

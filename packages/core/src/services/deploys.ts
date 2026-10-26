@@ -538,11 +538,16 @@ const BROWSER_STORAGE_RE = /\b(?:localStorage|sessionStorage|indexedDB)\b|docume
  */
 export async function deployWarnings(dc: DropwayContext, site: SiteRow, versionId: string): Promise<Warning[]> {
   const warnings: Warning[] = [];
-  const { results: files } = await dc.env.DB.prepare(
+  // Advisory reads must not turn an already-published version into an API failure.
+  // Keep this guard local to the scan: authorization and finalization still fail normally.
+  const files = await dc.env.DB.prepare(
     "SELECT path, sha256, size, content_type AS contentType FROM version_files WHERE version_id = ? ORDER BY path",
   )
     .bind(versionId)
-    .all<NormalisedEntry>();
+    .all<NormalisedEntry>()
+    .then((result) => result.results)
+    .catch(() => null);
+  if (files === null) return warnings;
 
   const hasIndex = files.some((f) => /^(index\.html?|index\.md|readme\.md)$/i.test(f.path));
   if (!hasIndex && files.length > 1) {
@@ -584,11 +589,14 @@ export async function deployWarnings(dc: DropwayContext, site: SiteRow, versionI
 
   // invalid_config: `.dropway/*.json` is the site's config namespace (stored, never served);
   // a file there that is not valid JSON can never take effect.
+  const configFiles = files.filter((f) => /^\.dropway\/[^/]+\.json$/i.test(f.path));
+  // textFor reserves its shared read budget synchronously in file order, so parallel
+  // reads keep the same deterministic ceiling; warnings are still emitted in order.
+  const configTexts = await Promise.all(configFiles.map(textFor));
   let configWarnings = 0;
-  for (const f of files) {
+  for (const [i, f] of configFiles.entries()) {
     if (configWarnings >= WARN_MAX_PER_CODE) break;
-    if (!/^\.dropway\/[^/]+\.json$/i.test(f.path)) continue;
-    const text = await textFor(f);
+    const text = configTexts[i]!;
     if (text === null) continue;
     try {
       JSON.parse(text);
@@ -627,20 +635,24 @@ export async function deployWarnings(dc: DropwayContext, site: SiteRow, versionI
     }
   }
 
+  const scanFiles = files.map((f) => ({
+    f,
+    isHtml: WARN_HTML_RE.test(f.path),
+    isCss: WARN_CSS_RE.test(f.path),
+    isJs: WARN_JS_RE.test(f.path),
+    maybeSecret: isTextual(f.contentType) || (f.path.split("/").pop() ?? f.path).startsWith(".env"),
+  })).filter(({ isHtml, isCss, isJs, maybeSecret }) =>
+    (pathMode && (isHtml || isCss || isJs)) || (sandboxed && (isHtml || isJs)) || maybeSecret);
+  const scanTexts = await Promise.all(scanFiles.map(({ f }) => textFor(f)));
   let rootAbsWarnings = 0;
   let storageWarnings = 0;
   let secretWarnings = 0;
-  for (const f of files) {
-    const isHtml = WARN_HTML_RE.test(f.path);
-    const isCss = WARN_CSS_RE.test(f.path);
-    const isJs = WARN_JS_RE.test(f.path);
-    const basename = f.path.split("/").pop() ?? f.path;
-    const maybeSecret = isTextual(f.contentType) || basename.startsWith(".env");
+  for (const [i, { f, isHtml, isCss, isJs, maybeSecret }] of scanFiles.entries()) {
     const wantRootAbs = pathMode && rootAbsWarnings < WARN_MAX_PER_CODE && (isHtml || isCss || isJs);
     const wantStorage = sandboxed && storageWarnings < WARN_MAX_PER_CODE && (isHtml || isJs);
     const wantSecret = secretWarnings < WARN_MAX_SECRETS && maybeSecret;
     if (!wantRootAbs && !wantStorage && !wantSecret) continue;
-    const text = await textFor(f);
+    const text = scanTexts[i]!;
     if (text === null) continue;
 
     if (wantRootAbs) {

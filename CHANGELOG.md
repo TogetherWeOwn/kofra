@@ -10,16 +10,21 @@
   `wasm_without_coi` (renamed from `wasm_without_cross_origin_isolation`),
   `possible_secret` (file and line; matched values are never included) and
   `invalid_config` (a `.dropway/*.json` file that is not valid JSON). `no_index` now
-  carries fix text too. Replayed finalizes and unchanged republishes return the same
-  warnings instead of an empty list.
+  carries fix text too. Replayed finalizes and unchanged republishes (including
+  file-source REST/MCP publishes and updates) return the same warnings instead of an
+  empty list. Advisory database-read failures return no warnings without failing a
+  successful publication; bounded blob reads run concurrently in deterministic order.
 - A page navigation with a same-origin `Referer` inside an SPA site to a path the site
   lacks now 307-redirects to that path inside the site (SRV-02), where the SPA fallback
   serves it; app routes, paths with a file extension and sub-resource requests are
-  untouched.
+  untouched. On a separate sites origin, existing destination sites (even empty or
+  expired) and version addresses keep their own routing instead of being captured by
+  the referring SPA.
 - Publishing a path under `__dropway/` is refused with the new `reserved_path` error on
   every publish path (the manifest, one-shot and file-source flows share the check).
-- `.dropway/*` files are stored with the version (owner read-back works) but are never
-  served from the sites origin and no longer appear in folder listings.
+- `.dropway` and `.dropway/*` files are stored with the version (owner read-back works)
+  but are never served from the sites origin, including through the single-file root
+  shortcut, and no longer appear in folder listings.
 
 ### Versions naming
 
