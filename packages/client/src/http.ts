@@ -368,7 +368,7 @@ async function parseBody(res: Response): Promise<unknown> {
 
 /** Turn an error response (the API's {error:{code,message,hint,details}} envelope or anything else) into a DropwayError. */
 export async function errorFromResponse(res: Response): Promise<DropwayError> {
-  const body = (await parseBody(res)) as { error?: { code?: string; message?: string; hint?: string; details?: Record<string, unknown> }; requestId?: string; text?: string };
+  const body = (await parseBody(res)) as { error?: { code?: string; message?: string; hint?: string; retryable?: boolean; details?: Record<string, unknown> }; requestId?: string; text?: string };
   const e = body?.error;
   const requestId = body?.requestId ?? res.headers.get("x-request-id") ?? undefined;
   if (e && typeof e === "object" && e.code) {
@@ -379,7 +379,7 @@ export async function errorFromResponse(res: Response): Promise<DropwayError> {
       details: e.details,
       status: res.status,
       requestId,
-      retryable: res.status === 429 || res.status >= 500,
+      retryable: typeof e.retryable === "boolean" ? e.retryable : res.status === 429 || res.status >= 500,
     });
   }
   const snippet = (body?.text ?? "").replace(/\s+/g, " ").slice(0, 200);

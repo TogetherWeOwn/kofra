@@ -21,6 +21,7 @@ Zero runtime dependencies. Node.js 20 or newer.
 | Command | What it does |
 |---|---|
 | `publish <path>` | Publish a folder, a single file or a `.zip`. Creates a site, or updates one with `--site <name>` |
+| `duplicate <source> <new-slug>` | Copy an explicit live site into a new slug (`--message`, `--idempotency-key`, offline `--dry-run`) |
 | `list` | Your sites (`--all` for every page) |
 | `site <name>` | One site: URL, live version, settings |
 | `files <name>` | Files of the live version (or `--version <ref>` with `live`, `v3`, `3` or a version id, read directly) with their URLs |
@@ -65,6 +66,59 @@ Runnable local check (from a repo clone, against your own instance):
 
 ```sh
 node packages/cli/bin/dropway.mjs versions team-report v1 --api https://<your-instance> --json
+```
+
+## Duplicating a live site
+
+```sh
+kofra duplicate template template-copy --message "Template snapshot"
+kofra duplicate site_abc123 template-copy --idempotency-key copy-01 --json
+kofra duplicate https://sites.example/template/ template-copy --dry-run
+```
+
+Both the source (slug, site id or site URL) and destination slug are required explicitly;
+project mappings never supply either target. This calls only the existing `duplicate_site`
+operation: the source's live manifest becomes version 1 of a new site with no file upload or
+source changes. The destination is **live immediately**. Only SPA mode is carried over;
+**passwords/access gates and other settings are not copied**. Re-apply protection explicitly
+if needed. The CLI never opens a browser, publishes local files, protects the destination
+or saves/updates a local project link.
+
+`--dry-run` is entirely offline, without an instance or credentials. It emits exactly one JSON
+plan even without `--json`, reads no project, credential or content files, and writes nothing:
+
+```json
+{
+  "schemaVersion": 1,
+  "operation": "duplicate_site",
+  "source": "template",
+  "newSlug": "template-copy",
+  "message": "Template snapshot"
+}
+```
+
+`message` is omitted when absent. `source` stays unresolved; no site/version id is invented.
+This plan does not validate source visibility, a live version, destination availability or
+server policy/limits.
+
+A nonempty `--idempotency-key` is sent unchanged; otherwise a fresh key is generated once per
+invocation and retained across the SDK's bounded 429 retries. There are no automatic retries
+on conflicts, server errors or network failures. **To recover an unknown outcome**, choose an
+explicit key before the first attempt, then repeat the identical source reference, destination
+and message with that same key within the server's 24-hour idempotency window. A new invocation
+without an explicit key cannot recover the previous invocation's result; do not blindly retry
+an uncertain mutation with a new key. Reusing a key with a different payload is refused by the server.
+
+`--json` preserves the backend receipt (returned destination slug/site/version, clean public URL,
+file/byte counters, note, warnings and replay marker when supplied). Identities are never guessed;
+fields the backend does not supply remain absent. Progress and access-reset advice go to stderr,
+not JSON stdout. Keys and claim/upload credentials are not added to the receipt. Existing error
+codes, hints, details and status-to-exit mapping apply: refusal or network failure is never success.
+
+Disposable local integration check (no deploy):
+
+```sh
+npm run test:cli -- test/duplicate.acceptance.test.ts test/duplicate-worker.acceptance.test.ts
 ```
 
 ## Discovering operations

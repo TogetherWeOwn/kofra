@@ -59,11 +59,12 @@ export class CliError extends DropwayError {
     message: string;
     hint?: string;
     exitCode: ExitCode;
+    retryable?: boolean;
     status?: number;
     requestId?: string;
     details?: Record<string, unknown>;
   }) {
-    super({ ...opts, retryable: opts.exitCode === EXIT.unavailable });
+    super({ ...opts, retryable: opts.retryable ?? opts.exitCode === EXIT.unavailable });
     this.name = "CliError";
     this.exitCode = opts.exitCode;
   }
@@ -105,6 +106,7 @@ function toCliError(error: DropwayError, fallback: ExitCode = EXIT.error): CliEr
     details: error.details,
     status: error.status,
     requestId: error.requestId,
+    retryable: error.retryable,
     exitCode: exitCodeFor(error, fallback),
   });
 }
