@@ -1569,7 +1569,7 @@ CLI hashes and uploads from disk. Credentials as for the CLI.
 | model3d | `.glb .gltf` | `<model-viewer>` from first-party assets | download | 50 MB | first-party | P2 | R-51 |
 | map | `.geojson` (opt-in) | Map with features (tiles from a configurable source) | JSON view | 10 MB | first-party | P2 | R-51 |
 | epub | `.epub` | Chapter list and reader | download | 50 MB | first-party | P2 | R-51 |
-| folder | (no index file) | Listing: folders, sizes, image gallery, and `README.md` rendered below | - | - | none | P0 | Done (README below in R-08) |
+| folder | (no index file) | Listing: folders first by name; plain links for Name (default), Largest first (size descending, then name) and Type (displayed kind label, then name). `?sort=name\|size\|type` affects only listings; unknown values use Name. English collation with code-unit ties pins name order. File/folder links stay canonical; the gallery follows the selected order, capped at 60 images | - | - | none | P0 | Done (sorting and gallery; README below in R-08) |
 
 ---
 
