@@ -139,13 +139,21 @@ describe("SPA Referer routing boundaries", () => {
     expect(a.status).toBe(201);
     const b = await dw.json("/api/v1/publish", {
       method: "POST", key: dw.ownerKey,
-      body: form({ "index.html": "<!doctype html><title>B home</title>", "about/index.html": "<!doctype html><title>B about page</title>" }, { slug: "site-b" }),
+      body: form({ "index.html": "<!doctype html><title>B home</title>", "about.html": "<!doctype html><title>B about page</title>" }, { slug: "site-b" }),
     });
     expect(b.status).toBe(201);
+    const baseline = await dw.call(`${SITES}${path}`, { headers: NAV });
+    expect(baseline.status).toBe(status);
+    expect(baseline.headers.get("location")).toBe(location);
     const page = await dw.call(`${SITES}${path}`, { headers: { ...NAV, Referer: `${SITES}/site-a/` } });
     expect(page.status).toBe(status);
     expect(page.headers.get("location")).toBe(location);
-    if (title) expect(await page.text()).toContain(`<title>${title}</title>`);
+    expect(page.status).toBe(baseline.status);
+    expect(page.headers.get("location")).toBe(baseline.headers.get("location"));
+    if (title) {
+      expect(await baseline.text()).toContain(`<title>${title}</title>`);
+      expect(await page.text()).toContain(`<title>${title}</title>`);
+    }
   });
 
   it.each([
