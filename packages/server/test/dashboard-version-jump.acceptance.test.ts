@@ -506,3 +506,70 @@ describe("deletion of inspected versions", () => {
     expect(m.paths()).toEqual(["release-104.txt"]);
   });
 });
+
+describe("selection and popstate pinning across site page re-runs", () => {
+  async function confirmDelete(m: Mounted, index: number) {
+    const del = rowButtons(m, "Delete")[index]!;
+    del.click();
+    await settle();
+    const dialog = m.doc.querySelector("dialog")!;
+    expect((dialog as unknown as { open: boolean }).open, "Delete confirm dialog opens").toBe(true);
+    const confirm = dialog.querySelectorAll("button").find(b => /delete version/i.test(b.textContent))!;
+    confirm.click();
+    await settle(); await settle(); await settle(); await settle();
+    expect((dialog as unknown as { open: boolean }).open, "Delete confirm closes").toBe(false);
+  }
+
+  it("a selection started before a site page re-run cannot commit after the re-run", async () => {
+    const m = await mount(fixture(), { requested: SECOND });
+    await expectSelection(m, SECOND, 104);
+    const gate = deferred<Response>();
+    m.intercept(u => u.pathname === `${BASE}/files` && u.searchParams.get("version") === OLD ? gate.promise : undefined);
+    submit(m, "v1");
+    await waitFor(() => m.manifests().length === 2, "old immutable manifest in flight");
+    // Deleting another version re-runs the site page, which re-displays the
+    // URL's v104 selection. The gated v1 manifest belongs to the previous
+    // page instance and must never commit once it finally resolves.
+    await confirmDelete(m, 1);
+    await expectSelection(m, SECOND, 104);
+    const href = m.location.href; const length = m.history.length;
+    gate.resolve(manifest(m.f.versions.find(v => v.id === OLD)!, m.f.files.get(OLD)!));
+    await settle(); await settle();
+    expect(m.paths()).toEqual(["release-104.txt"]);
+    expect(selectedUrl(m)).toBe(SECOND);
+    expect(m.location.href).toBe(href);
+    expect(m.history.length).toBe(length);
+  });
+
+  it("an explicit version selection pushes one history entry that Back and Forward traverse", async () => {
+    const m = await mount();
+    const before = m.history.length;
+    submit(m, "v1");
+    await expectSelection(m, OLD, 1); await settle();
+    expect(selectedUrl(m)).toBe(OLD);
+    expect(m.history.length).toBe(before + 1);
+    m.history.back();
+    await expectSelection(m, CURRENT, 105); await settle();
+    expect(m.paths()).toEqual(["release-105.txt"]);
+    expect(selectedUrl(m)).toBe(CURRENT);
+    expect(m.history.length).toBe(before + 1);
+    m.history.forward();
+    await expectSelection(m, OLD, 1); await settle();
+    expect(selectedUrl(m)).toBe(OLD);
+    expect(m.history.length).toBe(before + 1);
+  });
+
+  it("a site page re-run replaces the popstate listener instead of stacking lookups", async () => {
+    const m = await mount(fixture(), { requested: CURRENT, prior: OLD });
+    await expectSelection(m, CURRENT, 105);
+    // Re-run the site page while keeping the CURRENT selection; the fresh
+    // page must replace (not stack on) the previous popstate handler.
+    await confirmDelete(m, 1);
+    await expectSelection(m, CURRENT, 105);
+    m.calls.length = 0;
+    m.history.back();
+    await expectSelection(m, OLD, 1); await settle();
+    expect(m.lookups().map(c => c.url)).toEqual([`${BASE}/versions/${OLD}`]);
+    expect(m.manifests().map(c => new URL(c.url, m.location).searchParams.get("version"))).toEqual([OLD]);
+  });
+});
