@@ -1,6 +1,7 @@
 import { encodePath, KIND_LABELS } from "@dropway/core";
 import { escapeHtml, formatBytes, htmlPage } from "../html";
 import type { ViewerContext } from "./index";
+import { viewerPhone } from "./phone";
 
 /**
  * The shared frame of every viewer page: one slim bar (kind, path, size, type;
@@ -84,7 +85,7 @@ export function viewerBar(vc: ViewerContext, tabs: ViewerTab[], extra = ""): str
 <nav class="dw-vtabs" aria-label="View">${tabs
     .map((t) => `<a href="${escapeHtml(t.href)}"${t.current ? ' aria-current="page"' : ""} rel="nofollow">${escapeHtml(t.label)}</a>`)
     .join("")}</nav>
-<nav class="dw-vact" aria-label="File">${extra}<a href="${escapeHtml(vc.downloadUrl)}" rel="nofollow" download>Download</a><a href="${escapeHtml(vc.appViewerUrl)}" rel="nofollow" title="Browse every file of this site">Files</a></nav>
+<nav class="dw-vact" aria-label="File">${extra}${viewerPhone(vc)}<a href="${escapeHtml(vc.downloadUrl)}" rel="nofollow" download>Download</a><a href="${escapeHtml(vc.appViewerUrl)}" rel="nofollow" title="Browse every file of this site">Files</a></nav>
 </header>`;
 }
 
@@ -102,8 +103,13 @@ export const VIEWER_CSS = `
 .dw-vtabs a{padding:.28rem .7rem;text-decoration:none;color:var(--muted);border-left:1px solid var(--line)}
 .dw-vtabs a:first-child{border-left:0}.dw-vtabs a:hover{color:var(--fg);background:var(--code)}
 .dw-vtabs a[aria-current]{color:var(--fg);background:var(--card);font-weight:600;box-shadow:inset 0 -2px 0 var(--accent)}
-.dw-vact{display:flex;gap:.4rem;flex:none;align-items:center}
-.dw-vact a,.dw-vact label,.dw-btn{padding:.28rem .65rem;border:1px solid var(--line);border-radius:7px;text-decoration:none;color:var(--fg);background:var(--card);cursor:pointer;font-size:.82rem;line-height:1.3;user-select:none}
+.dw-vact{display:flex;gap:.4rem;flex:none;align-items:center;flex-wrap:wrap;max-width:100%}
+.dw-phone summary{list-style:none}.dw-phone summary::-webkit-details-marker{display:none}
+.dw-phone summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.dw-phone-panel{position:absolute;right:.6rem;top:100%;width:min(20rem,calc(100vw - 1.2rem));box-sizing:border-box;padding:1rem;border:1px solid var(--line);border-radius:8px;background:var(--card);box-shadow:0 .5rem 1.5rem #0003;max-height:calc(100dvh - 8rem);overflow:auto}
+.dw-phone-panel p{margin:0 0 .75rem}.dw-phone-panel svg{display:block;width:256px;max-width:100%;height:auto;margin:0 auto .75rem}
+.dw-vact .dw-phone-panel a{display:block;overflow-wrap:anywhere;white-space:normal;padding:0;border:0;border-radius:0;background:none;color:var(--accent);text-decoration:underline;user-select:text}
+.dw-vact a,.dw-vact label,.dw-phone summary,.dw-btn{padding:.28rem .65rem;border:1px solid var(--line);border-radius:7px;text-decoration:none;color:var(--fg);background:var(--card);cursor:pointer;font-size:.82rem;line-height:1.3;user-select:none}
 .dw-vact a:hover,.dw-vact label:hover,.dw-btn:hover{border-color:var(--accent);color:var(--accent)}
 .dw-toggle{position:absolute;opacity:0;pointer-events:none}
 .dw-toggle:focus-visible+label{outline:2px solid var(--accent);outline-offset:2px}
