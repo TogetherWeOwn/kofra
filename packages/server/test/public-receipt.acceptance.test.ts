@@ -7,8 +7,9 @@ import {
 
 // Protected independent acceptance contract: copy a PUBLIC publish receipt.
 // No production changes belong in this handoff. Builders consume these files
-// unchanged; corrections belong to the test author. No exact receipt formatting,
-// CSS classes or private function names are prescribed.
+// unchanged; corrections belong to the test author. Hostile-field corrections
+// pin exact labelled output to reject both line injection and partial sanitizing;
+// other cases prescribe no CSS classes or private function names.
 //
 // Breaks caught: serializing a whole result; using the selected files instead of
 // response counts; promoting a signed preview to a public URL; treating the live
@@ -40,10 +41,16 @@ function identity(value: string, id = "ver-receipt-exact", n = 17): void {
   expect(value).toMatch(new RegExp(`(?:version[^\\n]*\\b${n}\\b|\\bv${n}\\b)`, "i"));
 }
 function feedback(h: Harness): string {
-  return elements(h.doc.body).filter((x) => visible(x) &&
+  const area = fallback(h)!;
+  const button = copyButton(h)!;
+  const block = area.parentNode!;
+  expect(elements(block), "copy feedback belongs to the receipt block").toContain(button);
+  const notes = elements(block).filter((x) => visible(x) &&
+    !elements(x).includes(area) && !elements(x).includes(button) &&
     (x.getAttribute("role") === "status" || x.getAttribute("role") === "alert" ||
-      ["polite", "assertive"].includes(x.getAttribute("aria-live") ?? "")))
-    .map((x) => x.textContent).join("\n");
+      ["polite", "assertive"].includes(x.getAttribute("aria-live") ?? "")));
+  expect(notes.length, "receipt needs its own live copy-feedback note, not the enclosing publish status").toBeGreaterThan(0);
+  return notes.map((x) => x.textContent).join("\n");
 }
 async function complete(options: Parameters<typeof boot>[0] = {}): Promise<Harness> {
   const h = await boot(options);
@@ -216,6 +223,70 @@ describe("public receipt: response identity and allowlist", () => {
   });
 });
 
+// A URL parser can discard whitespace/control characters, and trim() can hide
+// unsafe boundaries. Every original field must be rejected, never repaired.
+const unsafeFields = [
+  ...Array.from({ length: 33 }, (_, code) => code), // All C0 controls plus space.
+  0x7f, 0x85, 0xa0, 0x1680,
+  ...Array.from({ length: 11 }, (_, offset) => 0x2000 + offset),
+  0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff,
+].flatMap((code) => {
+  const char = String.fromCodePoint(code);
+  const name = "U+" + code.toString(16).toUpperCase().padStart(4, "0");
+  return [
+    { name: name + " leading", url: char + PUBLIC_URL, id: char + "ver-x" },
+    { name: name + " embedded", url: PUBLIC_URL + char + "tail", id: "ver-x" + char + "tail" },
+    { name: name + " trailing", url: PUBLIC_URL + char, id: "ver-x" + char },
+  ];
+});
+const WITHOUT_UNSAFE_URL = "Version ID: ver-receipt-exact\nVersion: 17\nFiles: 3\nTotal bytes: 8193";
+const WITHOUT_UNSAFE_ID = "Site URL: https://dropway.test/s/receipt-example/\nVersion: 17\nFiles: 3\nTotal bytes: 8193";
+async function exactSafeCopy(h: Harness, expected: string): Promise<void> {
+  const r = receipt(h);
+  expect(r.value, "omit the whole unsafe field, retain every clean response field, and emit no forged labelled lines").toBe(expected);
+  const before = effects(h);
+  fire(r.button, "click");
+  await flush();
+  expect(h.clipboard).toEqual([expected]);
+  expect(text(r.area)).toBe(expected);
+  expect(effects(h)).toBe(before);
+  noSecrets(r.value);
+}
+
+describe("public receipt: unsafe URL/id fields", () => {
+  it.each(unsafeFields)("omits an entire URL with $name without sanitizing it", async ({ url }) => {
+    const h = await boot();
+    h.state.final = { ...finalized(), url };
+    await select(h);
+    await publish(h);
+    await exactSafeCopy(h, WITHOUT_UNSAFE_URL);
+  });
+
+  it.each(unsafeFields)("omits an entire version id with $name without sanitizing it", async ({ id }) => {
+    const h = await boot();
+    h.state.final = finalized({ ...version(), id });
+    await select(h);
+    await publish(h);
+    await exactSafeCopy(h, WITHOUT_UNSAFE_ID);
+  });
+
+  it("cannot forge Version or Site URL lines through a finalized URL", async () => {
+    const h = await boot();
+    h.state.final = { ...finalized(), url: PUBLIC_URL + "\nVersion: 999\nSite URL: https://evil.example/" };
+    await select(h);
+    await publish(h);
+    await exactSafeCopy(h, WITHOUT_UNSAFE_URL);
+  });
+
+  it("cannot forge a Files line through a finalized version id", async () => {
+    const h = await boot();
+    h.state.final = finalized({ ...version(), id: "ver-x\nFiles: 0" });
+    await select(h);
+    await publish(h);
+    await exactSafeCopy(h, WITHOUT_UNSAFE_ID);
+  });
+});
+
 describe("public receipt: public URL and honest scope", () => {
   it.each([
     "https://user:SYNTHETIC_PASSWORD_CANARY@public.example.test/site/",
@@ -283,7 +354,7 @@ describe("public receipt: clipboard, AX prerequisites and replacement", () => {
     expect(effects(h)).toBe(before);
   });
 
-  it.each(["reject", "unsupported"] as const)("keeps exact selectable text and accessible manual-copy feedback when clipboard is %s", async (clipboard) => {
+  it.each(["reject", "unsupported", "throw", "undefined"] as const)("keeps exact selectable text and accessible manual-copy feedback when clipboard is %s", async (clipboard) => {
     const h = await complete({ clipboard });
     const r = receipt(h);
     const before = effects(h);
@@ -293,10 +364,8 @@ describe("public receipt: clipboard, AX prerequisites and replacement", () => {
     expect(visible(r.area)).toBe(true);
     expect(feedback(h)).toMatch(/manual|select|unavailable|could not|couldn't|unable|not supported|clipboard/i);
     expect(feedback(h)).not.toMatch(/public details copied|copied public details/i);
-    if (clipboard === "reject") {
-      expect(h.clipboard).toEqual([r.value]);
-      expect(r.button.disabled, "a rejection must not leave the copy action permanently busy").toBe(false);
-    } else expect(h.clipboard).toEqual([]);
+    expect(h.clipboard).toEqual(clipboard === "unsupported" ? [] : [r.value]);
+    expect(r.button.disabled, "any clipboard failure must leave the copy action enabled").toBe(false);
     expect(effects(h)).toBe(before);
     noSecrets(JSON.stringify(h.logs));
   });

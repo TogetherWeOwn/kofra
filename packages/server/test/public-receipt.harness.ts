@@ -166,7 +166,7 @@ export function deferred() {
   return { promise, resolve };
 }
 export type Harness = Awaited<ReturnType<typeof boot>>;
-export async function boot(options: { anonymous?: boolean; clipboard?: "ok" | "reject" | "unsupported" | "pending"; page?: "publish" | "home" } = {}) {
+export async function boot(options: { anonymous?: boolean; clipboard?: "ok" | "reject" | "unsupported" | "pending" | "throw" | "undefined"; page?: "publish" | "home" } = {}) {
   const page = options.page ?? "publish";
   const doc = new Document(page, !!options.anonymous);
   const root = doc.addRoot(page === "home" ? "dw-quick" : "dw-publish");
@@ -208,10 +208,15 @@ export async function boot(options: { anonymous?: boolean; clipboard?: "ok" | "r
     permissions: { query: (input: unknown) => { permissions.push(input); throw new Error("Receipt must not request permissions"); } },
     sendBeacon: (...args: unknown[]) => { calls.push({ url: String(args[0]), method: "BEACON", body: args[1] }); return true; },
   };
-  if (options.clipboard !== "unsupported") navigator["clipboard"] = { writeText: async (text: string) => {
+  if (options.clipboard !== "unsupported") navigator["clipboard"] = { writeText: (text: string) => {
     clipboard.push(String(text));
-    if (options.clipboard === "pending") await clipboardGate.promise;
-    if (options.clipboard === "reject") throw new Error("Synthetic clipboard rejection");
+    // These must be synchronous: an async wrapper would turn the throw into a
+    // rejection and undefined into a fulfilled promise, hiding both regressions.
+    if (options.clipboard === "throw") throw new Error("Synthetic synchronous clipboard throw");
+    if (options.clipboard === "undefined") return undefined;
+    if (options.clipboard === "pending") return clipboardGate.promise;
+    if (options.clipboard === "reject") return Promise.reject(new Error("Synthetic clipboard rejection"));
+    return Promise.resolve();
   } };
   const location = { href: ORIGIN + "/dashboard/publish", pathname: page === "home" ? "/" : "/dashboard/publish", search: "" };
   const window = { localStorage: local, sessionStorage: session, navigator, location,
