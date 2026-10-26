@@ -47,12 +47,29 @@ const MD_CSS = `
 .dw-md .dw-diagram::after{content:"Mermaid diagram source";display:block;margin-top:.5rem;font:.72rem/1 ui-sans-serif,system-ui;color:var(--muted)}
 `;
 
+/**
+ * The `title:` value of a front-matter block, one optional pair of quotes
+ * stripped. The value is cut from the line with string operations, not a
+ * capture regex: lazy capture plus optional quote/trailing-space groups is
+ * ambiguous, so a value with many spaces makes it backtrack super-linearly
+ * on document-controlled input.
+ */
+function frontMatterTitle(frontMatter: string): string | null {
+  const t = /^title:/m.exec(frontMatter);
+  if (!t) return null;
+  const rest = frontMatter.slice(t.index + t[0].length).trimStart();
+  const lineEnd = rest.indexOf("\n");
+  let value = (lineEnd === -1 ? rest : rest.slice(0, lineEnd)).trimEnd();
+  if (value.length > 1 && (value[0] === '"' || value[0] === "'")) value = value.slice(1);
+  if (value.length > 1 && (value.endsWith('"') || value.endsWith("'"))) value = value.slice(0, -1);
+  return value || null;
+}
+
 /** Split optional YAML front matter from the body. Only `title:` is used. */
 export function splitFrontMatter(src: string): { title: string | null; body: string; frontMatter: string | null } {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(src);
   if (!m) return { title: null, body: src, frontMatter: null };
-  const t = /^title:\s*["']?(.+?)["']?\s*$/m.exec(m[1]!);
-  return { title: t ? t[1]! : null, body: src.slice(m[0].length), frontMatter: m[1]! };
+  return { title: frontMatterTitle(m[1]!), body: src.slice(m[0].length), frontMatter: m[1]! };
 }
 
 /** GitHub-style heading id: lowercase, punctuation dropped, spaces to dashes. */
@@ -114,8 +131,23 @@ export function renderMarkdown(
   path: string,
 ): { title: string; html: string; frontMatter: string | null; headings: MarkdownHeading[] } {
   const { title: fmTitle, body, frontMatter } = splitFrontMatter(src.replace(/^\uFEFF/, ""));
-  const h1 = /^#\s+(.+?)\s*#*\s*$/m.exec(body);
-  const title = fmTitle ?? (h1 ? h1[1]!.replace(/[*_`]/g, "") : (path.split("/").pop() ?? path));
+  // First h1 line, cut with string operations like frontMatterTitle: a lazy
+  // capture followed by space/# groups backtracks super-linearly on a
+  // heading line containing many spaces.
+  const h1 = /^#\s+/m.exec(body);
+  let h1Text: string | null = null;
+  if (h1) {
+    const rest = body.slice(h1.index + h1[0].length);
+    const lineEnd = rest.indexOf("\n");
+    let text = (lineEnd === -1 ? rest : rest.slice(0, lineEnd)).trimEnd();
+    // ATX closing sequence: one trailing run of #s (keeping at least one
+    // character, so "# ###" still yields "#"), then trailing spaces.
+    let end = text.length;
+    while (end > 1 && text[end - 1] === "#") end--;
+    if (end < text.length) text = text.slice(0, end).trimEnd();
+    h1Text = text || null;
+  }
+  const title = fmTitle ?? (h1Text ? h1Text.replace(/[*_`]/g, "") : (path.split("/").pop() ?? path));
   const headings: MarkdownHeading[] = [];
   return { title, html: markedFor(headings).parse(body) as string, frontMatter, headings };
 }
@@ -147,11 +179,34 @@ function decodeLabelEntities(s: string): string {
  * the heading renders, and carries no markup once the tags are stripped.
  */
 function plainHeadingText(inner: string): string {
-  const withoutAnchor = inner.replace(/<a\b[^>]*class="[^"]*dw-anchor[^"]*"[^>]*>[\s\S]*?<\/a>/g, "");
-  // codeql[js/incomplete-multi-character-sanitization] — not a sanitizer: this
-  // only flattens already-sanitized HTML to label text, and the outline built
-  // from it passes through sanitizeHtml() again before serving.
-  return withoutAnchor.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+  // Walk the sanitized HTML once, keeping only text outside tags and
+  // dropping the "#" text of the renderer's own dw-anchor link. A
+  // tag-stripping replace() would read as (incomplete) sanitization; this
+  // is only flattening, and the outline built from it passes through
+  // sanitizeHtml() again before serving.
+  const parts: string[] = [];
+  let inAnchor = false;
+  let i = 0;
+  while (i < inner.length) {
+    if (inner[i] === "<") {
+      const end = inner.indexOf(">", i + 1);
+      // A "<" with no later ">" is text, not a tag (sanitizer output encodes
+      // literal < as &lt;, so this only guards malformed input).
+      if (end === -1) {
+        if (!inAnchor) parts.push("<");
+        i++;
+        continue;
+      }
+      const tag = inner.slice(i + 1, end);
+      if (!inAnchor && /^a\b/.test(tag) && /\bclass="[^"]*dw-anchor/.test(tag)) inAnchor = true;
+      else if (inAnchor && tag === "/a") inAnchor = false;
+      i = end + 1;
+    } else {
+      if (!inAnchor) parts.push(inner[i]!);
+      i++;
+    }
+  }
+  return parts.join("").replace(/\s+/g, " ").trim();
 }
 
 /**
@@ -166,10 +221,22 @@ function plainHeadingText(inner: string): string {
 function renderedHeadingLabels(html: string, headings: MarkdownHeading[]): string[] {
   const labels = headings.map(() => "");
   let next = 0;
-  for (const m of html.matchAll(/<h([1-6])\b[^>]*\bid="([^"]*)"[^>]*>([\s\S]*?)<\/h[1-6]>/g)) {
+  // Match the opening tag, then search for the closing tag once from there:
+  // a single pattern spanning both rescans the rest of the document for
+  // every unclosed raw-HTML heading the sanitizer kept (quadratic), and if
+  // no closing tag exists after an opening one, no later heading can close.
+  const open = /<h([1-6])\b[^>]*\bid="([^"]*)"[^>]*>/g;
+  const close = /<\/h[1-6]>/g;
+  for (let m = open.exec(html); m; m = open.exec(html)) {
     const h = headings[next];
     if (!h) break;
-    if (Number(m[1]) === h.depth && decodeLabelEntities(m[2]!) === h.id) labels[next++] = plainHeadingText(m[3]!);
+    const innerStart = m.index + m[0].length;
+    close.lastIndex = innerStart;
+    const c = close.exec(html);
+    if (!c) break;
+    if (Number(m[1]) === h.depth && decodeLabelEntities(m[2]!) === h.id)
+      labels[next++] = plainHeadingText(html.slice(innerStart, c.index));
+    open.lastIndex = c.index + c[0].length;
   }
   return labels;
 }
