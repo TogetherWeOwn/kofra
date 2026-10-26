@@ -10,9 +10,12 @@
  *
  * Only fixture setup uses the API directly (setup, publish, set password).
  * The dashboard shell, CSP, served script, sign-in and site page are real, from
- * a disposable loopback Worker. No production calls. QR pixels are decoded in
- * the browser with the first-party BarcodeDetector (no third-party service) and
- * compared to the displayed URL. The fast vm contract lives in
+ * a disposable loopback Worker. No production calls. QR pixels are read from
+ * the rendered image in the browser (canvas getImageData) and decoded in Node
+ * with jsQR (a test-only decoder; no third-party service is contacted), then
+ * compared to the displayed URL. BarcodeDetector is not used: Chromium's Shape
+ * Detection API has no Linux implementation, so it can never decode on CI. The
+ * fast vm contract lives in
  * packages/server/test/site-qr.acceptance.test.ts; this file pins real rendering,
  * keyboard focus, narrow layout and the sentinel leak check end to end.
  *
@@ -115,7 +118,7 @@ afterAll(async () => {
   if (work) await rm(work, { recursive: true, force: true });
 });
 
-async function visit(slug: string, options: { mobile?: boolean; route?: (route: Route) => Promise<void> } = {}): Promise<View> {
+async function visit(slug: string, options: { mobile?: boolean; route?: (route: Route) => Promise<void>; waitUntil?: "load" | "domcontentloaded" | "networkidle" | "commit" } = {}): Promise<View> {
   const context = await browser.newContext({ viewport: options.mobile ? { width: 360, height: 800 } : { width: 1100, height: 900 } });
   const wire: Wire[] = [];
   await context.route("**/*", async route => {
@@ -138,7 +141,10 @@ async function visit(slug: string, options: { mobile?: boolean; route?: (route: 
   await page.getByLabel(/api key/i).fill(ownerKey);
   await page.getByRole("button", { name: /^sign in$/i }).click();
   await page.waitForURL("**/dashboard");
-  const response = await page.goto(`${origin}/dashboard/sites/${slug}`, { waitUntil: "networkidle" });
+  // Default to networkidle; the loading sub-case passes a non-networkidle wait
+  // because its route handler holds the site GET open, so the network can
+  // never idle until after visit() returns and the test releases the gate.
+  const response = await page.goto(`${origin}/dashboard/sites/${slug}`, { waitUntil: options.waitUntil ?? "networkidle" });
   const csp = response!.headers()["content-security-policy"] ?? "";
   expect(csp).toContain("script-src 'self'");
   expect(csp.match(/script-src[^;]*/)?.[0]).not.toMatch(/unsafe-inline|unsafe-eval/);
@@ -149,30 +155,40 @@ async function close(view: View): Promise<void> {
   await view.context.close();
 }
 
-/** Decode the rendered QR with the browser's first-party BarcodeDetector. */
+/**
+ * Decode the rendered QR from its actual pixels: read the image pixels in the
+ * browser (draw the rendered element to a canvas, getImageData) and decode in
+ * Node with jsQR. BarcodeDetector is unusable here — Chromium's Shape
+ * Detection API has no Linux implementation, so it is undefined on CI.
+ */
 async function decodeQr(page: Page): Promise<string> {
-  return page.evaluate(async () => {
+  const jsQR = require("jsqr");
+  const pixels = await page.evaluate(async () => {
     const pageGlobal = globalThis as any;
     const doc = pageGlobal.document;
     const img = doc.querySelector('[data-testid="site-qr-image"]');
     if (!img) throw new Error("Missing [data-testid=site-qr-image] for decode.");
-    const Detector = pageGlobal.BarcodeDetector;
-    if (!Detector) throw new Error("Chromium must support BarcodeDetector for QR decode.");
-    const detector = new Detector({ formats: ["qr_code"] });
-    if (String(img.tagName).toLowerCase() === "canvas") {
-      const codes = await detector.detect(img);
-      if (!codes.length) throw new Error("BarcodeDetector found no QR in canvas.");
-      return codes[0].rawValue;
+    const isCanvas = String(img.tagName).toLowerCase() === "canvas";
+    if (!isCanvas) {
+      const src = img.currentSrc || img.src;
+      if (!String(src).startsWith("data:image/")) throw new Error(`QR src must be a data URL for offline decode (got ${String(src).slice(0, 60)}).`);
+      if ((!img.complete || !img.naturalWidth) && typeof img.decode === "function") await img.decode();
     }
-    const src = img.currentSrc || img.src;
-    if (!String(src).startsWith("data:image/")) throw new Error(`QR src must be a data URL for offline decode (got ${String(src).slice(0, 60)}).`);
-    const res = await pageGlobal.fetch(src);
-    const blob = await res.blob();
-    const bitmap = await pageGlobal.createImageBitmap(blob);
-    const codes = await detector.detect(bitmap);
-    if (!codes.length) throw new Error("BarcodeDetector found no QR in the rendered image.");
-    return codes[0].rawValue;
+    const width = img.naturalWidth || img.width;
+    const height = img.naturalHeight || img.height;
+    if (!width || !height) throw new Error(`QR image has no pixels to decode (width ${width}, height ${height}).`);
+    const canvas = doc.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) throw new Error("Could not get a 2d canvas context for QR decode.");
+    context.drawImage(img, 0, 0, width, height);
+    const imageData = context.getImageData(0, 0, width, height);
+    return { width, height, data: Array.from(imageData.data as Iterable<number>) };
   });
+  const code = jsQR(new Uint8ClampedArray(pixels.data), pixels.width, pixels.height);
+  if (!code || !code.data) throw new Error("jsQR found no QR in the rendered image.");
+  return code.data;
 }
 
 async function displayedUrl(page: Page): Promise<{ text: string; href: string | null; alt: string | null; payload: string | null }> {
@@ -275,6 +291,9 @@ it("loading, error and empty QR states (route-controlled, no new endpoint)", asy
     let release!: () => void;
     const gate = new Promise<void>(res => { release = res; });
     const view = await visit(publicSlug, {
+      // The gate below holds the site GET open until after visit() returns, so
+      // a networkidle wait here would deadlock until the goto timeout.
+      waitUntil: "domcontentloaded",
       route: async route => {
         const url = new URL(route.request().url());
         if (url.pathname === `/api/v1/sites/${publicSlug}` && route.request().method() === "GET") {
