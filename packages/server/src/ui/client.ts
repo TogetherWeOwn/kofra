@@ -3414,7 +3414,7 @@ export function dropwayClient() {
       "form", { class: "dw-pad", "aria-label": "Rename site" },
       h("p", { class: "dw-small" }, "Current slug: ", h("strong", { class: "dw-mono", text: site.slug })),
       h("div", { class: "dw-field" },
-        h("label", { class: "dw-label", for: "dw-s-new-slug", text: "Proposed new slug" }), renameInput,
+        h("label", { class: "dw-label", for: "dw-s-new-slug", text: "Proposed slug" }), renameInput,
         h("p", { class: "dw-help", id: "dw-s-rename-help", text: "Use 3–56 characters: letters, digits and single hyphens. Renaming changes the site URL. The server decides whether the name is available and how long the old name stays bound." })),
       h("div", { class: "dw-row" }, renameSubmit, renameCancel), renameFeedback,
     );
