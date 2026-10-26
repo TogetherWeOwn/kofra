@@ -72,6 +72,12 @@ export async function startHistoryFixture() {
         versions: options.empty ? [] : allVersions.map(row => ({ ...row })),
       };
       views.push(view);
+      // Signing in lands on /dashboard, whose unchanged list page fetches the
+      // account's sites once before this fixture navigates to the site page.
+      // Permit exactly that bounded request during initial load only; once
+      // open() returns it is again unexpected, so typing/clearing keep their
+      // no-extra-request assertion (view.wire also records every request).
+      let initialDashboardLoad = true;
       page.on("pageerror", error => view.errors.push(error.message));
       page.on("dialog", async dialog => {
         view.dialogs.push(dialog.message());
@@ -112,6 +118,15 @@ export async function startHistoryFixture() {
             return json({ error: { code: "fixture_refused", message: "Disposable action refused.", hint: "Keep the current selection." } }, 409);
           }
         }
+        if (url.pathname === "/api/v1/sites") {
+          if (!initialDashboardLoad || request.method() !== "GET"
+            || url.searchParams.get("limit") !== "100"
+            || [...url.searchParams.keys()].some(key => key !== "limit")) {
+            view.violations.push(`unexpected request ${url.pathname}`);
+            return route.abort("blockedbyclient");
+          }
+          return route.continue();
+        }
         if (request.method() !== "GET") {
           view.violations.push(`unexpected mutation ${request.method()} ${url.pathname}`);
           return route.abort("blockedbyclient");
@@ -133,6 +148,7 @@ export async function startHistoryFixture() {
       expect(response!.headers()["content-security-policy"]).toContain("script-src 'self'");
       await expect.poll(() => view.wire.filter(call => call.path === `${base}/versions`).length).toBe(1);
       if (options.linked !== undefined) await expect.poll(() => page.locator("#files").innerText()).toContain(artifact(options.linked));
+      initialDashboardLoad = false;
       return view;
     };
     return { open, closeViews: async () => {

@@ -187,7 +187,7 @@ describe("filtered actions keep immutable version identity", () => {
     const before = await state(view);
     view.wire.length = 0;
     if (action === "Delete") {
-      await row(view, 102).getByRole("button", { name: /^delete$/i }).click();
+      await row(view, 102).getByRole("button", { name: /^delete version 102$/i }).click();
       const dialog = view.page.getByRole("dialog");
       expect(await dialog.innerText()).toContain("Delete v102?");
       await dialog.getByRole("button", { name: /^cancel$/i }).click();
@@ -195,7 +195,7 @@ describe("filtered actions keep immutable version identity", () => {
       expect(mutations(view), "dismissed confirmation sends no mutation").toEqual([]);
       expect(await state(view)).toEqual(before);
     }
-    await row(view, 102).getByRole("button", { name: new RegExp(`^${action}$`, "i") }).click();
+    await row(view, 102).getByRole("button", { name: action === "Delete" ? /^delete version 102$/i : /^restore$/i }).click();
     if (action === "Delete") {
       const dialog = view.page.getByRole("dialog");
       expect(await dialog.innerText()).toContain("Delete v102?");
