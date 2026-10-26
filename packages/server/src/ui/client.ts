@@ -398,7 +398,7 @@ export function dropwayClient() {
           opts.message ? h("p", { class: "dw-muted", text: opts.message }) : null,
           input ? h("label", { class: "dw-label", text: "Type " + opts.typeToConfirm + " to confirm" }) : null,
           input,
-          h("div", { class: "dw-row" }, h("button", { class: "dw-btn", value: "cancel", text: "Cancel" }), ok),
+          h("div", { class: "dw-row" }, h("button", { type: "button", class: "dw-btn", value: "cancel", text: "Cancel", onclick: function () { dlg.close("cancel"); } }), ok),
         ),
       );
       if (input)
@@ -3165,6 +3165,127 @@ export function dropwayClient() {
     d.title = (site.title || site.slug) + " · " + boot.instanceName;
     clear(root);
     var filesSection = h("section", { class: "dw-section", id: "files" });
+    var duplicateAttempt = null;
+    var duplicateDialog = null;
+    var duplicateButton = h("button", { type: "button", class: "dw-btn", text: "Duplicate site", onclick: openDuplicate });
+    function openDuplicate() {
+      if (duplicateDialog) return;
+      var busy = false;
+      var destination = h("input", { class: "dw-input", id: "dw-duplicate-slug", name: "newSlug", required: true, minlength: "3", maxlength: "56", autocomplete: "off", autocapitalize: "none", spellcheck: "false", "aria-describedby": "dw-duplicate-slug-help" });
+      var message = h("textarea", { class: "dw-input", id: "dw-duplicate-message", name: "message", maxlength: "500", rows: "2" });
+      var feedback = h("div", { "aria-live": "polite", style: "overflow-wrap:anywhere" });
+      var submit = h("button", { type: "submit", class: "dw-btn primary", text: "Duplicate site" });
+      var cancel = h("button", { type: "button", class: "dw-btn", text: "Cancel", onclick: function () { dlg.close(); } });
+      var form = h(
+        "form",
+        {},
+        h("h2", { id: "dw-duplicate-title", text: "Duplicate site" }),
+        h("p", { id: "dw-duplicate-warning", class: "dw-callout", text: "This creates a separate site from the source's live files, live immediately. Passwords and access protection are not copied. Re-apply protection on the copy before sharing it. Only SPA mode is carried over; all other settings reset to instance defaults. The original site is unchanged." }),
+        h("div", { class: "dw-field" },
+          h("label", { class: "dw-label", for: "dw-duplicate-slug", text: "Destination slug" }), destination,
+          h("p", { class: "dw-help", id: "dw-duplicate-slug-help", text: "3–56 lowercase letters, digits and single hyphens; start and end with a letter or digit. Choose an unused name." })),
+        h("div", { class: "dw-field" }, h("label", { class: "dw-label", for: "dw-duplicate-message", text: "Version message (optional)" }), message),
+        feedback,
+        h("div", { class: "dw-row" }, cancel, submit),
+      );
+      var dlg = h("dialog", { class: "dw-dialog", "aria-labelledby": "dw-duplicate-title", "aria-describedby": "dw-duplicate-warning" }, form);
+      duplicateDialog = dlg;
+      dlg.addEventListener("cancel", function (event) {
+        if (busy) event.preventDefault();
+      });
+      dlg.addEventListener("close", function () {
+        dlg.remove();
+        duplicateDialog = null;
+        duplicateButton.focus();
+      });
+      // Native modal Tab handling still cycles through the browser UI, which
+      // leaves focus on the page body between the last and first controls.
+      // Keep the cycle among this dialog's enabled, tabbable controls instead.
+      dlg.addEventListener("keydown", function (event) {
+        if (event.key !== "Tab") return;
+        var focusable = $$("a[href], button, input, textarea, select, [tabindex]", dlg).filter(function (el) {
+          return !el.disabled && el.tabIndex >= 0;
+        });
+        if (!focusable.length) {
+          event.preventDefault();
+          return;
+        }
+        var active = d.activeElement;
+        if (event.shiftKey && (active === focusable[0] || focusable.indexOf(active) < 0)) {
+          event.preventDefault();
+          focusable[focusable.length - 1].focus();
+        } else if (!event.shiftKey && (active === focusable[focusable.length - 1] || focusable.indexOf(active) < 0)) {
+          event.preventDefault();
+          focusable[0].focus();
+        }
+      });
+      function setBusy(value) {
+        busy = value;
+        dlg.setAttribute("aria-busy", String(value));
+        destination.disabled = message.disabled = submit.disabled = cancel.disabled = value;
+        submit.textContent = value ? "Duplicating…" : "Duplicate site";
+      }
+      // An edit starts a new submission, even when the previous request's outcome
+      // was unknown. Closing/reopening alone retains the last attempt for replay.
+      function changed() { duplicateAttempt = null; }
+      destination.addEventListener("input", changed);
+      message.addEventListener("input", changed);
+      if (duplicateAttempt) {
+        destination.value = duplicateAttempt.body.newSlug;
+        message.value = duplicateAttempt.body.message || "";
+      }
+      form.addEventListener("submit", async function (event) {
+        event.preventDefault();
+        if (busy) return;
+        clear(feedback);
+        var newSlug = destination.value;
+        if (!/^[a-z0-9][a-z0-9-]{1,54}[a-z0-9]$/.test(newSlug) || newSlug.indexOf("--") >= 0) {
+          add(feedback, errorBox({ message: "Enter a valid destination slug.", hint: "Use 3–56 lowercase letters, digits and single hyphens, starting and ending with a letter or digit.", code: "invalid_slug" }));
+          destination.focus();
+          return;
+        }
+        if (message.value.length > 500) {
+          add(feedback, errorBox({ message: "The version message is too long.", hint: "Use at most 500 characters.", code: "invalid_request" }));
+          message.focus();
+          return;
+        }
+        var body = { newSlug: newSlug };
+        if (message.value) body.message = message.value;
+        var signature = JSON.stringify(body);
+        if (!duplicateAttempt || duplicateAttempt.signature !== signature) {
+          duplicateAttempt = { signature: signature, body: body, key: crypto.randomUUID() };
+        }
+        setBusy(true);
+        try {
+          var result = await api("/sites/" + encodeURIComponent(site.slug) + "/duplicate", { method: "POST", body: duplicateAttempt.body, headers: { "Idempotency-Key": duplicateAttempt.key } });
+          // Links and receipt use only the returned identity, never the requested name.
+          var copy = result && result.site;
+          var copyUrl = null;
+          try { if (result && typeof result.url === "string") copyUrl = new URL(result.url); } catch (e) {}
+          if (!copy || typeof copy.slug !== "string" || !copy.slug || !copyUrl || ["http:", "https:"].indexOf(copyUrl.protocol) < 0) throw new Error("The server did not return a valid copy identity and URL. Retry this submission to recover its result.");
+          clear(form);
+          add(form,
+            h("h2", { id: "dw-duplicate-title", text: "Site duplicated" }),
+            h("div", { role: "status", style: "overflow-wrap:anywhere" },
+              h("p", { text: "Created a separate site: " + copy.slug }),
+              h("p", {}, h("a", { href: result.url, target: "_blank", rel: "noopener", text: result.url }))),
+            h("p", { id: "dw-duplicate-warning", class: "dw-callout", text: "Passwords and access protection were not copied. Re-apply protection before sharing the new site." }),
+            h("div", { class: "dw-row" },
+              h("button", { type: "button", class: "dw-btn", text: "Close", onclick: function () { dlg.close(); } }),
+              h("a", { class: "dw-btn primary", href: "/dashboard/sites/" + encodeURIComponent(copy.slug), text: "Manage copy" })),
+          );
+          duplicateAttempt = null;
+          $("button", form).focus();
+        } catch (error) {
+          add(feedback, errorBox(error, "Could not duplicate site"));
+        } finally {
+          setBusy(false);
+        }
+      });
+      d.body.appendChild(dlg);
+      dlg.showModal();
+      destination.focus();
+    }
     var head = h(
       "div",
       { class: "dw-pagehead" },
@@ -3180,10 +3301,19 @@ export function dropwayClient() {
         { class: "dw-row" },
         h("a", { class: "dw-btn", href: "/v/" + encodeURIComponent(slug) + "/", text: "Browse files" }),
         h("a", { class: "dw-btn", href: "/dashboard/publish?site=" + encodeURIComponent(slug), text: "Publish update" }),
+        duplicateButton,
         h("a", { class: "dw-btn primary", href: site.url, target: "_blank", rel: "noopener", text: "Open site" }),
       ),
     );
 
+    // Mutations that reload this page must not detach another action's feedback.
+    var siteMutationPending = false;
+    function setSiteMutationPending(pending) {
+      siteMutationPending = pending;
+      $$("button[data-site-mutation]", root).forEach(function (button) {
+        button.disabled = pending;
+      });
+    }
     var vBody = h("tbody");
     versions.forEach(function (v) {
       vBody.appendChild(
@@ -3205,16 +3335,18 @@ export function dropwayClient() {
                   type: "button",
                   class: "dw-btn small",
                   text: "Restore",
-                  onclick: async function (ev) {
-                    var btn = ev.currentTarget;
-                    btn.disabled = true;
+                  "data-site-mutation": "",
+                  onclick: async function () {
+                    if (siteMutationPending) return;
+                    setSiteMutationPending(true);
                     try {
                       await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id) + "/restore", { method: "POST" });
                       toast("v" + v.number + " is live again.");
                       pages.site();
                     } catch (e) {
                       toast(e.message, true);
-                      btn.disabled = false;
+                    } finally {
+                      setSiteMutationPending(false);
                     }
                   },
                 }),
@@ -3226,10 +3358,14 @@ export function dropwayClient() {
                   class: "dw-btn small danger",
                   text: "Delete",
                   "aria-label": "Delete version " + v.number,
-                  onclick: async function () {
-                    var ok = await confirmBox({ title: "Delete v" + v.number + "?", message: "The version and its file list are removed for good (use this for a version that leaked something). Other versions are not affected.", confirmText: "Delete version" });
-                    if (!ok) return;
+                  "data-site-mutation": "",
+                  onclick: async function (ev) {
+                    if (siteMutationPending) return;
+                    var trigger = ev.currentTarget;
+                    setSiteMutationPending(true);
                     try {
+                      var ok = await confirmBox({ title: "Delete v" + v.number + "?", message: "The version and its file list are removed for good (use this for a version that leaked something). Other versions are not affected.", confirmText: "Delete version" });
+                      if (!ok) return;
                       await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id), { method: "DELETE" });
                       toast("v" + v.number + " deleted.");
                       // A successful deletion must not reload its now-invalid
@@ -3242,6 +3378,9 @@ export function dropwayClient() {
                       pages.site();
                     } catch (e) {
                       toast(e.message, true);
+                    } finally {
+                      setSiteMutationPending(false);
+                      if ($$("button", root).indexOf(trigger) >= 0) trigger.focus();
                     }
                   },
                 }),
@@ -3631,18 +3770,22 @@ export function dropwayClient() {
       h("div", { class: "dw-field", style: "margin-top:.9rem" },
         h("label", { class: "dw-label", for: "dw-s-pw", text: s.passwordProtected ? "Password (set; type a new one to change it)" : "Password (optional)" }),
         h("div", { class: "dw-row" }, h("input", { class: "dw-input", id: "dw-s-pw", name: "password", type: "password", autocomplete: "new-password", minlength: "4", maxlength: "200", style: "max-width:18rem" }),
-          s.passwordProtected ? h("button", { type: "button", class: "dw-btn", text: "Remove password", onclick: async function () { await saveSettings({ password: null }, "Password removed."); } }) : null),
+          s.passwordProtected ? h("button", { type: "button", class: "dw-btn", "data-site-mutation": "", text: "Remove password", onclick: async function () { await saveSettings({ password: null }, "Password removed."); } }) : null),
         h("p", { class: "dw-help", text: "Visitors must enter it. Changing it signs everyone out." }),
       ),
-      h("div", { class: "dw-row" }, h("button", { type: "submit", class: "dw-btn primary", text: "Save settings" })),
+      h("div", { class: "dw-row" }, h("button", { type: "submit", class: "dw-btn primary", "data-site-mutation": "", text: "Save settings" })),
     );
     async function saveSettings(body, msg) {
+      if (siteMutationPending) return;
+      setSiteMutationPending(true);
       try {
         await api("/sites/" + encodeURIComponent(slug), { method: "PATCH", body: body });
         toast(msg || "Saved.");
         pages.site();
       } catch (e) {
         toast(e.message + (e.hint ? " " + e.hint : ""), true);
+      } finally {
+        setSiteMutationPending(false);
       }
     }
     form.addEventListener("submit", function (e) {
@@ -3652,6 +3795,92 @@ export function dropwayClient() {
       if (f.password.value) body.password = f.password.value;
       saveSettings(body);
     });
+    var renamePending = false;
+    var renameInput = h("input", { class: "dw-input", id: "dw-s-new-slug", name: "newSlug", type: "text", autocomplete: "off", autocapitalize: "none", spellcheck: "false", "aria-describedby": "dw-s-rename-help dw-s-rename-feedback" });
+    var renameFeedback = h("div", { id: "dw-s-rename-feedback", role: "status", "aria-live": "polite" });
+    var renameSubmit = h("button", { type: "submit", class: "dw-btn primary", "data-site-mutation": "", text: "Rename site" });
+    var renameCancel = h("button", {
+      type: "button", class: "dw-btn", text: "Cancel",
+      onclick: function () {
+        if (renamePending) return;
+        renameInput.value = "";
+        renameInput.removeAttribute("aria-invalid");
+        clear(renameFeedback);
+        renameInput.focus();
+      },
+    });
+    var renameForm = h(
+      "form", { class: "dw-pad", "aria-label": "Rename site" },
+      h("p", { class: "dw-small" }, "Current slug: ", h("strong", { class: "dw-mono", text: site.slug })),
+      h("div", { class: "dw-field" },
+        h("label", { class: "dw-label", for: "dw-s-new-slug", text: "Proposed slug" }), renameInput,
+        h("p", { class: "dw-help", id: "dw-s-rename-help", text: "Use 3–56 characters: letters, digits and single hyphens. Renaming changes the site URL. The server decides whether the name is available and how long the old name stays bound." })),
+      h("div", { class: "dw-row" }, renameSubmit, renameCancel), renameFeedback,
+    );
+    renameForm.addEventListener("submit", async function (e) {
+      e.preventDefault();
+      if (siteMutationPending) return;
+      clear(renameFeedback);
+      renameInput.removeAttribute("aria-invalid");
+      if (renameInput.value.trim().toLowerCase() === site.slug) {
+        renameFeedback.textContent = "This site already has that name. Nothing changed.";
+        renameInput.focus();
+        return;
+      }
+      renamePending = true;
+      setSiteMutationPending(true);
+      renameForm.setAttribute("aria-busy", "true");
+      renameInput.disabled = renameSubmit.disabled = renameCancel.disabled = true;
+      renameSubmit.textContent = "Rename site…";
+      try {
+        var renamed = await api("/sites/" + encodeURIComponent(slug) + "/rename", { method: "POST", body: { newSlug: renameInput.value } });
+        var invalidReceipt = "Could not confirm the rename response. Reload this site before trying again.";
+        if (!renamed || typeof renamed.renamed !== "boolean" || typeof renamed.slug !== "string" || !renamed.slug || typeof renamed.url !== "string") throw new Error(invalidReceipt);
+        var returnedUrl;
+        try { returnedUrl = new URL(renamed.url); } catch (err) { throw new Error(invalidReceipt); }
+        if (["https:", "http:"].indexOf(returnedUrl.protocol) < 0 || returnedUrl.username || returnedUrl.password) throw new Error(invalidReceipt);
+        if (!renamed.renamed) {
+          renameFeedback.textContent = "This site already has that name. Nothing changed.";
+          renameInput.focus();
+          return;
+        }
+        var receipt = h("section", { class: "dw-section", tabindex: "-1", role: "status", "aria-live": "polite", "aria-labelledby": "dw-rename-result" },
+          h("header", {}, h("h2", { id: "dw-rename-result", text: "Renamed to " + renamed.slug })),
+        );
+        var details = h("div", { class: "dw-pad", style: "overflow-wrap:anywhere" },
+          h("p", {}, "Previous slug: ", h("strong", { class: "dw-mono", text: renamed.oldSlug || site.slug })),
+          h("p", {}, "Old URL: ", h("span", { text: site.url })),
+          h("p", {}, "New URL: ", h("a", { href: renamed.url, target: "_blank", rel: "noopener", text: renamed.url })),
+        );
+        var deadline = renamed.redirectUntil && new Date(renamed.redirectUntil);
+        if (deadline && Number.isFinite(deadline.getTime())) {
+          add(details, h("p", {}, "Returned redirect deadline: ", h("time", { datetime: renamed.redirectUntil, text: deadline.toLocaleString() }), "."),
+            h("p", { class: "dw-small dw-muted", text: deadline.getTime() > Date.now()
+              ? "The old URL redirects (308) to the new URL until this deadline. The old name remains bound to this site during that configured lifetime. Redirects are not promised after the deadline."
+              : "This redirect deadline has expired. No active 308 redirect is guaranteed. Name retention follows the configured policy." }));
+        } else {
+          add(details, h("p", { class: "dw-small dw-muted", text: "No redirect deadline was provided. An active 308 redirect from the old URL is not guaranteed. The old name remains subject to the configured retention policy." }));
+        }
+        add(details, h("a", { class: "dw-btn primary", href: "/dashboard/sites/" + encodeURIComponent(renamed.slug), text: "Manage " + renamed.slug }));
+        add(receipt, details);
+        // Retire old-slug controls; management resumes only with the confirmed identity.
+        clear(root);
+        add(root, receipt);
+        d.title = renamed.slug + " · " + boot.instanceName;
+        receipt.focus();
+      } catch (err) {
+        add(renameFeedback, errorBox(err, "Could not rename site"));
+        renameInput.setAttribute("aria-invalid", "true");
+      } finally {
+        renamePending = false;
+        setSiteMutationPending(false);
+        renameForm.removeAttribute("aria-busy");
+        renameInput.disabled = renameSubmit.disabled = renameCancel.disabled = false;
+        renameSubmit.textContent = "Rename site";
+        if ($$("form", root).indexOf(renameForm) >= 0) renameInput.focus();
+      }
+    });
+    var renameSection = h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "Rename site" })), renameForm);
     var danger = h(
       "section",
       { class: "dw-section" },
@@ -3659,26 +3888,33 @@ export function dropwayClient() {
       h(
         "div",
         { class: "dw-pad dw-row", style: "justify-content:space-between" },
-        h("span", { class: "dw-small dw-muted", text: "The URL stops working at once and the name is freed. Files no other site uses are removed by the hourly cleanup." }),
+        h("span", { class: "dw-small dw-muted", text: "The URL stops serving this site at once. Its name and any retained old names are held according to the configured name-retention policy. Deletion does not make a name immediately available to another tenant. Files no other site uses are removed by the hourly cleanup." }),
         h("button", {
           type: "button",
           class: "dw-btn danger",
           text: "Delete site",
-          onclick: async function () {
-            var ok = await confirmBox({ title: "Delete " + slug + "?", message: "Every version goes with it. This cannot be undone from the dashboard.", confirmText: "Delete site", typeToConfirm: slug });
-            if (!ok) return;
+          "data-site-mutation": "",
+          onclick: async function (ev) {
+            if (siteMutationPending) return;
+            var trigger = ev.currentTarget;
+            setSiteMutationPending(true);
             try {
-              await api("/sites/" + encodeURIComponent(slug), { method: "DELETE" });
+              var ok = await confirmBox({ title: "Delete " + slug + "?", message: "Every version goes with it. This cannot be undone from the dashboard.", confirmText: "Delete site", typeToConfirm: slug });
+              if (!ok) return;
+              await api("/sites/" + encodeURIComponent(slug), { method: "DELETE", body: { confirm: slug } });
               location.href = "/dashboard?deleted=" + encodeURIComponent(slug);
             } catch (e) {
               toast(e.message, true);
+            } finally {
+              setSiteMutationPending(false);
+              if ($$("button", root).indexOf(trigger) >= 0) trigger.focus();
             }
           },
         }),
       ),
     );
     var qrSection = siteQrSection(site.url, !!(site.settings && site.settings.passwordProtected));
-    add(root, head, qrSection, versionsSection, filesSection, h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "Settings" })), form), danger);
+    add(root, head, qrSection, versionsSection, filesSection, h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "Settings" })), form), renameSection, danger);
     var live = versions.filter(function (v) {
       return v.live;
     })[0];

@@ -222,15 +222,19 @@ export async function createDeploy(dc: DropwayContext, p: Principal, site: SiteR
 
   const hash = await manifestHash(entries);
   const origin = appOrigin(dc);
+  const versionLinks = { versions: `${origin}/api/v1/sites/${site.slug}/versions`, deploys: `${origin}/api/v1/sites/${site.slug}/deploys` };
   if (site.current_version_id) {
     const current = await getVersion(dc, site.id, site.current_version_id);
     if (current && current.manifest_hash === hash) {
+      const serialized = { ...serializeVersion(current, site.current_version_id), siteSlug: site.slug };
       return {
         unchanged: true,
-        deploy: { ...serializeVersion(current, site.current_version_id), siteSlug: site.slug },
+        deploy: serialized,
+        version: serialized,
         missing: [] as string[],
         uploads: [] as Array<Record<string, unknown>>,
         finalizeUrl: null,
+        links: versionLinks,
         next: "Nothing changed: the live version already has exactly these files. No new version was created.",
       };
     }
@@ -282,10 +286,13 @@ export async function createDeploy(dc: DropwayContext, p: Principal, site: SiteR
   const missing = await missingForScope(dc, blobScope(siteOwner(site)), entries.map((e) => e.sha256));
   const bySha = new Map<string, NormalisedEntry[]>();
   for (const e of entries) bySha.set(e.sha256, [...(bySha.get(e.sha256) ?? []), e]);
-  const base = `${origin}/api/v1/sites/${site.slug}/deploys/${version.id}`;
+  const base = `${origin}/api/v1/sites/${site.slug}/versions/${version.id}`;
+  const serialized = { ...serializeVersion(version, site.current_version_id), siteSlug: site.slug };
   return {
     unchanged: false,
-    deploy: { ...serializeVersion(version, site.current_version_id), siteSlug: site.slug },
+    deploy: serialized,
+    version: serialized,
+    links: versionLinks,
     missing,
     uploads: missing.map((sha) => {
       const es = bySha.get(sha)!;
@@ -413,7 +420,7 @@ export async function uploadBlob(
     throw notFound(
       "blob_not_expected",
       "No pending deploy you control lists a file with this SHA-256.",
-      "Create a deploy with POST /api/v1/sites/:slug/deploys first; upload only the sha256 values it returns as missing.",
+      "Create a version with POST /api/v1/sites/:slug/versions first (alias: /deploys); upload only the sha256 values it returns as missing.",
     );
   }
   const scope = blobScope({ tenantId: expected.tenant_id, siteId: expected.site_id });
@@ -443,22 +450,26 @@ export async function finalizeDeploy(dc: DropwayContext, p: Principal, site: Sit
   site = await getSiteFor(dc, p, site.slug, "sites:write");
   if (site.mode === "transfer" && !transferCreate) throw conflict("transfer_immutable", "Transfer files cannot be replaced.", "Create a new transfer instead.");
   const version = await getVersion(dc, site.id, versionId);
-  if (!version) throw notFound("deploy_not_found", `No deploy ${versionId} on site ${site.slug}.`, "Start one with POST /api/v1/sites/:slug/deploys.");
+  if (!version) throw notFound("deploy_not_found", `No version ${versionId} on site ${site.slug}.`, "Start one with POST /api/v1/sites/:slug/versions (alias: /deploys).");
   if (version.status === "ready") {
     return { version, replayed: true, live: version.id === site.current_version_id, warnings: await deployWarnings(dc, site, version.id) };
   }
   const scope = blobScope(siteOwner(site));
-  const { results: missingRows } = await dc.env.DB.prepare(
-    `SELECT DISTINCT vf.sha256 FROM version_files vf
+  const missingPredicate = `FROM version_files vf
        LEFT JOIN blob_scopes bs ON bs.sha256 = vf.sha256 AND bs.scope = ?
        LEFT JOIN blobs b ON b.sha256 = vf.sha256
-      WHERE vf.version_id = ? AND (bs.sha256 IS NULL OR b.sha256 IS NULL) LIMIT 200`,
-  )
-    .bind(scope, version.id)
-    .all<{ sha256: string }>();
+      WHERE vf.version_id = ? AND (bs.sha256 IS NULL OR b.sha256 IS NULL)`;
+  const [missingResult, missingCount] = await dc.env.DB.batch<{ sha256: string } | { n: number }>([
+    dc.env.DB.prepare(`SELECT DISTINCT vf.sha256 ${missingPredicate} LIMIT 200`).bind(scope, version.id),
+    dc.env.DB.prepare(`SELECT COUNT(DISTINCT vf.sha256) AS n ${missingPredicate}`).bind(scope, version.id),
+  ]);
+  const missingRows = (missingResult?.results ?? []) as Array<{ sha256: string }>;
+  const totalMissing = (missingCount?.results?.[0] as { n: number } | undefined)?.n ?? missingRows.length;
   if (missingRows.length) {
-    throw conflict("missing_blobs", `${missingRows.length} file(s) of this deploy have not been uploaded yet.`, "PUT each missing sha256 to /api/v1/blobs/:sha256, then finalize again.", {
+    const shown = totalMissing > missingRows.length ? ` (first ${missingRows.length} listed)` : "";
+    throw conflict("missing_blobs", `${totalMissing} file(s) of this deploy have not been uploaded yet${shown}.`, "PUT each missing sha256 to /api/v1/blobs/:sha256, then finalize again.", {
       missing: missingRows.map((r) => r.sha256),
+      ...(totalMissing > missingRows.length ? { totalMissing } : {}),
     });
   }
   const { results: files } = await dc.env.DB.prepare("SELECT path, sha256, size, content_type AS contentType FROM version_files WHERE version_id = ?").bind(version.id).all<NormalisedEntry>();
@@ -677,7 +688,7 @@ export async function deployWarnings(dc: DropwayContext, site: SiteRow, versionI
 
 export async function getDeployStatus(dc: DropwayContext, site: SiteRow, versionId: string) {
   const version = await getVersion(dc, site.id, versionId);
-  if (!version) throw notFound("deploy_not_found", `No deploy ${versionId} on site ${site.slug}.`);
+  if (!version) throw notFound("deploy_not_found", `No version ${versionId} on site ${site.slug}.`);
   let missing: string[] = [];
   if (version.status === "pending") {
     const { results } = await dc.env.DB.prepare("SELECT DISTINCT sha256 FROM version_files WHERE version_id = ?").bind(version.id).all<{ sha256: string }>();

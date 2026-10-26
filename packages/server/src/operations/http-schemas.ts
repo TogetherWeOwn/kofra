@@ -84,6 +84,27 @@ export const HTTP_SCOPES: Record<string, any> = {
     { type: "string", description: '"*" or space-separated scopes' },
   ],
 };
+export const HTTP_UPLOAD_ITEM: Record<string, any> = {
+  type: "object",
+  properties: {
+    path: { type: "string" },
+    paths: { type: "array", items: { type: "string" } },
+    sha256: { type: "string" },
+    size: { type: "integer" },
+    method: { const: "PUT" },
+    url: { type: "string" },
+    headers: { type: "object", additionalProperties: { type: "string" } },
+    curl: { type: "string" },
+  },
+};
+export const HTTP_UPLOAD: Record<string, any> = {
+  type: "object",
+  properties: {
+    versionId: { type: "string" },
+    expiresAt: { type: "string" },
+    items: { type: "array", items: HTTP_UPLOAD_ITEM },
+  },
+};
 export const HTTP_DEPLOY: Record<string, any> = {
   type: "object",
   properties: {

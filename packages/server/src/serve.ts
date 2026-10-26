@@ -422,8 +422,14 @@ async function serveFile(
     });
     const out = new Headers(rendered.headers);
     if (!out.has("Content-Security-Policy")) out.set("Content-Security-Policy", VIEWER_CSP);
-    out.set("ETag", etag);
-    out.set("Cache-Control", live.passwordHash ? "private, no-store" : "public, max-age=0, must-revalidate");
+    // A viewer may mark its page non-storable (a fallback for a transient
+    // failure, never a verdict on the stored bytes). Honor that policy and
+    // withhold the success ETag: revalidating the fallback as if it were
+    // the healthy render would strand browsers on it after recovery.
+    const viewerCacheControl = out.get("Cache-Control");
+    if (viewerCacheControl?.includes("no-store")) out.delete("ETag");
+    else out.set("ETag", etag);
+    out.set("Cache-Control", live.passwordHash ? "private, no-store" : viewerCacheControl ?? "public, max-age=0, must-revalidate");
     out.set("Vary", "Accept, Sec-Fetch-Dest");
     out.set("X-Kofra-Viewer", viewer.id);
     out.delete("Content-Length");

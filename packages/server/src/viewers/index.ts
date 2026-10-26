@@ -1,4 +1,5 @@
 import { detectFileKind, type DropwayContext, type FileKind, type LiveSite } from "@dropway/core";
+import { archiveViewer } from "./archive";
 import { binaryViewer } from "./binary";
 import { codeViewer, sourceViewer } from "./code";
 import { csvViewer } from "./csv";
@@ -94,6 +95,7 @@ export const VIEWERS: Viewer[] = [
   videoViewer,
   audioViewer,
   fontViewer,
+  archiveViewer,
   codeViewer,
   binaryViewer,
 ];
