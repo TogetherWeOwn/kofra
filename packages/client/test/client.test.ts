@@ -74,6 +74,22 @@ describe("DropwayError", () => {
       requestId: "r1",
     });
   });
+
+  it("omits recovery metadata it was not constructed with", () => {
+    const e = new DropwayError({ code: "site_not_found", message: "gone", status: 404, retryable: false });
+    expect(e.retryAfterSeconds).toBeUndefined();
+    expect(e.docs).toBeUndefined();
+    expect(e.next).toBeUndefined();
+    expect(e.toJSON()).toEqual({ code: "site_not_found", message: "gone", status: 404, retryable: false });
+  });
+
+  it("keeps explicit recovery metadata in toJSON, including null delay, zero and an empty next array", () => {
+    const next = [{ tool: "get_version", args: { site: "s" }, why: "inspect" }];
+    const full = new DropwayError({ code: "c", message: "m", status: 409, retryable: false, retryAfterSeconds: 0, docs: "/docs/errors#c", next });
+    expect(full.toJSON()).toEqual({ code: "c", message: "m", status: 409, retryable: false, retryAfterSeconds: 0, docs: "/docs/errors#c", next });
+    const empty = new DropwayError({ code: "c", message: "m", status: 404, retryable: false, retryAfterSeconds: null, docs: "/docs/errors", next: [] });
+    expect(JSON.parse(JSON.stringify(empty))).toEqual({ code: "c", message: "m", status: 404, retryable: false, retryAfterSeconds: null, docs: "/docs/errors", next: [] });
+  });
 });
 
 describe("DropwayClient transport", () => {
@@ -140,6 +156,27 @@ describe("DropwayClient transport", () => {
     );
     expect(e.code).toBe("rate_limited");
     expect(capped.requests.length).toBe(1);
+  });
+
+  it("retries 429s for unsafe methods too, within the cap (5xx/network stay safe-only)", async () => {
+    let posts = 0;
+    const fetch = stubFetch(() => {
+      posts++;
+      return posts < 2
+        ? json({ error: { code: "rate_limited", message: "slow down" } }, 429, { "Retry-After": "0" })
+        : json({ ok: true });
+    });
+    const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch, attempts: 3, backoffMs: 1 });
+    await expect(client.post("/sites", {})).resolves.toMatchObject({ status: 200 });
+    expect(posts).toBe(2);
+
+    let unsafe = 0;
+    const failing = stubFetch(() => {
+      unsafe++;
+      return json({ error: { code: "internal_error", message: "boom" } }, 503);
+    });
+    await new DropwayClient({ api: "https://kofra.test", token: null, fetch: failing, attempts: 3, backoffMs: 1 }).post("/sites", {}).catch(() => {});
+    expect(unsafe).toBe(1);
   });
 
   it("retries network failures on safe methods only", async () => {

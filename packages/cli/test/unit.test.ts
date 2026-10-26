@@ -102,6 +102,59 @@ describe("client helpers", () => {
   });
 });
 
+describe("read-file continuation pinning", () => {
+  const page = (over: Record<string, unknown> = {}) => ({
+    path: "big.txt", versionId: "ver_pinned", contentType: "text/plain", kind: "text", size: 10,
+    sha256: "abc123", encoding: "text", offset: 0, length: 5, truncated: true, nextOffset: 5,
+    content: "ABCDE", url: "https://site.test/big.txt", rawUrl: "https://api.test/raw",
+    ...over,
+  });
+
+  async function harness(body: Record<string, unknown>) {
+    let out = "";
+    let err = "";
+    const io: Io = {
+      stdout: (t) => void (out += t),
+      stderr: (t) => void (err += t),
+      stdinIsTTY: false,
+      stderrIsTTY: false,
+      readStdin: async () => "",
+      prompt: async () => { throw new Error("read-file must never prompt"); },
+      env: { KOFRA_CONFIG_DIR: await tmp() },
+      cwd: await tmp(),
+      fetch: async () => new Response(JSON.stringify(body), { status: 200 }),
+    };
+    return { io, stdout: () => out, stderr: () => err };
+  }
+
+  const BASE = ["--api", "https://api.test", "--key", "dw_test_key"];
+
+  it("pins the returned id even when the request used a mutable alias", async () => {
+    const h = await harness(page());
+    const code = await run(["read-file", "my-site", "big.txt", ...BASE, "--version", "live"], h.io);
+    expect(code).toBe(EXIT.ok);
+    expect(h.stdout()).toBe("ABCDE");
+    expect(h.stderr()).toContain("Truncated: continue with: kofra read-file my-site big.txt --offset 5 --version ver_pinned");
+  });
+
+  it("adds the pinned id when --version was omitted", async () => {
+    const h = await harness(page());
+    const code = await run(["read-file", "my-site", "big.txt", ...BASE], h.io);
+    expect(code).toBe(EXIT.ok);
+    expect(h.stderr()).toContain("--version ver_pinned");
+  });
+
+  it.each(["live", "v2", "7", "", "   "])("refuses a guessed continuation for %j identity", async (versionId) => {
+    const h = await harness(page({ versionId }));
+    const code = await run(["read-file", "my-site", "big.txt", ...BASE, "--version", "live"], h.io);
+    expect(code).toBe(EXIT.error);
+    expect(h.stdout()).toBe("");
+    expect(h.stderr()).toMatch(/Error \(bad_read_file_version\):/);
+    expect(h.stderr()).toContain("Fix: ");
+    expect(h.stderr()).not.toContain("continue with:");
+  });
+});
+
 describe("ignore rules", () => {
   it("ignores credentials and VCS folders by default", () => {
     const m = new IgnoreMatcher();
