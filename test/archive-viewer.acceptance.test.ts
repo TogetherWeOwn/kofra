@@ -32,6 +32,12 @@
  *   of exactly 2 MiB lists (only OVER 2 MiB falls back); a short storage
  *   read falls back for that request only and is never cached, so the next
  *   healthy render of the same bytes is a cache miss with the real listing.
+ * - Transient-fallback pins (round 2): the short-read fallback page is
+ *   non-storable and validator-less ("Cache-Control: no-store", no ETag),
+ *   so a browser reload after storage recovers gets the real listing
+ *   instead of a 304 that keeps the fallback page. Only the short-read
+ *   error takes that fallback: any other storage rejection propagates to
+ *   the 500 handler.
  */
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { gzipSync, strToU8, zipSync } from "fflate";
@@ -258,6 +264,8 @@ describe("archive viewer pages", () => {
     files["archives/over-cap.zip"] = exactSizeZip("over-cap-entry.txt", MAX_ARCHIVE_BYTES + 1);
     files["archives/short-tail.zip"] = zipSync({ "short-tail.txt": strToU8("short tail probe\n") });
     files["archives/short-directory.zip"] = zipSync({ "short-directory.txt": strToU8("short directory probe\n") });
+    // Dedicated to the error-propagation test (unique bytes, no other test requests it).
+    files["archives/error-probe.zip"] = zipSync({ "error-probe.txt": strToU8("error probe\n") });
     files["archives/unreadable-payload.zip"] = unreadablePayloadZip();
     for (const kind of BAD_DIRECTORY_CASES) files[`archives/bad-directory-${kind}.zip`] = badDirectoryZip(kind);
     expect(files["archives/big.zip"]!.length).toBeGreaterThan(MAX_ARCHIVE_BYTES);
@@ -569,7 +577,10 @@ describe("archive viewer pages", () => {
    * One truncated storage read during the first render must fall back for
    * that request only: nothing is cached, so the next healthy render of the
    * same bytes — with no cache clear in between — is a miss with the real
-   * listing, and only that good listing then serves from memory.
+   * listing, and only that good listing then serves from memory. The
+   * fallback response must also be non-storable (no-store, no ETag), or a
+   * browser holding it would revalidate against the healthy listing's
+   * validator, be answered 304, and keep showing the fallback page.
    */
   async function expectShortReadRecovery(path: string, entry: string, shorten: (offset: number, calls: number) => boolean): Promise<void> {
     const archive = VIEWERS.find((viewer) => viewer.id === "archive");
@@ -599,9 +610,20 @@ describe("archive viewer pages", () => {
       expect(firstHtml).toMatch(/could not be read/i);
       expect(firstHtml).not.toMatch(/uncompressed/i); // Binary fallback, not a listing.
       expect(shortened).toBe(true);
+      // Non-storable and carrying no validator of the healthy listing's.
+      const fallbackCacheControl = first.headers.get("cache-control") ?? "";
+      const fallbackEtag = first.headers.get("etag");
+      expect(fallbackCacheControl).toContain("no-store");
+      expect(fallbackEtag).toBeNull();
 
-      // Deliberately no clearRenderMemoryCache() here.
-      const second = await get(path);
+      // Deliberately no clearRenderMemoryCache() here. Model a browser
+      // reload: the fallback only earns a conditional revalidation if it
+      // was stored with a validator. (Sending the healthy listing's own
+      // ETag would correctly earn a 304 here — a browser that genuinely
+      // holds the healthy page should keep it. The bug was the fallback
+      // borrowing that validator, so the pin derives it from the fallback.)
+      const reloadHeaders: Record<string, string> = fallbackEtag && !/no-store/i.test(fallbackCacheControl) ? { ...NAV, "If-None-Match": fallbackEtag } : NAV;
+      const second = await get(path, reloadHeaders);
       expect(second.status).toBe(200);
       expect(second.headers.get("x-kofra-render-cache")).toBe("miss");
       const secondHtml = await second.text();
@@ -627,6 +649,37 @@ describe("archive viewer pages", () => {
     // The tail read of this small ZIP starts at 0; the directory read is the
     // only one at a non-zero offset (the fallback read also starts at 0).
     await expectShortReadRecovery("archives/short-directory.zip", "short-directory.txt", (offset) => offset > 0);
+  });
+
+  it("propagates an ordinary storage error to the 500 handler instead of the fallback page", async () => {
+    const archive = VIEWERS.find((viewer) => viewer.id === "archive");
+    expect(archive).toBeDefined();
+    const render = archive!.render;
+    let calls = 0;
+    // Throwaway spy (restored below): the first storage read rejects with an
+    // ordinary error; later reads are healthy, so swallowing that rejection
+    // into the fallback would still answer 200 and fail this test. The
+    // dedicated fixture matters: no earlier test has rendered it, so the
+    // edge render tier cannot answer from cache without calling readBytes.
+    const spy = vi.spyOn(archive!, "render").mockImplementation((vc) => render.call(archive, {
+      ...vc,
+      readBytes: async (offset, length) => {
+        calls++;
+        if (calls === 1) throw new Error("acceptance probe: storage unavailable");
+        return vc.readBytes(offset, length);
+      },
+    }));
+    try {
+      clearRenderMemoryCache();
+      const res = await get("archives/error-probe.zip");
+      expect(res.status).toBe(500);
+      expect(res.headers.get("cache-control")).toContain("no-store");
+      expect(await res.text()).toContain("Internal error");
+      expect(calls).toBeGreaterThan(0); // The render ran; no tier answered from cache.
+    } finally {
+      spy.mockRestore();
+      clearRenderMemoryCache();
+    }
   });
 
   it("makes no external requests", async () => {
