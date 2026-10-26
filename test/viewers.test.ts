@@ -182,6 +182,13 @@ describe("helpers", () => {
     expect(parseCsv("a\nb\nc\nd\n", ",", 2)).toEqual({ rows: [["a"], ["b"]], complete: false });
   });
 
+  it("csv detection: blank lines between records cast no vote", () => {
+    // Pin the nonempty-record rule: an empty record voting [0,0,0,0] would
+    // drop the semicolon minimum to 0 and fall back to comma.
+    expect(detectDelimiter("a;b\n\n1;2\n3;4\n", "x.csv")).toBe(";");
+    expect(detectDelimiter("\n\na;b\n1;2\n3;4\n", "x.csv")).toBe(";");
+  });
+
   it("tells text from binary", () => {
     expect(looksLikeText(new TextEncoder().encode("MIT License\n\nCopyright ünïcode"))).toBe(true);
     expect(looksLikeText(new Uint8Array([0x50, 0x4b, 3, 4, 0, 0, 1]))).toBe(false);
