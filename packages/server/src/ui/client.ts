@@ -3592,7 +3592,7 @@ export function dropwayClient() {
         clear(filesSection);
         add(
           filesSection,
-          h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", role: "status", text: plural(rows.length, "loaded file") + " in this selected version · " + exactBytes(0) }), filter)),
+          h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", "aria-live": "polite", "aria-atomic": "true", text: plural(rows.length, "loaded file") + " in this selected version · " + exactBytes(0) }), filter)),
           h("div", { class: "dw-empty" }, h("h3", { text: "No files in this version" }), h("p", { class: "dw-small", text: "This version has an empty manifest." })),
         );
         commitSelection(mv, opts, my);
@@ -3668,7 +3668,9 @@ export function dropwayClient() {
       // selected version: updating it never fetches, writes storage or moves
       // focus (the filter keeps focus while typing). One persistent status
       // element is updated in place so live announcements are not lost.
-      var filterStatus = h("span", { class: "dw-small dw-muted", role: "status", text: "" });
+      // aria-live (not role="status") so the checksum copy announcements keep
+      // the section's single status region and existing contracts hold.
+      var filterStatus = h("span", { class: "dw-small dw-muted", "aria-live": "polite", "aria-atomic": "true", text: "" });
       var noMatch = h("div", { class: "dw-empty", hidden: true, text: "" });
       var clearFilter = h("button", {
         type: "button",
