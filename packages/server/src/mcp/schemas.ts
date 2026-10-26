@@ -88,7 +88,7 @@ export const PUBLISH_OUT: Schema = {
     status: { type: "string", enum: ["live", "unchanged", "awaiting_upload"] },
     url: { type: "string", description: "Live URL. Share it exactly as returned." },
     slug: { type: "string" },
-    versionUrl: { type: "string", description: "Owner dashboard link pinned by version id." },
+    versionUrl: { type: "string", description: "24 h signed preview; bearer capability." },
     site: SITE_OUT,
     version: { type: ["object", "null"] },
     files: { type: "object" },

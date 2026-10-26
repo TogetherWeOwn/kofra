@@ -27,6 +27,7 @@ export * from "./services/identity";
 export * from "./services/keys";
 export * from "./services/tenants";
 export * from "./services/live";
+export * from "./services/previews";
 export * from "./services/blobs";
 export * from "./services/sites";
 export * from "./services/deploys";

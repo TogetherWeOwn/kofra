@@ -23,6 +23,7 @@ import { apiErrorResponse, installApiMiddleware } from "./routes/api";
 import { legacyAppRedirect, legacyAppSuccessor, withDeprecationHeaders } from "./legacy";
 import { redirectResponse, routeSiteRequest } from "./route-sites";
 import { SITE_SANDBOX, serveSite, systemResponse } from "./serve";
+import { previewResponse, serveVersionPreview } from "./previews";
 import { bindUiSlots } from "./ui/shell";
 import { VIEWERS, type Viewer } from "./viewers";
 import { createMcpEndpoint } from "./mcp";
@@ -58,7 +59,7 @@ function requestErrorDetails(request: Request, error: unknown) {
   const safeUrl = `${url.origin}${url.pathname}`;
   // Exceptions can echo credentials using any equivalent URL encoding, not just
   // the spelling on this request. Do not serialize their message or stack here.
-  if (url.searchParams.has("grant") || url.searchParams.has("recipient")) {
+  if (url.searchParams.has("grant") || url.searchParams.has("recipient") || url.searchParams.has("dw_preview")) {
     return { url: safeUrl, error: "[redacted]" };
   }
   return { url: safeUrl, error: String(error), stack: (error as Error)?.stack };
@@ -153,6 +154,8 @@ export function createDropway(opts: CreateDropwayOptions = {}): Dropway {
       switch (route.kind) {
         case "site":
           return await serveSite(request, dw, route.slug, route.path, route.mode, viewers);
+        case "preview":
+          return await serveVersionPreview(request, dw, route.slug, route.number, route.path, route.mode, viewers);
         case "redirect":
           return redirectResponse(route);
         case "sites_home":
@@ -160,7 +163,7 @@ export function createDropway(opts: CreateDropwayOptions = {}): Dropway {
         case "sites_not_found":
           return systemResponse(dw, request, { kind: "path", base: "/", sandbox: true, rewrite: null }, null, 404, "404", "Nothing is published here", "There is no site at this address. See {app}.");
         case "gone":
-          return systemResponse(dw, request, route.mode, null, 410, "GONE", "This version is gone", "This version address names a deleted version. Old version links never serve another site's files.");
+          return previewResponse(systemResponse(dw, request, route.mode, null, 410, "GONE", "This version is gone", "This version address names a deleted version. Old version links never serve another site's files."));
         case "app": {
           contexts.set(request, dw);
           const res = await app.fetch(request, env, ctx);

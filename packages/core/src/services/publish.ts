@@ -9,6 +9,7 @@ import { normaliseFilePath, stripCommonRoot } from "../lib/paths";
 import type { Principal } from "../principal";
 import { blobScope, putVerifiedBlob } from "./blobs";
 import { createDeploy, finalizeDeploy, parseDeployOptions, precheckManifest } from "./deploys";
+import { versionPreviewUrl } from "./previews";
 import { createSite, discardNewSite, findSite, getSiteFor, parseSettings, serializeSite, updateSite, type SiteRow, type VersionRow } from "./sites";
 
 /** A file held in memory for one-shot publishing. */
@@ -253,6 +254,7 @@ async function publishToTarget(
   const described = serializeSite(dc, site, version);
   return {
     url: siteUrl(dc, site.slug),
+    versionUrl: await versionPreviewUrl(dc, actor, site, version!),
     slug: site.slug,
     created: target.created,
     unchanged: deploy.unchanged,
