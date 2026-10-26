@@ -226,6 +226,10 @@ export async function explainConfig(input: ExplainInput): Promise<ConfigExplanat
   };
 }
 
+function terminalText(value: string): string {
+  return bounded(value.replace(/[\x00-\x1f\x7f-\x9f]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`));
+}
+
 export function explainConfigHuman(report: ConfigExplanation): string {
   const lines = [
     `Status: ${report.status} (exit ${report.exitCode})`,
@@ -238,6 +242,6 @@ export function explainConfigHuman(report: ConfigExplanation): string {
   for (const check of report.checks) {
     lines.push(`${check.code}${check.source ? ` (${check.source.detail ?? check.source.kind})` : ""}: ${check.hint}${check.nextAction ? ` ${check.nextAction}` : ""}`);
   }
-  if (report.projectLink.mapping) lines.push(`Mapping: ${report.projectLink.mapping.key} -> ${report.projectLink.mapping.slug ?? "missing"}`);
+  if (report.projectLink.mapping) lines.push(`Mapping: ${terminalText(report.projectLink.mapping.key)} -> ${report.projectLink.mapping.slug === null ? "missing" : terminalText(report.projectLink.mapping.slug)}`);
   return lines.join("\n");
 }
