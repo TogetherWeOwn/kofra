@@ -1526,7 +1526,12 @@ CLI hashes and uploads from disk. Credentials as for the CLI.
    `page.html?view=1` serves the **viewer frame**: the bar plus the page in an iframe, so a person can flip
    between the rendered page and its source. (R-07)
 5. Each viewer has a size cap. Above it the file is served raw (or, for text, as the first part with a
-   "showing first N KB" note and links).
+   "showing first N KB" note and links). For the shipped JSON, CSV and notebook viewers the exact
+   input caps, read budgets, rendered-output limits and fallbacks are the canonical
+   [viewer-limits reference](VIEWERS.md); where an older row below disagrees with that page or the
+   viewer code, the code and that page are right. JSON and notebooks above their input cap fall
+   through to the code view (first 1 MiB shown), not straight to raw bytes; CSV has no input cap and
+   is bounded instead by its 4 MiB read budget and 2,000 rendered data rows.
 6. Viewer pages get `VIEWER_CSP` (no scripts) by default. A viewer that needs scripts (P1 sorting,
    search, diagrams) uses a per-response nonce and loads only first-party files from
    `/__dropway/assets/`. User content is always escaped or run through an allowlist sanitizer (Markdown
@@ -1548,13 +1553,13 @@ CLI hashes and uploads from disk. Credentials as for the CLI.
 | pdf | `.pdf` | Browser's built-in PDF viewer in an embed, with a download fallback | raw | - | none | P0 | R-08 |
 | video | `.mp4 .webm .mov .ogv` | `<video controls>` with Range | raw | - | none | P0 | R-08 |
 | audio | `.mp3 .wav .ogg .m4a .flac .aac` | `<audio controls>` | raw | - | none | P0 | R-08 |
-| json | `.json`, `.geojson`, `.webmanifest` | Collapsible tree from `<details>` elements, pretty-printed values, key counts | highlighted | 5 MB (pretty-print only up to 20 MB) | none (P0); search (P1) | P0 | R-08 |
+| json | `.json`, `.geojson`, `.webmanifest` | Collapsible tree from `<details>` elements, pretty-printed values, key counts | highlighted | 2 MiB (2,097,152 bytes) input; tree 20,000 nodes and 2,000 per string; Pretty pane only when its output is at most 1,048,576 (see [VIEWERS.md](VIEWERS.md)) | none (P0); search planned (P1, R-34, not shipped) | P0 | Shipped viewer (R-08); search R-34 |
 | json lines | `.jsonl .ndjson` | One collapsible row per line, first 2,000 lines | highlighted | 10 MB | none | P1 | R-34 |
-| csv | `.csv .tsv` | Table with header detection, row and column counts, first 2,000 rows | raw | 10 MB | none (P0); sort and filter (P1) | P0 | R-08 |
+| csv | `.csv .tsv` | Table: first row always shown as the header (no header detection), row and column counts, first 2,000 data rows | raw | No input cap; reads the first 4 MiB (4,194,304 bytes), 1,000 per cell (see [VIEWERS.md](VIEWERS.md)) | none (P0); header detection, sort and filter planned (P1, R-34, not shipped) | P0 | Shipped viewer (R-08); header detection/sort/filter R-34 |
 | code | 60+ languages via `languageFor` (`.js .ts .py .go .rs .sql .sh ...`) | Highlighted, line numbers, `#L10-L20` anchors, wrap toggle | raw | 1 MB | none | P0 | R-07 |
 | config | `.yaml .yml .toml .ini .xml` | Highlighted (P0); collapsible tree for YAML/TOML (P1) | raw | 1 MB | none | P0 / P1 | R-07 / R-34 |
 | text | `.txt .log`, `text/*` | Monospace with line numbers, wrap toggle | raw | 2 MB | none | P0 | R-07 |
-| notebook | `.ipynb` | Cells: Markdown, highlighted code, outputs (text, images, sanitized HTML) | JSON source | 10 MB | none | P1 | R-34 |
+| notebook | `.ipynb` | Cells: Markdown, highlighted code, outputs (text, images, sanitized HTML) | JSON source | 20 MiB (20,971,520 bytes) input; clipped output text 100,000 each (see [VIEWERS.md](VIEWERS.md)) | none | P1 | Shipped viewer; further VIEW-03 work R-34 |
 | diff | `.diff .patch` | Colored unified diff with file headers | raw | 1 MB | none | P1 | R-34 |
 | diagram | `.mmd .mermaid` (and fenced blocks in Markdown) | Rendered diagram (Mermaid, `securityLevel: strict`) | source | 256 KB | first-party | P1 | R-34 |
 | font | `.woff .woff2 .ttf .otf` | Specimen: alphabet, sizes, sample text | download | 10 MB | none | P1 | R-34 |
