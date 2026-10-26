@@ -1482,7 +1482,7 @@ export function dropwayClient() {
       vBody.appendChild(
         h(
           "tr",
-          {},
+          { "data-search": ["v" + v.number, v.id, v.message || "", v.client || "", v.source || ""].join(" ").toLowerCase() },
           h("td", {}, h("strong", { text: "v" + v.number }), " ", v.live ? h("span", { class: "dw-badge live", text: "Live" }) : null),
           h("td", { class: "dw-small" }, v.message ? h("span", { text: v.message }) : h("span", { class: "dw-muted", text: "No message" }), h("span", { class: "dw-sub", text: [v.client, v.source].filter(Boolean).join(" · ") })),
           h("td", { class: "num dw-small" }, plural(v.fileCount, "file"), h("span", { class: "dw-sub", text: bytes(v.totalBytes) })),
@@ -1535,14 +1535,46 @@ export function dropwayClient() {
         ),
       );
     });
+    var versionFilter = h("input", { id: "dw-version-filter", class: "dw-input", type: "search", placeholder: "Version, id, message, client or source", "aria-describedby": "dw-version-scope", style: "flex:1 1 12rem;min-width:0" });
+    var versionClear = h("button", { type: "button", class: "dw-btn", text: "Clear" });
+    var versionCount = h("p", { class: "dw-help", role: "status", "aria-live": "polite", "aria-atomic": "true" });
+    var versionTable = h("div", { class: "dw-scroll" }, h("table", { class: "dw-table" }, h("thead", {}, h("tr", {}, h("th", { text: "Version" }), h("th", { text: "Message" }), h("th", { class: "num", text: "Files" }), h("th", { class: "num dw-hide-sm", text: "Published" }), h("th", {}))), vBody));
+    var noVersionMatches = h("div", { class: "dw-empty", hidden: true }, h("h3", { text: "No matching versions" }), h("p", { text: "Try another filter or Clear to show the loaded versions." }));
+    function filterVersions() {
+      var q = versionFilter.value.trim().toLowerCase();
+      var matching = 0;
+      // Only hide existing rows: their immutable-id action closures and the
+      // separately selected file manifest stay untouched, in server order.
+      $$("tr[data-search]", vBody).forEach(function (tr) {
+        tr.hidden = !!(q && tr.getAttribute("data-search").indexOf(q) < 0);
+        if (!tr.hidden) matching++;
+      });
+      versionCount.textContent = plural(matching, "match", "matches") + " of " + plural(versions.length, "loaded version") + ".";
+      versionTable.hidden = !matching;
+      noVersionMatches.hidden = !versions.length || !!matching;
+    }
+    versionFilter.addEventListener("input", filterVersions);
+    versionClear.addEventListener("click", function () {
+      versionFilter.value = "";
+      filterVersions();
+      versionFilter.focus();
+    });
     var versionsSection = h(
       "section",
       { class: "dw-section" },
-      h("header", {}, h("h2", { text: "Versions" }), h("span", { class: "dw-small dw-muted", text: plural(versions.length, "version") + ". Restoring is instant: it only moves the live pointer." })),
+      h("header", {}, h("h2", { text: "Versions" }), h("span", { class: "dw-small dw-muted", text: "Restoring is instant: it only moves the live pointer." })),
+      h("div", { class: "dw-pad" },
+        h("label", { class: "dw-label", for: "dw-version-filter", text: "Filter loaded versions" }),
+        h("div", { class: "dw-row" }, versionFilter, versionClear),
+        h("p", { id: "dw-version-scope", class: "dw-help", text: "Only the newest 100 versions are loaded. This filters loaded versions, not all history." }),
+        versionCount,
+      ),
       versions.length
-        ? h("div", { class: "dw-scroll" }, h("table", { class: "dw-table" }, h("thead", {}, h("tr", {}, h("th", { text: "Version" }), h("th", { text: "Message" }), h("th", { class: "num", text: "Files" }), h("th", { class: "num dw-hide-sm", text: "Published" }), h("th", {}))), vBody))
+        ? versionTable
         : h("div", { class: "dw-empty" }, h("h3", { text: "Nothing published yet" }), h("a", { class: "dw-btn primary", href: "/dashboard/publish?site=" + encodeURIComponent(slug), text: "Publish files" })),
+      noVersionMatches,
     );
+    filterVersions();
 
     var filesReq = 0;
     async function showFiles(v) {
