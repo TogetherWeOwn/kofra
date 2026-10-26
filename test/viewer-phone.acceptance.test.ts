@@ -25,8 +25,23 @@ function qrSvg(html: string): string | undefined {
     .find((svg) => /\b(?:aria-label|aria-labelledby)=|<title\b/i.test(svg));
 }
 
-function expectPhone(html: string, url: string) {
-  const labels = Array.from(html.matchAll(/<(summary|label)\b[^>]*>([\s\S]*?)<\/\1>/gi), (m) => m[2]!.replace(/<[^>]*>/g, ""));
+// Parse labels in workerd: assert on parsed text content, so attribute
+// values and nested markup spellings neither satisfy nor break Phone.
+async function elementTexts(html: string, selector: "summary" | "label"): Promise<string[]> {
+  const texts: string[] = [];
+  let current = -1;
+  await new HTMLRewriter().on(selector, {
+    element(element) {
+      current = texts.push("") - 1;
+      element.onEndTag(() => { current = -1; });
+    },
+    text(chunk) { if (current >= 0) texts[current] += chunk.text; },
+  }).transform(new Response(html)).text();
+  return texts;
+}
+
+async function expectPhone(html: string, url: string) {
+  const labels = [...(await elementTexts(html, "summary")), ...(await elementTexts(html, "label"))];
   expect(labels.some((label) => /\bPhone\b/i.test(label)), "a native no-script Phone disclosure must be served in the viewer bar").toBe(true);
   const svg = qrSvg(html);
   expect(svg, "Phone must include a labelled, server-rendered inline SVG").toBeDefined();
@@ -53,7 +68,7 @@ describe("viewer Phone: served public-file contract", () => {
     "serves a labelled Phone QR and public link on %s without relaxing CSP", async (path) => {
       const res = await dw.call(`${root}${path}?view=1&share=discard-me&token=discard-me`, { headers: NAV });
       expect(res.status).toBe(200);
-      expectPhone(await res.text(), `${ORIGIN}${root}${path}`);
+      await expectPhone(await res.text(), `${ORIGIN}${root}${path}`);
       const csp = res.headers.get("content-security-policy")!;
       expect(csp).toContain("default-src 'none'");
       expect(csp).not.toMatch(/script-src[^;]*(?:'unsafe-inline'|https?:|\*)/);
@@ -64,16 +79,16 @@ describe("viewer Phone: served public-file contract", () => {
     const a = await dw.call(`${root}notes.md?view=1&claim=first#secret`, { headers: NAV });
     const b = await dw.call(`${root}notes.md?view=1&unlock=second`, { headers: NAV });
     const url = `${ORIGIN}${root}notes.md`;
-    expect(expectPhone(await a.text(), url)).toBe(expectPhone(await b.text(), url));
+    expect(await expectPhone(await a.text(), url)).toBe(await expectPhone(await b.text(), url));
   });
 
   it("uses request origin rather than an app origin retained in a render cache", async () => {
     const path = `${root}notes.md?view=1`;
-    expectPhone(await (await dw.call(path, { headers: NAV })).text(), `${ORIGIN}${root}notes.md`);
+    await expectPhone(await (await dw.call(path, { headers: NAV })).text(), `${ORIGIN}${root}notes.md`);
     const otherOrigin = "https://phone.example.test:8443";
     const res = await dw.call(`${otherOrigin}${path}`, { headers: NAV });
     expect(res.status).toBe(200);
-    expectPhone(await res.text(), `${otherOrigin}${root}notes.md`);
+    await expectPhone(await res.text(), `${otherOrigin}${root}notes.md`);
   });
 
   it("encodes hostile path segments exactly as existing public file links do", async () => {
@@ -81,7 +96,7 @@ describe("viewer Phone: served public-file contract", () => {
     const res = await dw.call(`${root}${path}?view=1&dw_preview=not-a-grant`, { headers: NAV });
     expect(res.status).toBe(200);
     const html = await res.text();
-    expectPhone(html, `${ORIGIN}${root}${path}`);
+    await expectPhone(html, `${ORIGIN}${root}${path}`);
     expect(html).not.toContain('<phone> "quote"');
     expect(html).not.toMatch(/<img[^>]+onerror|<script[^>]*src=["']https?:/i);
   });
@@ -129,7 +144,7 @@ describe("viewer Phone: served public-file contract", () => {
     expect(refreshed.status, "old cached viewer markup must refresh to include Phone").toBe(200);
     const etag = refreshed.headers.get("etag")!;
     expect(etag).not.toBe(legacy);
-    expectPhone(await refreshed.text(), `${ORIGIN}${root}${path}`);
+    await expectPhone(await refreshed.text(), `${ORIGIN}${root}${path}`);
     const conditional = await dw.call(`${root}${path}?view=1`, { headers: { ...NAV, "If-None-Match": etag } });
     expect(conditional.status).toBe(304);
     expect(await conditional.text()).toBe("");
@@ -167,7 +182,7 @@ describe("viewer Phone: site-origin topology", () => {
     const clean = "https://phone-topology.files.example.test/notes.md";
     const res = await dw.call(`${clean}?view=1&token=not-public`, { headers: NAV });
     expect(res.status).toBe(200);
-    expectPhone(await res.text(), clean);
+    await expectPhone(await res.text(), clean);
   });
 
   it("does not advertise a Phone handoff on a preview-shaped address", async () => {
