@@ -63,6 +63,29 @@ function decodeEntities(s: string): string {
   return s.replace(/&(amp|lt|gt|quot|#39);/g, (_m, name: string) => map[name]!);
 }
 
+/**
+ * The visible text of an anchor's inner HTML: drop any nested tags by
+ * scanning for "<" ... ">" spans, leaving the text between them. The
+ * result is only compared in assertions; it is never rendered as HTML.
+ * A "<" with no closing ">" is literal text, as is a lone ">".
+ */
+function innerText(inner: string): string {
+  let out = "";
+  let i = 0;
+  while (i < inner.length) {
+    if (inner[i] === "<") {
+      const end = inner.indexOf(">", i + 1);
+      if (end !== -1) {
+        i = end + 1;
+        continue;
+      }
+    }
+    out += inner[i];
+    i += 1;
+  }
+  return out;
+}
+
 /** Every anchor on the page, in document order, with its visible text. */
 function anchors(html: string): Anchor[] {
   const out: Anchor[] = [];
@@ -71,7 +94,7 @@ function anchors(html: string): Anchor[] {
   while ((m = re.exec(html)) !== null) {
     out.push({
       href: decodeEntities(m[1] ?? m[2] ?? ""),
-      text: decodeEntities(m[3]!.replace(/<[^>]*>/g, "")).replace(/\s+/g, " ").trim(),
+      text: decodeEntities(innerText(m[3]!)).replace(/\s+/g, " ").trim(),
     });
   }
   return out;
