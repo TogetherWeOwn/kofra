@@ -69,6 +69,23 @@ function hasChildren(files: LiveSite["files"], dir: string): boolean {
 }
 
 /**
+ * The longest proper ancestor directory of `filePath` (with trailing "/")
+ * that prefixes at least one path in the live manifest, or null when no
+ * ancestor folder has files. The site root never counts. Computed from the
+ * already-loaded manifest only. Object.keys keeps an ancestor folder named
+ * `__proto__` ordinary manifest data.
+ */
+function nearestManifestAncestor(files: LiveSite["files"], filePath: string): string | null {
+  const segments = filePath.replace(/\/+$/, "").split("/").filter(Boolean);
+  const paths = Object.keys(files);
+  for (let len = segments.length - 1; len >= 1; len--) {
+    const dir = `${segments.slice(0, len).join("/")}/`;
+    if (paths.some((k) => k.startsWith(dir))) return dir;
+  }
+  return null;
+}
+
+/**
  * Find which manifest entry answers a request path ("" = site root).
  * With fallbacks=false (used for Referer resolution) SPA and 404.html fallbacks are skipped.
  */
@@ -336,7 +353,7 @@ export async function serveSite(
   if (method !== "GET" && method !== "HEAD") {
     return new Response("Method not allowed", { status: 405, headers: { Allow: "GET, HEAD, OPTIONS" } });
   }
-  if (!live.versionId) return systemResponse(dw, req, mode, live, 404, "EMPTY", "Nothing published yet", "This site exists but has no live version yet.");
+  if (!live.versionId) return systemResponse(dw, req, mode, live, 404, "EMPTY", "Nothing published yet", "This site exists but has no live version yet. See {app}.");
 
   const resolved = resolvePath(live, filePath, req, mode);
   let response: Response;
@@ -345,7 +362,15 @@ export async function serveSite(
     response = new Response(null, { status: 301, headers: { Location: resolved.location } });
     securityHeaders(response.headers, live, mode);
   } else if (resolved.kind === "not_found") {
-    response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", `There is no file at <code>/${escapeHtml(filePath)}</code> on this site.`);
+    // Post-gate only (like listings): lead back to the site instead of a dead end.
+    const ancestor = nearestManifestAncestor(live.files, filePath);
+    const recovery =
+      `<nav aria-label="Where to go next"><ul>` +
+      `<li><a href="${escapeHtml(mode.base)}">Site home</a></li>` +
+      (ancestor ? `<li><a href="${escapeHtml(mode.base + encodePath(ancestor))}">Folder: /${escapeHtml(ancestor)}</a></li>` : "") +
+      `<li><a href="${escapeHtml(`${appOrigin(dw)}/v/${live.slug}/${encodePath(ancestor ?? "")}`)}">Browse files</a></li>` +
+      `</ul></nav>`;
+    response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", `There is no file at <code>/${escapeHtml(filePath)}</code> on this site.`, recovery);
   } else if (resolved.kind === "listing") {
     response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`);
     securityHeaders(response.headers, live, mode);
@@ -448,7 +473,7 @@ async function serveFile(
     if (etagMatches(req, etag)) return new Response(null, { status: 304, headers: h });
     if (head) return new Response(null, { status, headers: h });
     const blob = await readBlob(dw, sha256, size);
-    if (!blob) return blobMissing(dw, req, mode, live);
+    if (!blob) return blobMissing(dw, req, mode, live, path);
     if (rewriteKind === "css" && mode.rewrite) {
       const css = blob.body ? await new Response(blob.body).text() : "";
       return new Response(rewriteCss(css, mode.rewrite), { status, headers: h });
@@ -493,19 +518,22 @@ async function serveFile(
     init.status = 206;
     if (head) return new Response(null, init);
     const body = await readBlobRange(dw, sha256, range);
-    if (!body) return blobMissing(dw, req, mode, live);
+    if (!body) return blobMissing(dw, req, mode, live, path);
     return new Response(body, init);
   }
   h.set("Content-Length", String(size));
   if (head || size === 0) return new Response(null, init);
   const blob = await readBlob(dw, sha256, size);
-  if (!blob) return blobMissing(dw, req, mode, live);
+  if (!blob) return blobMissing(dw, req, mode, live, path);
   return new Response(blob.body, init);
 }
 
-function blobMissing(dw: DropwayContext, req: Request, mode: ServeMode, live: LiveSite): Response {
+function blobMissing(dw: DropwayContext, req: Request, mode: ServeMode, live: LiveSite, path: string): Response {
   console.error(JSON.stringify({ event: "blob_missing", slug: live.slug, version: live.versionId, url: req.url }));
-  return systemResponse(dw, req, mode, live, 502, "502", "File unavailable", "This file is listed in the site but its contents could not be read. Try again shortly.");
+  // Rebuild the retry href from the serving base and the manifest path only:
+  // never copy the raw request URL or its query into the page.
+  const retry = `<p><a href="${escapeHtml(mode.base + encodePath(path))}">Try again</a></p>`;
+  return systemResponse(dw, req, mode, live, 502, "502", "File unavailable", "This file is listed in the site but its contents could not be read. Try again shortly.", retry);
 }
 
 function recordHit(dw: DropwayContext, req: Request, live: LiveSite, path: string, status: number, bytes: number, ms: number) {
