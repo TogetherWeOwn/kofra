@@ -141,12 +141,12 @@ export function renderMarkdown(
     const lineEnd = rest.indexOf("\n");
     let text = (lineEnd === -1 ? rest : rest.slice(0, lineEnd)).trimEnd();
     // ATX closing sequence: a trailing run of #s is a closing sequence only
-    // when whitespace precedes it, or it is all that follows the opening #s
-    // (an empty heading). A # glued to text is heading text ("# C#" renders
+    // when a space or tab precedes it, or it is all that follows the opening
+    // #s (an empty heading). A # glued to text is heading text ("# C#" renders
     // as "C#"), so the extracted title matches the rendered heading.
     let end = text.length;
     while (end > 0 && text[end - 1] === "#") end--;
-    if (end < text.length && (end === 0 || /\s/.test(text[end - 1]!))) text = text.slice(0, end).trimEnd();
+    if (end < text.length && (end === 0 || text[end - 1] === " " || text[end - 1] === "\t")) text = text.slice(0, end).trimEnd();
     h1Text = text || null;
   }
   const title = fmTitle ?? (h1Text ? h1Text.replace(/[*_`]/g, "") : (path.split("/").pop() ?? path));
