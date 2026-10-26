@@ -273,6 +273,31 @@ async function readSecretInput(io: Io, question: string): Promise<string> {
   return "";
 }
 
+/** Remove exactly one trailing line terminator (`\r\n` or `\n`), nothing else. */
+function stripLineTerminator(v: string): string {
+  if (v.endsWith("\r\n")) return v.slice(0, -2);
+  if (v.endsWith("\n")) return v.slice(0, -1);
+  return v;
+}
+
+/**
+ * Read a visitor password without changing it: the instance hashes and
+ * verifies passwords byte-exactly, so (unlike API/bootstrap keys above)
+ * surrounding spaces are part of the password. Only the one trailing line
+ * terminator from the pipe/prompt is removed. Empty or whitespace-only
+ * input still reads as "no password" and is refused before networking.
+ */
+async function readPasswordInput(io: Io, question: string): Promise<string> {
+  if (!io.stdinIsTTY) {
+    const v = stripLineTerminator(await io.readStdin());
+    if (v.trim()) return v;
+  } else if (io.stderrIsTTY) {
+    const v = stripLineTerminator(await io.prompt(question, { hidden: true }));
+    if (v.trim()) return v;
+  }
+  return "";
+}
+
 const versionLabel = (v: VersionInfo | null | undefined) => (v ? `v${v.number}` : "-");
 
 // ---------------------------------------------------------------- commands
@@ -753,6 +778,8 @@ Options:
 
 With --mode password the visitor password comes from piped stdin, or from one
 no-echo prompt in a terminal; empty input is refused before anything is sent.
+Only the trailing newline is removed: surrounding spaces are part of the
+password and are sent exactly as entered.
 Changing the password signs everyone out. The password is never printed, logged
 or echoed back in errors.
 
@@ -772,7 +799,7 @@ Examples:
       // Offline plan: no instance resolution, no key, no requests, no writes.
       // Never prompts and never fails for a missing password.
       let passwordSupplied = false;
-      if (mode === "password" && !io.stdinIsTTY) passwordSupplied = (await io.readStdin()).trim() !== "";
+      if (mode === "password" && !io.stdinIsTTY) passwordSupplied = stripLineTerminator(await io.readStdin()).trim() !== "";
       out.result({ dryRun: true, planVersion: 1, site, mode, passwordSupplied }, () =>
         mode === "password"
           ? `Dry run: would set ${site} access to password (${passwordSupplied ? "password supplied" : "no password supplied"}).`
@@ -790,7 +817,7 @@ Examples:
     }
     let password = "";
     if (mode === "password") {
-      password = await readSecretInput(io, "Visitor password: ");
+      password = await readPasswordInput(io, "Visitor password: ");
       if (!password) {
         throw new CliError({
           code: "missing_password",
