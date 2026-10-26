@@ -233,6 +233,23 @@ export function dropwayClient() {
     if (days < 30) return days + (days === 1 ? " day ago" : " days ago");
     return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
   }
+  function expiry(iso) {
+    if (!iso) return "";
+    var date = new Date(iso);
+    var t = date.getTime();
+    if (!Number.isFinite(t)) return "";
+    var remaining = t - Date.now();
+    if (remaining < 0) return "Expired " + ago(iso);
+    var s = Math.round(remaining / 1000);
+    if (s < 45) return "Expires in under a minute";
+    var m = Math.round(s / 60);
+    if (m < 60) return "Expires in " + m + " min";
+    var hr = Math.round(m / 60);
+    if (hr < 24) return "Expires in " + hr + " h";
+    var days = Math.round(hr / 24);
+    if (days < 30) return "Expires in " + days + (days === 1 ? " day" : " days");
+    return "Expires " + date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  }
   function encodePath(p) {
     return p.split("/").map(encodeURIComponent).join("/");
   }
@@ -2947,7 +2964,8 @@ export function dropwayClient() {
     var badges = [];
     if (s.settings && s.settings.passwordProtected) badges.push(h("span", { class: "dw-badge warn", text: "Password" }));
     if (s.settings && s.settings.spa) badges.push(h("span", { class: "dw-badge", text: "SPA" }));
-    if (s.expiresAt) badges.push(h("span", { class: "dw-badge warn", title: s.expiresAt, text: "Expires " + new Date(s.expiresAt).toLocaleDateString() }));
+    var expires = expiry(s.expiresAt);
+    if (expires) badges.push(h("span", { class: "dw-badge warn", title: s.expiresAt, text: expires }));
     if (!v) badges.push(h("span", { class: "dw-badge", text: "Empty" }));
     return h(
       "tr",
@@ -3286,6 +3304,7 @@ export function dropwayClient() {
       dlg.showModal();
       destination.focus();
     }
+    var expires = expiry(site.expiresAt);
     var head = h(
       "div",
       { class: "dw-pagehead" },
@@ -3294,6 +3313,7 @@ export function dropwayClient() {
         { style: "min-width:0" },
         h("h1", { class: "dw-h1", text: site.title || site.slug }),
         h("p", {}, h("span", { class: "dw-url" }, h("a", { href: site.url, target: "_blank", rel: "noopener", text: site.url }), copyButton(site.url, "Copy site URL"))),
+        expires ? h("p", { class: "dw-small dw-muted", title: site.expiresAt, text: expires + " · " + new Date(site.expiresAt).toLocaleString() }) : null,
         site.description ? h("p", { text: site.description }) : null,
       ),
       h(
@@ -4061,6 +4081,7 @@ export function dropwayClient() {
         }
         var tb = h("tbody");
         res.keys.forEach(function (k) {
+          var expires = expiry(k.expiresAt);
           tb.appendChild(
             h(
               "tr",
@@ -4070,7 +4091,7 @@ export function dropwayClient() {
                 return h("span", { class: "dw-badge", style: "margin:0 .2rem .2rem 0", text: sc });
               }), k.siteId ? h("span", { class: "dw-sub", text: "One site only" }) : null),
               h("td", { class: "num dw-small dw-muted dw-hide-sm" }, h("span", { title: k.createdAt, text: "Created " + ago(k.createdAt) }), h("span", { class: "dw-sub", text: k.lastUsedAt ? "Used " + ago(k.lastUsedAt) : "Never used" })),
-              h("td", { class: "num dw-small dw-hide-sm", text: k.expiresAt ? "Expires " + new Date(k.expiresAt).toLocaleDateString() : "No expiry" }),
+              h("td", { class: "num dw-small dw-hide-sm", title: expires ? k.expiresAt : null, text: k.expiresAt ? expires : "No expiry" }),
               h(
                 "td",
                 { class: "act" },
