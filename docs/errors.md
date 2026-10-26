@@ -26,7 +26,7 @@ Extension adapters can add codes and override guidance without changing built-in
 | `bootstrap_key_required` | 403 | false | Send the bootstrap key in Authorization: Bearer for setup or recovery only. |
 | `claim_token_required` | 400 | false | Send the claimToken returned when the anonymous site was created. |
 | `confirm_mismatch` | 400 | false | Set confirm to the exact value in details.expected, then call again. |
-| `deploy_not_found` | 404 | false | Start a deploy with POST /api/v1/sites/:slug/deploys, or use a returned deploy ID. |
+| `deploy_not_found` | 404 | false | Start a version with POST /api/v1/sites/:slug/versions (alias: /deploys), or use a returned version ID. |
 | `duplicate_path` | 400 | false | Give each file a unique normalized path; remove duplicate entries. |
 | `empty_body` | 400 | false | Send files as multipart, JSON, a .zip, or one raw file. |
 | `export_too_large` | 413 | false | Download file by file with list_files and read_file. |

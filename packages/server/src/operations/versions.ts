@@ -1,5 +1,5 @@
-import { HTTP_VERSION } from "./http-schemas";
-import { deleteVersion, exportVersionZip, getDeployStatus, getSiteByRef, requireConfirm, resolveVersionRef, getSiteFor } from "@dropway/core";
+import { HTTP_UPLOAD, HTTP_UPLOAD_ITEM, HTTP_VERSION } from "./http-schemas";
+import { deleteVersion, exportVersionZip, getVersionStatus, getSiteByRef, requireConfirm, resolveVersionRef } from "@dropway/core";
 import { CONFIRM_SLUG, SITE_REF, VERSION_OUT, VERSION_REF, obj } from "../mcp/schemas";
 import { defineOperation } from "../operations";
 import { fromSchema, RO, DESTROY, P, D } from "./shared";
@@ -13,7 +13,7 @@ export const VERSION_OPERATIONS = [
     toolset: "versions",
     scopes: ["sites:read"],
     description:
-      'Show one version ("live", "v3", "3" or an id): status, number, file count, size, source, client, message. For a pending version, `missing` lists the sha256 of files still to upload.',
+      'Show one version ("live", "v3", "3" or an id): status, number, counts, source, client, message. Pending: `missing` sha256 list, plus fresh upload items for write keys.',
     input: fromSchema({
       type: "object",
       properties: { site: SITE_REF, version: VERSION_REF },
@@ -26,6 +26,8 @@ export const VERSION_OPERATIONS = [
           site: { type: "string" },
           version: VERSION_OUT,
           missing: { type: "array", items: { type: "string" } },
+          // Pending versions (write keys): fresh upload items; same items repeat as legacy `uploads`.
+          upload: { type: "object" },
         },
         ["version"],
       ),
@@ -34,12 +36,7 @@ export const VERSION_OPERATIONS = [
     async handler(a, { dw, principal }) {
       const site = await getSiteByRef(dw, principal, a.site);
       const v = await resolveVersionRef(dw, site, a.version);
-      const status = await getDeployStatus(dw, site, v.id);
-      return {
-        site: site.slug,
-        version: status.deploy,
-        missing: status.missing,
-      };
+      return { site: site.slug, ...(await getVersionStatus(dw, site, v, principal)) };
     },
     http: {
       input: fromSchema({
@@ -53,17 +50,14 @@ export const VERSION_OPERATIONS = [
           site: { type: "string" },
           version: HTTP_VERSION,
           missing: { type: "array", items: { type: "string" } },
+          upload: HTTP_UPLOAD,
+          uploads: { type: "array", items: HTTP_UPLOAD_ITEM },
         },
       }),
       handler: async (c) => {
         const site = await getSiteByRef(D(c), P(c), c.req.param("slug")!);
         const v = await resolveVersionRef(D(c), site, c.req.param("id")!);
-        const status = await getDeployStatus(D(c), site, v.id);
-        return c.json({
-          site: site.slug,
-          version: status.deploy,
-          missing: status.missing,
-        });
+        return c.json({ site: site.slug, ...(await getVersionStatus(D(c), site, v, P(c))) });
       },
     },
     tool: {
@@ -121,8 +115,9 @@ export const VERSION_OPERATIONS = [
       }),
       output: fromSchema({ type: "object" }),
       handler: async (c) => {
-        const site = await getSiteFor(D(c), P(c), c.req.param("slug")!, "sites:delete");
-        return c.json(await deleteVersion(D(c), P(c), site, c.req.param("id")!));
+        const site = await getSiteByRef(D(c), P(c), c.req.param("slug")!, "sites:delete");
+        const v = await resolveVersionRef(D(c), site, c.req.param("id")!);
+        return c.json(await deleteVersion(D(c), P(c), site, v.id));
       },
     },
     tool: { summarize: (r) => `Deleted version ${r.id}.` },

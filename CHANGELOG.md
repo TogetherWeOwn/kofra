@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Versions naming
+
+- Version creation and finalize move under `/versions`
+  (`POST /api/v1/sites/{slug}/versions` and `POST .../versions/{id}/finalize`).
+  The historical `/deploys` paths keep working as aliases with the same bodies
+  and responses (plus additive `version` and `links` fields on manifest
+  results). REST version references accept `live`, `vN`, `N` or an id, as the
+  tools already did.
+- `get_version` now returns `upload`/`uploads` with fresh upload items for
+  pending versions (dwu_ tokens only for keys that may write the site), and
+  missing-blob finalize errors carry a true `totalMissing` count.
+
 ### Publish v2
 
 - REST JSON publishing now uses the same flat file sources as MCP: content,

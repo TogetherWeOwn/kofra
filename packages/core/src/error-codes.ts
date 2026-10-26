@@ -54,7 +54,7 @@ export const ERROR_CODES: Readonly<Record<string, ErrorCode>> = {
   not_available: { status: 403, retryable: false, hint: "Use the instance's supported owner recovery process." },
   scope_not_grantable: { status: 403, retryable: false, hint: "Request only scopes held by both the caller and the target member's role." },
   blob_not_expected: { status: 404, retryable: false, hint: "Create a pending deploy first, then upload only the SHA-256 values it reports as missing." },
-  deploy_not_found: { status: 404, retryable: false, hint: "Start a deploy with POST /api/v1/sites/:slug/deploys, or use a returned deploy ID." },
+  deploy_not_found: { status: 404, retryable: false, hint: "Start a version with POST /api/v1/sites/:slug/versions (alias: /deploys), or use a returned version ID." },
   file_not_found: { status: 404, retryable: false, hint: "List files for the selected site/version and use an existing path." },
   folder_not_found: { status: 404, retryable: false, hint: "List your folders and retry." },
   key_not_found: { status: 404, retryable: false, hint: "List revocable keys with GET /api/v1/keys." },
