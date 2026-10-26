@@ -1335,6 +1335,104 @@ export function dropwayClient() {
     d.title = (site.title || site.slug) + " · " + boot.instanceName;
     clear(root);
     var filesSection = h("section", { class: "dw-section", id: "files" });
+    var duplicateAttempt = null;
+    var duplicateDialog = null;
+    var duplicateButton = h("button", { type: "button", class: "dw-btn", text: "Duplicate site", onclick: openDuplicate });
+    function openDuplicate() {
+      if (duplicateDialog) return;
+      var busy = false;
+      var destination = h("input", { class: "dw-input", id: "dw-duplicate-slug", name: "newSlug", required: true, minlength: "3", maxlength: "56", autocomplete: "off", autocapitalize: "none", spellcheck: "false", "aria-describedby": "dw-duplicate-slug-help" });
+      var message = h("textarea", { class: "dw-input", id: "dw-duplicate-message", name: "message", maxlength: "500", rows: "2" });
+      var feedback = h("div", { "aria-live": "polite", style: "overflow-wrap:anywhere" });
+      var submit = h("button", { type: "submit", class: "dw-btn primary", text: "Duplicate site" });
+      var cancel = h("button", { type: "button", class: "dw-btn", text: "Cancel", onclick: function () { dlg.close(); } });
+      var form = h(
+        "form",
+        {},
+        h("h2", { id: "dw-duplicate-title", text: "Duplicate site" }),
+        h("p", { id: "dw-duplicate-warning", class: "dw-callout", text: "This creates a separate site from the source's live files, live immediately. Passwords and access protection are not copied. Re-apply protection on the copy before sharing it. Only SPA mode is carried over; all other settings reset to instance defaults. The original site is unchanged." }),
+        h("div", { class: "dw-field" },
+          h("label", { class: "dw-label", for: "dw-duplicate-slug", text: "Destination slug" }), destination,
+          h("p", { class: "dw-help", id: "dw-duplicate-slug-help", text: "3–56 lowercase letters, digits and single hyphens; start and end with a letter or digit. Choose an unused name." })),
+        h("div", { class: "dw-field" }, h("label", { class: "dw-label", for: "dw-duplicate-message", text: "Version message (optional)" }), message),
+        feedback,
+        h("div", { class: "dw-row" }, cancel, submit),
+      );
+      var dlg = h("dialog", { class: "dw-dialog", "aria-labelledby": "dw-duplicate-title", "aria-describedby": "dw-duplicate-warning" }, form);
+      duplicateDialog = dlg;
+      dlg.addEventListener("cancel", function (event) {
+        if (busy) event.preventDefault();
+      });
+      dlg.addEventListener("close", function () {
+        dlg.remove();
+        duplicateDialog = null;
+        duplicateButton.focus();
+      });
+      function setBusy(value) {
+        busy = value;
+        dlg.setAttribute("aria-busy", String(value));
+        destination.disabled = message.disabled = submit.disabled = cancel.disabled = value;
+        submit.textContent = value ? "Duplicating…" : "Duplicate site";
+      }
+      // An edit starts a new submission, even when the previous request's outcome
+      // was unknown. Closing/reopening alone retains the last attempt for replay.
+      function changed() { duplicateAttempt = null; }
+      destination.addEventListener("input", changed);
+      message.addEventListener("input", changed);
+      if (duplicateAttempt) {
+        destination.value = duplicateAttempt.body.newSlug;
+        message.value = duplicateAttempt.body.message || "";
+      }
+      form.addEventListener("submit", async function (event) {
+        event.preventDefault();
+        if (busy) return;
+        clear(feedback);
+        var newSlug = destination.value;
+        if (!/^[a-z0-9][a-z0-9-]{1,54}[a-z0-9]$/.test(newSlug) || newSlug.indexOf("--") >= 0) {
+          add(feedback, errorBox({ message: "Enter a valid destination slug.", hint: "Use 3–56 lowercase letters, digits and single hyphens, starting and ending with a letter or digit.", code: "invalid_slug" }));
+          destination.focus();
+          return;
+        }
+        if (message.value.length > 500) {
+          add(feedback, errorBox({ message: "The version message is too long.", hint: "Use at most 500 characters.", code: "invalid_request" }));
+          message.focus();
+          return;
+        }
+        var body = { newSlug: newSlug };
+        if (message.value) body.message = message.value;
+        var signature = JSON.stringify(body);
+        if (!duplicateAttempt || duplicateAttempt.signature !== signature) {
+          duplicateAttempt = { signature: signature, body: body, key: crypto.randomUUID() };
+        }
+        setBusy(true);
+        try {
+          var result = await api("/sites/" + encodeURIComponent(site.slug) + "/duplicate", { method: "POST", body: duplicateAttempt.body, headers: { "Idempotency-Key": duplicateAttempt.key } });
+          // Links and receipt use only the returned identity, never the requested name.
+          var copy = result && result.site;
+          if (!copy || !copy.slug || !result.url) throw new Error("The server did not return the copy's identity. Retry this submission to recover its result.");
+          clear(form);
+          add(form,
+            h("h2", { id: "dw-duplicate-title", text: "Site duplicated" }),
+            h("div", { role: "status", style: "overflow-wrap:anywhere" },
+              h("p", { text: "Created a separate site: " + copy.slug }),
+              h("p", {}, h("a", { href: result.url, target: "_blank", rel: "noopener", text: result.url }))),
+            h("p", { class: "dw-callout", text: "Passwords and access protection were not copied. Re-apply protection before sharing the new site." }),
+            h("div", { class: "dw-row" },
+              h("button", { type: "button", class: "dw-btn", text: "Close", onclick: function () { dlg.close(); } }),
+              h("a", { class: "dw-btn primary", href: "/dashboard/sites/" + encodeURIComponent(copy.slug), text: "Manage copy" })),
+          );
+          duplicateAttempt = null;
+          $("button", form).focus();
+        } catch (error) {
+          add(feedback, errorBox(error, "Could not duplicate site"));
+        } finally {
+          setBusy(false);
+        }
+      });
+      d.body.appendChild(dlg);
+      dlg.showModal();
+      destination.focus();
+    }
     var head = h(
       "div",
       { class: "dw-pagehead" },
@@ -1350,6 +1448,7 @@ export function dropwayClient() {
         { class: "dw-row" },
         h("a", { class: "dw-btn", href: "/v/" + encodeURIComponent(slug) + "/", text: "Browse files" }),
         h("a", { class: "dw-btn", href: "/dashboard/publish?site=" + encodeURIComponent(slug), text: "Publish update" }),
+        duplicateButton,
         h("a", { class: "dw-btn primary", href: site.url, target: "_blank", rel: "noopener", text: "Open site" }),
       ),
     );
