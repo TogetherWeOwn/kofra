@@ -159,8 +159,10 @@ describe("ordinary rename against an isolated real Worker", () => {
         expect(req.method).toBe("POST");
         expect(url.pathname).toBe("/api/v1/sites/worker-cli-old/rename");
         expect(wire).toHaveLength(0);
+        // Capture before fetch: Node fetch consumes the Request body, so req.clone() after would throw TypeError: unusable.
+        const body = await req.clone().json();
         const res = await fetch(req, { redirect: "manual" });
-        wire.push({ method: req.method, path: url.pathname, body: await req.clone().json(), response: await res.clone().json() });
+        wire.push({ method: req.method, path: url.pathname, body, response: await res.clone().json() });
         return res;
       },
     };
