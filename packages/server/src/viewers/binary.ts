@@ -82,7 +82,7 @@ export const binaryViewer: Viewer = {
 };
 
 /** Shared binary fallback; note is plain text, never trusted markup. */
-export function binaryInfoPage(vc: ViewerContext, head: Uint8Array, note?: string): Response {
+export function binaryInfoPage(vc: ViewerContext, head: Uint8Array, note?: string, headers?: Record<string, string>): Response {
   const hex = Array.from(head.subarray(0, 16), (x) => x.toString(16).padStart(2, "0")).join("");
   const magic = MAGIC.find(([re]) => re.test(hex))?.[1] ?? null;
   const rows: Array<[string, string]> = [
@@ -101,5 +101,5 @@ ${note ? `<p class="dw-note">${escapeHtml(note)}</p>` : ""}
 <p><a class="dw-btn" href="${escapeHtml(vc.downloadUrl)}" rel="nofollow" download>Download</a></p>
 <h2 style="font-size:.95rem;margin:2rem 0 .5rem;color:var(--muted)">First ${Math.min(256, head.byteLength)} bytes</h2>
 <pre style="background:var(--code);padding:1rem;border-radius:8px;overflow:auto;font-size:.8rem;line-height:1.5">${escapeHtml(hexDump(head.subarray(0, 256)))}</pre></main>`;
-  return viewerPage(vc, { tabs: standardTabs(vc, { rendered: "Info", raw: false }), body });
+  return viewerPage(vc, { tabs: standardTabs(vc, { rendered: "Info", raw: false }), body, headers });
 }

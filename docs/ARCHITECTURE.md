@@ -154,6 +154,9 @@ ZIP64/split ZIPs and non-ZIP archives get the binary info page with an explanati
 No entry is inflated, extracted or linked, and entry contents are not verified.
 The ZIP fragment uses `archive@<version>/<sha256>`; bump the viewer version when
 its parser or output changes to invalidate both fragments and HTTP validators.
+A fallback caused by a transient short storage read is stored nowhere: no
+fragment is cached and the page itself is `no-store` without the listing ETag,
+so a reload recovers once storage does.
 Raw/download and sub-resource requests still serve the original complete bytes.
 
 **To add a viewer:** create `packages/server/src/viewers/<name>.ts` exporting a

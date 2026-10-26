@@ -122,14 +122,18 @@ export const archiveViewer: Viewer = {
   async render(vc) {
     let note = extname(vc.file.path) !== "zip" ? "Only ZIP archives can be listed. Download this archive to open it." :
       vc.file.size > MAX_ARCHIVE_BYTES ? `This ZIP is too large to list (limit ${formatBytes(MAX_ARCHIVE_BYTES)}). Download it to open it.` : "";
+    let transient = false;
     if (!note) {
       let r: Awaited<ReturnType<typeof cachedRender>> | null = null;
       try {
         r = await cachedRender(vc.dw, `archive@${archiveViewer.version}/${vc.file.sha256}`, async () => await archiveListing(vc) ?? "");
       } catch (e) {
-        // Short reads store nothing; this request still falls back, uncached.
-        // Deterministic parse failures keep returning null and stay cached.
+        // Short reads store no fragment; this request still falls back, and
+        // its page is non-storable (serve.ts withholds the listing ETag) so
+        // a reload after storage recovers is not answered 304 from the
+        // fallback. Deterministic parse failures return null, stay cached.
         if (!(e instanceof ArchiveReadError)) throw e;
+        transient = true;
       }
       if (r?.html) {
         return viewerPage(vc, {
@@ -141,6 +145,6 @@ export const archiveViewer: Viewer = {
       }
       note = "This ZIP could not be read: it is invalid, truncated or uses an unsupported ZIP format (ZIP64 or split archives). Download it to open it.";
     }
-    return binaryInfoPage(vc, await vc.readBytes(0, Math.min(vc.file.size, 8192)), note);
+    return binaryInfoPage(vc, await vc.readBytes(0, Math.min(vc.file.size, 8192)), note, transient ? { "Cache-Control": "no-store" } : undefined);
   },
 };
