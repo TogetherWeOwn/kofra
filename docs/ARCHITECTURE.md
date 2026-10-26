@@ -154,6 +154,16 @@ wrap the body with `viewerPage()` from `viewers/chrome.ts`, and add it to
 `VIEWERS` in `viewers/index.ts` before the code/binary fallbacks. Embedding apps
 pass extra viewers in `createDropway({ viewers })`; they run first.
 
+CSV delimiter detection (`viewers/csv.ts`) counts comma/tab/semicolon/pipe only
+outside quoted fields across complete logical records (LF, CRLF and bare-CR
+boundaries; `""` stays inside its field), bounded to the first 64 Ki characters
+and five complete nonempty records. A trailing record cut by the budget or left
+unterminated casts no vote; empty input, one column, unknown separators and
+ties fall back to comma in candidate order; `.tsv` always selects tab. Render
+changes bump the viewer version, which retires both cached fragments and
+conditional ETags; raw/download bytes, the no-script viewer CSP and the 4 MiB /
+2,000-row / 1,000-character caps stay unchanged.
+
 ### App-origin UI (`packages/server/src/ui`)
 
 | Path | Page |
