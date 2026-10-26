@@ -19,29 +19,29 @@ export interface WhoamiOutput {
 export interface PublishSiteInput {
   /** Every file of the site. */
   files: ({
-    /** Path inside the site, e.g. "index.html", "docs/guide.md", "assets/app.js". */
+    /** Path in the site, e.g. "docs/guide.md". */
     path: string;
-    /** The file itself: text (encoding "utf8", up to 1 MB) or base64 bytes (encoding "base64", up to 256 KB). For bigger or binary files prefer url or sha256. */
+    /** Text (utf8, up to 1 MB) or base64 bytes (up to 256 KB). Prefer url/sha256 for bigger or binary files. */
     content?: string;
-    /** How content is encoded. Default "utf8". */
+    /** Content encoding (default utf8). */
     encoding?: "utf8" | "base64";
-    /** Public https URL to download. URL_FETCH_MAX_BYTES (default 100 MiB), 30 s, 3 redirects; file/request caps also apply. */
+    /** Public https URL to fetch (URL_FETCH_MAX_BYTES, 30 s, 3 redirects; file/request caps apply). */
     url?: string;
-    /** Request headers for the url download, e.g. Authorization. Used once, never stored. */
+    /** Headers for the url fetch; used once, never stored. */
     headers?: Record<string, string>;
-    /** Hex SHA-256 of the bytes. Already stored: reused at once. Not stored: the result lists an upload link (PUT the bytes, then finalize_version). */
+    /** Hex SHA-256. Stored bytes are reused; otherwise the result gives an upload link (PUT, then finalize_version). */
     sha256?: string;
-    /** Size in bytes. Required with sha256 when the bytes are not stored yet. */
+    /** Bytes; required with sha256 if not yet stored. */
     size?: number;
-    /** Copy a file you already published: from a site you can read (default: this site), a version (default: live) and a path (default: the same path). */
+    /** Copy a published file: site (default: this site), version (default: live), path (default: same path). */
     copyFrom?: {
       /** Site slug, site_... id, or site URL. */
       site?: string;
-      /** A version: "live", "v3" or "3" (version number 3), or a version id (ver_...). */
+      /** "live", "v3", "3", or a ver_... id. */
       version?: string;
       path?: string;
     };
-    /** MIME type. Default: from the file extension. */
+    /** MIME type; default from extension. */
     contentType?: string;
   })[];
   /** Optional. Slug, id or URL of your existing site to replace, or a new slug (3-56 chars: a-z, 0-9, single hyphens). */
@@ -50,12 +50,18 @@ export interface PublishSiteInput {
   title?: string | null;
   /** One or two sentences about the site. */
   description?: string | null;
-  /** Single-page app: unknown paths serve index.html instead of a 404. */
+  /** SPA: unknown paths serve index.html. */
   spa?: boolean;
-  /** Browsers see .md files rendered as pages (default true); false serves them raw. */
+  /** .md rendered for browsers (default); false serves raw. */
   renderMarkdown?: boolean;
-  /** Send COOP/COEP headers (needed for SharedArrayBuffer and threaded WebAssembly). */
+  /** COOP/COEP headers (SharedArrayBuffer, threaded WASM). */
   crossOriginIsolation?: boolean;
+  /** Keep the site out of search indexes. */
+  noindex?: boolean;
+  /** File viewers; false serves raw bytes. */
+  viewers?: boolean;
+  /** Keyed sites: seconds to expiry from latest publish; null clears. */
+  ttlSeconds?: number | null;
   /** Optional visitor password (see set_site_access). */
   password?: string;
   /** Short note about this version, like a commit message. */
@@ -288,7 +294,7 @@ export interface ReadFileInput {
   site: string;
   /** File path, e.g. "index.html". */
   path: string;
-  /** A version: "live", "v3" or "3" (version number 3), or a version id (ver_...). */
+  /** "live", "v3", "3", or a ver_... id. */
   version?: string;
   /** Default "auto". */
   encoding?: "auto" | "text" | "base64";
@@ -341,6 +347,12 @@ export interface UpdateSiteSettingsInput {
   renderMarkdown?: boolean;
   /** Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM). */
   crossOriginIsolation?: boolean;
+  /** Ask crawlers not to index this site (X-Robots-Tag: noindex). */
+  noindex?: boolean;
+  /** Rendered file viewers on (default true); false always serves the stored bytes. */
+  viewers?: boolean;
+  /** Keyed sites only: lifetime in seconds from the latest publish; null clears it. */
+  ttlSeconds?: number | null;
   /** Visitor password; null removes it. Needs an API key. */
   password?: string | null;
   slug: string;
@@ -456,6 +468,12 @@ export interface CreateSiteInput {
   renderMarkdown?: boolean;
   /** Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM). */
   crossOriginIsolation?: boolean;
+  /** Ask crawlers not to index this site (X-Robots-Tag: noindex). */
+  noindex?: boolean;
+  /** Rendered file viewers on (default true); false always serves the stored bytes. */
+  viewers?: boolean;
+  /** Keyed sites only: lifetime in seconds from the latest publish; null clears it. */
+  ttlSeconds?: number | null;
   /** Visitor password; null removes it. Needs an API key. */
   password?: string | null;
   [key: string]: unknown;
@@ -794,6 +812,12 @@ export interface PublishUploadInput {
   renderMarkdown?: boolean;
   /** Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM). */
   crossOriginIsolation?: boolean;
+  /** Ask crawlers not to index this site (X-Robots-Tag: noindex). */
+  noindex?: boolean;
+  /** Rendered file viewers on (default true); false always serves the stored bytes. */
+  viewers?: boolean;
+  /** Keyed sites only: lifetime in seconds from the latest publish; null clears it. */
+  ttlSeconds?: number | null;
   /** Visitor password; null removes it. Needs an API key. */
   password?: string | null;
   path?: string;
@@ -950,6 +974,12 @@ export interface CreateVersionInput {
   renderMarkdown?: boolean;
   /** Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM). */
   crossOriginIsolation?: boolean;
+  /** Ask crawlers not to index this site (X-Robots-Tag: noindex). */
+  noindex?: boolean;
+  /** Rendered file viewers on (default true); false always serves the stored bytes. */
+  viewers?: boolean;
+  /** Keyed sites only: lifetime in seconds from the latest publish; null clears it. */
+  ttlSeconds?: number | null;
   /** Visitor password; null removes it. Needs an API key. */
   password?: string | null;
   slug: string;

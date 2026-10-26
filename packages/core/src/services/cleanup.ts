@@ -22,7 +22,7 @@ export interface CleanupReport {
 
 /**
  * Hourly housekeeping (Worker cron):
- * 1. expire anonymous sites past expires_at (soft delete, name tombstoned);
+ * 1. expire sites past expires_at (anonymous sites and keyed sites with a ttlSeconds lifetime; soft delete, name tombstoned);
  * 2. purge rows of sites deleted more than an hour ago (tombstones survive);
  * 3. drop pending deploys older than a day;
  * 4. delete blobs no version references any more (older than a day);
@@ -34,7 +34,7 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
   const report: CleanupReport = { expiredSites: 0, purgedSites: 0, abandonedDeploys: 0, deletedBlobs: 0, ...await cleanupTransfers(dc, now) };
   const db = dc.env.DB;
 
-  // 1. Expire anonymous sites.
+  // 1. Expire sites past their lifetime (anonymous expiry or a keyed site's ttlSeconds).
   const { results: expired } = await db
     .prepare("SELECT * FROM sites WHERE mode = 'site' AND expires_at IS NOT NULL AND expires_at < ? AND deleted_at IS NULL LIMIT 200")
     .bind(now)

@@ -3,6 +3,7 @@ import {
   baseType,
   encodePath,
   extname,
+  findSiteRedirect,
   getLiveSite,
   hmacHex,
   isHtml,
@@ -14,6 +15,7 @@ import {
   readBlobRange,
   requestPathToFilePath,
   resolveSlugRedirect,
+  siteHeadersFor,
   siteUrl,
   verifyPassword,
   type DropwayContext,
@@ -94,13 +96,43 @@ export function resolvePath(live: LiveSite, p: string, req: Request, mode: Serve
   return { kind: "not_found" };
 }
 
-/** Long-lived caching only for build outputs whose names carry a content hash (Vite, webpack, Next, Astro). */
+const WASM_RE = /\.wasm(\.(br|gz))?$/i;
+
+/**
+ * The SRV-05 cache policy matrix:
+ * - password-gated sites: `private, no-store` for everything;
+ * - sites that ship WebAssembly: everything revalidates, so the .wasm module
+ *   and the glue that loads it can never drift a year apart in a cache;
+ * - build outputs whose names carry a content hash (Vite, webpack, Next,
+ *   Astro): immutable for a year;
+ * - HTML and every other (unfingerprinted) file: revalidate.
+ * A site's own `_headers` Cache-Control overrides the last two classes.
+ */
 export function cacheControlFor(path: string, live: LiveSite): string {
   if (live.passwordHash) return "private, no-store";
+  if (WASM_RE.test(path)) return "public, max-age=0, must-revalidate";
+  for (const p in live.files) if (WASM_RE.test(p)) return "public, max-age=0, must-revalidate";
   const fingerprinted =
     /^(assets|_next\/static|static|_astro|build|_app\/immutable|dist)\//.test(path) &&
     /[.\-_](?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{8,}\.[a-z0-9]+(\.(br|gz))?$/.test(path);
   return fingerprinted ? "public, max-age=31536000, immutable" : "public, max-age=0, must-revalidate";
+}
+
+/** Anonymous, expiring and explicitly noindex sites stay out of search indexes (SRV-12). */
+export function isNoindex(live: LiveSite): boolean {
+  return live.tenantId === null || live.expiresAt !== null || live.noindex === true;
+}
+
+/**
+ * Apply the site's `_headers` entries matching `requestPath` (leading "/").
+ * Callers apply platform security headers afterwards, so those always win;
+ * a gated site's Cache-Control is never customised.
+ */
+function applySiteHeaders(h: Headers, live: LiveSite, requestPath: string) {
+  for (const { name, value } of siteHeadersFor(live.config, requestPath)) {
+    if (live.passwordHash && name.toLowerCase() === "cache-control") continue;
+    h.set(name, value);
+  }
 }
 
 /**
@@ -115,7 +147,7 @@ export function securityHeaders(h: Headers, live: LiveSite | null, mode: ServeMo
   h.set("Strict-Transport-Security", "max-age=31536000");
   if (gated) h.delete("Access-Control-Allow-Origin");
   else h.set("Access-Control-Allow-Origin", "*");
-  h.set("X-Robots-Tag", live?.expiresAt ? "noindex" : "all");
+  h.set("X-Robots-Tag", live && isNoindex(live) ? "noindex" : "all");
   if (live) {
     h.set("X-Kofra-Site", live.slug);
     if (live.versionId) h.set("X-Kofra-Version", live.versionId);
@@ -316,7 +348,11 @@ export async function serveSite(
   // Anonymous sites are untrusted: sandbox them even where other sites are not.
   if (!mode.sandbox && live.tenantId === null && dw.config.sitesSandboxAnonymous) mode = { ...mode, sandbox: true };
   if (live.expiresAt && live.expiresAt < Date.now()) {
-    return systemResponse(dw, req, mode, live, 410, "EXPIRED", "This site has expired", "Anonymous sites are temporary. Publish again, or claim a site with an API key to keep it. See {app}.");
+    const message =
+      live.tenantId === null
+        ? "Anonymous sites are temporary. Publish again, or claim a site with an API key to keep it. See {app}."
+        : "This site was published with a set lifetime (ttlSeconds) and it has ended. Its owner can publish again or clear the lifetime. See {app}.";
+    return systemResponse(dw, req, mode, live, 410, "EXPIRED", "This site has expired", message);
   }
 
   // Password-protected sites only answer navigations (top level or frames, such as the app's file
@@ -338,6 +374,51 @@ export async function serveSite(
   }
   if (!live.versionId) return systemResponse(dw, req, mode, live, 404, "EMPTY", "Nothing published yet", "This site exists but has no live version yet.");
 
+  const requestPath = `/${filePath}`;
+
+  // The site-config files are platform inputs, never site content (SRV-09).
+  if (filePath === "_redirects" || filePath === "_headers") {
+    const response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", `There is no file at <code>/${escapeHtml(filePath)}</code> on this site.`);
+    recordHit(dw, req, live, filePath, response.status, 0, Date.now() - started);
+    return response;
+  }
+
+  // `_redirects` rules run before file resolution; the first match wins. A
+  // rule pointing at its own path is skipped, so `/* /index.html` style
+  // catch-alls cannot loop on their destination.
+  const redirect = findSiteRedirect(live.config, requestPath);
+  if (redirect) {
+    const destinationPath = redirect.destination.startsWith("/") ? redirect.destination.split("?")[0] : null;
+    if (destinationPath !== requestPath) {
+      let location = redirect.destination.startsWith("/") ? `${mode.base}${redirect.destination.slice(1)}` : redirect.destination;
+      if (!redirect.destination.includes("?") && url.search) location += url.search;
+      const h = new Headers({ Location: location, "Cache-Control": cacheControlFor(filePath, live) });
+      applySiteHeaders(h, live, requestPath);
+      securityHeaders(h, live, mode);
+      const response = new Response(null, { status: redirect.rule.status, headers: h });
+      recordHit(dw, req, live, filePath, response.status, 0, Date.now() - started);
+      return response;
+    }
+  }
+
+  // A site's own robots.txt is served verbatim; without one, noindex sites
+  // get a generated disallow-all and indexable sites a plain 404. Neither is
+  // ever answered by the SPA or 404.html fallbacks (SRV-12).
+  if (filePath === "robots.txt") {
+    let response: Response;
+    if (live.files["robots.txt"]) {
+      response = await serveFile(req, dw, url, live, mode, "robots.txt", 200, viewers, { requestPath, forceRaw: true });
+    } else if (isNoindex(live)) {
+      const h = new Headers({ "Content-Type": "text/plain; charset=utf-8", "Cache-Control": cacheControlFor("robots.txt", live) });
+      securityHeaders(h, live, mode);
+      response = new Response(method === "HEAD" ? null : "User-agent: *\nDisallow: /\n", { status: 200, headers: h });
+    } else {
+      response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", "This site has no robots.txt.");
+    }
+    recordHit(dw, req, live, filePath, response.status, Number(response.headers.get("Content-Length") ?? 0), Date.now() - started);
+    return response;
+  }
+
   const resolved = resolvePath(live, filePath, req, mode);
   let response: Response;
   let bytes = 0;
@@ -350,7 +431,7 @@ export async function serveSite(
     response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`);
     securityHeaders(response.headers, live, mode);
   } else {
-    response = await serveFile(req, dw, url, live, mode, resolved.path, resolved.status, viewers);
+    response = await serveFile(req, dw, url, live, mode, resolved.path, resolved.status, viewers, { requestPath });
     bytes = Number(response.headers.get("Content-Length") ?? 0);
   }
   recordHit(dw, req, live, filePath, response.status, bytes, Date.now() - started);
@@ -366,6 +447,7 @@ async function serveFile(
   path: string,
   status: number,
   viewers: readonly Viewer[],
+  opts: { requestPath: string; forceRaw?: boolean },
 ): Promise<Response> {
   const [sha256, size, contentType] = live.files[path]!;
   const file = toViewerFile(path, sha256, size, contentType);
@@ -373,7 +455,9 @@ async function serveFile(
   const raw = flag(sp, "raw");
   const download = flag(sp, "download");
   const head = req.method === "HEAD";
-  const viewMode = raw || download ? null : requestedViewMode(req, sp);
+  // `viewers: false` (VIEW-06) turns every rendered view off: the stored
+  // bytes are served for navigations and for ?view= / ?view=source alike.
+  const viewMode = raw || download || opts.forceRaw || live.viewers === false ? null : requestedViewMode(req, sp);
   const viewer = viewMode ? findViewer(file, live, viewers, viewMode) : null;
   const report = live.tenantId === null && !raw && !download && !precompressed(path) && baseType(contentType) === "text/html";
   const reportVariant = report ? `-report${REPORT_LINK_VERSION}` : "";
@@ -444,6 +528,7 @@ async function serveFile(
     const etag = `W/"${rewriteKind ? "pm-" : ""}${sha256}${shim ? `-js${PATH_SHIM_VERSION}` : ""}${reportVariant}"`;
     const h = new Headers({ "Content-Type": contentType, ETag: etag, "Cache-Control": cacheControlFor(path, live) });
     if (rewriteKind) h.set("X-Kofra-Rewritten", "path-prefix");
+    applySiteHeaders(h, live, opts.requestPath);
     securityHeaders(h, live, mode);
     if (etagMatches(req, etag)) return new Response(null, { status: 304, headers: h });
     if (head) return new Response(null, { status, headers: h });
@@ -463,7 +548,7 @@ async function serveFile(
   h.set("ETag", etag);
   h.set("Accept-Ranges", "bytes");
   h.set("Cache-Control", cacheControlFor(path, live));
-  if (findViewer(file, live, viewers, "document") || findViewer(file, live, viewers, "frame")) h.set("Vary", "Accept, Sec-Fetch-Dest");
+  if (live.viewers !== false && (findViewer(file, live, viewers, "document") || findViewer(file, live, viewers, "frame"))) h.set("Vary", "Accept, Sec-Fetch-Dest");
   const pre = !raw && !download ? precompressed(path) : null;
   if (raw && (isTextual(contentType) || isHtml(contentType))) {
     // ?raw=1 shows the source: never let the browser render it.
@@ -476,6 +561,7 @@ async function serveFile(
     h.set("Content-Type", contentType);
   }
   if (download) h.set("Content-Disposition", `attachment; filename="${(path.split("/").pop() ?? "file").replace(/["\\\r\n]/g, "_")}"`);
+  applySiteHeaders(h, live, opts.requestPath);
   securityHeaders(h, live, mode);
 
   if (etagMatches(req, etag)) return new Response(null, { status: 304, headers: h });

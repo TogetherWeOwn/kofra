@@ -75,6 +75,7 @@ Extension adapters can add codes and override guidance without changing built-in
 | `invalid_transfer_expiry` | 400 | false | Choose a deadline from one hour to the effective expiry ceiling. |
 | `invalid_transfer_password` | 400 | false | Use 8-1,024 characters without NUL, or empty for no password. |
 | `invalid_transfer_range` | 416 | false | Request one satisfiable byte range. |
+| `invalid_ttl` | 400 | false | Set ttlSeconds to an integer from 1 to 315360000 (10 years), or null to clear a keyed site's lifetime. |
 | `invalid_zip` | 400 | false | Send a standard .zip using deflate or stored entries. |
 | `key_limit` | 409 | false | Revoke unused keys with DELETE /api/v1/keys/:id. |
 | `key_not_found` | 404 | false | List revocable keys with GET /api/v1/keys. |

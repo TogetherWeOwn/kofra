@@ -23,6 +23,7 @@ export * from "./lib/slug";
 export * from "./lib/filetypes";
 
 export * from "./services/events";
+export * from "./services/site-config";
 export * from "./services/identity";
 export * from "./services/keys";
 export * from "./services/tenants";

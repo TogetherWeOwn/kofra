@@ -14,36 +14,36 @@ export const SITE_REF: Schema = {
 export const VERSION_REF: Schema = {
   type: "string",
   minLength: 1,
-  description: 'A version: "live", "v3" or "3" (version number 3), or a version id (ver_...).',
+  description: '"live", "v3", "3", or a ver_... id.',
 };
 
 const COPY_FROM: Schema = {
   type: "object",
-  description: "Copy a file you already published: from a site you can read (default: this site), a version (default: live) and a path (default: the same path).",
+  description: "Copy a published file: site (default: this site), version (default: live), path (default: same path).",
   properties: { site: SITE_REF, version: VERSION_REF, path: { type: "string" } },
   additionalProperties: false,
 };
 
 export const FILE_INPUT: Schema = {
   type: "object",
-  description: "One file: a path plus exactly one source (content, url, sha256 or copyFrom).",
+  description: "A path plus exactly one source: content, url, sha256 or copyFrom.",
   properties: {
-    path: { type: "string", minLength: 1, description: 'Path inside the site, e.g. "index.html", "docs/guide.md", "assets/app.js".' },
+    path: { type: "string", minLength: 1, description: 'Path in the site, e.g. "docs/guide.md".' },
     content: {
       type: "string",
-      description: 'The file itself: text (encoding "utf8", up to 1 MB) or base64 bytes (encoding "base64", up to 256 KB). For bigger or binary files prefer url or sha256.',
+      description: "Text (utf8, up to 1 MB) or base64 bytes (up to 256 KB). Prefer url/sha256 for bigger or binary files.",
     },
-    encoding: { type: "string", enum: ["utf8", "base64"], description: 'How content is encoded. Default "utf8".' },
-    url: { type: "string", description: "Public https URL to download. URL_FETCH_MAX_BYTES (default 100 MiB), 30 s, 3 redirects; file/request caps also apply." },
-    headers: { type: "object", additionalProperties: { type: "string" }, description: "Request headers for the url download, e.g. Authorization. Used once, never stored." },
+    encoding: { type: "string", enum: ["utf8", "base64"], description: "Content encoding (default utf8)." },
+    url: { type: "string", description: "Public https URL to fetch (URL_FETCH_MAX_BYTES, 30 s, 3 redirects; file/request caps apply)." },
+    headers: { type: "object", additionalProperties: { type: "string" }, description: "Headers for the url fetch; used once, never stored." },
     sha256: {
       type: "string",
       pattern: "^[a-fA-F0-9]{64}$",
-      description: "Hex SHA-256 of the bytes. Already stored: reused at once. Not stored: the result lists an upload link (PUT the bytes, then finalize_version).",
+      description: "Hex SHA-256. Stored bytes are reused; otherwise the result gives an upload link (PUT, then finalize_version).",
     },
-    size: { type: "integer", minimum: 0, description: "Size in bytes. Required with sha256 when the bytes are not stored yet." },
+    size: { type: "integer", minimum: 0, description: "Bytes; required with sha256 if not yet stored." },
     copyFrom: COPY_FROM,
-    contentType: { type: "string", description: "MIME type. Default: from the file extension." },
+    contentType: { type: "string", description: "MIME type; default from extension." },
   },
   required: ["path"],
   additionalProperties: false,
@@ -52,9 +52,12 @@ export const FILE_INPUT: Schema = {
 export const SETTINGS_INPUT = {
   title: { type: ["string", "null"], maxLength: 200, description: "Title shown in lists." },
   description: { type: ["string", "null"], maxLength: 2000, description: "One or two sentences about the site." },
-  spa: { type: "boolean", description: "Single-page app: unknown paths serve index.html instead of a 404." },
-  renderMarkdown: { type: "boolean", description: "Browsers see .md files rendered as pages (default true); false serves them raw." },
-  crossOriginIsolation: { type: "boolean", description: "Send COOP/COEP headers (needed for SharedArrayBuffer and threaded WebAssembly)." },
+  spa: { type: "boolean", description: "SPA: unknown paths serve index.html." },
+  renderMarkdown: { type: "boolean", description: ".md rendered for browsers (default); false serves raw." },
+  crossOriginIsolation: { type: "boolean", description: "COOP/COEP headers (SharedArrayBuffer, threaded WASM)." },
+  noindex: { type: "boolean", description: "Keep the site out of search indexes." },
+  viewers: { type: "boolean", description: "File viewers; false serves raw bytes." },
+  ttlSeconds: { type: ["integer", "null"], minimum: 1, maximum: 315360000, description: "Keyed sites: seconds to expiry from latest publish; null clears." },
 } satisfies Record<string, Schema>;
 
 export const IDEMPOTENCY_KEY: Schema = {
@@ -64,7 +67,7 @@ export const IDEMPOTENCY_KEY: Schema = {
   description: "Retry key (24 h): same arguments replay; different arguments return 422.",
 };
 
-export const CONFIRM_SLUG: Schema = { type: "string", description: "Must equal the site's slug. Destructive actions need this explicit confirmation." };
+export const CONFIRM_SLUG: Schema = { type: "string", description: "Must equal the site's slug (destructive-action confirmation)." };
 
 // ---------------------------------------------------------------- outputs
 // Deliberately small: clients validate structuredContent against these, and some send

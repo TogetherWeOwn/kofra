@@ -57,15 +57,16 @@ throws `ApiError` with a stable `code` and a `hint` for the caller.
 | `identity.ts` | Default identity adapter: `Authorization: Bearer` API key (`dw_`), claim token (`dwc_`) or bootstrap secret |
 | `keys.ts` | Create, list, revoke scoped API keys (only a SHA-256 is stored) |
 | `tenants.ts` | First-run setup (bootstrap key creates the owner), members, owner recovery |
-| `sites.ts` | Create, list, update, delete and claim sites; settings; access checks (`getSiteFor`) |
-| `deploys.ts` | Manifest validation, content-addressed upload, atomic finalize, versions, restore, read-back |
+| `sites.ts` | Create, list, update, delete and claim sites; settings (including `noindex`, `viewers` and keyed-site `ttlSeconds`); access checks (`getSiteFor`) |
+| `deploys.ts` | Manifest validation, content-addressed upload, atomic finalize (including parsing the version's site config and restarting a keyed site's `ttl_seconds` lifetime), versions, restore, read-back |
+| `site-config.ts` | Parses root `_redirects` (301/302/307/308, placeholders, one trailing splat) and `_headers` (path patterns) into a version's `config_json`; invalid lines become `invalid_config` warnings; matches rules for serving |
 | `publish.ts` | One-shot publish (multipart, JSON, zip, raw) built on `deploys.ts` |
 | `sources.ts` | Agent file sources (`content`, base64, `url` with an SSRF guard, `sha256` + upload links, `copyFrom`), `publishSources`, partial `updateSiteFiles`, `finalizeVersionByRef` |
 | `site-ops.ts` | Site refs (slug, id or URL), version refs (`live`, `v3`, `3`, id), rename, access modes, paged file reads, `confirm` checks |
 | `idempotency.ts` | Atomic D1 idempotency claims (24 h): replay the first result, 422 on a reused key with another body, retryable 409 for concurrent/unknown outcomes |
 | `upload-tokens.ts` | HMAC upload-only capabilities for the blobs of one pending version, expiring one hour after creation |
 | `blobs.ts` | R2 storage at `blobs/<sha256>` (R2 verifies the hash on write), edge cache |
-| `live.ts` | `live:<slug>` manifest in KV (D1 fallback, per-isolate 5 s cache); v3 filename maps are prototype-less so legal names like `__proto__` survive |
+| `live.ts` | `live:<slug>` manifest in KV (D1 fallback, per-isolate 5 s cache); v3 filename maps are prototype-less so legal names like `__proto__` survive; v4 adds the `noindex`/`viewers` settings and the live version's parsed site config |
 | `cleanup.ts` | Hourly cron: expire anonymous sites, purge deleted sites, drop stale uploads, delete orphan blobs |
 | `events.ts` | Runs hooks and metering after the response (never throws) |
 | `transfers.ts` | Sender-owned deliveries: create/read/update/revoke, revision fencing and permanent slug reservations |
@@ -116,10 +117,25 @@ Path mode is interim. Root-relative URLs (`/assets/app.js`) would escape the
    import specifiers, CSS set from JS, `location.href = "/x"` and
    `history.pushState("/x")`. Use relative URLs there, or subdomain mode.
 
+Site-config files: after the password gate, `_redirects` rules run before
+file resolution (first match wins; a rule pointing at its own path is skipped
+so catch-alls cannot loop), and `_redirects`/`_headers` themselves always
+answer 404. `_headers` entries apply to file responses (including redirect
+responses), under the platform security headers, which are applied afterwards
+and win; platform-owned headers (cookies, length, type, validators,
+`X-Kofra-*`) cannot be set at all, and a gated site's `Cache-Control` stays
+`private, no-store`. Otherwise the cache matrix is: gated `private, no-store`;
+any site shipping `.wasm` revalidates; fingerprinted build outputs are
+immutable for a year; HTML and other unfingerprinted files revalidate. A
+site's own `robots.txt` is served verbatim; without one, a `noindex` site
+(anonymous, expiring, or the `noindex` setting) gets a generated
+disallow-all and any other site a plain 404 — never the SPA fallback.
+
 ### Viewing files
 
 `serveFile` asks `findViewer(file, live, viewers, mode)` (`packages/server/src/viewers`)
-for a rendered view. The mode comes from the request:
+for a rendered view — unless the site sets `viewers: false`, which always
+serves the stored bytes. The mode comes from the request:
 
 | Request | Mode | What it gets |
 |---|---|---|
@@ -231,8 +247,8 @@ selection stays bound to the in-flight publish.
 - `tenants`: exactly one in this build (created by `POST /api/v1/setup`).
 - `members`: owner / admin / member of a tenant; `external_ref` links an outer identity system.
 - `api_keys`: SHA-256 of the key, `scopes` (`sites:read sites:write sites:delete keys:write members:write data:write secrets:write admin`), optional `site_id` restriction.
-- `sites`: `tenant_id` NULL = anonymous (then `claim_token_hash`, `expires_at`).
-- `versions`: immutable manifests; `status` pending|ready; `manifest_hash` (identical republish = `unchanged`); `base_version_id` (409 `version_conflict`).
+- `sites`: `tenant_id` NULL = anonymous (then `claim_token_hash`, `expires_at`); `noindex`/`viewers` serving switches; `ttl_seconds` (keyed sites only) recomputes `expires_at` at every finalize, so expiry counts from the latest publish.
+- `versions`: immutable manifests; `status` pending|ready; `manifest_hash` (identical republish = `unchanged`); `base_version_id` (409 `version_conflict`); `config_json` holds the parsed `_redirects`/`_headers` rules and their warnings for that version, so restore and duplicate carry the rules with the files.
 - `version_files`: path -> sha256, size, content type.
 - `blobs` + `blob_scopes`: bytes exist once in R2; a scope (`t:<tenant>` or `s:<anonymous site>`) skips an upload only for bytes it has proven it holds, so dedupe never reveals another owner's files.
 - `usage_counters`: active owned sites and unique bytes in ordinary sites' ready versions, plus each transfer's reserved bytes until purge (including deleted or held deliveries). Lifecycle transactions refresh counters; transfer insert/purge triggers preserve their retention charge. `recomputeUsage(dc, tenantId)` repairs drift; the midnight cron emits one `storage_snapshot` per tenant. Ordinary pending manifests are not charged; a transfer reserves its bytes before its initial deploy, so that deploy's `newBytes` is zero. `0003_scopes_usage.sql` extends the table from `0002_transfers.sql` without rewriting the applied migration.

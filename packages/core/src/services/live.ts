@@ -1,4 +1,5 @@
 import type { DropwayContext } from "../context";
+import { emptySiteConfig, parseSiteConfigJson, type SiteConfig } from "./site-config";
 
 /**
  * The "live manifest": everything the edge needs to serve a site, cached in KV
@@ -9,8 +10,8 @@ import type { DropwayContext } from "../context";
  * as own keys; older cached entries are treated as a miss and rebuilt from D1.
  */
 export interface LiveSite {
-  /** 2 = stale (rebuilt on read); fresh writes are LIVE_VERSION. */
-  v: 2 | 3;
+  /** 2 and 3 = stale (rebuilt on read); fresh writes are LIVE_VERSION. */
+  v: 2 | 3 | 4;
   siteId: string;
   slug: string;
   tenantId: string | null;
@@ -18,6 +19,12 @@ export interface LiveSite {
   spa: boolean;
   renderMarkdown: boolean;
   crossOriginIsolation: boolean;
+  /** v4: per-site noindex setting. Optional so viewers/fixtures built against v2/v3 keep compiling; undefined = false. */
+  noindex?: boolean;
+  /** v4: rendered file viewers enabled. Optional as above; undefined = true. */
+  viewers?: boolean;
+  /** v4: parsed _redirects/_headers of the live version. Optional as above; undefined = no rules. */
+  config?: SiteConfig;
   passwordHash: string | null;
   expiresAt: number | null;
   files: Record<string, [sha256: string, size: number, contentType: string]>;
@@ -25,7 +32,8 @@ export interface LiveSite {
 
 export const liveKey = (slug: string) => `live:${slug}`;
 
-const LIVE_VERSION = 3;
+// v4 adds the noindex/viewers settings and the live version's parsed site config.
+const LIVE_VERSION = 4;
 
 /** Copy own file entries into a prototype-less map, preserving an own __proto__ key. */
 function ownFiles(files: LiveSite["files"]): LiveSite["files"] {
@@ -55,6 +63,7 @@ export async function getLiveSite(dc: DropwayContext, slug: string): Promise<Liv
   const cached = await dc.env.CACHE.get<LiveSite>(liveKey(slug), { type: "json", cacheTtl: dc.config.liveCacheTtlSeconds }).catch(() => null);
   if (cached && cached.v === LIVE_VERSION && cached.files && typeof cached.files === "object") {
     cached.files = ownFiles(cached.files);
+    cached.config ??= emptySiteConfig();
     remember(slug, cached);
     return cached;
   }
@@ -66,8 +75,10 @@ export async function getLiveSite(dc: DropwayContext, slug: string): Promise<Liv
 
 export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string; siteId?: string }): Promise<LiveSite | null> {
   const site = await dc.env.DB.prepare(
-    `SELECT id, slug, tenant_id, current_version_id, spa, render_markdown, cross_origin_isolation, password_hash, expires_at
-       FROM sites WHERE ${by.siteId ? "id" : "slug"} = ? AND deleted_at IS NULL`,
+    `SELECT s.id, s.slug, s.tenant_id, s.current_version_id, s.spa, s.render_markdown, s.cross_origin_isolation,
+            s.noindex, s.viewers, s.password_hash, s.expires_at, v.config_json
+       FROM sites s LEFT JOIN versions v ON v.id = s.current_version_id
+      WHERE s.${by.siteId ? "id" : "slug"} = ? AND s.deleted_at IS NULL`,
   )
     .bind(by.siteId ?? by.slug)
     .first<{
@@ -78,8 +89,11 @@ export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string
       spa: number;
       render_markdown: number;
       cross_origin_isolation: number;
+      noindex: number;
+      viewers: number;
       password_hash: string | null;
       expires_at: number | null;
+      config_json: string | null;
     }>();
   if (!site) return null;
   const files: LiveSite["files"] = Object.create(null);
@@ -98,6 +112,9 @@ export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string
     spa: site.spa === 1,
     renderMarkdown: site.render_markdown === 1,
     crossOriginIsolation: site.cross_origin_isolation === 1,
+    noindex: site.noindex === 1,
+    viewers: site.viewers !== 0,
+    config: parseSiteConfigJson(site.config_json),
     passwordHash: site.password_hash,
     expiresAt: site.expires_at,
     files,

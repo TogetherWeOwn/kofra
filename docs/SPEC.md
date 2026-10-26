@@ -107,7 +107,7 @@ What Kofra is not:
 | PUB-13 | Files larger than one request (above about 95 MB): multipart upload through the Worker, resumable | P1 | R-35 |
 | PUB-14 | `archiveUrl` (publish a zip from a URL) and chat-client attachments (`{download_url, file_name}`) as sources | P1 | R-35 |
 | PUB-15 | Duplicate a site server-side (immediately live) | P1 | Done |
-| PUB-16 | TTL for keyed sites (`ttlSeconds`, `null` clears) | P1 | R-27 |
+| PUB-16 | TTL for keyed sites (`ttlSeconds`, `null` clears) | P1 | Done |
 | PUB-17 | Dry run: `dryRun: true` returns added, changed, removed and skipped files and the resulting size without creating a version | P1 | R-20 |
 | PUB-18 | Drag-and-drop publish in the dashboard (folder, zip or file) | P1 | R-22 |
 | PUB-19 | `kofra watch` republishes on change | P1 | R-10 |
@@ -121,14 +121,14 @@ What Kofra is not:
 | SRV-02 | Path mode keeps sites inside `/<slug>/`: HTML and CSS root-relative URLs are rewritten; URLs built at runtime are resolved by `Referer` with a 307 (unsandboxed pages) or by an injected run-time shim (sandboxed pages, which send no Referer); navigations inside an SPA fall back to the SPA. Interim until an instance has a domain | P0 | Done (SPA navigation fallback in R-12) |
 | SRV-03 | Index resolution: `index.html`, `index.htm`, `index.md`, `README.md`; a one-file site serves that file at `/`; folders without an index get a listing; `404.html`; SPA fallback | P0 | Done |
 | SRV-04 | Headers: `ETag` (sha256), `Range`/206, pre-compressed `.br`/`.gz` with `Content-Encoding`, `X-Kofra-Version`, `X-Robots-Tag: noindex` on expiring sites, `X-Content-Type-Options: nosniff` | P0 | Done |
-| SRV-05 | Cache policy matrix (HTML and unfingerprinted files revalidate; fingerprinted files immutable; gated sites `private, no-store`; sites with `.wasm` revalidate) | P0 | Partial; R-27 |
+| SRV-05 | Cache policy matrix (HTML and unfingerprinted files revalidate; fingerprinted files immutable; gated sites `private, no-store`; sites with `.wasm` revalidate) | P0 | Done |
 | SRV-06 | Content-addressed edge cache (Cache API by sha256, pointer memo). Live URL shows a new version within about 60 s worldwide, the version URL at once | P0 | R-14 |
 | SRV-07 | Version preview URLs `<slug>--v<N>` for the owner (signed links for others) | P0 | R-13 |
 | SRV-08 | Cross-origin isolation per site (COOP/COEP for `SharedArrayBuffer` and threaded WebAssembly) | P0 | Done |
-| SRV-09 | `_redirects` and `_headers` files at the site root (Netlify/Cloudflare Pages syntax subset), parsed at finalize, never served | P1 | R-27 |
+| SRV-09 | `_redirects` and `_headers` files at the site root (Netlify/Cloudflare Pages syntax subset), parsed at finalize, never served | P1 | Done |
 | SRV-10 | Agent-readable pages: `Accept: text/markdown` on a navigation returns a Markdown rendering of HTML and text files | P1 | R-34 |
 | SRV-11 | Embeds: public sites can be framed anywhere; gated sites refuse framing; per-site embed allowlist (`frame-ancestors`) | P1 | Partial; R-23 |
-| SRV-12 | Robots: anonymous and expiring sites `noindex`; per-site `noindex` setting; a site's own `robots.txt` is served when present | P0 | Partial; R-27 |
+| SRV-12 | Robots: anonymous and expiring sites `noindex`; per-site `noindex` setting; a site's own `robots.txt` is served when present | P0 | Done |
 | SRV-13 | Live reload: open tabs refresh when a new version goes live | P2 | R-41 |
 | SRV-14 | Per-site functions (sandboxed server code via Dynamic Workers) | P2 | R-48 |
 
@@ -143,7 +143,7 @@ Full matrix in section 10.
 | VIEW-03 | P1 types: Jupyter notebooks, Mermaid and math inside Markdown, YAML/TOML tree, sortable and filterable CSV, JSON search, font specimens, diffs and patches, binary info page | P1 | R-34 |
 | VIEW-04 | P2 types: Office documents (via Markdown conversion), archives (entry list), 3D models, GeoJSON maps, EPUB | P2 | R-51 |
 | VIEW-05 | App-origin viewer page `<app>/view/{site}/{path}` with tabs and a version picker; user content stays in an iframe on the sites origin | P1 | R-22 |
-| VIEW-06 | Per-site switches: `renderMarkdown` (exists) and `viewers: false` (always raw) | P0/P1 | Partial; R-27 |
+| VIEW-06 | Per-site switches: `renderMarkdown` (exists) and `viewers: false` (always raw) | P0/P1 | Done |
 
 ### 4.4 Versions (VER)
 
@@ -1810,7 +1810,7 @@ Workspaces 24, Variables 3, Billing 4, Support 1.
 | Finalize `warnings[]` | Publish warnings (more kinds) | P0 | R-12 |
 | Client attribution header and badge | `X-Kofra-Client`, MCP `clientInfo` | P0 | Done / R-06 |
 | `urls[]` (slug, domain, label...) | `site.urls[]` (slug, domain, mount) | P1 | R-33 |
-| TTL | `ttlSeconds` | P1 | R-27 |
+| TTL | `ttlSeconds` | P1 | Done |
 | SPA mode | `spa` | P0 | Done |
 | Display metadata and AI generation | Title/description; HTML metadata then Workers AI | P1 | R-19 |
 | Viewer metadata for auto-viewers | Site title/description and OG image per version | P1 | R-19, R-20 |
