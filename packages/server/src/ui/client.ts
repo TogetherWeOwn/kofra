@@ -629,6 +629,11 @@ export function dropwayClient() {
     // blocked until reselected). seq: selection generation; a drop that resolves
     // after a newer selection (or after a publish started) is stale and ignored.
     var state = { items: [], skipped: [], errors: [], busy: false, seq: 0 };
+    // Review navigation (search, visibility, ordering). Presentation only: it
+    // never touches state.items, state.skipped, the ignore policy or what
+    // run() sends. Every setItems call resets it to the complete review.
+    var nav = { q: "", cat: "all", order: "path" };
+    var navEls = null;
     var siteSelect = h("select", { class: "dw-select", id: "dw-pub-site", "aria-label": "Site to update" }, h("option", { value: "", text: "Loading sites…" }));
     var slugInput = h("input", { class: "dw-input", id: "dw-pub-slug", placeholder: "generated if empty", autocomplete: "off", spellcheck: "false", pattern: "[a-z0-9][a-z0-9-]{1,62}" });
     var modeNew = h("input", { type: "radio", name: "dw-pub-mode", value: "new", checked: !opts.site });
@@ -682,10 +687,16 @@ export function dropwayClient() {
       errors = [];
       var keep = [];
       var skipped = [];
+      var skipRows = [];
       stripCommonRoot(selection).forEach(function (it) {
         var why = ignored(it.path);
-        if (why) skipped.push(it.path + " (" + why + (it.error ? "; " + (it.error.kind === "directory" ? "contents unreadable" : "unreadable") : "") + ")");
-        else if (it.error) errors.push(it.error);
+        if (why) {
+          var entry = it.path + " (" + why + (it.error ? "; " + (it.error.kind === "directory" ? "contents unreadable" : "unreadable") : "") + ")";
+          skipped.push(entry);
+          // The full "path (reason)" text stays the row; the path alone
+          // drives review search and ordering, never the reason.
+          skipRows.push({ path: it.path, text: entry });
+        } else if (it.error) errors.push(it.error);
         else keep.push(it);
       });
       state.items = keep;
@@ -727,8 +738,18 @@ export function dropwayClient() {
       // The review lists the exact normalized inventory publish() will send:
       // every included path with its byte size, every excluded path with its
       // ignore reason. It reads no file contents and makes no requests.
+      // Navigation (search, visibility, ordering) only re-renders these rows:
+      // default is the complete review in deterministic Path order, included
+      // group first. Size orders included bytes descending (equal sizes fall
+      // back to Path order); exclusions always stay Path-ordered last, and an
+      // unreadable exclusion keeps its "unreadable" note instead of a guessed
+      // size. Hidden rows are still uploaded; Clear restores the full review.
       var wasOpen = review.open;
       clear(review);
+      nav.q = "";
+      nav.cat = "all";
+      nav.order = "path";
+      navEls = null;
       if (!keep.length && !skipped.length) {
         review.hidden = true;
       } else {
@@ -736,23 +757,114 @@ export function dropwayClient() {
         var label = keep.length ? "Review " + plural(keep.length, "file") + " · " + bytes(total) : "Review selection";
         if (skipped.length) label += " · " + plural(skipped.length, "excluded file");
         add(review, h("summary", { text: label }));
-        if (keep.length) {
-          add(review, h("p", { class: "dw-small dw-muted dw-review-h", text: zip ? "Archive" : "Included (" + keep.length + ")" }));
-          var included = h("ul", { class: "dw-review-list" });
-          keep.forEach(function (it) {
-            add(included, h("li", { class: "dw-review-row" }, h("code", { class: "dw-mono", text: it.path }), " · " + bytes(it.file.size)));
+        var search = h("input", { class: "dw-input", type: "search", placeholder: "Search paths", "aria-label": "Search review by path", autocomplete: "off", spellcheck: "false" });
+        var navOption = function (value, text) {
+          var o = h("option", { text: text });
+          o.value = value;
+          o.setAttribute("value", value);
+          return o;
+        };
+        var catSel = h("select", { class: "dw-select", "aria-label": "Review visibility" }, navOption("all", "All"), navOption("included", "Included"), navOption("excluded", "Excluded"));
+        catSel.value = "all";
+        var orderSel = h("select", { class: "dw-select", "aria-label": "Review order" }, navOption("path", "Path"), navOption("size", "Size"));
+        orderSel.value = "path";
+        var clearNav = h("button", { type: "button", class: "dw-btn small", text: "Clear filters" });
+        var counts = h("p", { class: "dw-small dw-muted", role: "status" });
+        // Controls stay mounted while typing: only the emitted tail (headings,
+        // lists, notes) is re-rendered, so focus never detaches mid-query.
+        var tail = [];
+        add(review, h("div", { class: "dw-review-nav" }, search, catSel, orderSel, clearNav));
+        add(review, h("p", { class: "dw-small dw-muted", text: keep.length ? "Search, visibility and ordering only change this review. All included files are uploaded." : "Search, visibility and ordering only change this review." }));
+        add(review, counts);
+        var cmpPath = function (a, b) {
+          return a < b ? -1 : a > b ? 1 : 0;
+        };
+        var renderReview = function () {
+          var q = nav.q;
+          var showIncluded = nav.cat !== "excluded";
+          var showExcluded = nav.cat !== "included";
+          var visKeep = showIncluded
+            ? keep.filter(function (it) {
+                return !q || it.path.toLowerCase().indexOf(q) >= 0;
+              })
+            : [];
+          var visSkip = showExcluded
+            ? skipRows.filter(function (r) {
+                return !q || r.path.toLowerCase().indexOf(q) >= 0;
+              })
+            : [];
+          // Sorted copies only: the normalized inventory keeps selection
+          // order, which is the manifest order run() sends.
+          var byPath = function (a, b) {
+            return cmpPath(a.path, b.path);
+          };
+          visSkip.sort(byPath);
+          if (nav.order === "size") {
+            visKeep.sort(function (a, b) {
+              return b.file.size - a.file.size || cmpPath(a.path, b.path);
+            });
+          } else {
+            visKeep.sort(byPath);
+          }
+          counts.textContent = visKeep.length + " of " + keep.length + " included files · " + visSkip.length + " of " + skipRows.length + " excluded paths";
+          tail.forEach(function (n) {
+            n.remove();
           });
-          add(review, included);
-          if (zip) add(review, h("p", { class: "dw-small dw-muted", text: "This archive is unpacked by the server; its entries cannot be listed before upload." }));
-        }
-        if (skipped.length) {
-          add(review, h("p", { class: "dw-small dw-muted dw-review-h", text: "Excluded (" + skipped.length + ")" }));
-          var excluded = h("ul", { class: "dw-review-list" });
-          skipped.forEach(function (entry) {
-            add(excluded, reviewRow(entry));
-          });
-          add(review, excluded);
-        }
+          tail = [];
+          var emit = function (n) {
+            add(review, n);
+            tail.push(n);
+          };
+          if (visKeep.length) {
+            emit(h("p", { class: "dw-small dw-muted dw-review-h", text: zip ? "Archive" : "Included (" + keep.length + ")" }));
+            var included = h("ul", { class: "dw-review-list" });
+            visKeep.forEach(function (it) {
+              add(included, h("li", { class: "dw-review-row" }, h("code", { class: "dw-mono", text: it.path }), " · " + bytes(it.file.size)));
+            });
+            emit(included);
+            if (zip) emit(h("p", { class: "dw-small dw-muted", text: "This archive is unpacked by the server; its entries cannot be listed before upload." }));
+          }
+          if (visSkip.length) {
+            emit(h("p", { class: "dw-small dw-muted dw-review-h", text: "Excluded (" + skipRows.length + ")" }));
+            var excluded = h("ul", { class: "dw-review-list" });
+            visSkip.forEach(function (r) {
+              add(excluded, reviewRow(r.text));
+            });
+            emit(excluded);
+          }
+          if (!visKeep.length && !visSkip.length) emit(h("p", { class: "dw-small dw-muted", text: "No matching files in this review." }));
+        };
+        search.addEventListener("input", function () {
+          if (state.busy) return;
+          // Literal substring on the path only: never a regex, never the
+          // exclusion reason.
+          nav.q = search.value.trim().toLowerCase();
+          renderReview();
+        });
+        catSel.addEventListener("change", function () {
+          if (state.busy) return;
+          nav.cat = catSel.value;
+          renderReview();
+        });
+        orderSel.addEventListener("change", function () {
+          if (state.busy) return;
+          nav.order = orderSel.value;
+          renderReview();
+        });
+        clearNav.addEventListener("click", function () {
+          if (state.busy) return;
+          nav.q = "";
+          nav.cat = "all";
+          nav.order = "path";
+          search.value = "";
+          catSel.value = "all";
+          orderSel.value = "path";
+          renderReview();
+          search.focus();
+        });
+        navEls = { search: search, cat: catSel, order: orderSel, clear: clearNav };
+        if (state.busy) setNavDisabled(true);
+        renderReview();
         review.open = wasOpen;
       }
       publishBtn.disabled = !keep.length || state.busy || !!errors.length;
@@ -841,6 +953,15 @@ export function dropwayClient() {
       status.textContent = text;
     }
 
+    /** Review navigation locks with the destination while a publish runs. */
+    function setNavDisabled(on) {
+      if (!navEls) return;
+      navEls.search.disabled = on;
+      navEls.cat.disabled = on;
+      navEls.order.disabled = on;
+      navEls.clear.disabled = on;
+    }
+
     /** Destination controls bound to the active publish; frozen while it runs. */
     function setDestinationDisabled(on) {
       modeNew.disabled = on;
@@ -858,6 +979,7 @@ export function dropwayClient() {
       state.busy = true;
       publishBtn.disabled = true;
       setDestinationDisabled(true);
+      setNavDisabled(true);
       clear(result);
       var auth = key;
       var claim = null;
@@ -932,6 +1054,7 @@ export function dropwayClient() {
       } finally {
         state.busy = false;
         setDestinationDisabled(false);
+        setNavDisabled(false);
         publishBtn.disabled = !state.items.length || !!state.errors.length;
       }
     }
