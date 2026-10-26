@@ -25,6 +25,7 @@ Zero runtime dependencies. Node.js 20 or newer.
 | `list` | Your sites (`--all` for every page) |
 | `site <name>` | One site: URL, live version, settings |
 | `files <name>` | Files of the live version (or `--version <ref>` with `live`, `v3`, `3` or a version id, read directly) with their URLs |
+| `pull <site> <dir>` | Download an immutable version with size/SHA-256 verification (`--version`, `--force`, `--json`) |
 | `read-file <site> <path>` | One file's content, one bounded page (`--version`, `--offset`, `--length`, `--encoding`) |
 | `versions <name>` | Newest 500 versions, newest first, live marked — or `versions <name> <ref>` to inspect one directly |
 | `restore <name> [v3]` | Make an older version live again. Without a version: the one before the live version. Alias `rollback` |
@@ -199,6 +200,64 @@ bytes}`); the CLI never unpacks the archive locally.
 Anonymous publishing (`--anonymous`) works only on instances that turned it on. The site expires and
 the output includes a `claimToken`: keep it to update the site (`--key <claimToken> --site <name>`) or
 to claim it into an account.
+
+## Pulling a version
+
+```sh
+kofra pull my-site ./snapshot --json
+kofra pull my-site ./old-snapshot --version v1 --json
+kofra pull my-site ./snapshot --version ver_abc123 --force
+```
+
+The CLI resolves `live` (default), `vN`, `N` or an id directly to an immutable
+version id **before** listing any files. Every manifest continuation and file
+page uses that id: a concurrent republish cannot change the snapshot. Only the
+existing `list_files` and `read_file` operations are used; your key needs read
+access to the site. No project link or credentials are written.
+
+Files are downloaded as base64 pages of at most 1 MiB, decoded and hashed
+incrementally, then renamed from an exclusive temporary file only after the
+size and SHA-256 match the manifest. Binary, Unicode, empty, HTML and CSS files
+retain their original stored bytes, without viewer rendering or URL rewriting.
+A failed file is named in `failures`, never counted in `files`, and its temporary
+file is removed. An old same-path file is retained if its replacement fails.
+Other files continue; the first failure determines the exit code using the
+existing table. Failures before downloading (such as auth/version resolution or
+nonempty-directory refusal) use the normal error envelope instead.
+
+An existing non-empty directory is refused with `pull_directory_not_empty`
+(exit 2) unless `--force` is passed. `--force` replaces only pulled file paths;
+extra local files are **never deleted** and their names are reported on stderr
+(unless `--quiet`). Unsafe relative paths, symlinks and conflicting directories
+are refused rather than followed or removed. Windows drive/alternate-stream
+syntax and reserved names are also refused. A path that aliases an earlier
+download or a differently named local extra on a case-insensitive filesystem
+fails with `pull_path_collision`, rather than overwriting it. Use a case-sensitive
+destination for manifests containing such names. Do not modify the destination
+concurrently while pulling; this is not a filesystem sandbox against concurrent
+local changes. A pull is atomic per file, not across the whole directory.
+
+`--json` writes exactly one object on stdout, **without** an `ok` wrapper:
+
+```json
+{
+  "site": "my-site",
+  "versionId": "ver_abc123",
+  "dir": "/absolute/path/to/snapshot",
+  "files": [{ "path": "index.html", "size": 12, "sha256": "<64 lowercase hex characters>" }],
+  "failures": []
+}
+```
+
+Failure rows are `{ "path": "file.bin", "code": "pull_integrity_mismatch",
+"message": "..." }`. Progress and extra-file notices stay on stderr; human
+output summarizes pulled/failed counts and the exact pinned version.
+
+Disposable local integration check (no deploy):
+
+```sh
+npm run test:cli -- test/pull.acceptance.test.ts test/pull-worker.acceptance.test.ts
+```
 
 ## Reading files
 
