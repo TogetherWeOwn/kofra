@@ -23,6 +23,7 @@ Zero runtime dependencies. Node.js 20 or newer.
 | `publish <path>` | Publish a folder, a single file or a `.zip`. Creates a site, or updates one with `--site <name>` |
 | `list` | Your sites (`--all` for every page) |
 | `site <name>` | One site: URL, live version, settings |
+| `rename <source> <new-slug> --yes` | Rename an explicit site; offline `--dry-run`; saved local project mappings remain unchanged |
 | `files <name>` | Files of the live version (or `--version <ref>` with `live`, `v3`, `3` or a version id, read directly) with their URLs |
 | `read-file <site> <path>` | One file's content, one bounded page (`--version`, `--offset`, `--length`, `--encoding`) |
 | `versions <name>` | Newest 500 versions, newest first, live marked — or `versions <name> <ref>` to inspect one directly |
@@ -66,6 +67,59 @@ Runnable local check (from a repo clone, against your own instance):
 ```sh
 node packages/cli/bin/dropway.mjs versions team-report v1 --api https://<your-instance> --json
 ```
+
+## Renaming a site
+
+```sh
+kofra rename old-report new-report --dry-run --json  # offline, no key or acknowledgement
+kofra rename old-report new-report --yes --json      # one explicit rename
+kofra rename site_abc123def456 new-report --yes       # a site id or URL also works
+```
+
+Both arguments are required: rename never selects a saved local target. `--yes` is
+mandatory for a mutation, even in a terminal; the command never prompts. Unknown
+flags, extra arguments and release/override flags fail locally. The new slug is
+trimmed and lowercased; validity, availability, permissions and name reservations
+remain server decisions. A canonical no-op succeeds without a second action.
+
+`--dry-run` makes no HTTP requests or config writes and does not require a key or
+`--yes`. With `--json` it returns exactly this versioned plan (not a resolved site
+identity or a promise that the server will accept the rename):
+
+```json
+{
+  "schemaVersion": 1,
+  "operation": "rename_site",
+  "target": { "api": "https://kofra.example", "site": "old-report" },
+  "patch": { "slug": "new-report" },
+  "localLinksUpdated": false
+}
+```
+
+An acknowledged rename calls the existing `rename_site` endpoint once through the
+typed client. JSON success is the unchanged server response (`site`, `slug`, `url`,
+`renamed`, `oldSlug`, `redirectUntil`, including any returned identity), plus
+`localLinksUpdated: false`, without an additional success envelope. Use the returned
+new URL, not one guessed from the requested name. Human output shows the old
+canonical URL when recognizable from the returned URL, otherwise the old name;
+custom addresses are not guessed. An old-URL redirect is reported only with the
+actual returned `redirectUntil`; a null deadline makes no redirect promise. Rename
+does not alter live versions, passwords, access rules or name-retention semantics.
+Server errors and the existing CLI exit codes are preserved; the command adds no
+retry or follow-up rename beyond the client's transport contract.
+
+**Saved local project mappings remain unchanged**, on success, no-op, failure and
+dry-run. Before a later publish, update the affected `dropway.json` mapping, or use
+the existing explicit-target update workflow:
+
+```sh
+kofra publish ./dist --site new-report  # updates that site and saves this path's target
+```
+
+That is a separate publish, not part of rename. Review the explicit target first:
+publishing without correcting a stale mapping can still target the old name.
+Unrelated paths, instances, credentials and project files are never rewritten by
+rename.
 
 ## Discovering operations
 
