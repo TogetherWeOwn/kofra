@@ -481,8 +481,18 @@ describe("notebook output folding", () => {
   };
 
   const detailsBlocks = (html: string) => Array.from(html.matchAll(/<details\b[^>]*>[\s\S]*?<\/details>/g), (m) => m[0]);
-  const summaryText = (block: string) => (block.match(/<summary\b[^>]*>([\s\S]*?)<\/summary>/)?.[1] ?? "").replace(/<[^>]+>/g, "").trim();
-  const stripTags = (html: string) => html.replace(/<[^>]+>/g, "");
+  // Text extraction for assertions only: scan out <...> spans character by
+  // character instead of stripping tags with a regex replace.
+  const stripTags = (html: string) => {
+    let text = "";
+    for (let i = 0; i < html.length; ) {
+      const end = html[i] === "<" ? html.indexOf(">", i + 1) : -1;
+      if (end > i + 1) i = end + 1;
+      else text += html[i++];
+    }
+    return text;
+  };
+  const summaryText = (block: string) => stripTags(block.match(/<summary\b[^>]*>([\s\S]*?)<\/summary>/)?.[1] ?? "").trim();
   const withoutDetails = (html: string) => html.replace(/<details\b[^>]*>[\s\S]*?<\/details>/g, "");
   const expectOrder = (haystack: string, needles: string[]) => {
     let at = -1;
