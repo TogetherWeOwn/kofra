@@ -982,6 +982,68 @@ function operationDetail(row: Record<string, unknown>, withSchema: boolean): str
   return lines.join("\n");
 }
 
+const duplicateCmd: Command = {
+  summary: "Duplicate a live site: duplicate <source> <new-slug>",
+  usage: "kofra duplicate <source> <new-slug> [--message <text>] [--idempotency-key <key>] [--dry-run] [--json]",
+  flags: {
+    message: { kind: "string", short: "m" },
+    "idempotency-key": { kind: "string" },
+    "dry-run": { kind: "boolean" },
+  },
+  details: `Both targets are required: source is a slug, site id or site URL. Neither
+is inferred from a local project mapping. The existing live manifest becomes
+version 1 of a new site; no local files are read or uploaded and no links are saved.
+Only SPA mode is copied. Passwords/access gates and other settings are not copied;
+re-apply protection explicitly. The destination is live immediately, not opened
+in a browser or automatically protected.
+
+--dry-run emits one schemaVersion: 1 JSON plan even without --json. It is entirely
+offline: no instance, credentials or files are read, and no source id is resolved.
+--idempotency-key preserves an explicit key (1-255 printable ASCII characters,
+no spaces); otherwise one is generated per invocation. Invalid keys are rejected
+before any I/O, including with --dry-run. To recover an unknown outcome, repeat
+the identical source, new slug and message with the same explicit key (within the
+server's 24h window).
+Mutations retry only rate-limit refusals, not network failures or server errors.
+
+Examples:
+  kofra duplicate template template-copy --message "Template snapshot"
+  kofra duplicate site_abc123 template-copy --idempotency-key copy-01 --json
+  kofra duplicate template template-copy --dry-run`,
+  async run(p, io, out) {
+    const source = positional(p, 0, "source", this.usage);
+    const newSlug = positional(p, 1, "new-slug", this.usage);
+    if (!source.trim() || !newSlug.trim() || p.positionals.length !== 2) {
+      throw new UsageError(`Exactly two nonempty targets are required. Usage: ${this.usage}`);
+    }
+    const explicitKey = str(p, "idempotency-key");
+    if (explicitKey !== undefined && !/^[\x21-\x7e]{1,255}$/.test(explicitKey)) {
+      throw new UsageError("--idempotency-key must be 1-255 printable ASCII characters without spaces.");
+    }
+    const message = str(p, "message");
+    if (bool(p, "dry-run")) {
+      io.stdout(`${JSON.stringify({ schemaVersion: 1, operation: "duplicate_site", source, newSlug, ...(message !== undefined ? { message } : {}) }, null, 2)}\n`);
+      return EXIT.ok;
+    }
+    const inst = await resolveInstance(p, io);
+    const client = makeClient(io, inst.api, requireKey(inst));
+    // Generate once, outside the SDK's bounded rate-limit retry loop.
+    const idempotencyKey = explicitKey ?? crypto.randomUUID();
+    const result = await client.duplicateSite({ site: source, newSlug, ...(message !== undefined ? { message } : {}) }, { idempotencyKey });
+    out.result(result, () => `${result.url}\nDuplicated into ${result.slug} (${plural(result.fileCount, "file")}, ${formatBytes(result.totalBytes)}).`);
+    out.note("Only SPA mode is copied. Passwords/access gates and other settings are not copied; re-apply protection explicitly.");
+    if (result.note) out.note(result.note);
+    if (Array.isArray(result.warnings)) {
+      for (const warning of result.warnings) {
+        if (warning && typeof warning === "object" && typeof warning.message === "string") {
+          out.note(`Warning (${warning.code}): ${warning.message}${typeof warning.fix === "string" ? ` ${warning.fix}` : ""}`);
+        }
+      }
+    }
+    return EXIT.ok;
+  },
+};
+
 const operationsCmd: Command = {
   summary: "List API operations, or inspect one, without running anything",
   usage: "kofra operations [operationId] [--schema] [--json]",
@@ -1107,6 +1169,7 @@ const apiCmd: Command = {
 
 const COMMANDS: Record<string, Command> = {
   publish: publishCmd,
+  duplicate: duplicateCmd,
   list: listCmd,
   site: siteCmd,
   files: filesCmd,
