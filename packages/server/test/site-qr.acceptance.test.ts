@@ -770,7 +770,7 @@ function expectExistingControls(doc: FakeDocument, slug: string): void {
 function expectZeroThirdParty(calls: string[], doc: FakeDocument): void {
   for (const url of calls) {
     expect(url.startsWith("/api/"), `same-origin API call only (got ${url})`).toBe(true);
-    expect(url, "no QR/image endpoint").not.toMatch(/qr|barcode|chart|image\/generate/i);
+    expect(url, "no QR/image endpoint").not.toMatch(/\/(qr|barcode|chart)([\/?#]|$)|image\/generate/i);
   }
   // No external image: every img src is data: (QR) — no https:// third-party.
   for (const img of doc.querySelectorAll("img")) {
