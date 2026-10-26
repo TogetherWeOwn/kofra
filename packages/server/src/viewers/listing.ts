@@ -1,6 +1,7 @@
 import { detectFileKind, encodePath, KIND_LABELS, type LiveSite } from "@dropway/core";
 import { escapeHtml, formatBytes, htmlPage } from "../html";
 import type { ServeMode } from "../serve";
+import { unfurlHead } from "./unfurl";
 
 const LISTING_CSS = `
 .dw-ls{max-width:56rem;margin:0 auto;padding:2rem 1.25rem 4rem}
@@ -28,7 +29,7 @@ const GALLERY_MAX = 60;
  * folders first, then files with their kind and size, then a gallery of the
  * folder's images. `appViewerUrl` links to the app-origin file browser.
  */
-export function renderListing(live: LiveSite, dir: string, mode: ServeMode, appViewerUrl?: string): Response {
+export function renderListing(live: LiveSite, dir: string, mode: ServeMode, origin: string, appViewerUrl?: string): Response {
   const dirs = new Map<string, number>();
   const files: Array<{ name: string; size: number; kind: ReturnType<typeof detectFileKind> }> = [];
   let total = 0;
@@ -69,10 +70,15 @@ export function renderListing(live: LiveSite, dir: string, mode: ServeMode, appV
     return `<a href="${escapeHtml(mode.base + encodePath(acc))}">${escapeHtml(s)}</a>`;
   })].join(" / ");
   const summary = `${dirs.size ? `${dirs.size} folder${dirs.size === 1 ? "" : "s"}, ` : ""}${files.length} file${files.length === 1 ? "" : "s"} · ${formatBytes(total)}`;
+  const title = `${live.slug}/${dir}`;
   const page = htmlPage({
-    title: `${live.slug}/${dir}`,
+    title,
     css: LISTING_CSS,
-    head: '<meta name="robots" content="noindex">',
+    head: unfurlHead({
+      title,
+      description: `Folder listing · ${dirs.size ? "" : "0 folders, "}${summary}`,
+      url: origin + base,
+    }),
     body: `<main class="dw-ls"><header><h1>${crumb} /</h1><span class="sum">${summary}${appViewerUrl ? `<a href="${escapeHtml(appViewerUrl)}" rel="nofollow">Browse files</a>` : ""}</span></header><ul>${items.join("")}</ul>${gallery}</main>`,
   });
   return new Response(page, {

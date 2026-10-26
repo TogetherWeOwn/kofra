@@ -9,6 +9,7 @@ import type { Viewer } from "./index";
  */
 export const htmlFrameViewer: Viewer = {
   id: "html-frame",
+  version: 2,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "html" && mode === "view",
   async render(vc) {
