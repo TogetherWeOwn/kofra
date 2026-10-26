@@ -297,6 +297,7 @@ the local filter.
 | XFR-02 | App-origin delivery/password pages; sites-host attachment-only downloads; 404 before 451 before 410 before password protection | P1 | Implemented; deployment verification pending |
 | XFR-03 | Sender-only management, per-file/recipient counts, guarded updates and bulk revocation; same-call current-password proof and digest-bound unlock grants | P1 | Implemented; deployment verification pending |
 | XFR-04 | Permanent sender-owned slug reservations; idempotent hourly expiry; holds fence purge, storage released once at purge | P1 | Implemented; deployment verification pending |
+| XFR-05 | [Sender-scoped delivery inventory](DELIVERY_INVENTORY.md): metadata only, without recipient data or bearer links | P2 | Proposed, design only; separate intent/privacy decisions required before implementation |
 
 Delivery files cannot be replaced through site publishing, settings, access or
 version operations. Create another transfer instead. A password is 8–1,024
