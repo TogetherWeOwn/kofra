@@ -285,6 +285,23 @@ describe("viewer pages", () => {
     expect(html).toContain('<td class="n">2100000</td>');
   });
 
+  it("csv: the render path discards a record cut by the detection budget", async () => {
+    // The detector must see the whole sample so it can tell a 64 Ki budget
+    // cut from EOF; a pre-sliced sample would vote the cut tail and pick comma.
+    const prefix = "name;note\n";
+    const cut = "cut.csv";
+    const body = prefix + "a,b,c," + "x".repeat(64 * 1024 - prefix.length - 6) + ",late\n";
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST",
+      key: dw.ownerKey,
+      body: form({ [cut]: body }),
+    });
+    expect(published.status).toBe(201);
+    const html = await (await dw.call(`/s/${published.body.slug}/${cut}`, { headers: NAV })).text();
+    expect(html).toContain("1 rows · 2 columns · semicolon-separated");
+    expect(html).not.toContain("comma-separated");
+  });
+
   it("images: zoomable with dimensions; sub-resources and iframes get the bytes", async () => {
     const res = await get("img/logo.png");
     expect(res.headers.get("x-kofra-viewer")).toBe("image");

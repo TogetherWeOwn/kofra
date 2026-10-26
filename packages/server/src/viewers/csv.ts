@@ -45,7 +45,9 @@ const CSV_CSS = `
  * budget mid-record is not EOF: a trailing unterminated record is discarded
  * and the completed prefix decides; with no completed record the fallback is
  * comma. An unterminated quote at true EOF likewise casts no vote. Empty
- * records cast no vote. A candidate seen a consistent nonzero number of times
+ * records cast no vote. Callers must pass the whole sample: the detector
+ * slices internally, which is what lets it tell a budget cut from EOF. A
+ * candidate seen a consistent nonzero number of times
  * in every voting record wins; remaining ties keep candidate order, and files
  * with no candidate evidence fall back to comma. `.tsv` always selects tab.
  */
@@ -214,7 +216,7 @@ export const csvViewer: Viewer = {
     let meta = "";
     const r = await cachedRender(vc.dw, `csv@${CSV_VERSION}/${extname(vc.file.path)}/${vc.file.sha256}`, async () => {
       const text = decodeText(await vc.readBytes(0, partial ? READ_MAX_BYTES : vc.file.size));
-      const delimiter = detectDelimiter(text.slice(0, 64 * 1024), vc.file.path);
+      const delimiter = detectDelimiter(text, vc.file.path);
       const parsed = parseCsv(text, delimiter, MAX_ROWS + 1);
       // A partial read can end mid-row.
       if (partial && parsed.complete && parsed.rows.length > 1) parsed.rows.pop();
