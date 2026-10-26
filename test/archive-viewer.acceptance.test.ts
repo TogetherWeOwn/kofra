@@ -27,6 +27,11 @@
  *   (plus -e for &embed=1) so a version bump invalidates old renders.
  * - Escape entry names as text; make no external requests (relative links
  *   plus the absolute app-origin Files link only).
+ * - Review pins: the counts line totals the complete directory past the
+ *   1,000-row cap; names without the UTF-8 flag bit decode as CP437; a ZIP
+ *   of exactly 2 MiB lists (only OVER 2 MiB falls back); a short storage
+ *   read falls back for that request only and is never cached, so the next
+ *   healthy render of the same bytes is a cache miss with the real listing.
  */
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { gzipSync, strToU8, zipSync } from "fflate";
@@ -69,6 +74,53 @@ function manyZip(): Uint8Array {
 
 function bigZip(): Uint8Array {
   return zipSync({ "payload.bin": [new Uint8Array(BIG_BYTES), { level: 0 }] });
+}
+
+/** One stored entry sized so the whole ZIP is exactly `total` bytes. */
+function exactSizeZip(entry: string, total: number): Uint8Array {
+  const sized = (payload: number): Uint8Array => {
+    const files: Record<string, [Uint8Array, { level: 0 }]> = {};
+    files[entry] = [new Uint8Array(payload), { level: 0 }];
+    return zipSync(files);
+  };
+  const zipBytes = sized(total - sized(0).length);
+  expect(zipBytes.length).toBe(total);
+  return zipBytes;
+}
+
+const CP437_NAME = "über-café.txt";
+
+/**
+ * Stored fixture whose name bytes are CP437 with flag bit 11 clear.
+ * fflate writes the ASCII placeholder without the UTF-8 flag (and would set
+ * it for the non-ASCII name), so patch the two high bytes (0x81 = ü,
+ * 0x82 = é) into both copies of the same-length placeholder.
+ */
+function cp437Zip(): Uint8Array {
+  const placeholder = "uber-cafe.txt"; // Same 13 bytes as CP437_NAME in CP437.
+  const bytes = zipSync({ [placeholder]: [strToU8("cp437 name\n"), { level: 0 }] });
+  const needle = strToU8(placeholder);
+  let patched = 0;
+  for (let i = 0; i + needle.length <= bytes.length; i++) {
+    if (needle.every((b, j) => bytes[i + j] === b)) {
+      bytes[i] = 0x81;
+      bytes[i + 8] = 0x82;
+      patched++;
+      i += needle.length - 1;
+    }
+  }
+  expect(patched).toBe(2); // Local header + central directory.
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let central = -1;
+  for (let i = 0; i + 4 <= bytes.length; i++) {
+    if (view.getUint32(i, true) === 0x02014b50) {
+      central = i;
+      break;
+    }
+  }
+  expect(central).toBeGreaterThan(0);
+  expect(view.getUint16(central + 8, true) & 0x800).toBe(0); // Bit 11 clear: CP437, not UTF-8.
+  return bytes;
 }
 
 function garbageZip(): Uint8Array {
@@ -201,6 +253,11 @@ describe("archive viewer pages", () => {
     files["archives/a.rar"] = new Uint8Array([0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     files["archives/cache-probe.zip"] = zipSync({ "probe.txt": strToU8("probe\n") });
     files["archives/version-probe.zip"] = zipSync({ "version-probe.txt": strToU8("version cache probe\n") });
+    files["archives/cp437.zip"] = cp437Zip();
+    files["archives/at-cap.zip"] = exactSizeZip("at-cap-entry.txt", MAX_ARCHIVE_BYTES);
+    files["archives/over-cap.zip"] = exactSizeZip("over-cap-entry.txt", MAX_ARCHIVE_BYTES + 1);
+    files["archives/short-tail.zip"] = zipSync({ "short-tail.txt": strToU8("short tail probe\n") });
+    files["archives/short-directory.zip"] = zipSync({ "short-directory.txt": strToU8("short directory probe\n") });
     files["archives/unreadable-payload.zip"] = unreadablePayloadZip();
     for (const kind of BAD_DIRECTORY_CASES) files[`archives/bad-directory-${kind}.zip`] = badDirectoryZip(kind);
     expect(files["archives/big.zip"]!.length).toBeGreaterThan(MAX_ARCHIVE_BYTES);
@@ -310,6 +367,10 @@ describe("archive viewer pages", () => {
     expect(html).toContain("file-0999.txt");
     expect(html).not.toContain("file-1000.txt");
     expect(html).not.toContain("file-1199.txt");
+    // The counts line totals the complete directory (1,200 one-byte entries),
+    // not only the 1,000 rows shown.
+    expect(html).toContain(`${formatBytes(MANY_COUNT)} uncompressed`);
+    expect(html).not.toContain(`${formatBytes(MAX_ENTRIES)} uncompressed`);
   });
 
   it("falls back to the binary info page with a note past the size cap", async () => {
@@ -370,6 +431,36 @@ describe("archive viewer pages", () => {
     expect(html).toContain("27 B");
     expect(html).toMatch(/deflated/i);
     expect(html).not.toContain("SHA-256"); // A real listing, not the binary fallback.
+  });
+
+  it("decodes CP437 entry names when the UTF-8 flag bit is clear", async () => {
+    const res = await get("archives/cp437.zip");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-kofra-viewer")).toBe("archive");
+    const html = await res.text();
+    expect(html).toMatch(/1 entry\b/i);
+    expect(html).toContain(CP437_NAME); // 0x81/0x82 decoded as ü/é, not raw U+0081/U+0082.
+    expect(html).not.toContain("uber-cafe.txt");
+    expect(html).not.toContain("SHA-256"); // A real listing, not the binary fallback.
+  });
+
+  it("lists a ZIP exactly at the 2 MiB cap and falls back one byte over it", async () => {
+    const at = await get("archives/at-cap.zip");
+    expect(at.status).toBe(200);
+    expect(at.headers.get("x-kofra-viewer")).toBe("archive");
+    const atHtml = await at.text();
+    expect(atHtml).toContain("at-cap-entry.txt");
+    expect(atHtml).toMatch(/1 entry\b[^<]*uncompressed/i);
+    expect(atHtml).not.toMatch(/too large/i);
+    expect(atHtml).not.toContain("SHA-256"); // Exactly at the cap still lists.
+
+    const over = await get("archives/over-cap.zip");
+    expect(over.status).toBe(200);
+    expect(over.headers.get("x-kofra-viewer")).toBe("archive");
+    const overHtml = await over.text();
+    expect(overHtml).toContain("SHA-256");
+    expect(overHtml).toMatch(/too large/i);
+    expect(overHtml).not.toMatch(/uncompressed/i); // No listing past the cap.
   });
 
   it("serves sub-resource requests as byte-identical ZIPs without a viewer", async () => {
@@ -472,6 +563,70 @@ describe("archive viewer pages", () => {
       spy.mockRestore();
       clearRenderMemoryCache();
     }
+  });
+
+  /**
+   * One truncated storage read during the first render must fall back for
+   * that request only: nothing is cached, so the next healthy render of the
+   * same bytes — with no cache clear in between — is a miss with the real
+   * listing, and only that good listing then serves from memory.
+   */
+  async function expectShortReadRecovery(path: string, entry: string, shorten: (offset: number, calls: number) => boolean): Promise<void> {
+    const archive = VIEWERS.find((viewer) => viewer.id === "archive");
+    expect(archive).toBeDefined();
+    const render = archive!.render;
+    let calls = 0;
+    let shortened = false;
+    const spy = vi.spyOn(archive!, "render").mockImplementation((vc) => render.call(archive, {
+      ...vc,
+      readBytes: async (offset, length) => {
+        calls++;
+        const bytes = await vc.readBytes(offset, length);
+        if (!shortened && shorten(offset ?? 0, calls)) {
+          shortened = true;
+          return bytes.subarray(0, bytes.length - 1);
+        }
+        return bytes;
+      },
+    }));
+    try {
+      clearRenderMemoryCache();
+      const first = await get(path);
+      expect(first.status).toBe(200);
+      expect(first.headers.get("x-kofra-viewer")).toBe("archive");
+      const firstHtml = await first.text();
+      expect(firstHtml).toContain("SHA-256");
+      expect(firstHtml).toMatch(/could not be read/i);
+      expect(firstHtml).not.toMatch(/uncompressed/i); // Binary fallback, not a listing.
+      expect(shortened).toBe(true);
+
+      // Deliberately no clearRenderMemoryCache() here.
+      const second = await get(path);
+      expect(second.status).toBe(200);
+      expect(second.headers.get("x-kofra-render-cache")).toBe("miss");
+      const secondHtml = await second.text();
+      expect(secondHtml).toContain(entry);
+      expect(secondHtml).toMatch(/1 entry\b[^<]*uncompressed/i);
+      expect(secondHtml).not.toContain("SHA-256");
+
+      const warm = await get(path);
+      expect(warm.headers.get("x-kofra-render-cache")).toBe("memory");
+      expect(await warm.text()).toContain(entry);
+    } finally {
+      spy.mockRestore();
+      clearRenderMemoryCache();
+    }
+  }
+
+  it("does not cache a short tail read as an invalid archive", async () => {
+    // The tail/end-record read is the first read of the render.
+    await expectShortReadRecovery("archives/short-tail.zip", "short-tail.txt", (_offset, calls) => calls === 1);
+  });
+
+  it("does not cache a short central-directory read as an invalid archive", async () => {
+    // The tail read of this small ZIP starts at 0; the directory read is the
+    // only one at a non-zero offset (the fallback read also starts at 0).
+    await expectShortReadRecovery("archives/short-directory.zip", "short-directory.txt", (offset) => offset > 0);
   });
 
   it("makes no external requests", async () => {
