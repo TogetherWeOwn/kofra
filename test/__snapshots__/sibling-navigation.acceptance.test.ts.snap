@@ -148,6 +148,8 @@ input,button{font:inherit}
 #dw-zoom:checked~.dw-stage img{max-width:none;max-height:none;cursor:zoom-out}
 #dw-zoom:checked~.dw-mediabar label{border-color:var(--accent);color:var(--accent)}
 .dw-mediabar{display:flex;gap:.6rem;align-items:center;justify-content:center;flex-wrap:wrap}
+.dw-fnav{display:flex;gap:.6rem;align-items:center;justify-content:center;flex-wrap:wrap}
+.dw-fnav .dw-fname{display:inline-block;max-width:14rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .dw-pdf{width:100%;height:calc(100vh - 3.2rem);border:0;display:block}
 .dw-video{max-width:100%;max-height:calc(100vh - 9rem);border-radius:10px;background:#000}
 .dw-audio{width:min(40rem,100%);margin-top:18vh}
@@ -157,7 +159,7 @@ input,button{font:inherit}
 <nav class="dw-vtabs" aria-label="View"><a href="/s/sibling-navigation-fixture/media/01%20image.png" aria-current="page" rel="nofollow">Image</a><a href="/s/sibling-navigation-fixture/media/01%20image.png?raw=1" rel="nofollow">Raw</a></nav>
 <nav class="dw-vact" aria-label="File"><a href="/s/sibling-navigation-fixture/media/01%20image.png?download=1" rel="nofollow" download>Download</a><a href="https://dropway.test/v/sibling-navigation-fixture/media/01%20image.png" rel="nofollow" title="Browse every file of this site">Files</a></nav>
 </header><main class="dw-media"><input type="checkbox" id="dw-zoom" class="dw-toggle">
-<div class="dw-mediabar"><span class="dw-meta" style="margin:0">1 × 1 px · 32 B · image/png</span><label for="dw-zoom" class="dw-btn">Actual size</label></div>
+<div class="dw-mediabar"><nav class="dw-fnav" aria-label="Other images in this folder"><span class="dw-meta" style="margin:0">1 of 2 in this folder</span><a class="dw-btn" rel="next" href="/s/sibling-navigation-fixture/media/02%20vector.svg">Next: <span class="dw-fname">02 vector.svg</span> <span aria-hidden="true">→</span></a></nav><span class="dw-meta" style="margin:0">1 × 1 px · 32 B · image/png</span><label for="dw-zoom" class="dw-btn">Actual size</label></div>
 <label for="dw-zoom" class="dw-stage dw-checker"><img src="/s/sibling-navigation-fixture/media/01%20image.png" alt="01 image.png" width="1" height="1"></label></main></body></html>"
 `;
 
@@ -200,7 +202,7 @@ input,button{font:inherit}
 .dw-checker{background-color:var(--card);background-image:linear-gradient(45deg,var(--code) 25%,transparent 25%),linear-gradient(-45deg,var(--code) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,var(--code) 75%),linear-gradient(-45deg,transparent 75%,var(--code) 75%);background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0}
 .dw-meta{color:var(--muted);font-size:.85rem;text-align:center;margin:.75rem 0}
 @media (max-width:640px){.dw-vmeta{display:none}.dw-vbar{padding:.4rem .6rem}}
-
+.dw-stage img{min-width:min(16rem,100%)}
 .dw-media{display:flex;flex-direction:column;align-items:center;padding:1rem .9rem 2rem;gap:.6rem}
 .dw-stage{display:flex;align-items:center;justify-content:center;width:100%;min-height:calc(100vh - 9rem);border:1px solid var(--line);border-radius:10px;overflow:auto}
 .dw-stage img{display:block;max-width:100%;max-height:calc(100vh - 10rem);object-fit:contain;cursor:zoom-in}
@@ -208,16 +210,18 @@ input,button{font:inherit}
 #dw-zoom:checked~.dw-stage img{max-width:none;max-height:none;cursor:zoom-out}
 #dw-zoom:checked~.dw-mediabar label{border-color:var(--accent);color:var(--accent)}
 .dw-mediabar{display:flex;gap:.6rem;align-items:center;justify-content:center;flex-wrap:wrap}
+.dw-fnav{display:flex;gap:.6rem;align-items:center;justify-content:center;flex-wrap:wrap}
+.dw-fnav .dw-fname{display:inline-block;max-width:14rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .dw-pdf{width:100%;height:calc(100vh - 3.2rem);border:0;display:block}
 .dw-video{max-width:100%;max-height:calc(100vh - 9rem);border-radius:10px;background:#000}
 .dw-audio{width:min(40rem,100%);margin-top:18vh}
 .dw-fallback{max-width:34rem;margin:15vh auto;text-align:center;color:var(--muted)}
-.dw-stage img{min-width:min(16rem,100%)}</style><meta name="robots" content="noindex"></head><body><header class="dw-vbar" role="banner">
+</style><meta name="robots" content="noindex"></head><body><header class="dw-vbar" role="banner">
 <div class="dw-vfile"><span class="dw-kind">SVG image</span><span class="dw-crumbs"><a href="/s/sibling-navigation-fixture/">sibling-navigation-fixture</a><span class="dw-sep">/</span><a href="/s/sibling-navigation-fixture/media/">media</a><span class="dw-sep">/</span><strong>02 vector.svg</strong></span><span class="dw-vmeta">67 B · image/svg+xml</span></div>
 <nav class="dw-vtabs" aria-label="View"><a href="/s/sibling-navigation-fixture/media/02%20vector.svg" aria-current="page" rel="nofollow">Image</a><a href="/s/sibling-navigation-fixture/media/02%20vector.svg?view=source" rel="nofollow">Source</a><a href="/s/sibling-navigation-fixture/media/02%20vector.svg?raw=1" rel="nofollow">Raw</a></nav>
 <nav class="dw-vact" aria-label="File"><a href="/s/sibling-navigation-fixture/media/02%20vector.svg?download=1" rel="nofollow" download>Download</a><a href="https://dropway.test/v/sibling-navigation-fixture/media/02%20vector.svg" rel="nofollow" title="Browse every file of this site">Files</a></nav>
 </header><main class="dw-media"><input type="checkbox" id="dw-zoom" class="dw-toggle">
-<div class="dw-mediabar"><span class="dw-meta" style="margin:0">67 B · SVG (scripts inside it do not run here)</span><label for="dw-zoom" class="dw-btn">Actual size</label></div>
+<div class="dw-mediabar"><nav class="dw-fnav" aria-label="Other images in this folder"><a class="dw-btn" rel="prev" href="/s/sibling-navigation-fixture/media/01%20image.png"><span aria-hidden="true">←</span> Previous: <span class="dw-fname">01 image.png</span></a><span class="dw-meta" style="margin:0">2 of 2 in this folder</span></nav><span class="dw-meta" style="margin:0">67 B · SVG (scripts inside it do not run here)</span><label for="dw-zoom" class="dw-btn">Actual size</label></div>
 <label for="dw-zoom" class="dw-stage dw-checker"><img src="/s/sibling-navigation-fixture/media/02%20vector.svg" alt="02 vector.svg"></label></main></body></html>"
 `;
 
