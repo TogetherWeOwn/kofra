@@ -52,7 +52,8 @@ describe("resumable upload integrity and real R2 multipart", () => {
     const served = await dw.call(`/s/${p.site}/data.bin?raw=1`);
     expect(served.status).toBe(200);
     const actual = new Uint8Array(await served.arrayBuffer());
-    expect(actual).toEqual(data);
+    // Byte-exactness via length + hash: a 20 MiB toEqual diff OOM-crashes workerd.
+    expect(actual.length).toBe(data.length);
     expect(await sha256Hex(actual)).toBe(hash);
     expect((await env.FILES.list({ prefix: "uploads/" })).objects).toEqual([]);
     // A complete multipart handle cannot accept more bytes; plain R2.put-only
@@ -62,7 +63,7 @@ describe("resumable upload integrity and real R2 multipart", () => {
 
   it("accepts a final-small-part file and idempotently replays identical part/completion retries", async () => {
     const { dw, p } = await small();
-    const s = await session(dw, p, undefined, p.token);
+    const s = await session(dw, p, null, p.token);
     expect(s.partSize).toBe(50 * MiB);
     accepted(await putPart(dw, s, 1, bytes, p.token));
     const before = await state(dw, s, p.token);
@@ -252,7 +253,7 @@ describe("multipart authority is bound to pending version, hash and lifetime", (
 
   it("expires a session when its anonymous pending site expires before the upload credential", async () => {
     const dw = await freshInstance({ anonymous: { enabled: true, ttlMs: 1_000 } });
-    const p = await pending(dw, await sha256Hex(bytes), bytes.length, "anonymous-expiry", "");
+    const p = await pending(dw, await sha256Hex(bytes), bytes.length, null, "");
     const s = await session(dw, p, 10 * MiB, p.token);
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1_001);
     await refused(dw, await state(dw, s, p.token), [401, 403, 404, 409, 410]);

@@ -25,8 +25,10 @@ export async function refused(dw: Instance, reply: Reply, statuses = [400, 401, 
   expect(await catalog.text(), "new refusal codes must enter the public error catalog").toContain(reply.body.error.code);
 }
 
-export async function pending(dw: Instance, sha256: string, size: number, site = "multipart-fixture", key = dw.ownerKey): Promise<Pending> {
-  const result = await dw.json("/api/v1/publish", { ...jsonBody({ site, files: [{ path: "data.bin", sha256, size }] }), key });
+// `null` means omit the field entirely (a generated site name / the server
+// partSize default); explicit `undefined` would trigger the default parameter.
+export async function pending(dw: Instance, sha256: string, size: number, site: string | null = "multipart-fixture", key = dw.ownerKey): Promise<Pending> {
+  const result = await dw.json("/api/v1/publish", { ...jsonBody({ ...(site === null ? {} : { site }), files: [{ path: "data.bin", sha256, size }] }), key });
   expect(result.status, JSON.stringify(result.body)).toBe(202);
   expect(result.body.status).toBe("awaiting_upload");
   const authorization = new Headers(result.body.upload.items[0].headers).get("Authorization")!;
@@ -34,11 +36,11 @@ export async function pending(dw: Instance, sha256: string, size: number, site =
   return { site: result.body.site.slug, versionId: result.body.version.id, sha256, size, key, token: authorization.slice(7) };
 }
 
-export function start(dw: Instance, p: Pending, partSize: number | undefined = 10 * MiB, key = p.key) {
-  return dw.json("/api/v1/uploads", { ...jsonBody({ versionId: p.versionId, sha256: p.sha256, ...(partSize === undefined ? {} : { partSize }) }), key });
+export function start(dw: Instance, p: Pending, partSize: number | null = 10 * MiB, key = p.key) {
+  return dw.json("/api/v1/uploads", { ...jsonBody({ versionId: p.versionId, sha256: p.sha256, ...(partSize === null ? {} : { partSize }) }), key });
 }
 
-export async function session(dw: Instance, p: Pending, partSize: number | undefined = 10 * MiB, key = p.key): Promise<Session> {
+export async function session(dw: Instance, p: Pending, partSize: number | null = 10 * MiB, key = p.key): Promise<Session> {
   const result = await start(dw, p, partSize, key);
   accepted(result);
   expect(result.body).toMatchObject({ id: expect.any(String), sha256: p.sha256, size: p.size, partSize: partSize ?? 50 * MiB, parts: [] });
