@@ -999,9 +999,11 @@ in a browser or automatically protected.
 
 --dry-run emits one schemaVersion: 1 JSON plan even without --json. It is entirely
 offline: no instance, credentials or files are read, and no source id is resolved.
---idempotency-key preserves an explicit nonempty key; otherwise one is generated
-per invocation. To recover an unknown outcome, repeat the identical source,
-new slug and message with the same explicit key (within the server's 24h window).
+--idempotency-key preserves an explicit key (1-255 printable ASCII characters,
+no spaces); otherwise one is generated per invocation. Invalid keys are rejected
+before any I/O, including with --dry-run. To recover an unknown outcome, repeat
+the identical source, new slug and message with the same explicit key (within the
+server's 24h window).
 Mutations retry only rate-limit refusals, not network failures or server errors.
 
 Examples:
@@ -1015,8 +1017,8 @@ Examples:
       throw new UsageError(`Exactly two nonempty targets are required. Usage: ${this.usage}`);
     }
     const explicitKey = str(p, "idempotency-key");
-    if (explicitKey !== undefined && !explicitKey.trim()) {
-      throw new UsageError("--idempotency-key must be nonempty.");
+    if (explicitKey !== undefined && !/^[\x21-\x7e]{1,255}$/.test(explicitKey)) {
+      throw new UsageError("--idempotency-key must be 1-255 printable ASCII characters without spaces.");
     }
     const message = str(p, "message");
     if (bool(p, "dry-run")) {

@@ -101,10 +101,12 @@ plan even without `--json`, reads no project, credential or content files, and w
 This plan does not validate source visibility, a live version, destination availability or
 server policy/limits.
 
-A nonempty `--idempotency-key` is sent unchanged; otherwise a fresh key is generated once per
-invocation and retained across the SDK's bounded 429 retries. There are no automatic retries
-on conflicts, server errors or network failures. **To recover an unknown outcome**, choose an
-explicit key before the first attempt, then repeat the identical source reference, destination
+An explicit `--idempotency-key` must contain 1-255 printable ASCII characters without spaces.
+Invalid keys return a usage error (exit 2) before any file/credential reads or networking,
+including with `--dry-run`. Valid keys are sent unchanged; otherwise a fresh key is generated
+once per invocation and retained across the SDK's bounded 429 retries. There are no automatic
+retries on conflicts, server errors or network failures. **To recover an unknown outcome**, choose
+an explicit key before the first attempt, then repeat the identical source reference, destination
 and message with that same key within the server's 24-hour idempotency window. A new invocation
 without an explicit key cannot recover the previous invocation's result; do not blindly retry
 an uncertain mutation with a new key. Reusing a key with a different payload is refused by the server.
