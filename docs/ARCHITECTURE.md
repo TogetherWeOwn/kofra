@@ -154,6 +154,11 @@ wrap the body with `viewerPage()` from `viewers/chrome.ts`, and add it to
 `VIEWERS` in `viewers/index.ts` before the code/binary fallbacks. Embedding apps
 pass extra viewers in `createDropway({ viewers })`; they run first.
 
+Exact caps, read budgets, rendered-output limits and fallbacks for the JSON,
+CSV and notebook viewers (and the Source/Raw/Download byte contract) are in
+[`docs/VIEWERS.md`](VIEWERS.md); that page is canonical where a summary here
+or in `docs/SPEC.md` is shorter.
+
 CSV delimiter detection (`viewers/csv.ts`) counts comma/tab/semicolon/pipe only
 outside quoted fields across complete logical records (LF, CRLF and bare-CR
 boundaries; `""` stays inside its field), bounded to the first 64 Ki characters
