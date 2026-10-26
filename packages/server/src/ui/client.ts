@@ -2754,6 +2754,12 @@ export function dropwayClient() {
   // ------------------------------------------------------------------ pages
 
   var pages = {};
+  // Latest site-page traversal handler: pages.site() re-runs after restore,
+  // delete and settings saves, and must replace (not stack) its listener.
+  var sitePopstate = null;
+  // Generation of the latest pages.site() run: work started by an earlier
+  // run must not commit (view, URL or history) over its replacement.
+  var siteRun = 0;
 
   pages.home = async function () {
     wireTabs(d);
@@ -3032,6 +3038,7 @@ export function dropwayClient() {
 
   pages.site = async function () {
     if (!requireAuth()) return;
+    var mySiteRun = ++siteRun;
     renderAccount();
     var slug = P.slug;
     var root = d.getElementById("dw-site");
@@ -3055,7 +3062,10 @@ export function dropwayClient() {
       site = r[0].site;
       versions = r[1].versions;
       linkedVersion = r[2] && r[2].version;
+      // A newer re-run already owns this page; rendering now would replace it.
+      if (mySiteRun !== siteRun) return;
     } catch (e) {
+      if (mySiteRun !== siteRun) return;
       clear(root);
       add(
         root,
@@ -3100,7 +3110,7 @@ export function dropwayClient() {
           h(
             "td",
             { class: "act" },
-            h("button", { type: "button", class: "dw-btn small", text: "Files", onclick: function () { showFiles(v); filesSection.scrollIntoView({ behavior: "smooth" }); } }),
+            h("button", { type: "button", class: "dw-btn small", text: "Files", onclick: function () { showFiles(v, { history: "push", clearFirst: true }); filesSection.scrollIntoView({ behavior: "smooth" }); } }),
             " ",
             v.live
               ? null
@@ -3135,6 +3145,13 @@ export function dropwayClient() {
                     try {
                       await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id), { method: "DELETE" });
                       toast("v" + v.number + " deleted.");
+                      // A successful deletion must not reload its now-invalid
+                      // explicit link; unrelated inspected versions stay put.
+                      var url = new URL(location.href);
+                      if (url.searchParams.get("version") === v.id) {
+                        url.searchParams.delete("version");
+                        history.replaceState(null, "", url.pathname + url.search + url.hash);
+                      }
                       pages.site();
                     } catch (e) {
                       toast(e.message, true);
@@ -3145,35 +3162,172 @@ export function dropwayClient() {
         ),
       );
     });
+    // Explicit version jump: open any version by reference (live, v3, 3 or an
+    // immutable id), including versions older than the newest-100 rows.
+    // Typing never fetches; each submit makes one bounded get_version lookup,
+    // then loads the manifest pinned to the returned immutable id.
+    var jumpInput = h("input", { class: "dw-input", id: "dw-version-ref", name: "version", type: "text", style: "max-width:14rem", placeholder: "live, v3, 3, or id", autocomplete: "off", spellcheck: "false", "aria-describedby": "dw-version-jump-help" });
+    var jumpStatus = h("p", { class: "dw-small dw-muted", style: "margin:.4rem 0 0", role: "status", text: "" });
+    var jumpErrorBox = h("div", { role: "alert", text: "" });
+    var jumpForm = h(
+      "form",
+      { class: "dw-pad", id: "dw-version-jump", style: "padding-top:.75rem;padding-bottom:.75rem" },
+      h("div", { class: "dw-row" }, h("label", { class: "dw-label", style: "margin:0", for: "dw-version-ref", text: "Version" }), jumpInput, h("button", { type: "submit", class: "dw-btn", text: "Open" })),
+      h("p", { class: "dw-help", id: "dw-version-jump-help", text: "Open any version by reference. Nothing is fetched until you submit." }),
+      jumpStatus,
+      jumpErrorBox,
+    );
+    jumpForm.addEventListener("submit", function (e) {
+      e.preventDefault();
+      openVersionRef(jumpInput.value, { history: "push" });
+    });
     var versionsSection = h(
       "section",
       { class: "dw-section" },
-      h("header", {}, h("h2", { text: "Versions" }), h("span", { class: "dw-small dw-muted", text: plural(versions.length, "version") + ". Restoring is instant: it only moves the live pointer." })),
+      h("header", {}, h("h2", { text: "Versions" }), h("span", { class: "dw-small dw-muted", text: plural(versions.length, "version") + (versions.length >= 100 ? " (newest 100)" : "") + ". Restoring is instant: it only moves the live pointer." })),
+      jumpForm,
       versions.length
         ? h("div", { class: "dw-scroll" }, h("table", { class: "dw-table" }, h("thead", {}, h("tr", {}, h("th", { text: "Version" }), h("th", { text: "Message" }), h("th", { class: "num", text: "Files" }), h("th", { class: "num dw-hide-sm", text: "Published" }), h("th", {}))), vBody))
         : h("div", { class: "dw-empty" }, h("h3", { text: "Nothing published yet" }), h("a", { class: "dw-btn primary", href: "/dashboard/publish?site=" + encodeURIComponent(slug), text: "Publish files" })),
     );
 
-    var filesReq = 0;
-    async function showFiles(v) {
-      var my = ++filesReq;
-      clear(filesSection);
-      add(filesSection, h("header", {}, h("h2", { text: "Files in v" + v.number + (v.live ? " (live)" : "") })), skeleton(3));
+    // One token per selection attempt, whatever its source (history row,
+    // version jump, traversal): a completion holding a stale token must not
+    // touch the view, the URL, or the announced state. The token is per
+    // page run, so completions also check mySiteRun: a selection still in
+    // flight when this page re-runs belongs to a replaced closure.
+    var selectionReq = 0;
+    var displayedReq = 0;
+    var currentSelection = null;
+    function setJumpError(message, hint, opts) {
+      clear(jumpErrorBox);
+      add(jumpErrorBox, errorBox({ message: message, hint: hint }, null));
+      // A refused traversal retains the manifest: reconcile this entry's URL
+      // with that view, without pushing another history entry.
+      if (opts && opts.history === "replace" && currentSelection && mySiteRun === siteRun) recordSelection(currentSelection.id, "replace");
+    }
+    function clearJumpError() {
+      clear(jumpErrorBox);
+    }
+    function setJumpLoading(on) {
+      jumpStatus.textContent = on ? "Opening version…" : "";
+    }
+    // The management URL always names the displayed manifest by immutable
+    // id: explicit selections (history row, version jump) push an entry so
+    // Back returns to the previous version; traversal and the initial load
+    // replace the current entry instead of manufacturing new ones.
+    function selectionUrl(id) {
+      try {
+        var u = new URL(location.href);
+        u.searchParams.set("version", id);
+        return u.pathname + u.search + u.hash;
+      } catch (e) {
+        return null;
+      }
+    }
+    function recordSelection(id, mode) {
+      var url = selectionUrl(id);
+      if (!url || typeof history === "undefined") return;
+      try {
+        if (mode === "push" && typeof history.pushState === "function") history.pushState({ v: id }, "", url);
+        else if (typeof history.replaceState === "function") history.replaceState({ v: id }, "", url);
+        else if (typeof history.pushState === "function") history.pushState({ v: id }, "", url);
+      } catch (e) {}
+    }
+    function commitSelection(mv, opts, my) {
+      if (mySiteRun !== siteRun) return;
+      displayedReq = my;
+      currentSelection = { id: mv.id, number: mv.number };
+      setJumpLoading(false);
+      clearJumpError();
+      if (opts.history) recordSelection(mv.id, opts.history);
+    }
+    // One path segment, never decoded: empty, dot-only and separator-like
+    // references fail before any request; anything else goes out literally
+    // encoded so "%2F" cannot become a second segment.
+    function validVersionRef(ref) {
+      if (!ref) return false;
+      var t = ref.trim();
+      if (!t || /^\.+$/.test(t)) return false;
+      return !/[\/?#\\\x00-\x1f\x7f]/.test(t);
+    }
+    async function openVersionRef(raw, opts) {
+      opts = opts || {};
+      var my = ++selectionReq;
+      var ref = (raw || "").trim();
+      if (!validVersionRef(ref)) {
+        setJumpLoading(false);
+        setJumpError("Enter a version reference: live, v3, 3, or a version id.", "Check the reference and try again.", opts);
+        // Explicit submits return focus for correction; traversal must not
+        // steal it while the person is moving through history.
+        if (opts.focus !== false) jumpInput.focus();
+        return;
+      }
+      clearJumpError();
+      setJumpLoading(true);
+      var found;
+      try {
+        found = await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(ref));
+      } catch (e) {
+        if (my !== selectionReq || mySiteRun !== siteRun) return;
+        setJumpLoading(false);
+        setJumpError(e.message || "Could not open that version.", "Check the reference and try again." + (e.hint ? " " + e.hint : ""), opts);
+        return;
+      }
+      if (my !== selectionReq || mySiteRun !== siteRun) return;
+      var v = found && found.version;
+      if (!v || v.status === "pending") {
+        setJumpLoading(false);
+        if (!v) setJumpError("That version reference did not resolve.", "Check the reference and try again.", opts);
+        else setJumpError("Version v" + v.number + " is not ready yet.", "Choose a ready version from the history, or retry once its upload finishes.", opts);
+        return;
+      }
+      // showFiles takes the next token and loads the manifest pinned to the
+      // returned immutable id, even when the version is not among the rows.
+      showFiles(v, { history: opts.history || "push" });
+    }
+    async function showFiles(v, opts) {
+      opts = opts || {};
+      var my = ++selectionReq;
+      var hadSelection = !!currentSelection;
+      // History rows swap panels at once; jumps and traversal keep the valid
+      // view until the replacement (or its failure) is known.
+      if (!hadSelection || opts.clearFirst) {
+        clear(filesSection);
+        add(filesSection, h("header", {}, h("h2", { text: "Files in v" + v.number + (v.live ? " (live)" : "") })), skeleton(3));
+      }
+      setJumpLoading(true);
       var data;
       try {
         // Always pin the selected version by immutable ID: a live-row snapshot
         // may already be stale by the time this request lands.
         data = await api("/sites/" + encodeURIComponent(slug) + "/files?version=" + encodeURIComponent(v.id));
       } catch (e) {
-        if (my !== filesReq) return;
-        clear(filesSection);
-        add(filesSection, h("div", { class: "dw-pad" }, errorBox(e, "Could not load files")));
+        if (my !== selectionReq || mySiteRun !== siteRun) return;
+        setJumpLoading(false);
+        if (!hadSelection || opts.clearFirst) {
+          clear(filesSection);
+          add(filesSection, h("div", { class: "dw-pad" }, errorBox(e, "Could not load files")));
+        } else {
+          setJumpError(e.message || "Could not load files.", e.hint, opts);
+        }
         return;
       }
-      if (my !== filesReq) return;
+      if (my !== selectionReq || mySiteRun !== siteRun) return;
       // Identity comes from the response, never the clicked row: the live
       // pointer may have moved between selection and retrieval.
       var mv = (data && data.version) || { id: v.id, number: v.number, live: v.live };
+      if (mv.status === "pending") {
+        setJumpLoading(false);
+        var notReady = { message: "Version v" + mv.number + " is not ready yet.", hint: "Choose a ready version from the history, or retry once its upload finishes." };
+        if (!hadSelection || opts.clearFirst) {
+          clear(filesSection);
+          add(filesSection, h("div", { class: "dw-pad" }, errorBox(notReady, "Version not ready")));
+        } else {
+          setJumpError(notReady.message, notReady.hint, opts);
+        }
+        return;
+      }
       var rows = (data && data.files) || [];
       var filter = h("input", { class: "dw-input", type: "search", placeholder: "Filter files", "aria-label": "Filter files" });
       if (!rows.length) {
@@ -3183,6 +3337,7 @@ export function dropwayClient() {
           h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", text: "0 files" }), filter)),
           h("div", { class: "dw-empty" }, h("h3", { text: "No files in this version" }), h("p", { class: "dw-small", text: "This version has an empty manifest." })),
         );
+        commitSelection(mv, opts, my);
         return;
       }
       var copyStatus = h("p", { class: "dw-pad dw-small", style: "margin:0", role: "status", text: "" });
@@ -3215,10 +3370,10 @@ export function dropwayClient() {
                 clearTimeout(copyTimer);
                 copyStatus.textContent = "";
                 copyText(f.sha256, btn).then(function (ok) {
-                  if (attempt !== copyReq || my !== filesReq) return;
+                  if (attempt !== copyReq || my !== displayedReq) return;
                   // A separate task makes identical results observable again.
                   copyTimer = setTimeout(function () {
-                    if (attempt !== copyReq || my !== filesReq) return;
+                    if (attempt !== copyReq || my !== displayedReq) return;
                     copyStatus.textContent = ok
                       ? "Copied SHA-256 for " + f.path + "."
                       : "Copy failed for " + f.path + ". Select the checksum and copy it yourself.";
@@ -3227,7 +3382,9 @@ export function dropwayClient() {
               },
             }),
             " ",
-            h("button", { type: "button", class: "dw-btn small", text: "Download", onclick: function (ev) { downloadFile(slug, f.path, mv.live ? null : mv.id, ev.currentTarget); } }),
+            // Pin every download to the inspected manifest: even a live-marked
+            // row describes immutable bytes, and the live pointer may move on.
+            h("button", { type: "button", class: "dw-btn small", text: "Download", onclick: function (ev) { downloadFile(slug, f.path, mv.id, ev.currentTarget); } }),
           ),
         );
         tb.appendChild(tr);
@@ -3338,6 +3495,7 @@ export function dropwayClient() {
         mv.live ? null : h("p", { class: "dw-pad dw-small dw-muted", style: "margin:0", text: "Older versions are not served publicly. Restore this version to view it on the site, or download single files." }),
       );
       applySort();
+      commitSelection(mv, opts, my);
     }
 
     var s = site.settings;
@@ -3405,10 +3563,40 @@ export function dropwayClient() {
     var live = versions.filter(function (v) {
       return v.live;
     })[0];
-    var selected = requestedVersion ? linkedVersion : live;
-    if (selected) showFiles(selected);
-    else if (requestedVersion) add(filesSection, h("div", { class: "dw-pad" }, errorBox(linkedVersionError || { message: "This version is unavailable." }, "Version unavailable")));
-    else filesSection.hidden = true;
+    if (typeof window !== "undefined" && window.addEventListener) {
+      if (sitePopstate && typeof window.removeEventListener === "function") {
+        try {
+          window.removeEventListener("popstate", sitePopstate);
+        } catch (e) {}
+      }
+      sitePopstate = function () {
+        var ref = null;
+        try {
+          ref = new URL(location.href).searchParams.get("version");
+        } catch (e) {}
+        if (ref && currentSelection && ref === currentSelection.id) {
+          // Forward can return to the displayed view while Back's request is
+          // still pending. Even this no-op navigation supersedes that request.
+          ++selectionReq;
+          setJumpLoading(false);
+          clearJumpError();
+          return;
+        }
+        if (ref) openVersionRef(ref, { history: "replace", focus: false });
+        else if (live) showFiles(live, { history: "replace" });
+      };
+      window.addEventListener("popstate", sitePopstate);
+    }
+    if (requestedVersion && linkedVersion && linkedVersion.status === "pending") {
+      // A pending link names unfinished bytes: report it, never render it as
+      // an inspected version, and never fall back to live.
+      add(filesSection, h("div", { class: "dw-pad" }, errorBox({ message: "Version v" + linkedVersion.number + " is not ready yet — its upload has not finished.", hint: "Choose a ready version from the history, or retry once the upload finishes." }, "Version not ready")));
+    } else {
+      var selected = requestedVersion ? linkedVersion : live;
+      if (selected) showFiles(selected, { history: requestedVersion ? "replace" : null });
+      else if (requestedVersion) add(filesSection, h("div", { class: "dw-pad" }, errorBox(linkedVersionError || { message: "This version is unavailable." }, "Version unavailable")));
+      else filesSection.hidden = true;
+    }
   };
 
   async function downloadFile(slug, path, versionId, btn) {

@@ -202,6 +202,7 @@ Full matrix in section 10.
 | ORG-04 | QR code per site in the dashboard and viewer bar | P1 | R-22 |
 | ORG-05 | Opt-in public gallery of the instance's public sites with a JSON feed | P2 | R-50 |
 | ORG-06 | Dashboard version files: sort the loaded manifest by path, kind or exact byte size, ascending/descending, composed with the path filter; client-side only, default Path ascending | P1 | Done |
+| ORG-07 | Dashboard version jump: labelled reference input (live, vN, N or immutable id) with explicit Open submit; one bounded direct lookup per submit, never on typing; history lists the newest 100 only; the management URL records the displayed manifest by immutable id (explicit selections push, traversal and initial load replace; refused traversal restores the displayed id without adding an entry); deleting the inspected version clears its link before reloading live; every file download is pinned to the inspected manifest id | P1 | Done |
 
 ### 4.9 Agent surfaces (AX)
 
