@@ -10,7 +10,7 @@ import type { Viewer } from "./index";
  * key counts and typed values, plus a pretty-printed, highlighted view.
  * Invalid JSON shows the parse error above the highlighted source.
  */
-const JSON_VERSION = 2;
+const JSON_VERSION = 3;
 /** Nodes rendered in the tree before the rest is summarised. */
 const MAX_NODES = 20_000;
 /** Strings longer than this are cut in the tree (the pretty view has them whole). */
@@ -112,8 +112,12 @@ export const jsonViewer: Viewer = {
     const tree = await cachedRender(vc.dw, `json@${JSON_VERSION}/tree/${vc.file.sha256}`, async () => renderJsonTree(parsed));
     const prettyText = JSON.stringify(parsed, null, 2);
     const pretty = prettyText.length <= MAX_PRETTY ? (await renderCodeLines(vc, prettyText, "json", "pretty")).html : null;
+    // Without a Pretty pane there is no Pretty tab either, so the radio goes
+    // too: otherwise arrowing to it shows no focus indicator (its label is
+    // the indicator's target) and hides the tree with nothing to show.
+    const prettyInput = pretty ? '<input type="radio" name="dw-jt" id="dw-jt-pretty" class="dw-toggle">' : "";
     const body = `<main class="dw-json">
-<input type="radio" name="dw-jt" id="dw-jt-tree" class="dw-toggle" checked><input type="radio" name="dw-jt" id="dw-jt-pretty" class="dw-toggle">
+<input type="radio" name="dw-jt" id="dw-jt-tree" class="dw-toggle" checked>${prettyInput}
 <div class="dw-jtabs"><label for="dw-jt-tree">Tree</label>${pretty ? '<label for="dw-jt-pretty">Pretty</label>' : ""}</div>
 <div class="dw-jpane dw-jtree">${tree.html}</div>
 ${pretty ? `<div class="dw-jpane dw-jpretty"><div class="dw-src">${pretty}</div></div>` : ""}
