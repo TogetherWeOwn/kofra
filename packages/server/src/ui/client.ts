@@ -3592,7 +3592,7 @@ export function dropwayClient() {
         clear(filesSection);
         add(
           filesSection,
-          h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", text: "0 files" }), filter)),
+          h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", "aria-live": "polite", "aria-atomic": "true", text: plural(rows.length, "loaded file") + " in this selected version · " + exactBytes(0) }), filter)),
           h("div", { class: "dw-empty" }, h("h3", { text: "No files in this version" }), h("p", { class: "dw-small", text: "This version has an empty manifest." })),
         );
         commitSelection(mv, opts, my);
@@ -3664,11 +3664,50 @@ export function dropwayClient() {
         if (sortField === "path") return 0;
         return cmpText(a.path, b.path);
       }
+      // Filter feedback is derived only from the already-loaded rows for this
+      // selected version: updating it never fetches, writes storage or moves
+      // focus (the filter keeps focus while typing). One persistent status
+      // element is updated in place so live announcements are not lost.
+      // aria-live (not role="status") so the checksum copy announcements keep
+      // the section's single status region and existing contracts hold.
+      var filterStatus = h("span", { class: "dw-small dw-muted", "aria-live": "polite", "aria-atomic": "true", text: "" });
+      var noMatch = h("div", { class: "dw-empty", hidden: true, text: "" });
+      var clearFilter = h("button", {
+        type: "button",
+        class: "dw-btn small",
+        text: "Clear filter",
+        hidden: true,
+        onclick: function () {
+          // Reset only the query: sort, checksums, downloads and the
+          // selected immutable version are untouched. Focus returns to the
+          // filter so keyboard users land where they were.
+          filter.value = "";
+          applyFilter();
+          filter.focus();
+        },
+      });
       function applyFilter() {
-        var q = filter.value.trim().toLowerCase();
+        var raw = filter.value;
+        var q = raw.trim().toLowerCase();
+        var matching = 0;
+        var matchingBytes = 0;
         items.forEach(function (it) {
-          it.row.hidden = q && it.row.getAttribute("data-search").indexOf(q) < 0;
+          var show = !q || it.row.getAttribute("data-search").indexOf(q) >= 0;
+          it.row.hidden = !show;
+          if (show) {
+            matching++;
+            matchingBytes += it.file.size || 0;
+          }
         });
+        filterStatus.textContent = q
+          ? matching + " of " + plural(items.length, "loaded file") + " in this selected version match · " + exactBytes(matchingBytes) + " matching"
+          : plural(items.length, "loaded file") + " in this selected version · " + exactBytes(matchingBytes);
+        clearFilter.hidden = !raw;
+        // The query is quoted back as inert text (textContent), never markup;
+        // a nonempty manifest with zero matches is not an empty version.
+        var noMatches = !!q && matching === 0;
+        noMatch.hidden = !noMatches;
+        noMatch.textContent = noMatches ? 'No matching files for "' + raw + '" in the loaded files for this selected version. Clear the filter to show every loaded file.' : "";
       }
       function applySort() {
         items
@@ -3746,9 +3785,10 @@ export function dropwayClient() {
       clear(filesSection);
       add(
         filesSection,
-        h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", text: plural(rows.length, "file") }), sortBar, filter)),
+        h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, filterStatus, sortBar, filter, clearFilter)),
         h("p", { class: "dw-pad dw-small dw-muted", style: "margin:0", text: "SHA-256 manifest checksums for the selected version (v" + mv.number + ", " + mv.id + "). A checksum is not proof of authenticity, provenance, safe content, or independent verification, and does not show the current live download matches — compare it against a trusted source you already have." }),
         h("div", { class: "dw-scroll" }, h("table", { class: "dw-table" }, h("thead", {}, h("tr", {}, sortTh("path", "Path"), sortTh("kind", "Kind", "dw-hide-sm"), sortTh("size", "Size", "num"), h("th", { scope: "col", text: "SHA-256" }), h("th", { scope: "col" }))), tb)),
+        noMatch,
         copyStatus,
         mv.live ? null : h("p", { class: "dw-pad dw-small dw-muted", style: "margin:0", text: "Older versions are not served publicly. Restore this version to view it on the site, or download single files." }),
       );
