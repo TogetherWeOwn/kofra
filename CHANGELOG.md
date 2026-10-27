@@ -19,7 +19,7 @@
   rows wrap on narrow screens instead of being cut with an ellipsis. The sample
   is now a labelled plain-text multiline textbox with a visible focus
   indicator. Font bytes, CSP and read budgets are unchanged; cached specimen
-  pages are revalidated (font viewer version 2).
+  pages are revalidated (font viewer version 3).
 
 ### Dashboard
 

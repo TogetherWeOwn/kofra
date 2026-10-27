@@ -259,7 +259,7 @@ const FONT_FORMATS: Record<string, string> = { woff2: "woff2", woff: "woff", ttf
 
 export const fontViewer: Viewer = {
   id: "font",
-  version: 2,
+  version: 3,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "font" && topLevelOnly(mode),
   async render(vc) {
