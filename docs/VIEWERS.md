@@ -126,7 +126,7 @@ deliveries never use these viewers; they always download.
 | Navigation, or `?view=1` | Rendered viewer above if within its cap; JSON and notebooks above their cap fall through to the code viewer (kind `json`/`notebook` is in its kind set) | No: rendered HTML |
 | `?view=source` | `sourceViewer` ([`packages/server/src/viewers/code.ts`](../packages/server/src/viewers/code.ts)): highlighted source for the text kinds `json`, `csv` and `notebook`; shows at most `SHOW_MAX_BYTES = 1024 * 1024` (1,048,576 bytes) with a truncation note above that | No: rendered HTML, possibly truncated |
 | `?raw=1` | The stored bytes; text types are relabelled `text/plain; charset=utf-8` (original type in `X-Kofra-Original-Content-Type`) so a browser shows rather than renders them | Yes, for a full (non-Range) GET |
-| `?download=1` | The stored bytes with `Content-Disposition: attachment` and the file's base name | Yes, for a full (non-Range) GET |
+| `?download=1` | The stored bytes with `Content-Disposition: attachment` and the file's base name (non-ASCII names get an ASCII `filename` fallback plus the real UTF-8 name in RFC 5987 `filename*`) | Yes, for a full (non-Range) GET |
 | Sub-resource request (`fetch()`, `<img>`, `<script>`, `curl` without navigation headers) | No viewer is chosen; the stored bytes. Path-mode HTML/CSS URL rewriting does not apply to these formats | Yes, for a full (non-Range) GET |
 
 To fetch exact bytes, use `?raw=1` or `?download=1` (or any non-navigation
