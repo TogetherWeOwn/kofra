@@ -101,7 +101,7 @@ describe("Publisher acceptance protocol deadline", () => {
     expect(elapsed).toBeLessThan(20_000);
     const response = trace.timings.find(t => t.event === "response" && t.phase === "finalize");
     expect(response?.status).toBe(200);
-    expect(response?.path).toMatch(new RegExp(`^/api/v1/sites/${older}/deploys/[^/]+/finalize$`));
+    expect(response?.path).toMatch(new RegExp(`^/api/v1/sites/${older}/versions/[^/]+/finalize$`));
     console.info(JSON.stringify({ case: "wrong-slug-finalize", elapsed, error: error?.message, timings: trace.timings }));
   });
 });

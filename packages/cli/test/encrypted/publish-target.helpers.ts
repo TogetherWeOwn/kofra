@@ -203,8 +203,8 @@ export async function publishAndWaitForFinalize(f: Fixture, slug?: string) {
   const [response] = await Promise.all([
     f.page.waitForResponse((r: any) => {
       const path = new URL(r.url()).pathname;
-      return r.request().method() === "POST" && /^\/api\/v1\/sites\/[^/]+\/deploys\/[^/]+\/finalize$/.test(path)
-        && (slug === undefined || path.startsWith(`/api/v1/sites/${slug}/deploys/`));
+      return r.request().method() === "POST" && /^\/api\/v1\/sites\/[^/]+\/versions\/[^/]+\/finalize$/.test(path)
+        && (slug === undefined || path.startsWith(`/api/v1/sites/${slug}/versions/`));
     }, { timeout: publishProtocolTimeout }),
     publishButton(f).click(),
   ]);
