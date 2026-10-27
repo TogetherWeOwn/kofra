@@ -262,6 +262,18 @@ function etagMatches(req: Request, etag: string): boolean {
   });
 }
 
+// Viewer ids and etagExtra output may be any string — including lone
+// (unpaired) UTF-16 surrogates, on which encodeURIComponent throws URIError.
+// Normalize those to U+FFFD first (same approach as content-disposition.ts);
+// valid surrogate pairs pass through untouched.
+function etagSegment(value: string): string {
+  return encodeURIComponent(
+    value.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, (m) =>
+      m.length === 2 ? m : "\uFFFD",
+    ),
+  );
+}
+
 const flag = (sp: URLSearchParams, name: string) => sp.has(name) && sp.get(name) !== "0" && sp.get(name) !== "false";
 
 /** Which view a request asks for: ?view=source, ?view=1, or a browser navigation (top level or iframe). null = raw bytes. */
@@ -393,7 +405,7 @@ async function serveFile(
   // Rendered views: see ./viewers (one per file kind, plus ?view=source).
   if (viewer && viewMode) {
     const embed = flag(sp, "embed");
-    const etag = `W/"${encodeURIComponent(viewer.id)}@${viewer.version ?? 1}-${sha256}${encodeURIComponent(viewer.etagExtra?.(file, live) ?? "")}${embed ? "-e" : ""}${reportVariant}"`;
+    const etag = `W/"${etagSegment(viewer.id)}@${viewer.version ?? 1}-${sha256}${etagSegment(viewer.etagExtra?.(file, live) ?? "")}${embed ? "-e" : ""}${reportVariant}"`;
     const h = new Headers();
     if (etagMatches(req, etag)) {
       h.set("ETag", etag);
@@ -439,7 +451,12 @@ async function serveFile(
     else out.set("ETag", etag);
     out.set("Cache-Control", live.passwordHash ? "private, no-store" : viewerCacheControl ?? "public, max-age=0, must-revalidate");
     out.set("Vary", "Accept, Sec-Fetch-Dest");
-    out.set("X-Kofra-Viewer", viewer.id);
+    // Headers.set throws on CR, LF and NUL: a viewer id containing them would
+    // 500 an otherwise healthy render. Omit this diagnostic header for such
+    // ids; the ETag above already carries the encoded identity.
+    if (!viewer.id.includes("\r") && !viewer.id.includes("\n") && !viewer.id.includes("\0")) {
+      out.set("X-Kofra-Viewer", viewer.id);
+    }
     out.delete("Content-Length");
     securityHeaders(out, live, mode);
     let page = new Response(head ? null : rendered.body, { status, headers: out });
