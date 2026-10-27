@@ -155,7 +155,7 @@ describe("extension viewer ETag contract", () => {
     const rendered = await dw.call(path);
     expect(rendered.status).toBe(200);
     expect(rendered.headers.get("x-kofra-viewer")).toBeNull();
-    expect(rendered.headers.get("x-dropway-viewer")).toBeNull();
+    expect(rendered.headers.get("x-dropway-viewer")).toBeNull(); // rebrand:keep
     expect(await rendered.text()).toBe("Contract view: hello");
     const etag = rendered.headers.get("etag");
     expect(etag).toMatch(ENTITY_TAG);
@@ -181,7 +181,7 @@ describe("extension viewer ETag contract", () => {
     const rendered = await dw.call("/s/nul-viewer/fixture.txt?view=1");
     expect(rendered.status).toBe(200);
     expect(rendered.headers.get("x-kofra-viewer")).toBeNull();
-    expect(rendered.headers.get("x-dropway-viewer")).toBeNull();
+    expect(rendered.headers.get("x-dropway-viewer")).toBeNull(); // rebrand:keep
     expect(await rendered.text()).toBe("Contract view: hello");
     expect(rendered.headers.get("etag")).toMatch(ENTITY_TAG);
   });
