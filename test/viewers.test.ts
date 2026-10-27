@@ -83,6 +83,18 @@ const live = (renderMarkdown = true): LiveSite => ({
   files: {},
 });
 
+describe("viewer versions", () => {
+  // The version is part of the ETag and the render cache key: a changed render
+  // without a bump serves stale cached pages, so every bump is pinned here.
+  it("pins every registered viewer to its current render version", () => {
+    expect(VIEWERS).toHaveLength(15);
+    expect(Object.fromEntries(VIEWERS.map((v) => [v.id, v.version ?? 1]))).toEqual({
+      source: 4, "html-frame": 2, markdown: 4, notebook: 3, json: 3, csv: 4, svg: 3, image: 3,
+      pdf: 2, video: 2, audio: 2, font: 2, archive: 2, code: 4, binary: 4,
+    });
+  });
+});
+
 describe("viewer selection", () => {
   const pick = (path: string, mode: ViewMode, size = 100, l = live()) => findViewer(toViewerFile(path, "0".repeat(64), size, contentTypeFor(path)), l, VIEWERS, mode)?.id ?? null;
 
@@ -250,7 +262,7 @@ describe("viewer pages", () => {
     const again = await get("src/app.ts");
     expect(again.headers.get("x-kofra-render-cache")).toBe("memory");
     const etag = again.headers.get("etag")!;
-    expect(etag).toMatch(/^W\/"code@3-[a-f0-9]{64}"$/);
+    expect(etag).toMatch(/^W\/"code@4-[a-f0-9]{64}"$/);
     expect((await get("src/app.ts", { ...NAV, "If-None-Match": etag })).status).toBe(304);
     // Sub-resource requests still get the bytes.
     const script = await get("src/app.ts", { "Sec-Fetch-Dest": "script", Accept: "*/*" });
