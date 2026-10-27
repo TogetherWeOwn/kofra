@@ -12,6 +12,15 @@
   entries rebuild from D1 on first read) and is not recorded as a site request. `badge.svg` at a
   site root is reserved. See `docs/SITE_BADGE.md`.
 
+### Viewers
+
+- The font specimen has three native sample-size presets (16px, 32px default,
+  64px) for the editable sample, works without JavaScript, and its static size
+  rows wrap on narrow screens instead of being cut with an ellipsis. The sample
+  is now a labelled plain-text multiline textbox with a visible focus
+  indicator. Font bytes, CSP and read budgets are unchanged; cached specimen
+  pages are revalidated (font viewer version 2).
+
 ### Dashboard
 
 - The selected-version file table now announces matching-vs-loaded file counts
