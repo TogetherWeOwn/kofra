@@ -4124,10 +4124,11 @@ export function dropwayClient() {
       var filename = /^attachment;\s*filename="([a-z0-9][a-z0-9-]*-v[1-9][0-9]*\.zip)"$/i.exec(disposition);
       if (res.ok && !filename) throw new Error("The ZIP attachment filename is missing or invalid. Reload versions and retry.");
       var limit = res.ok ? 32 * 1024 * 1024 : 64 * 1024;
+      var limitLabel = res.ok ? "32 MiB" : "64 KiB";
       var length = res.headers.get("Content-Length");
       var expected = length === null ? null : Number(length);
       if (expected !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(expected) || expected > limit)) {
-        throw new Error("The response exceeds the browser download limit (32 MiB) or has an invalid length. Use the authenticated REST/CLI export.");
+        throw new Error("The response exceeds the browser limit (" + limitLabel + ") or has an invalid length. Use the authenticated REST/CLI export.");
       }
       if (!res.body) throw new Error("The archive response is incomplete. Retry the download.");
       reader = res.body.getReader();
@@ -4137,7 +4138,7 @@ export function dropwayClient() {
         if (next.done) break;
         size += next.value.byteLength;
         // Check before retaining each chunk, even without a truthful Content-Length.
-        if (size > limit) throw new Error("The response exceeds the browser download limit (32 MiB). Use the authenticated REST/CLI export or read files file-by-file.");
+        if (size > limit) throw new Error("The response exceeds the browser limit (" + limitLabel + "). Use the authenticated REST/CLI export or read files file-by-file.");
         chunks.push(next.value);
       }
       if (expected !== null && size !== expected) throw new Error("The archive response was truncated or its length did not match. Retry the download.");
@@ -4154,10 +4155,13 @@ export function dropwayClient() {
       a.click();
       complete = true;
     } catch (e) {
-      add(result, errorBox({
+      var failure = {
         message: e.name === "AbortError" ? "ZIP download cancelled." : e.message || "ZIP download failed.",
         hint: (e.hint ? e.hint + " " : "") + "Retry, reload versions, or use the authenticated REST/CLI export route above.",
-      }, "Could not download ZIP"));
+      };
+      // The selection may have changed mid-download, detaching this container.
+      if (result.isConnected === false) toast("Could not download ZIP for " + versionId + ": " + failure.message, true);
+      else add(result, errorBox(failure, "Could not download ZIP"));
     } finally {
       if (!complete) {
         controller.abort();
