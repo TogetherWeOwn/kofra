@@ -59,7 +59,7 @@ throws `ApiError` with a stable `code` and a `hint` for the caller.
 | `tenants.ts` | First-run setup (bootstrap key creates the owner), members, owner recovery |
 | `sites.ts` | Create, list, update, delete and claim sites; settings (including `noindex`, `viewers` and keyed-site `ttlSeconds`); access checks (`getSiteFor`) |
 | `deploys.ts` | Manifest validation, content-addressed upload, atomic finalize (including parsing the version's site config and restarting a keyed site's `ttl_seconds` lifetime), versions, restore, read-back |
-| `site-config.ts` | Parses root `_redirects` (301/302/307/308, placeholders, one trailing splat) and `_headers` (path patterns) into a version's `config_json`; invalid lines become `invalid_config` warnings; matches rules for serving |
+| `site-config.ts` | Parses root `_redirects` (301/302/307/308, placeholders, one trailing splat) and `_headers` (path patterns) into a version's `config_json`; invalid lines become `invalid_hosting_rule` warnings; matches rules for serving |
 | `publish.ts` | One-shot publish (multipart, JSON, zip, raw) built on `deploys.ts` |
 | `sources.ts` | Agent file sources (`content`, base64, `url` with an SSRF guard, `sha256` + upload links, `copyFrom`), `publishSources`, partial `updateSiteFiles`, `finalizeVersionByRef` |
 | `site-ops.ts` | Site refs (slug, id or URL), version refs (`live`, `v3`, `3`, id), rename, access modes, paged file reads, `confirm` checks |
@@ -158,7 +158,12 @@ Every view shares one bar (`viewers/chrome.ts`: kind, path, size, type; view
 tabs; Download; Files) built from plain links, so it works with JavaScript off.
 View pages get `VIEWER_CSP` (no scripts). The code view adds one static inline
 script (Copy, `#L10-L20` ranges) allowed by its SHA-256 hash, which stays valid
-across 304 responses, unlike a nonce. User markup (Markdown, notebook HTML)
+across 304 responses, unlike a nonce. Line ranges are selected without typing a
+fragment: shift-click extends from the first line of the current `#L…` selection,
+and the toolbar's First/Last line inputs (bounded to the rendered lines, at most
+5000 at a time) do the same from the keyboard. Selection only rewrites the
+fragment — no request, storage or extra history beyond the new hash — and the
+address remains a live address, not a pinned one. User markup (Markdown, notebook HTML)
 goes through `viewers/sanitize.ts`, an allowlist sanitizer on `HTMLRewriter`.
 Expensive output (highlighting, Markdown, JSON trees, CSV tables) is cached by
 content in `viewers/cache.ts` (`render/<viewer>@<version>/<variant>/<sha256>`:

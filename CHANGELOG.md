@@ -7,7 +7,7 @@
 - Root `_redirects` (301/302/307/308, `:placeholders`, one trailing `*`
   splat) and `_headers` (path patterns) are parsed at finalize into the
   version's `config_json` (migration 0007). Invalid lines are skipped and
-  returned as `invalid_config` warnings; the files themselves are never
+  returned as `invalid_hosting_rule` warnings; the files themselves are never
   served. Platform-owned headers cannot be set from `_headers`, and platform
   security headers are applied after (and win over) site headers. Restoring
   or duplicating a version carries its rules with its files.
@@ -21,7 +21,44 @@
   `ttlSeconds` for keyed sites: the site expires that long after its latest
   finalize, and `null` clears the lifetime. Anonymous sites keep the
   instance expiry and cannot set `ttlSeconds` (an explicit `null` is
-  ignored; 400 `invalid_ttl` for values outside 1 to 315360000).
+  ignored; 400 `invalid_ttl` for values outside 1 to 315360000). Expiry of a
+  keyed site refreshes the owner's usage counters, `_redirects`/`_headers` never
+  count as the single served file or appear in folder listings, and
+  `Service-Worker-Allowed` is platform-owned.
+
+### Dashboard
+
+- The selected-version file table now announces matching-vs-loaded file counts
+  and the matching byte total as you filter by path. A version with files but
+  no matches shows a distinct no-match message with a Clear filter action
+  (instead of a blank table), while a genuinely empty manifest stays labelled
+  as empty. Clearing resets only the query, keeps the selected version and
+  sort, and returns focus to the filter.
+
+### Path-mode hardening and publish warnings (R-12)
+
+- Publish and finalize return warnings with `fix` text (and `path`/`line` where known),
+  computed from the stored bytes over a bounded scan: `root_absolute_paths` (path mode),
+  `spa_without_base`, `uses_browser_storage` (when the site will be sandboxed),
+  `wasm_without_coi` (renamed from `wasm_without_cross_origin_isolation`),
+  `possible_secret` (file and line; matched values are never included) and
+  `invalid_config` (a `.dropway/*.json` file that is not valid JSON). `no_index` now
+  carries fix text too. Replayed finalizes and unchanged republishes (including
+  file-source REST/MCP publishes and updates) return the same warnings instead of an
+  empty list. Advisory database-read failures return no warnings without failing a
+  successful publication; bounded blob reads run concurrently in deterministic order.
+- A page navigation with a same-origin `Referer` inside an SPA site to a path the site
+  lacks now 307-redirects to that path inside the site (SRV-02), where the SPA fallback
+  serves it; app routes, paths with a file extension and sub-resource requests are
+  untouched. On a separate sites origin, existing destination sites (even empty or
+  expired), renamed-away slugs (their 308 redirect) and version addresses keep their
+  own routing instead of being captured by the referring SPA.
+- Publishing a path under `__dropway/` is refused with the new `reserved_path` error on
+  every publish path (the manifest, one-shot and file-source flows share the check).
+- `.dropway` and `.dropway/*` files are stored with the version (owner read-back works)
+  but are never served from the sites origin, including through the single-file root
+  shortcut, and no longer appear in folder listings. A directory holding only private
+  entries answers 404 instead of an empty listing or a redirect.
 
 ### Versions naming
 

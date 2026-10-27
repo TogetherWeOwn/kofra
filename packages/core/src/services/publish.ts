@@ -8,9 +8,8 @@ import { contentTypeFor, normaliseContentType } from "../lib/mime";
 import { normaliseFilePath, stripCommonRoot } from "../lib/paths";
 import type { Principal } from "../principal";
 import { blobScope, putVerifiedBlob } from "./blobs";
-import { createDeploy, finalizeDeploy, parseDeployOptions, precheckManifest } from "./deploys";
+import { createDeploy, deployWarnings, finalizeDeploy, parseDeployOptions, precheckManifest, versionWarnings, type Warning } from "./deploys";
 import { createSite, discardNewSite, findSite, getSiteFor, getVersion, parseSettings, serializeSite, updateSite, type SiteRow, type VersionRow } from "./sites";
-import { parseSiteConfigJson } from "./site-config";
 
 /** A file held in memory for one-shot publishing. */
 export interface InlineFile {
@@ -231,12 +230,13 @@ async function publishToTarget(
   });
 
   let uploaded = 0;
-  let warnings: Array<{ code: string; message: string }> = [];
+  // An unchanged republish still reports the live version's warnings, like finalize does.
+  let warnings: Warning[] = [];
   let versionId = deploy.deploy.id;
   if (deploy.unchanged) {
     // The same files mean the same parsed site config, so its warnings still apply.
-    const current = site.current_version_id ? await getVersion(dc, site.id, site.current_version_id) : null;
-    warnings = parseSiteConfigJson(current?.config_json).warnings;
+    const current = await getVersion(dc, site.id, deploy.deploy.id);
+    warnings = current ? await versionWarnings(dc, site, current) : await deployWarnings(dc, site, deploy.deploy.id);
   } else {
     const missing = new Set(deploy.missing);
     const toStore = new Map<string, (typeof hashed)[number]>();

@@ -1,6 +1,7 @@
-import { env } from "cloudflare:test";
+import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { parseSettings, type LiveSite } from "@dropway/core";
+import { parseSettings, runCleanup, type LiveSite } from "@dropway/core";
+import type { ServerBindings } from "@dropway/server";
 import { cacheControlFor } from "../packages/server/src/serve";
 import { form, freshInstance, type Instance } from "./helpers";
 
@@ -59,7 +60,7 @@ describe("_redirects and _headers (SRV-09)", () => {
     expect(pub.status, JSON.stringify(pub.body)).toBe(201);
     const slug = pub.body.slug as string;
 
-    const invalid = (pub.body.warnings as Array<{ code: string; message: string }>).filter((w) => w.code === "invalid_config");
+    const invalid = (pub.body.warnings as Array<{ code: string; message: string }>).filter((w) => w.code === "invalid_hosting_rule");
     // _redirects: bad status, nonsense, missing destination, unknown placeholder, protocol-relative destination.
     // _headers: bad path, its orphaned header, a non-header line, Set-Cookie, Clear-Site-Data.
     expect(invalid).toHaveLength(10);
@@ -156,7 +157,7 @@ describe("_redirects and _headers (SRV-09)", () => {
       { slug: "bad-dest" },
     );
     expect(pub.status, JSON.stringify(pub.body)).toBe(201);
-    const invalid = (pub.body.warnings as Array<{ code: string; message: string }>).filter((w) => w.code === "invalid_config");
+    const invalid = (pub.body.warnings as Array<{ code: string; message: string }>).filter((w) => w.code === "invalid_hosting_rule");
     expect(invalid).toHaveLength(2);
     expect((await dw.call("/s/bad-dest/old")).status).toBe(404);
     expect((await dw.call("/s/bad-dest/ext")).status).toBe(404);
@@ -185,12 +186,12 @@ describe("_redirects and _headers (SRV-09)", () => {
     const files = { "index.html": "<p>x</p>", _redirects: "/ok /index.html 301\nnonsense-line\n" };
     const first = await publish(files, { slug: "replay-warn" });
     expect(first.status).toBe(201);
-    const firstInvalid = (first.body.warnings as Array<{ code: string; message: string }>).filter((w) => w.code === "invalid_config");
+    const firstInvalid = (first.body.warnings as Array<{ code: string; message: string }>).filter((w) => w.code === "invalid_hosting_rule");
     expect(firstInvalid).toHaveLength(1);
     const second = await publish(files, { slug: "replay-warn" });
     expect(second.status).toBe(200);
     expect(second.body.unchanged).toBe(true);
-    const secondInvalid = (second.body.warnings as Array<{ code: string; message: string }>).filter((w) => w.code === "invalid_config");
+    const secondInvalid = (second.body.warnings as Array<{ code: string; message: string }>).filter((w) => w.code === "invalid_hosting_rule");
     expect(secondInvalid).toHaveLength(1);
     expect(secondInvalid[0]!.message).toBe(firstInvalid[0]!.message);
   });
@@ -206,7 +207,7 @@ describe("_redirects and _headers (SRV-09)", () => {
     chunks.push("/overflow/*", "  X-Overflow: v");
     const pub = await publish({ "index.html": "<p>x</p>", _headers: chunks.join("\n") }, { slug: "cap-warn" });
     expect(pub.status, JSON.stringify(pub.body)).toBe(201);
-    const invalid = (pub.body.warnings as Array<{ code: string; message: string }>).filter((w) => w.code === "invalid_config");
+    const invalid = (pub.body.warnings as Array<{ code: string; message: string }>).filter((w) => w.code === "invalid_hosting_rule");
     expect(invalid.some((w) => w.message.includes("more than 1000 headers"))).toBe(true);
     expect(invalid.some((w) => w.message.includes("more than 100 path patterns"))).toBe(true);
   });
@@ -217,7 +218,7 @@ describe("_redirects and _headers (SRV-09)", () => {
       { slug: "splat-clash" },
     );
     expect(pub.status, JSON.stringify(pub.body)).toBe(201);
-    const invalid = (pub.body.warnings as Array<{ code: string; message: string }>).filter((w) => w.code === "invalid_config");
+    const invalid = (pub.body.warnings as Array<{ code: string; message: string }>).filter((w) => w.code === "invalid_hosting_rule");
     expect(invalid).toHaveLength(1);
     expect(invalid[0]!.message).toContain("splat");
     const row = await env.DB.prepare("SELECT config_json FROM versions WHERE id = ?")
@@ -375,5 +376,106 @@ describe("ttlSeconds, noindex, viewers and robots.txt (PUB-16, SRV-12, VIEW-06)"
       body: JSON.stringify({ ttlSeconds: 60 }),
     });
     expect(numbered.status).toBe(403);
+  });
+});
+
+describe("review round 1 regressions", () => {
+  const warningsOf = (body: Record<string, unknown>) => (body.warnings as Array<{ code: string; message: string }>).filter((w) => w.code === "invalid_hosting_rule");
+
+  it("uses its own warning code, not the .dropway invalid_config one", async () => {
+    const pub = await publish({ "index.html": "x", _redirects: "nonsense-line\n", ".dropway/settings.json": "{not json" }, { slug: "code-split" });
+    expect(pub.status, JSON.stringify(pub.body)).toBe(201);
+    const codes = (pub.body.warnings as Array<{ code: string }>).map((w) => w.code);
+    expect(codes).toContain("invalid_hosting_rule");
+    expect(codes).toContain("invalid_config");
+    const rule = (pub.body.warnings as Array<{ code: string; path?: string; line?: number; fix?: string }>).find((w) => w.code === "invalid_hosting_rule")!;
+    expect(rule.path).toBe("_redirects");
+    expect(rule.line).toBe(1);
+    expect(rule.fix).toBeTruthy();
+  });
+
+  it("refuses Service-Worker-Allowed and X-Kofra-* in _headers, and keeps the platform's own X-Kofra-Site", async () => {
+    const pub = await publish(
+      {
+        "index.html": "x",
+        _headers: "/*\n  Service-Worker-Allowed: /\n  X-Kofra-Site: spoofed\n  X-Kofra-Extra: 1\n  X-Fine: ok\n",
+      },
+      { slug: "reserved-hdrs" },
+    );
+    expect(pub.status, JSON.stringify(pub.body)).toBe(201);
+    expect(warningsOf(pub.body)).toHaveLength(3);
+    const res = await dw.call("/s/reserved-hdrs/index.html");
+    expect(res.headers.get("service-worker-allowed")).toBeNull();
+    expect(res.headers.get("x-kofra-extra")).toBeNull();
+    expect(res.headers.get("x-kofra-site")).toBe("reserved-hdrs");
+    expect(res.headers.get("x-fine")).toBe("ok");
+  });
+
+  it("warns on header values outside the HTTP ByteString range instead of failing at serve time", async () => {
+    const pub = await publish({ "index.html": "x", _headers: "/*\n  X-Snow: ☃\n  X-Latin: café\n" }, { slug: "bytestring" });
+    expect(pub.status, JSON.stringify(pub.body)).toBe(201);
+    expect(warningsOf(pub.body)).toHaveLength(1);
+    const res = await dw.call("/s/bytestring/index.html");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-snow")).toBeNull();
+  });
+
+  it("never lets _headers customise a gated site's Cache-Control", async () => {
+    const pub = await publish({ "index.html": "x", _headers: "/*\n  Cache-Control: public, max-age=600\n" }, { slug: "gated-cache" });
+    expect(pub.status).toBe(201);
+    const open = await dw.call("/s/gated-cache/index.html");
+    expect(open.headers.get("cache-control")).toBe("public, max-age=600");
+    const lock = await dw.json("/api/v1/sites/gated-cache/access", {
+      method: "PUT",
+      key: dw.ownerKey,
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ mode: "password", password: "secret1" }),
+    });
+    expect(lock.status).toBe(200);
+    const login = await dw.call("/s/gated-cache/__dropway/password", {
+      method: "POST",
+      headers: { ...BROWSER_NAV, "Content-Type": "application/x-www-form-urlencoded", "Sec-Fetch-Site": "same-origin" },
+      body: "password=secret1&next=%2Findex.html",
+    });
+    expect(login.status).toBe(303);
+    const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
+    const gated = await dw.call("/s/gated-cache/index.html", { headers: { Cookie: cookie } });
+    expect(gated.status).toBe(200);
+    expect(gated.headers.get("cache-control")).toBe("private, no-store");
+  });
+
+  it("never serves the config files as the single-file root or lists them", async () => {
+    const onlyConfig = await publish({ _redirects: "/old /new 301\n" }, { slug: "only-config" });
+    expect(onlyConfig.status, JSON.stringify(onlyConfig.body)).toBe(201);
+    const root = await dw.call("/s/only-config/");
+    expect(root.status).toBe(404);
+    expect(await root.text()).not.toContain("/old /new");
+
+    const oneReal = await publish({ "note.txt": "real file", _headers: "/*\n  X-A: 1\n" }, { slug: "one-real" });
+    expect(oneReal.status).toBe(201);
+    const single = await dw.call("/s/one-real/");
+    expect(single.status).toBe(200);
+    expect(await single.text()).toBe("real file");
+
+    const many = await publish({ "a.txt": "a", "b.txt": "b", _redirects: "/x /a.txt\n", _headers: "/*\n  X-A: 1\n" }, { slug: "many-real" });
+    expect(many.status).toBe(201);
+    const listing = await (await dw.call("/s/many-real/", { headers: BROWSER_NAV })).text();
+    expect(listing).toContain("a.txt");
+    expect(listing).not.toContain("_redirects");
+    expect(listing).not.toContain("_headers");
+  });
+
+  it("recomputes the owner's usage counters when a keyed site's lifetime expires", async () => {
+    await publish({ "index.html": "x" }, { slug: "ttl-usage" });
+    await patchSite("ttl-usage", { ttlSeconds: 60 });
+    const sitesBefore = await env.DB.prepare("SELECT value FROM usage_counters WHERE key = 'sites' AND tenant_id = (SELECT tenant_id FROM sites WHERE slug = 'ttl-usage')").first<{ value: number }>();
+    expect(sitesBefore?.value).toBe(1);
+    await env.DB.prepare("UPDATE sites SET expires_at = ? WHERE slug = 'ttl-usage'").bind(Date.now() - 1000).run();
+    const ctx = createExecutionContext();
+    const report = await runCleanup(dw.dropway.context(env as unknown as ServerBindings, ctx));
+    await waitOnExecutionContext(ctx);
+    expect(report.expiredSites).toBe(1);
+    const row = await env.DB.prepare("SELECT value FROM usage_counters WHERE key = 'sites' AND tenant_id = (SELECT tenant_id FROM sites WHERE deleted_slug = 'ttl-usage')").first<{ value: number }>();
+    expect(row?.value).toBe(0);
   });
 });

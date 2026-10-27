@@ -250,7 +250,7 @@ describe("viewer pages", () => {
     const again = await get("src/app.ts");
     expect(again.headers.get("x-kofra-render-cache")).toBe("memory");
     const etag = again.headers.get("etag")!;
-    expect(etag).toMatch(/^W\/"code@1-[a-f0-9]{64}"$/);
+    expect(etag).toMatch(/^W\/"code@3-[a-f0-9]{64}"$/);
     expect((await get("src/app.ts", { ...NAV, "If-None-Match": etag })).status).toBe(304);
     // Sub-resource requests still get the bytes.
     const script = await get("src/app.ts", { "Sec-Fetch-Dest": "script", Accept: "*/*" });

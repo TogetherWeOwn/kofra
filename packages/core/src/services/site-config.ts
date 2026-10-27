@@ -7,13 +7,16 @@ import { encodePath } from "../lib/paths";
  * syntax subset described in docs/SPEC.md. They are parsed once, at finalize,
  * into `versions.config_json`; serving only ever reads the parsed rules, and
  * the files themselves are never served. Invalid lines are skipped and
- * reported as `invalid_config` warnings (returned by finalize, and kept in
+ * reported as `invalid_hosting_rule` warnings (returned by finalize, and kept in
  * `config_json.warnings` so a replayed finalize can report them again).
  */
 
 export interface SiteConfigWarning {
   code: string;
   message: string;
+  path?: string;
+  line?: number;
+  fix?: string;
 }
 
 export interface SiteRedirectRule {
@@ -72,6 +75,7 @@ const BLOCKED_HEADERS = new Set([
   "location",
   "refresh",
   "server",
+  "service-worker-allowed",
   "set-cookie",
   "te",
   "trailer",
@@ -81,6 +85,11 @@ const BLOCKED_HEADERS = new Set([
   "vary",
   "www-authenticate",
 ]);
+
+/** The root hosting-rule files: parsed at finalize, stored with the version, never served or listed. */
+export function isSiteConfigPath(path: string): boolean {
+  return path === "_redirects" || path === "_headers";
+}
 
 export function emptySiteConfig(): SiteConfig {
   return { redirects: [], headers: [], warnings: [] };
@@ -94,14 +103,14 @@ class WarningSink {
     if (this.warnings.length >= MAX_WARNINGS_PER_FILE) {
       if (!this.overflowNoted) {
         this.overflowNoted = true;
-        this.warnings.push({ code: "invalid_config", message: `${this.file}: further invalid lines were also ignored (only the first ${MAX_WARNINGS_PER_FILE} are reported).` });
+        this.warnings.push({ code: "invalid_hosting_rule", message: `${this.file}: further invalid lines were also ignored (only the first ${MAX_WARNINGS_PER_FILE} are reported).`, path: this.file });
       }
       return;
     }
-    this.warnings.push({ code: "invalid_config", message: `${this.file} line ${line}: ${reason}` });
+    this.warnings.push({ code: "invalid_hosting_rule", message: `${this.file} line ${line}: ${reason}`, path: this.file, line, fix: `Correct or remove line ${line} of ${this.file}; it was ignored.` });
   }
   addFile(reason: string) {
-    this.warnings.push({ code: "invalid_config", message: `${this.file}: ${reason}` });
+    this.warnings.push({ code: "invalid_hosting_rule", message: `${this.file}: ${reason}`, path: this.file, fix: `Correct ${this.file}; it was ignored.` });
   }
 }
 

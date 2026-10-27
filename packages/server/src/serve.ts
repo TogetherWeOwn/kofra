@@ -7,6 +7,7 @@ import {
   getLiveSite,
   hmacHex,
   isHtml,
+  isSiteConfigPath,
   isTextual,
   meter,
   emit,
@@ -28,6 +29,7 @@ import { MAX_CSS_REWRITE_BYTES, rewriteCss, rewriteHtml, type PathRewrite } from
 import { PATH_SHIM_VERSION, pathShimScript } from "./path-shim";
 import { injectReportLink, REPORT_LINK_VERSION } from "./report-link";
 import { serveTransfer } from "./transfers";
+import { attachmentDisposition } from "./content-disposition";
 
 /**
  * How a site is being served.
@@ -65,8 +67,14 @@ export function isNavigation(req: Request): boolean {
   return (req.headers.get("accept") ?? "").includes("text/html");
 }
 
-function hasChildren(files: LiveSite["files"], dir: string): boolean {
-  for (const k in files) if (k.startsWith(dir)) return true;
+/** Private configuration paths are stored with the version but never served. */
+function isPrivatePath(p: string): boolean {
+  return p === ".dropway" || p.startsWith(".dropway/") || isSiteConfigPath(p);
+}
+
+/** A directory counts for serving only when it holds at least one non-private entry. */
+function hasVisibleChildren(files: LiveSite["files"], dir: string): boolean {
+  for (const k in files) if (k.startsWith(dir) && !isPrivatePath(k)) return true;
   return false;
 }
 
@@ -77,16 +85,20 @@ function hasChildren(files: LiveSite["files"], dir: string): boolean {
 export function resolvePath(live: LiveSite, p: string, req: Request, mode: ServeMode, fallbacks = true): Resolved {
   const files = live.files;
   const search = new URL(req.url).search;
+  // .dropway and .dropway/* are stored with the version (site configuration) but never
+  // served: not as a file, not raw, not as a listing, and not through the SPA fallback.
+  // A directory holding only private entries therefore answers as if it were absent.
+  if (isPrivatePath(p)) return { kind: "not_found" };
   if (p === "" || p.endsWith("/")) {
     for (const name of INDEX_NAMES) if (files[p + name]) return { kind: "file", path: p + name, status: 200 };
     if (p === "") {
-      const keys = Object.keys(files);
+      const keys = Object.keys(files).filter((k) => !isPrivatePath(k));
       if (keys.length === 1) return { kind: "file", path: keys[0]!, status: 200 };
     }
-    if (hasChildren(files, p)) return { kind: "listing", dir: p };
+    if (hasVisibleChildren(files, p)) return { kind: "listing", dir: p };
   } else {
     if (files[p]) return { kind: "file", path: p, status: 200 };
-    if (hasChildren(files, `${p}/`)) return { kind: "redirect", location: `${mode.base}${encodePath(p)}/${search}` };
+    if (hasVisibleChildren(files, `${p}/`)) return { kind: "redirect", location: `${mode.base}${encodePath(p)}/${search}` };
     if (files[`${p}.html`]) return { kind: "file", path: `${p}.html`, status: 200 };
     if (files[`${p}.htm`]) return { kind: "file", path: `${p}.htm`, status: 200 };
   }
@@ -377,7 +389,7 @@ export async function serveSite(
   const requestPath = `/${filePath}`;
 
   // The site-config files are platform inputs, never site content (SRV-09).
-  if (filePath === "_redirects" || filePath === "_headers") {
+  if (isSiteConfigPath(filePath)) {
     const response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", `There is no file at <code>/${escapeHtml(filePath)}</code> on this site.`);
     recordHit(dw, req, live, filePath, response.status, 0, Date.now() - started);
     return response;
@@ -425,7 +437,7 @@ export async function serveSite(
   } else if (resolved.kind === "not_found") {
     response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", `There is no file at <code>/${escapeHtml(filePath)}</code> on this site.`);
   } else if (resolved.kind === "listing") {
-    response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`);
+    response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`, url.searchParams.get("sort"));
     securityHeaders(response.headers, live, mode);
   } else {
     response = await serveFile(req, dw, url, live, mode, resolved.path, resolved.status, viewers, { requestPath });
@@ -463,7 +475,7 @@ async function serveFile(
   // Rendered views: see ./viewers (one per file kind, plus ?view=source).
   if (viewer && viewMode) {
     const embed = flag(sp, "embed");
-    const etag = `W/"${viewer.id}@${viewer.version ?? 1}-${sha256}${embed ? "-e" : ""}${reportVariant}"`;
+    const etag = `W/"${viewer.id}@${viewer.version ?? 1}-${sha256}${viewer.etagExtra?.(file, live) ?? ""}${embed ? "-e" : ""}${reportVariant}"`;
     const h = new Headers();
     if (etagMatches(req, etag)) {
       h.set("ETag", etag);
@@ -561,7 +573,7 @@ async function serveFile(
   } else {
     h.set("Content-Type", contentType);
   }
-  if (download) h.set("Content-Disposition", `attachment; filename="${(path.split("/").pop() ?? "file").replace(/["\\\r\n]/g, "_")}"`);
+  if (download) h.set("Content-Disposition", attachmentDisposition(path.split("/").pop() ?? "file"));
   applySiteHeaders(h, live, opts.requestPath);
   securityHeaders(h, live, mode);
 

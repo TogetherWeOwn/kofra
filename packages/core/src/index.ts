@@ -21,6 +21,7 @@ export * from "./lib/mime";
 export * from "./lib/paths";
 export * from "./lib/slug";
 export * from "./lib/filetypes";
+export * from "./lib/secrets";
 
 export * from "./services/events";
 export * from "./services/site-config";

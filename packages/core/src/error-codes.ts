@@ -38,6 +38,7 @@ export const ERROR_CODES: Readonly<Record<string, ErrorCode>> = {
   password_required: { status: 400, retryable: false, hint: "Call again with a password of 4–200 characters." },
   reason_required: { status: 400, retryable: false, hint: "Provide a non-empty reason for releasing the held name, such as a trademark dispute reference." },
   path_required: { status: 400, retryable: false, hint: "Add a path query parameter or X-Kofra-Path header to name the raw file." },
+  reserved_path: { status: 400, retryable: false, hint: "Rename the __dropway/ folder: paths under __dropway/ belong to the server (password form, report link)." },
   size_mismatch: { status: 400, retryable: false, hint: "Recheck the file bytes, manifest size and Content-Length; send the raw file body." },
   slug_reserved: { status: 400, retryable: false, hint: "Pick another name, or omit the slug to get a generated one. For a freed name held for its previous tenant (409), only that tenant may reclaim before details.holdUntil; otherwise wait until the hold ends." },
   too_many_files: { status: 400, retryable: false, hint: "Split content across sites or trim build output; never silently drop files." },

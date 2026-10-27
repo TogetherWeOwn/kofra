@@ -7,6 +7,7 @@ import { convertRedirectsStatements, insertTombstone, purgeExpiredHolds } from "
 import { cleanupTransfers } from "./transfer-cleanup";
 import { assertSiteDeletionState, siteDeletionStateChanged } from "./atomic-write";
 import type { SiteRow } from "./sites";
+import { usageStatements } from "./usage";
 
 const HOUR = 3600_000;
 const DAY = 24 * HOUR;
@@ -49,6 +50,7 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
           .bind(now, `~deleted~${s.id}`, s.id),
         insertTombstone(dc, { slug: s.slug, tenantId: s.tenant_id, siteId: s.id, chosen: s.slug_chosen === 1, holdUntil, reason: "expired", createdAt: now, deletedAt: now }),
         ...convertRedirectsStatements(dc, { siteId: s.id, tenantId: s.tenant_id, reason: "expired", now, deletedAt: now }),
+        ...usageStatements(dc, s.tenant_id),
       ]);
     } catch (error) {
       // A changed row is reconsidered from fresh state on the next cron run.

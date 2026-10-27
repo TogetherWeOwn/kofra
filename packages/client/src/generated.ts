@@ -19,25 +19,25 @@ export interface WhoamiOutput {
 export interface PublishSiteInput {
   /** Every file of the site. */
   files: ({
-    /** Path in the site, e.g. "docs/guide.md". */
+    /** Path inside the site, e.g. "index.html" or "docs/guide.md". */
     path: string;
-    /** Text (utf8, up to 1 MB) or base64 bytes (up to 256 KB). Prefer url/sha256 for bigger or binary files. */
+    /** Text (encoding "utf8", up to 1 MB) or base64 bytes (up to 256 KB). For bigger/binary files prefer url or sha256. */
     content?: string;
-    /** Content encoding (default utf8). */
+    /** Default "utf8". */
     encoding?: "utf8" | "base64";
-    /** Public https URL to fetch (URL_FETCH_MAX_BYTES, 30 s, 3 redirects; file/request caps apply). */
+    /** Public https URL (URL_FETCH_MAX_BYTES default 100 MiB; 30 s, 3 redirects; other caps). */
     url?: string;
-    /** Headers for the url fetch; used once, never stored. */
+    /** Headers for the url download, e.g. Authorization; used once, never stored. */
     headers?: Record<string, string>;
-    /** Hex SHA-256. Stored bytes are reused; otherwise the result gives an upload link (PUT, then finalize_version). */
+    /** Hex SHA-256 of the bytes. Stored: reused at once. Not stored: the result lists an upload link (PUT, then finalize_version). */
     sha256?: string;
-    /** Bytes; required with sha256 if not yet stored. */
+    /** Bytes; required with sha256 if not stored yet. */
     size?: number;
-    /** Copy a published file: site (default: this site), version (default: live), path (default: same path). */
+    /** Copy a published file: site you can read (default: this site), version (default: live), path (default: same). */
     copyFrom?: {
-      /** Site slug, site_... id, or site URL. */
+      /** Site slug, site_... id or URL. */
       site?: string;
-      /** "live", "v3", "3", or a ver_... id. */
+      /** "live", "v3"/"3", or a ver_... id. */
       version?: string;
       path?: string;
     };
@@ -50,17 +50,14 @@ export interface PublishSiteInput {
   title?: string | null;
   /** One or two sentences about the site. */
   description?: string | null;
-  /** SPA: unknown paths serve index.html. */
+  /** SPA: unknown paths serve index.html instead of 404. */
   spa?: boolean;
-  /** .md rendered for browsers (default); false serves raw. */
+  /** Render .md files as pages for browsers (default true); false serves raw. */
   renderMarkdown?: boolean;
-  /** COOP/COEP headers (SharedArrayBuffer, threaded WASM). */
+  /** Send COOP/COEP headers (for SharedArrayBuffer/threaded WASM). */
   crossOriginIsolation?: boolean;
-  /** Keep the site out of search indexes. */
   noindex?: boolean;
-  /** File viewers; false serves raw bytes. */
   viewers?: boolean;
-  /** Keyed sites: seconds to expiry from latest publish; null clears. */
   ttlSeconds?: number | null;
   /** Optional visitor password (see set_site_access). */
   password?: string;
@@ -75,7 +72,7 @@ export interface PublishSiteOutput {
   /** Live URL. Share it exactly as returned. */
   url: string;
   slug: string;
-  /** Owner dashboard link pinned by version id. */
+  /** Dashboard link pinned by version id. */
   versionUrl?: string;
   site?: {
     slug: string;
@@ -85,9 +82,16 @@ export interface PublishSiteOutput {
   };
   version?: Record<string, unknown> | null;
   files?: Record<string, unknown>;
-  /** Only when status is awaiting_upload: items to PUT, then finalize. */
+  /** Only for awaiting_upload: items to PUT, then finalize. */
   upload?: Record<string, unknown>;
-  warnings?: unknown[];
+  warnings?: {
+    code?: string;
+    message?: string;
+    path?: string;
+    line?: number;
+    fix?: string;
+    [key: string]: unknown;
+  }[];
   next?: unknown[];
   [key: string]: unknown;
 }
@@ -190,7 +194,14 @@ export interface UpdateSiteFilesOutput {
     [key: string]: unknown;
   };
   changes?: Record<string, unknown>;
-  warnings?: Record<string, unknown>[];
+  warnings?: {
+    code?: string;
+    message?: string;
+    path?: string;
+    line?: number;
+    fix?: string;
+    [key: string]: unknown;
+  }[];
   next?: Record<string, unknown>[];
   [key: string]: unknown;
 }
@@ -290,11 +301,11 @@ export interface ListFilesInput {
 export type ListFilesOutput = Record<string, unknown>;
 
 export interface ReadFileInput {
-  /** Site slug, site_... id, or site URL. */
+  /** Site slug, site_... id or URL. */
   site: string;
   /** File path, e.g. "index.html". */
   path: string;
-  /** "live", "v3", "3", or a ver_... id. */
+  /** "live", "v3"/"3", or a ver_... id. */
   version?: string;
   /** Default "auto". */
   encoding?: "auto" | "text" | "base64";
@@ -590,7 +601,7 @@ export interface RenameSiteOutput {
 }
 
 export interface DuplicateSiteInput {
-  /** Site slug, site_... id, or site URL. */
+  /** Site slug, site_... id or URL. */
   site: string;
   /** 3-56 chars: a-z, 0-9, single hyphens. */
   newSlug: string;
@@ -890,7 +901,14 @@ export type PublishUploadOutput = {
     [key: string]: unknown;
   };
   changes?: Record<string, unknown>;
-  warnings?: Record<string, unknown>[];
+  warnings?: {
+    code?: string;
+    message?: string;
+    path?: string;
+    line?: number;
+    fix?: string;
+    [key: string]: unknown;
+  }[];
   next?: Record<string, unknown>[];
   [key: string]: unknown;
 } | {
@@ -947,6 +965,9 @@ export type PublishUploadOutput = {
   warnings?: {
     code?: string;
     message?: string;
+    path?: string;
+    line?: number;
+    fix?: string;
     [key: string]: unknown;
   }[];
   /** Anonymous publishes only; shown once. */
