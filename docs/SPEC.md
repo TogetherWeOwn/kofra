@@ -1544,6 +1544,13 @@ CLI hashes and uploads from disk. Credentials as for the CLI.
 
 ### 10.2 Matrix
 
+Shipped report printing: Markdown, code/text/Source, JSON, CSV and notebook
+viewers use print-only black-on-white styles, path context, wrapped content and
+page-aware tables without viewer controls. Existing caps, notices, selected
+panes and closed disclosures remain; HTML applications own their print styles.
+See [Printing reports](VIEWERS.md#printing-reports) for boundaries and browser
+URL-header settings. This describes repository behavior, not deployment status.
+
 | Kind (`detectFileKind`) | Typical extensions | Rendered view | Source / raw | Viewer cap | Scripts | Pri | Status |
 |---|---|---|---|---|---|---|---|
 | html | `.html`, `.htm` | The page itself; `?view=1` = viewer frame | highlighted source; raw as text | - | page's own | P0 | Page + raw done; frame, source R-07 |

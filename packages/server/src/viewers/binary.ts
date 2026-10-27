@@ -64,9 +64,10 @@ const MAGIC: Array<[RegExp, string]> = [
 
 export const binaryViewer: Viewer = {
   id: "binary",
-  // Bumped with the code viewer's line-range selection: the as-text branch
-  // renders through codePage, so its output changed too.
-  version: 2,
+  // Bumped with the code viewer's line-range selection and report print
+  // treatment: the as-text branch renders through codePage, so its output
+  // changed with both.
+  version: 3,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => mode === "view" && BINARY_KINDS.has(file.kind),
   async render(vc) {
