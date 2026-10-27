@@ -1679,6 +1679,8 @@ grant more than they hold. Keys can be limited to one site and, for drives, a pa
   boundary between paths. As with password sites, use subdomain mode for sensitive content or mutually
   untrusted sites: path-mode sites share an origin, including ambient-cookie classic-script inclusions
   from opaque sandboxes. Signed links and cookies expire at the same absolute 24-hour deadline.
+  Link issuance requires HTTPS except on loopback development origins; non-loopback HTTP
+  omits `versionUrl` without failing publication.
 - **IPs.** Only salted hashes (`SIGNING_SECRET`) are stored. Analytics visitors are daily salted hashes.
 - **SSRF.** URL sources, proxy routes and webhooks fetch `https` only, refuse private, loopback,
   link-local and Cloudflare-internal addresses, follow at most 3 redirects (re-checking each), time out at

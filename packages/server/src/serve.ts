@@ -40,6 +40,8 @@ export interface ServeMode {
   sandbox: boolean;
   /** Path mode: prefix root-relative URLs in HTML and CSS (null = serve bytes untouched). */
   rewrite: PathRewrite | null;
+  /** Keep runtime URLs in path scope when a preview suppresses the Referer. */
+  pathShim?: boolean;
 }
 
 export const INDEX_NAMES = ["index.html", "index.htm", "index.md", "README.md", "readme.md"];
@@ -465,8 +467,8 @@ async function serveFile(
   // Path mode: HTML and CSS get root-relative URLs prefixed with the site base.
   const rewriteKind = mode.rewrite && !raw && !download && !precompressed(path) ? (isHtml(contentType) ? "html" : baseType(contentType) === "text/css" && size <= MAX_CSS_REWRITE_BYTES ? "css" : null) : null;
   if (rewriteKind || report) {
-    // Sandboxed pages send no Referer, so their HTML also carries the run-time shim (./path-shim).
-    const shim = rewriteKind === "html" && mode.sandbox;
+    // Sandboxed pages and private previews send no Referer, so they need runtime URL repair.
+    const shim = rewriteKind === "html" && (mode.sandbox || mode.pathShim === true);
     const etag = `W/"${rewriteKind ? "pm-" : ""}${sha256}${shim ? `-js${PATH_SHIM_VERSION}` : ""}${reportVariant}"`;
     const h = new Headers({ "Content-Type": contentType, ETag: etag, "Cache-Control": cacheControlFor(path, live) });
     if (rewriteKind) h.set("X-Kofra-Rewritten", "path-prefix");

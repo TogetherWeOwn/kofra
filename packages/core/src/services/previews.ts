@@ -12,10 +12,14 @@ const payload = (siteId: string, versionId: string, expiresAt: number) => `dw-pr
 /** A bearer capability for one version, independent of the eventually consistent live pointer. */
 export async function versionPreviewUrl(dc: DropwayContext, principal: Principal, site: Pick<SiteRow, "id" | "slug" | "tenant_id">, version: Pick<VersionRow, "id" | "number">): Promise<string | undefined> {
   try {
+    const url = new URL(siteUrl(dc, `${site.slug}--v${version.number}`));
+    const loopback = url.hostname === "localhost" || url.hostname === "[::1]" || /^127\.\d+\.\d+\.\d+$/.test(url.hostname);
+    if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) return undefined;
     if (!(await capabilityDecision(dc, principal, "version_previews", { siteId: site.id, tenantId: site.tenant_id })).allowed) return undefined;
     const expiresAt = Date.now() + PREVIEW_TTL_MS;
     const signature = await hmacHex(dc.config.signingSecret, payload(site.id, version.id, expiresAt));
-    return `${siteUrl(dc, `${site.slug}--v${version.number}`)}?dw_preview=${expiresAt}.${signature}`;
+    url.searchParams.set("dw_preview", `${expiresAt}.${signature}`);
+    return url.toString();
   } catch {
     // Callers invoke this after the version is already committed live. Preserve
     // that success response without the optional link rather than reporting a
