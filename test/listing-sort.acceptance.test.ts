@@ -24,8 +24,10 @@
  *     recognized, case-sensitive values: `name`, `size`, `type`.
  *   - The three header links are labelled `Name`, `Largest first` and
  *     `Type`, each a plain anchor whose href is the same listing path
- *     with a single `sort=<value>` query parameter. The active sort's
- *     link carries `aria-current` (not `="false"`); inactive links
+ *     with a single `sort=<value>` query parameter, plus the recognized
+ *     `kind` selection when filtering. Kind controls also preserve sort;
+ *     neither parameter propagates to content or navigation links.
+ *     The active sort's link carries `aria-current` (not `="false"`); inactive links
  *     carry no `aria-current` or `aria-current="false"`.
  *   - No parameter, `sort=name`, and any unrecognized value render
  *     byte-identically to each other (canonical default). A repeated
@@ -71,7 +73,8 @@ function anchors(html: string): Anchor[] {
   const out: Anchor[] = [];
   const re = /<a\s+([^>]*href="([^"]+)"[^>]*)>([^<]*)<\/a>/g;
   for (let m; (m = re.exec(html)); ) {
-    out.push({ attrs: m[1]!, href: m[2]!, label: m[3]!, index: m.index });
+    // HTML href attributes escape query separators; URLs use the decoded value.
+    out.push({ attrs: m[1]!, href: m[2]!.replace(/&amp;/g, "&"), label: m[3]!, index: m.index });
   }
   return out;
 }
@@ -85,6 +88,17 @@ const SORT_VALUE: Record<(typeof SORT_LABELS)[number], string> = {
 
 function sortLinks(html: string): Anchor[] {
   return anchors(html).filter((a) => (SORT_LABELS as readonly string[]).includes(a.label));
+}
+
+/** Only anchors inside the kind nav are display controls, not content/navigation links. */
+function kindLinks(html: string): Anchor[] {
+  for (const nav of html.matchAll(/<nav\b([^>]*)>[\s\S]*?<\/nav>/g)) {
+    const label = /aria-label="([^"]*)"/.exec(nav[1]!)?.[1] ?? "";
+    if (!/this folder/i.test(label)) continue;
+    const start = nav.index!;
+    return anchors(html).filter((a) => a.index >= start && a.index < start + nav[0].length);
+  }
+  return [];
 }
 
 function ariaCurrent(a: Anchor): string | null {
@@ -283,6 +297,79 @@ describe("listing sort: header controls", () => {
   });
 });
 
+describe("listing sort: kind coexistence", () => {
+  // RED until filtering lands: sort controls must retain, not silently clear, the selection.
+  it.each(["pdf", "csv", "image", "svg", "text"])("sort controls preserve recognized kind=%s and only display parameters", async (kind) => {
+    for (const sort of ["name", "size", "type"]) {
+      const path = `${root}?kind=${kind}&sort=${sort}&utm_source=test`;
+      const { html } = await listing(dw, path);
+      const links = sortLinks(html);
+      expect(links.map((l) => l.label)).toEqual([...SORT_LABELS]);
+      for (const link of links) {
+        const u = new URL(link.href, `https://dropway.test${path}`);
+        expect(u.pathname, `${link.label} must stay in this folder`).toBe(root);
+        expect([...u.searchParams.keys()].sort()).toEqual(["kind", "sort"]);
+        expect(u.searchParams.getAll("kind")).toEqual([kind]);
+        expect(u.searchParams.getAll("sort")).toEqual([SORT_VALUE[link.label as (typeof SORT_LABELS)[number]]]);
+      }
+    }
+  });
+
+  // RED: following each real href must keep the text subset and change its order, without JS.
+  it.each(["", "nested files/"])("following sort controls preserves filtered membership in folder %j", async (prefix) => {
+    const files = {
+      "zeta-dir/inner.txt": "z",
+      "Alpha-dir/inner.txt": "a",
+      "Zebra.txt": "z".repeat(90),
+      "apple.txt": "a".repeat(40),
+      "éclair.txt": "e".repeat(40),
+      "report.pdf": "%PDF-report",
+    };
+    const s = await publish(dw, Object.fromEntries(Object.entries(files).map(([path, bytes]) => [prefix + path, bytes])));
+    const folder = `/s/${s}/${prefix ? "nested%20files/" : ""}`;
+    const path = `${folder}?kind=text&sort=type`;
+    const { html } = await listing(dw, path);
+    expect(html).not.toContain("<script");
+    const links = sortLinks(html);
+    expect(links).toHaveLength(3);
+    for (const link of links) {
+      const sorted = await listing(dw, follow(path, link.href));
+      expect(sorted.res.status).toBe(200);
+      const names = link.label === "Largest first"
+        ? ["Zebra.txt", "apple.txt", "éclair.txt"]
+        : ["apple.txt", "éclair.txt", "Zebra.txt"];
+      expectOrder(sorted.html, ["Alpha-dir/", "zeta-dir/"], names);
+      expect(sortLinks(sorted.html).filter((a) => ariaCurrent(a) !== null && ariaCurrent(a) !== "false").map((a) => a.label)).toEqual([link.label]);
+    }
+  });
+
+  // RED (All control): normalized kind must not be echoed or resurrected by sorting.
+  it.each(["name", "size", "type"])("unknown kind normalizes to All without changing sort=%s", async (sort) => {
+    const plain = await listing(dw, `${root}?sort=${sort}`);
+    for (const kind of ["all", "", "bogus", "TEXT", '\"><script>alert(1)</script>']) {
+      const { html } = await listing(dw, `${root}?kind=${encodeURIComponent(kind)}&sort=${sort}`);
+      expect(html).toBe(plain.html);
+      expect(kindLinks(html).filter((a) => ariaCurrent(a) !== null && ariaCurrent(a) !== "false").map((a) => a.label)).toEqual(["All"]);
+      const links = sortLinks(html);
+      expect(links).toHaveLength(3);
+      for (const link of links) {
+        const u = new URL(link.href, `https://dropway.test${root}`);
+        expect(u.pathname).toBe(root);
+        expect([...u.searchParams.keys()]).toEqual(["sort"]);
+        expect(u.searchParams.getAll("sort")).toEqual([SORT_VALUE[link.label as (typeof SORT_LABELS)[number]]]);
+      }
+    }
+  });
+
+  // GUARD: neither existing canonical default is weakened to accommodate the new controls.
+  it("All and name remain byte-identical defaults when combined", async () => {
+    const plain = await listing(dw, root);
+    for (const q of ["?kind=all", "?sort=name", "?kind=all&sort=name", "?kind=bogus&sort=bogus"]) {
+      expect((await listing(dw, `${root}${q}`)).html, q).toBe(plain.html);
+    }
+  });
+});
+
 describe("listing sort: ordering", () => {
   it("default (no parameter) is name order with folders first, exactly as today", async () => {
     const exp = expected(await displayedKinds());
@@ -419,13 +506,15 @@ describe("listing sort: unrecognized and hostile input", () => {
 });
 
 describe("listing sort: nothing else changes", () => {
-  it("sort never propagates into file, folder, gallery or header links", async () => {
+  it("sort never propagates into file, folder, gallery or unrelated header links", async () => {
     for (const q of ["?sort=size", "?sort=type"]) {
       const { html } = await listing(dw, `${root}${q}`);
       expect(sortLinks(html), `${q}: all three sort links must render`).toHaveLength(3);
       const sortHrefs = new Set(sortLinks(html).map((l) => l.href));
+      const kindIndexes = new Set(kindLinks(html).map((l) => l.index));
       for (const a of anchors(html)) {
         if (sortHrefs.has(a.href) && (SORT_LABELS as readonly string[]).includes(a.label)) continue;
+        if (kindIndexes.has(a.index)) continue;
         expect(a.href, `link "${a.label}" must not carry the sort parameter`).not.toContain("sort=");
       }
       for (const r of rows(html)) {

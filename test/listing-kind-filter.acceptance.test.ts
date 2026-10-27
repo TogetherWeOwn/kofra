@@ -27,7 +27,9 @@
  *     href targets the same listing path with `kind=<id>`. The `All` href
  *     carries no `kind` parameter. A recognized `sort` selection
  *     (`name|size|type`) present in the current URL is preserved by every
- *     kind-control href; nothing else is added.
+ *     kind-control href. Absent/invalid sort may emit canonical `sort=name`
+ *     so the existing no-sort / explicit-name byte-identity contract holds;
+ *     no other parameters are added. Sort controls reciprocally preserve kind.
  *   - The active control carries `aria-current` (not `="false"`); inactive
  *     controls carry no `aria-current` or `aria-current="false"`.
  *   - Filtered summaries read "M of N files" (matching of total direct
@@ -36,7 +38,7 @@
  *     still offers the `All` recovery link; a folder with no direct files
  *     says "0 files" and never the no-match sentence.
  *   - File, folder, gallery, breadcrumb and app-viewer hrefs stay canonical:
- *     no `kind` parameter (and no `?` at all) outside the kind controls.
+ *     no `kind` parameter (and no `?` at all) outside kind/sort controls.
  *   - No `<form>`, no `<script>`, no CSP change (`form-action 'none'` stays),
  *     no new headers beyond what conditional correctness needs, no
  *     storage/API/index side effects. Following a kind link by plain GET
@@ -87,7 +89,8 @@ function anchors(html: string): Anchor[] {
   const out: Anchor[] = [];
   const re = /<a\s+([^>]*href="([^"]+)"[^>]*)>([^<]*)<\/a>/g;
   for (let m; (m = re.exec(html)) !== null; ) {
-    out.push({ attrs: m[1]!, href: m[2]!, label: m[3]!, index: m.index });
+    // HTML href attributes escape query separators; URLs use the decoded value.
+    out.push({ attrs: m[1]!, href: m[2]!.replace(/&amp;/g, "&"), label: m[3]!, index: m.index });
   }
   return out;
 }
@@ -283,20 +286,25 @@ describe("kind filter: controls", () => {
   });
 
   // RED: no kind controls exist on the baseline.
-  it("control hrefs target the same listing with only the kind parameter (All carries none)", async () => {
+  it("control hrefs target the same listing with kind and at most canonical default sort (All carries no kind)", async () => {
     const { html } = await listing(dw, root);
     const links = kindLinks(html);
     expect(links.length).toBeGreaterThan(1);
     for (const link of links) {
       const u = new URL(link.href, `https://dropway.test${root}`);
       expect(u.pathname, `${link.label} href must target the same listing`).toBe(root);
+      // Requiring sort to be absent here contradicted sort=name byte identity
+      // once kind controls also had to preserve an explicit name selection.
+      const sortKeys = u.searchParams.has("sort") ? ["sort"] : [];
+      if (sortKeys.length) expect(u.searchParams.getAll("sort")).toEqual(["name"]);
       if (link.label === "All") {
         expect(u.searchParams.has("kind"), "All href must not carry kind=").toBe(false);
+        expect([...u.searchParams.keys()]).toEqual(sortKeys);
       } else {
         const id = idByLabel.get(link.label);
         expect(id, `control label ${JSON.stringify(link.label)} must be a KIND_LABELS value`).toBeDefined();
         expect(u.searchParams.get("kind")).toBe(id);
-        expect([...u.searchParams.keys()], `${link.label} href must carry no parameter besides kind`).toEqual(["kind"]);
+        expect([...u.searchParams.keys()].sort(), `${link.label} href must carry only kind and optional default sort`).toEqual(["kind", ...sortKeys]);
       }
     }
   });
@@ -535,7 +543,7 @@ describe("kind filter: unrecognized and hostile input", () => {
 describe("kind filter: sort coexistence", () => {
   // RED: no kind controls exist to preserve anything. Passes whether or not listing sort has landed:
   // with sort absent the parameter is inert but must still round-trip through kind hrefs.
-  it.each(["size", "type"])("kind controls preserve a recognized sort selection: sort=%s", async (sort) => {
+  it.each(["name", "size", "type"])("kind controls preserve a recognized sort selection: sort=%s", async (sort) => {
     const { html } = await listing(dw, `${root}?sort=${sort}`);
     const links = kindLinks(html);
     expect(links.length, "kind controls must render on a sorted listing").toBeGreaterThan(1);
@@ -573,11 +581,13 @@ describe("kind filter: sort coexistence", () => {
     expect(rows(html).filter((r) => !r.isDir).map((r) => r.name).slice().sort()).toEqual(expectedMembers("pdf").slice().sort());
   });
 
-  // GUARD: kind hrefs must not invent a sort selection the visitor never made.
-  it("kind hrefs add no sort parameter when the current URL has none", async () => {
-    const { html } = await listing(dw, `${root}?kind=pdf`);
+  // GUARD: only the canonical default may be emitted without a recognized selection.
+  // Forbidding sort=name here contradicted the existing sort default's byte identity.
+  it.each(["", "&sort=bogus"])("kind hrefs add at most canonical sort=name without a recognized sort: %j", async (q) => {
+    const { html } = await listing(dw, `${root}?kind=pdf${q}`);
     for (const link of kindLinks(html)) {
-      expect(link.href, `${link.label} href must not add sort=`).not.toContain("sort=");
+      const u = new URL(link.href, `https://dropway.test${root}`);
+      expect([[], ["name"]], `${link.label} href must not invent a non-default sort`).toContainEqual(u.searchParams.getAll("sort"));
     }
   });
 });
@@ -699,9 +709,15 @@ describe("kind filter: nothing else changes", () => {
       const nav = kindNav(html) ?? "";
       const start = html.indexOf(nav);
       const end = start + nav.length;
+      const sortValues = new Map([["Name", "name"], ["Largest first", "size"], ["Type", "type"]]);
       for (const a of anchors(html)) {
         const inControls = nav !== "" && a.index >= start && a.index < end;
-        if (inControls) continue;
+        const u = new URL(a.href, `https://dropway.test${root}`);
+        // Only real same-folder header sort controls may preserve kind, never
+        // breadcrumbs, file/folder rows, gallery links or app-viewer links.
+        const isSortControl = a.index < html.indexOf("</header>") && u.pathname === root
+          && u.searchParams.getAll("sort").length === 1 && u.searchParams.get("sort") === sortValues.get(a.label);
+        if (inControls || isSortControl) continue;
         expect(a.href, `link "${a.label}" must not carry the kind parameter`).not.toContain("kind=");
       }
       for (const r of rows(html)) {
