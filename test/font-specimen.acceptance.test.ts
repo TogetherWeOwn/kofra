@@ -98,7 +98,9 @@ describe("font specimen HTTP and resource invariants", () => {
       const response = await get(suffix, { ...NAV, "If-None-Match": old });
       expect(response.status, "changed font UX must not revalidate the old specimen HTML as 304").toBe(200);
       expect(response.headers.get("etag")).not.toBe(old);
-      const match = response.headers.get("etag")?.match(/^W\/"font@(\d+)-([a-f0-9]{64})(-e)?"$/);
+      const match = response.headers.get("etag")?.match(variant === "embed"
+        ? /^W\/"font@(\d+)-([a-f0-9]{64})(-e)"$/
+        : /^W\/"font@(\d+)-([a-f0-9]{64})(?:-folder[A-Za-z0-9_-]+)?"$/);
       expect(match, "keep the viewer-version/content-hash ETag contract").not.toBeNull();
       expect(Number(match![1])).toBeGreaterThan(1);
       expect(match![2]).toBe(FONT_SPECIMEN_SHA256);
@@ -111,8 +113,8 @@ describe("font specimen HTTP and resource invariants", () => {
     const embed = await get("?view=1&embed=1");
     const fullTag = full.headers.get("etag")!;
     const embedTag = embed.headers.get("etag")!;
-    expect(fullTag).toMatch(/^W\/"font@\d+-[a-f0-9]{64}"$/);
-    expect(embedTag).toBe(fullTag.slice(0, -1) + '-e"');
+    expect(fullTag).toMatch(/^W\/"font@\d+-[a-f0-9]{64}(?:-folder[A-Za-z0-9_-]+)?"$/);
+    expect(embedTag).toBe(fullTag.replace(/(?:-folder[A-Za-z0-9_-]+)?"$/, '-e"'));
     expect((await get("", { ...NAV, "If-None-Match": fullTag })).status).toBe(304);
     expect((await get("?view=1&embed=1", { ...NAV, "If-None-Match": embedTag })).status).toBe(304);
     expect((await get("", { ...NAV, "If-None-Match": embedTag })).status).toBe(200);
@@ -130,8 +132,8 @@ describe("font specimen HTTP and resource invariants", () => {
       font!.version = version + 1;
       const changed = await get("", { ...NAV, "If-None-Match": old });
       expect(changed.status).toBe(200);
-      expect(changed.headers.get("etag")).toBe(`W/"font@${version + 1}-${FONT_SPECIMEN_SHA256}"`);
-      expect((await get("?view=1&embed=1", { ...NAV, "If-None-Match": old.slice(0, -1) + '-e"' })).status).toBe(200);
+      expect(changed.headers.get("etag")).toMatch(new RegExp(`^W/"font@${version + 1}-${FONT_SPECIMEN_SHA256}(?:-folder[A-Za-z0-9_-]+)?"$`));
+      expect((await get("?view=1&embed=1", { ...NAV, "If-None-Match": old.replace(/(?:-folder[A-Za-z0-9_-]+)?"$/, '-e"') })).status).toBe(200);
       expect((await changed.text()).length).toBeGreaterThan(0);
     } finally { font!.version = originalVersion; }
   });
