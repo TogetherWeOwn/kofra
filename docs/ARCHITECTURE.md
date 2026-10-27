@@ -255,6 +255,15 @@ The dashboard never renders user content on the app origin: files open in an
 iframe on the sites origin (with `allow-same-origin` only when that origin is
 not the app origin), and downloads go through a forced-download blob.
 
+The loaded version's file detail offers **Download ZIP** through the authenticated
+immutable-ID export route. Browser downloads require known metadata of at most
+16 MiB stored bytes and 1,000 files; pending, larger or unknown versions show an
+explanation and the authenticated REST/CLI route instead. The client verifies
+`X-Kofra-Version`, ZIP type and the server attachment filename, reads at most
+32 MiB of actual response bytes, and offers no attachment until the stream is
+complete. The file selection and filter stay intact. These browser limits do not
+change the server export limits.
+
 Drag-and-drop publishing hashes files in the browser (SHA-256), sends the
 manifest to `POST /api/v1/sites/:slug/deploys`, uploads only the blobs the
 server reports missing (4 at a time, retried on 429/5xx), then finalizes. A
