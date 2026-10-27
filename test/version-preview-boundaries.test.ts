@@ -95,6 +95,31 @@ describe("R-13 preview capability discovery", () => {
   });
 });
 
+describe("R-13 preview URL transport", () => {
+  // Catches issuance losing the HTTPS requirement or also refusing loopback development.
+  it.each([
+    { origin: "http://preview.example", preview: false },
+    { origin: "http://127.0.0.1", preview: true },
+  ])("issues a signed preview only on loopback HTTP: $origin", async ({ origin, preview }) => {
+    const dw = await freshInstance({ appOrigin: origin, sitesMode: "path" });
+    const result = await dw.json<Publication>("/api/v1/publish", {
+      origin, key: dw.ownerKey, ...jsonBody({ site: SLUG, files: [{ path: "index.html", content: CONTENT }] }),
+    });
+    expect(result.status).toBe(201);
+    expect(result.body.status).toBe("live");
+    const live = await dw.call(`${origin}/s/${SLUG}/?raw=1`);
+    expect(live.status).toBe(200);
+    expect(await live.text()).toBe(CONTENT);
+    if (!preview) {
+      expect(result.body.versionUrl).toBeUndefined();
+      return;
+    }
+    const root = `${origin}/s/${SLUG}--v1/`;
+    const session = await redeem(dw, signedLink(result.body, root));
+    await expectBytes(dw, root, session.cookie);
+  });
+});
+
 for (const topology of topologies) {
   describe(`R-13 preview boundary: ${topology.name}`, () => {
     let dw: Instance;
@@ -319,10 +344,37 @@ for (const topology of topologies) {
       await expectBytes(dw, topology.root, [session.cookie, ...passwordCookies].join("; "));
     });
 
+    if (topology.name === "path on dedicated sites origin") {
+      // Catches reverting preview shim injection to sandbox-only behavior despite no-referrer.
+      it("injects exactly one version-scoped path shim into unsandboxed preview HTML", async () => {
+        dw = await freshInstance({ ...topology.config, sitesSandbox: false });
+        const content = '<!doctype html><html><head><title>Preview</title></head><body><script>fetch("/runtime.json")</script></body></html>';
+        const result = await dw.json<Publication>("/api/v1/publish", {
+          key: dw.ownerKey, ...jsonBody({ site: SLUG, files: [{ path: "index.html", content }] }),
+        });
+        expect(result.status).toBe(201);
+        const session = await redeem(dw, signedLink(result.body, topology.root));
+        const page = await dw.call(session.clean.href, {
+          headers: { Cookie: session.cookie, Accept: "text/html", "Sec-Fetch-Dest": "document" },
+        });
+        expect(page.status).toBe(200);
+        expect(page.headers.get("content-type")).toContain("text/html");
+        expect(page.headers.get("content-security-policy") ?? "").not.toMatch(/\bsandbox\b/i);
+        expect(page.headers.get("referrer-policy")).toBe("no-referrer");
+        const html = await page.text();
+        expect(html.split('<script data-dropway="path-shim">')).toHaveLength(2);
+        expect(html).toContain('("/preview-boundary--v1/",');
+      });
+    }
+
     // Catches bearer cookies missing browser security/isolation attributes.
     it("redeems to a Secure HttpOnly host-only cookie confined to the version root", async () => {
       const session = await redeem(dw, signedLink(await publish(dw), topology.root));
       const attributes = session.setCookie.split(";").map((part) => part.trim());
+      if (topology.name === "subdomain") {
+        expect(session.setCookie).toMatch(/^__Host-dw_preview=/);
+        expect(attributes).toContain("SameSite=Lax");
+      }
       expect(attributes.some((part) => /^secure$/i.test(part))).toBe(true);
       expect(attributes.some((part) => /^httponly$/i.test(part))).toBe(true);
       expect(attributes.some((part) => /^domain=/i.test(part))).toBe(false);
