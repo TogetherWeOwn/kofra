@@ -213,7 +213,8 @@ The update picker lists only the first page of sites, so an explicit update
 destination (the `?site=` target, or a slug entered in the update panel's
 lookup field) is verified with the single-site `GET /api/v1/sites/:slug`
 instead of paging through every site: the reference is encoded as one path
-segment, the returned slug is added to the picker and selected, and
+segment (dot-only references are rejected locally before URL normalization),
+the returned slug is added to the picker and selected, and
 publishing stays disabled until that verification succeeds — a failed or
 superseded lookup never falls back to another listed site or a new site.
 Typing in the lookup field makes no request; Enter or the lookup button

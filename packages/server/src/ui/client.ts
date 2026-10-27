@@ -1280,6 +1280,12 @@ export function dropwayClient() {
       destStatus.textContent = "Looking up site " + ref + "…";
       siteSelect.value = "";
       refreshPublishBtn();
+      // URL parsing normalizes dot segments even after encodeURIComponent.
+      // Reject them locally after retiring any older lookup's intent.
+      if (/^\.+$/.test(ref)) {
+        failDest(apiError(400, null, "That is not a site slug."));
+        return;
+      }
       var res;
       try {
         res = await api("/sites/" + encodeURIComponent(ref));
@@ -1309,11 +1315,15 @@ export function dropwayClient() {
       try {
         var res = await api("/sites?limit=200");
         var current = siteSelect.value;
+        var currentOption = siteSelect.options[siteSelect.selectedIndex];
         clear(siteSelect);
         if (!res.sites.length && !(destState === "resolved" && destSite)) add(siteSelect, h("option", { value: "", text: "No sites yet" }));
         res.sites.forEach(function (s) {
           add(siteSelect, h("option", { value: s.slug, text: s.title ? s.title + " (" + s.slug + ")" : s.slug }));
         });
+        // A deliberate picker choice may be a previously verified off-page
+        // option. Keep its label and identity before restoring its value.
+        if (current && currentOption && !res.sites.some(function (s) { return s.slug === current; })) add(siteSelect, currentOption);
         // Decide the selection when the list lands, not when it was asked
         // for: a destination verified (or still resolving) meanwhile wins
         // over the stale select request and over the first listed site.
