@@ -77,7 +77,7 @@ function hasVisibleChildren(files: LiveSite["files"], dir: string): boolean {
 
 /**
  * The longest proper ancestor directory of `filePath` (with trailing "/")
- * that prefixes at least one path in the live manifest, or null when no
+ * that prefixes at least one non-private path in the live manifest, or null when no
  * ancestor folder has files. The site root never counts. Computed from the
  * already-loaded manifest only. Object.keys keeps an ancestor folder named
  * `__proto__` ordinary manifest data.
@@ -88,7 +88,7 @@ function nearestManifestAncestor(files: LiveSite["files"], filePath: string): st
   const paths = Object.keys(files);
   for (let len = segments.length - 1; len >= 1; len--) {
     const dir = `${segments.slice(0, len).join("/")}/`;
-    if (paths.some((k) => k.startsWith(dir))) return dir;
+    if (paths.some((k) => k.startsWith(dir) && !isPrivatePath(k))) return dir;
   }
   return null;
 }
@@ -382,7 +382,7 @@ export async function serveSite(
       (ancestor ? `<li><a href="${escapeHtml(mode.base + encodePath(ancestor))}">Folder: /${escapeHtml(ancestor)}</a></li>` : "") +
       `<li><a href="${escapeHtml(`${appOrigin(dw)}/v/${live.slug}/${encodePath(ancestor ?? "")}`)}">Browse files</a></li>` +
       `</ul></nav>`;
-    response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", `There is no file at <code>/${escapeHtml(filePath)}</code> on this site.`, recovery);
+    response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", `There is no file at <code>/${escapeHtml(filePath).replaceAll("{", "&#123;")}</code> on this site.`, recovery);
   } else if (resolved.kind === "listing") {
     response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`);
     securityHeaders(response.headers, live, mode);
