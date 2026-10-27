@@ -123,7 +123,7 @@ What Kofra is not:
 | SRV-04 | Headers: `ETag` (sha256), `Range`/206, pre-compressed `.br`/`.gz` with `Content-Encoding`, `X-Kofra-Version`, `X-Robots-Tag: noindex` on expiring sites, `X-Content-Type-Options: nosniff` | P0 | Done |
 | SRV-05 | Cache policy matrix (HTML and unfingerprinted files revalidate; fingerprinted files immutable; gated sites `private, no-store`; sites with `.wasm` revalidate) | P0 | Partial; R-27 |
 | SRV-06 | Content-addressed edge cache (Cache API by sha256, pointer memo). Live URL shows a new version within about 60 s worldwide, the version URL at once | P0 | R-14 |
-| SRV-07 | Version preview URLs `<slug>--v<N>` for the owner (signed links for others) | P0 | R-13 |
+| SRV-07 | Version preview URLs `<slug>--v<N>` for the owner (signed links for others) | P0 | Done: exact ready version from D1 in both modes; owner Authorization or 24 h signed link with preview-root cookie, noindex/no-referrer |
 | SRV-08 | Cross-origin isolation per site (COOP/COEP for `SharedArrayBuffer` and threaded WebAssembly) | P0 | Done |
 | SRV-09 | `_redirects` and `_headers` files at the site root (Netlify/Cloudflare Pages syntax subset), parsed at finalize, never served | P1 | R-27 |
 | SRV-10 | Agent-readable pages: `Accept: text/markdown` on a navigation returns a Markdown rendering of HTML and text files | P1 | R-34 |
@@ -1317,6 +1317,7 @@ Sites origin:
 | any path declared in `.dropway/proxy.json` | Proxy route | P1 | R-31 |
 | `/__dropway/assets/<hash>.<ext>` | Our viewer scripts and styles (static assets) | P1 | R-34 |
 | `/__dropway/report` | Abuse report form | P1 | R-37 |
+| `<site>/badge.svg` | Live-version badge: SVG with the live version and coarse age for public sites; one identical generic SVG otherwise ([SITE_BADGE](SITE_BADGE.md)) | P1 | Done |
 
 Reserved: slugs never contain `--` and never match the reserved list; file paths under `__dropway/` are
 rejected at publish; files under `.dropway/` are stored but never served.
@@ -1681,7 +1682,15 @@ grant more than they hold. Keys can be limited to one site and, for drives, a pa
 - **Enumeration.** Newly generated slugs are `adjective-noun-xxxxxx` (60 x 60 words x 32^6 suffixes,
   about 3.9 trillion names, about 42 bits). That makes them hard to guess, not secret: anything private
   must use an access mode. Existing four-character slugs remain valid and are not renamed. Listing endpoints
-  need credentials; version previews need a signed link; 404s look the same for "never existed" and "no access".
+  need credentials; ready version previews need owner Authorization or a signed link; 404s look the same
+  for "never existed" and "no access". The link-permanence contract preserves 308 redirects for former
+  names and 410 for deleted-version addresses before preview authorization; neither serves content.
+- **Preview isolation.** A preview cookie is host-only and scoped to its version root, not an origin
+  boundary between paths. As with password sites, use subdomain mode for sensitive content or mutually
+  untrusted sites: path-mode sites share an origin, including ambient-cookie classic-script inclusions
+  from opaque sandboxes. Signed links and cookies expire at the same absolute 24-hour deadline.
+  Link issuance requires HTTPS except on loopback development origins; non-loopback HTTP
+  omits `versionUrl` without failing publication.
 - **IPs.** Only salted hashes (`SIGNING_SECRET`) are stored. Analytics visitors are daily salted hashes.
 - **SSRF.** URL sources, proxy routes and webhooks fetch `https` only, refuse private, loopback,
   link-local and Cloudflare-internal addresses, follow at most 3 redirects (re-checking each), time out at

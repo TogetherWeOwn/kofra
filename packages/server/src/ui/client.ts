@@ -3115,6 +3115,26 @@ export function dropwayClient() {
     );
   }
 
+  /** Embed snippet for the provider-served live-version badge. Public sites with a live URL only; nothing is rendered otherwise. */
+  function siteBadgeSection(url, gated) {
+    if (!url || gated) return null;
+    var badge = url + "badge.svg";
+    var markdown = "[![kofra](" + badge + ")](" + url + ")";
+    return h(
+      "section",
+      { class: "dw-section", "data-testid": "site-badge-snippet" },
+      h("header", {}, h("h2", { text: "Embed a version badge" }), h("span", { class: "dw-small dw-muted", text: "Shows the live version and how recently it changed" })),
+      h(
+        "div",
+        { class: "dw-pad" },
+        h("p", { style: "margin:0 0 .5rem" }, h("img", { "data-testid": "site-badge-preview", src: badge, alt: "kofra live version badge", height: "20", style: "height:20px;vertical-align:middle" })),
+        h("code", { "data-testid": "site-badge-markdown", class: "dw-mono", style: "display:block;margin:0 0 .5rem;overflow-wrap:anywhere", text: markdown }),
+        copyButton(markdown, "Copy badge Markdown"),
+        h("p", { class: "dw-small dw-muted", style: "margin:.5rem 0 0", text: "Paste into a README or any page. It never shows exact times, and it stays generic if the site is password protected, expired or removed." }),
+      ),
+    );
+  }
+
   // ------------------------------------------------------------------ pages
 
   var pages = {};
@@ -4231,7 +4251,7 @@ export function dropwayClient() {
       ),
     );
     var qrSection = siteQrSection(site.url, !!(site.settings && site.settings.passwordProtected));
-    add(root, head, qrSection, versionsSection, filesSection, h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "Settings" })), form), renameSection, danger);
+    add(root, head, qrSection, siteBadgeSection(site.url, !!(site.settings && site.settings.passwordProtected)), versionsSection, filesSection, h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "Settings" })), form), renameSection, danger);
     var live = versions.filter(function (v) {
       return v.live;
     })[0];
@@ -4628,6 +4648,8 @@ export function dropwayClient() {
     var tools = d.getElementById("dw-tools");
     var info = d.getElementById("dw-fileinfo");
     var current = P.path || "";
+    var currentMode = null;
+    var panel = d.getElementById("dw-view-panel");
     var manifest = null;
 
     function fileByPath(p) {
@@ -4650,6 +4672,11 @@ export function dropwayClient() {
       return base + "?view=1&embed=1";
     }
 
+    function validMode(p, mode) {
+      var f = fileByPath(p);
+      if (mode === "source" && (!f || TEXT_KINDS.indexOf(f.kind) >= 0)) return mode;
+      return mode === "raw" ? mode : "view";
+    }
     function renderTools(p, mode) {
       clear(tools);
       clear(info);
@@ -4657,19 +4684,47 @@ export function dropwayClient() {
       var isDir = !p || p.charAt(p.length - 1) === "/";
       var kind = f ? f.kind : null;
       var url = siteUrlFor(p);
+      var tabs = [];
+      panel.removeAttribute("role");
+      panel.removeAttribute("aria-labelledby");
       function tab(label, m, enabled) {
         if (!enabled) return null;
-        return h("button", {
+        var button = h("button", {
+          id: "dw-view-tab-" + m,
           type: "button",
           role: "tab",
+          tabindex: mode === m ? 0 : -1,
+          "aria-controls": panel.id,
           "aria-selected": mode === m ? "true" : "false",
           text: label,
+          onfocus: function (ev) {
+            tabs.forEach(function (t) { t.tabIndex = t === ev.currentTarget ? 0 : -1; });
+          },
+          onkeydown: function (ev) {
+            if (ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+            var i = tabs.indexOf(ev.currentTarget);
+            if (ev.key === "ArrowRight") i = (i + 1) % tabs.length;
+            else if (ev.key === "ArrowLeft") i = (i + tabs.length - 1) % tabs.length;
+            else if (ev.key === "Home") i = 0;
+            else if (ev.key === "End") i = tabs.length - 1;
+            else return;
+            ev.preventDefault();
+            tabs[i].focus();
+          },
+          // Native button Enter/Space already dispatch one click. Focus-only keys never navigate.
           onclick: function () {
+            if (mode === m) return;
+            var keepFocus = tabs.indexOf(d.activeElement) >= 0;
             go(p, m, true);
+            if (keepFocus) d.getElementById("dw-view-tab-" + m).focus();
           },
         });
+        tabs.push(button);
+        return button;
       }
       if (!isDir) {
+        panel.setAttribute("role", "tabpanel");
+        panel.setAttribute("aria-labelledby", "dw-view-tab-" + mode);
         add(
           tools,
           h(
@@ -4715,8 +4770,10 @@ export function dropwayClient() {
     }
 
     function go(p, mode, push) {
+      mode = validMode(p, mode);
+      if (push && p === current && mode === currentMode) return;
       current = p;
-      mode = mode || "view";
+      currentMode = mode;
       var src = viewSrc(p, mode);
       if (frame.src !== src) {
         // A fresh iframe instead of a new src: changing src would add a history entry
@@ -4795,7 +4852,7 @@ export function dropwayClient() {
       go(st.p !== undefined ? st.p : P.path || "", st.mode || "view", false);
     });
 
-    var mode = new URLSearchParams(location.search).get("mode") || "view";
+    var mode = validMode(current, new URLSearchParams(location.search).get("mode"));
     renderTools(current, mode);
     if (!authed()) {
       clear(tree);
@@ -4880,10 +4937,15 @@ export function dropwayClient() {
       emptyNote,
       treeBox,
     );
-    go(current, mode, false);
+    // The manifest load rebuilds the toolbar; a mode tab focused while it was in flight must keep focus.
+    var heldTab = tools.contains(d.activeElement) && d.activeElement.getAttribute("role") === "tab" ? d.activeElement.id : "";
+    go(current, currentMode || mode, false);
+    // If the manifest removed the held tab (Source on an image/binary), land on the tab that replaced it.
+    var heldEl = heldTab && (d.getElementById(heldTab) || d.getElementById("dw-view-tab-" + currentMode));
+    if (heldEl) heldEl.focus();
     // Push entries carry {p, mode}; record the same for the loaded entry so
     // Back restores the prior file and view mode instead of losing the mode.
-    history.replaceState({ p: current, mode: mode }, "");
+    history.replaceState({ p: current, mode: currentMode }, "");
     var cur = $("a[aria-current]", tree);
     if (cur) cur.scrollIntoView({ block: "nearest" });
   };
