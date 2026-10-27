@@ -23,11 +23,11 @@ exports[`every affected shared-bar viewer > 'binary' exposes adjacent files and 
 
 exports[`every affected shared-bar viewer > 'code' exposes adjacent files and retires the old viewer validator > code unchanged CSP and executable content 1`] = `
 {
-  "csp": "default-src 'none'; img-src * data: blob:; media-src * data: blob:; style-src 'unsafe-inline' https:; font-src * data:; frame-src https:; base-uri 'none'; form-action 'none'; script-src 'sha256-Twk9Jhol6HvWH3+I645ifLQh+iA9edVEM41FaSic/F8='; sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation allow-orientation-lock",
+  "csp": "default-src 'none'; img-src * data: blob:; media-src * data: blob:; style-src 'unsafe-inline' https:; font-src * data:; frame-src https:; base-uri 'none'; form-action 'none'; script-src 'sha256-8kBw0RLH7SihuFxmhc5HdeB3FJK+v2IMXvuARwK5LZ0='; sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation allow-orientation-lock",
   "scripts": [
     {
       "src": null,
-      "text": "(function(){var d=document,b=d.getElementById("dw-copy");if(b&&navigator.clipboard){b.hidden=false;b.addEventListener("click",function(){var t=Array.prototype.map.call(d.querySelectorAll(".dw-src .c"),function(e){return e.textContent}).join("\\n");navigator.clipboard.writeText(t).then(function(){b.textContent="Copied";setTimeout(function(){b.textContent="Copy"},1500)},function(){b.textContent="Copy failed"})})}function hl(){var m=/^#L(\\d+)(?:-L?(\\d+))?$/.exec(location.hash);Array.prototype.forEach.call(d.querySelectorAll(".dw-hl"),function(e){e.classList.remove("dw-hl")});if(!m||!m[2])return;var a=+m[1],z=+m[2];if(z<a){var t=a;a=z;z=t}for(var i=a;i<=z&&i<a+5000;i++){var e=d.getElementById("L"+i);if(e)e.classList.add("dw-hl")}var f=d.getElementById("L"+a);if(f)f.scrollIntoView({block:"center"})}addEventListener("hashchange",hl);hl()})();",
+      "text": "(function(){var d=document,b=d.getElementById("dw-copy");if(b&&navigator.clipboard){b.hidden=false;b.addEventListener("click",function(){var t=Array.prototype.map.call(d.querySelectorAll(".dw-src .c"),function(e){return e.textContent}).join("\\n");navigator.clipboard.writeText(t).then(function(){b.textContent="Copied";setTimeout(function(){b.textContent="Copy"},1500)},function(){b.textContent="Copy failed"})})}function parse(h){var m=/^#L(\\d+)(?:-L?(\\d+))?$/.exec(h);if(!m)return null;var a=+m[1],z=m[2]?+m[2]:a;if(z<a){var t=a;a=z;z=t}return[a,z,m[2]?1:0]}function hl(){Array.prototype.forEach.call(d.querySelectorAll(".dw-hl"),function(e){e.classList.remove("dw-hl")});var p=parse(location.hash);if(!p||!p[2])return;var a=p[0],z=p[1],box=d.querySelector(".dw-lines"),rs=box?box.children:[],f=null;for(var i=a;i<=z&&i<a+5000;i++){var e=rs[i-1];if(e&&e.id==="L"+i){e.classList.add("dw-hl");if(i===a)f=e}}if(f)f.scrollIntoView({block:"center"})}function select(a,z){if(z<a){var t=a;a=z;z=t}location.hash=a===z?"#L"+a:"#L"+a+"-L"+z;hl()}function anchor(){var p=parse(location.hash);return p&&d.getElementById("L"+p[0])?p[0]:0}d.addEventListener("click",function(ev){if(!ev.shiftKey||ev.ctrlKey||ev.metaKey||ev.altKey||ev.button)return;var t=ev.target;while(t&&t.tagName!=="A")t=t.parentNode;if(!t)return;var m=/^#L(\\d+)$/.exec(t.getAttribute("href")||"");if(!m)return;var a=anchor(),n=+m[1];ev.preventDefault();if(typeof getSelection==="function"){var s=getSelection();if(s)s.removeAllRanges()}select(a||n,n)});var r=d.getElementById("dw-range"),hint=d.getElementById("dw-range-hint"),first=d.getElementById("dw-line-first"),last=d.getElementById("dw-line-last"),go=d.getElementById("dw-line-select"),msg=d.getElementById("dw-line-msg");if(r)r.hidden=false;if(hint)hint.hidden=false;function read(inp){var v=(inp.value||"").replace(/^\\s+|\\s+$/g,"");return /^\\d+$/.test(v)?+v:0}function fail(text,inp){if(first)first.removeAttribute("aria-invalid");if(last)last.removeAttribute("aria-invalid");if(msg)msg.textContent=text;if(inp){inp.setAttribute("aria-invalid","true");inp.focus()}}function choose(){var max=+(last.getAttribute("max")||0),a=read(first),z=read(last);if(!a||a>max){fail("Enter a first line number between 1 and "+max+". Only shown lines can be selected.",first);return}if(!z||z>max){fail("Enter a last line number between 1 and "+max+". Only shown lines can be selected.",last);return}var lo=a<z?a:z,hi=a<z?z:a;if(hi-lo+1>5000){fail("Select at most 5000 lines at a time: lines "+lo+" to "+hi+" is over the limit.",last);return}if(first)first.removeAttribute("aria-invalid");if(last)last.removeAttribute("aria-invalid");if(msg)msg.textContent="";select(lo,hi)}if(go&&first&&last){go.addEventListener("click",choose);var enter=function(ev){if(ev.key==="Enter"){ev.preventDefault();choose()}};first.addEventListener("keydown",enter);last.addEventListener("keydown",enter)}addEventListener("hashchange",hl);hl()})();",
     },
   ],
 }
@@ -84,11 +84,11 @@ exports[`every affected shared-bar viewer > 'pdf' exposes adjacent files and ret
 
 exports[`every affected shared-bar viewer > 'source' exposes adjacent files and retires the old viewer validator > source unchanged CSP and executable content 1`] = `
 {
-  "csp": "default-src 'none'; img-src * data: blob:; media-src * data: blob:; style-src 'unsafe-inline' https:; font-src * data:; frame-src https:; base-uri 'none'; form-action 'none'; script-src 'sha256-Twk9Jhol6HvWH3+I645ifLQh+iA9edVEM41FaSic/F8='; sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation allow-orientation-lock",
+  "csp": "default-src 'none'; img-src * data: blob:; media-src * data: blob:; style-src 'unsafe-inline' https:; font-src * data:; frame-src https:; base-uri 'none'; form-action 'none'; script-src 'sha256-8kBw0RLH7SihuFxmhc5HdeB3FJK+v2IMXvuARwK5LZ0='; sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation allow-orientation-lock",
   "scripts": [
     {
       "src": null,
-      "text": "(function(){var d=document,b=d.getElementById("dw-copy");if(b&&navigator.clipboard){b.hidden=false;b.addEventListener("click",function(){var t=Array.prototype.map.call(d.querySelectorAll(".dw-src .c"),function(e){return e.textContent}).join("\\n");navigator.clipboard.writeText(t).then(function(){b.textContent="Copied";setTimeout(function(){b.textContent="Copy"},1500)},function(){b.textContent="Copy failed"})})}function hl(){var m=/^#L(\\d+)(?:-L?(\\d+))?$/.exec(location.hash);Array.prototype.forEach.call(d.querySelectorAll(".dw-hl"),function(e){e.classList.remove("dw-hl")});if(!m||!m[2])return;var a=+m[1],z=+m[2];if(z<a){var t=a;a=z;z=t}for(var i=a;i<=z&&i<a+5000;i++){var e=d.getElementById("L"+i);if(e)e.classList.add("dw-hl")}var f=d.getElementById("L"+a);if(f)f.scrollIntoView({block:"center"})}addEventListener("hashchange",hl);hl()})();",
+      "text": "(function(){var d=document,b=d.getElementById("dw-copy");if(b&&navigator.clipboard){b.hidden=false;b.addEventListener("click",function(){var t=Array.prototype.map.call(d.querySelectorAll(".dw-src .c"),function(e){return e.textContent}).join("\\n");navigator.clipboard.writeText(t).then(function(){b.textContent="Copied";setTimeout(function(){b.textContent="Copy"},1500)},function(){b.textContent="Copy failed"})})}function parse(h){var m=/^#L(\\d+)(?:-L?(\\d+))?$/.exec(h);if(!m)return null;var a=+m[1],z=m[2]?+m[2]:a;if(z<a){var t=a;a=z;z=t}return[a,z,m[2]?1:0]}function hl(){Array.prototype.forEach.call(d.querySelectorAll(".dw-hl"),function(e){e.classList.remove("dw-hl")});var p=parse(location.hash);if(!p||!p[2])return;var a=p[0],z=p[1],box=d.querySelector(".dw-lines"),rs=box?box.children:[],f=null;for(var i=a;i<=z&&i<a+5000;i++){var e=rs[i-1];if(e&&e.id==="L"+i){e.classList.add("dw-hl");if(i===a)f=e}}if(f)f.scrollIntoView({block:"center"})}function select(a,z){if(z<a){var t=a;a=z;z=t}location.hash=a===z?"#L"+a:"#L"+a+"-L"+z;hl()}function anchor(){var p=parse(location.hash);return p&&d.getElementById("L"+p[0])?p[0]:0}d.addEventListener("click",function(ev){if(!ev.shiftKey||ev.ctrlKey||ev.metaKey||ev.altKey||ev.button)return;var t=ev.target;while(t&&t.tagName!=="A")t=t.parentNode;if(!t)return;var m=/^#L(\\d+)$/.exec(t.getAttribute("href")||"");if(!m)return;var a=anchor(),n=+m[1];ev.preventDefault();if(typeof getSelection==="function"){var s=getSelection();if(s)s.removeAllRanges()}select(a||n,n)});var r=d.getElementById("dw-range"),hint=d.getElementById("dw-range-hint"),first=d.getElementById("dw-line-first"),last=d.getElementById("dw-line-last"),go=d.getElementById("dw-line-select"),msg=d.getElementById("dw-line-msg");if(r)r.hidden=false;if(hint)hint.hidden=false;function read(inp){var v=(inp.value||"").replace(/^\\s+|\\s+$/g,"");return /^\\d+$/.test(v)?+v:0}function fail(text,inp){if(first)first.removeAttribute("aria-invalid");if(last)last.removeAttribute("aria-invalid");if(msg)msg.textContent=text;if(inp){inp.setAttribute("aria-invalid","true");inp.focus()}}function choose(){var max=+(last.getAttribute("max")||0),a=read(first),z=read(last);if(!a||a>max){fail("Enter a first line number between 1 and "+max+". Only shown lines can be selected.",first);return}if(!z||z>max){fail("Enter a last line number between 1 and "+max+". Only shown lines can be selected.",last);return}var lo=a<z?a:z,hi=a<z?z:a;if(hi-lo+1>5000){fail("Select at most 5000 lines at a time: lines "+lo+" to "+hi+" is over the limit.",last);return}if(first)first.removeAttribute("aria-invalid");if(last)last.removeAttribute("aria-invalid");if(msg)msg.textContent="";select(lo,hi)}if(go&&first&&last){go.addEventListener("click",choose);var enter=function(ev){if(ev.key==="Enter"){ev.preventDefault();choose()}};first.addEventListener("keydown",enter);last.addEventListener("keydown",enter)}addEventListener("hashchange",hl);hl()})();",
     },
   ],
 }
@@ -275,11 +275,41 @@ input,button{font:inherit}
 .dw-table th.rn,.dw-table td.rn{position:sticky;left:0;background:var(--code);color:var(--muted);text-align:right;font-weight:400;font-variant-numeric:tabular-nums;user-select:none}
 .dw-table thead th.rn{z-index:2}
 .dw-table tbody tr:hover td{background:color-mix(in srgb,var(--accent) 6%,transparent)}
+
+body>.dw-print-title{display:none}
+@media print{
+:root{color-scheme:light;--bg:#fff;--fg:#000;--muted:#000;--line:#aaa;--card:#fff;--accent:#000;--code:#fff}
+body{background:#fff;color:#000;font-size:12pt}
+body *{color:#000!important;background:transparent!important;box-shadow:none!important;text-shadow:none!important}
+body>header.dw-vbar,main.dw-codewrap>.dw-codehead,main.dw-json>.dw-jtabs,.dw-md :is(h1,h2,h3,h4,h5,h6)>.dw-anchor,body>a[href$="/__dropway/report"],button{display:none!important}
+body>.dw-print-title{display:block;margin:0 0 1rem;padding:0 0 .4rem;border-bottom:1px solid var(--line);font:600 10pt/1.4 ui-monospace,monospace;overflow-wrap:anywhere}
+.dw-md,.dw-nb,.dw-json,.dw-csv{max-width:none;margin:0;padding:0;overflow-wrap:anywhere}
+.dw-src,.dw-table,.dw-jtree,pre{height:auto!important;max-height:none!important;max-width:100%;overflow:visible!important}
+.dw-src{margin:0;border:0}
+pre,code,.dw-ln>.c{white-space:pre-wrap!important;overflow-wrap:anywhere}
+pre{font-size:10pt!important}
+.dw-lines{width:100%;min-width:0;table-layout:fixed}
+.dw-ln>a{width:3.2em;min-width:0;padding:0 .5em 0 0;opacity:1}
+.dw-ln>.c{padding:0 .5em}
+.dw-jtree li{white-space:normal;overflow-wrap:anywhere}
+.dw-jtree ul{padding-left:.8rem}
+.dw-cell{display:block}
+.dw-prompt{text-align:left;padding:0}
+.dw-cell>div,.dw-mdcell,.dw-out{min-width:0}
+.dw-md table,.dw-nb table,.dw-table table{display:table;width:100%;min-width:0;max-width:100%;table-layout:fixed;border-collapse:collapse;overflow:visible}
+.dw-md th,.dw-md td,.dw-nb th,.dw-nb td,.dw-table th,.dw-table td{position:static;max-width:none;padding:.25em;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+.dw-table .rn{width:2.8em}
+thead{display:table-header-group}
+tr{break-inside:avoid}
+h1,h2,h3,h4,h5,h6,summary{break-after:avoid}
+img,video{max-width:100%;height:auto}
+.dw-note{max-width:none;break-inside:avoid}
+}
 </style><meta name="robots" content="noindex"></head><body><header class="dw-vbar" role="banner">
 <div class="dw-vfile"><span class="dw-kind">Table</span><span class="dw-crumbs"><a href="/s/sibling-navigation-fixture/">sibling-navigation-fixture</a><span class="dw-sep">/</span><a href="/s/sibling-navigation-fixture/alone/">alone</a><span class="dw-sep">/</span><strong>only.csv</strong></span><span class="dw-vmeta">21 B · text/csv</span></div>
 <nav class="dw-vtabs" aria-label="View"><a href="/s/sibling-navigation-fixture/alone/only.csv" aria-current="page" rel="nofollow">Table</a><a href="/s/sibling-navigation-fixture/alone/only.csv?view=source" rel="nofollow">Source</a><a href="/s/sibling-navigation-fixture/alone/only.csv?raw=1" rel="nofollow">Raw</a></nav>
 <nav class="dw-vact" aria-label="File"><a href="/s/sibling-navigation-fixture/alone/only.csv?download=1" rel="nofollow" download>Download</a><a href="https://dropway.test/v/sibling-navigation-fixture/alone/only.csv" rel="nofollow" title="Browse every file of this site">Files</a></nav>
-</header><main class="dw-csv"><p class="dw-csvmeta">1 rows · 2 columns · comma-separated</p><div class="dw-table"><table><thead><tr><th class="rn" scope="col">#</th><th scope="col" title="name">name</th><th scope="col" title="value">value</th></tr></thead><tbody><tr><td class="rn">1</td><td>fixture</td><td class="n">7</td></tr></tbody></table></div></main></body></html>"
+</header><p class="dw-print-title">alone/only.csv</p><main class="dw-csv"><p class="dw-csvmeta">1 rows · 2 columns · comma-separated</p><div class="dw-table"><table><thead><tr><th class="rn" scope="col">#</th><th scope="col" title="name">name</th><th scope="col" title="value">value</th></tr></thead><tbody><tr><td class="rn">1</td><td>fixture</td><td class="n">7</td></tr></tbody></table></div></main></body></html>"
 `;
 
 exports[`same-folder sibling navigation > omits navigation and preserves baseline output for a single-file folder and embeds > docs/02%20data.csv?view=1&embed=1 1`] = `
@@ -332,5 +362,35 @@ input,button{font:inherit}
 .dw-table th.rn,.dw-table td.rn{position:sticky;left:0;background:var(--code);color:var(--muted);text-align:right;font-weight:400;font-variant-numeric:tabular-nums;user-select:none}
 .dw-table thead th.rn{z-index:2}
 .dw-table tbody tr:hover td{background:color-mix(in srgb,var(--accent) 6%,transparent)}
-</style><meta name="robots" content="noindex"></head><body><main class="dw-csv"><p class="dw-csvmeta">1 rows · 2 columns · comma-separated</p><div class="dw-table"><table><thead><tr><th class="rn" scope="col">#</th><th scope="col" title="name">name</th><th scope="col" title="value">value</th></tr></thead><tbody><tr><td class="rn">1</td><td>fixture</td><td class="n">7</td></tr></tbody></table></div></main></body></html>"
+
+body>.dw-print-title{display:none}
+@media print{
+:root{color-scheme:light;--bg:#fff;--fg:#000;--muted:#000;--line:#aaa;--card:#fff;--accent:#000;--code:#fff}
+body{background:#fff;color:#000;font-size:12pt}
+body *{color:#000!important;background:transparent!important;box-shadow:none!important;text-shadow:none!important}
+body>header.dw-vbar,main.dw-codewrap>.dw-codehead,main.dw-json>.dw-jtabs,.dw-md :is(h1,h2,h3,h4,h5,h6)>.dw-anchor,body>a[href$="/__dropway/report"],button{display:none!important}
+body>.dw-print-title{display:block;margin:0 0 1rem;padding:0 0 .4rem;border-bottom:1px solid var(--line);font:600 10pt/1.4 ui-monospace,monospace;overflow-wrap:anywhere}
+.dw-md,.dw-nb,.dw-json,.dw-csv{max-width:none;margin:0;padding:0;overflow-wrap:anywhere}
+.dw-src,.dw-table,.dw-jtree,pre{height:auto!important;max-height:none!important;max-width:100%;overflow:visible!important}
+.dw-src{margin:0;border:0}
+pre,code,.dw-ln>.c{white-space:pre-wrap!important;overflow-wrap:anywhere}
+pre{font-size:10pt!important}
+.dw-lines{width:100%;min-width:0;table-layout:fixed}
+.dw-ln>a{width:3.2em;min-width:0;padding:0 .5em 0 0;opacity:1}
+.dw-ln>.c{padding:0 .5em}
+.dw-jtree li{white-space:normal;overflow-wrap:anywhere}
+.dw-jtree ul{padding-left:.8rem}
+.dw-cell{display:block}
+.dw-prompt{text-align:left;padding:0}
+.dw-cell>div,.dw-mdcell,.dw-out{min-width:0}
+.dw-md table,.dw-nb table,.dw-table table{display:table;width:100%;min-width:0;max-width:100%;table-layout:fixed;border-collapse:collapse;overflow:visible}
+.dw-md th,.dw-md td,.dw-nb th,.dw-nb td,.dw-table th,.dw-table td{position:static;max-width:none;padding:.25em;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+.dw-table .rn{width:2.8em}
+thead{display:table-header-group}
+tr{break-inside:avoid}
+h1,h2,h3,h4,h5,h6,summary{break-after:avoid}
+img,video{max-width:100%;height:auto}
+.dw-note{max-width:none;break-inside:avoid}
+}
+</style><meta name="robots" content="noindex"></head><body><p class="dw-print-title">docs/02 data.csv</p><main class="dw-csv"><p class="dw-csvmeta">1 rows · 2 columns · comma-separated</p><div class="dw-table"><table><thead><tr><th class="rn" scope="col">#</th><th scope="col" title="name">name</th><th scope="col" title="value">value</th></tr></thead><tbody><tr><td class="rn">1</td><td>fixture</td><td class="n">7</td></tr></tbody></table></div></main></body></html>"
 `;
