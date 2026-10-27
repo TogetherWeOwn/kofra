@@ -254,6 +254,9 @@ describe("same-folder sibling navigation", () => {
         return (...args: unknown[]) => { if (methods.includes(String(property))) counts[key]++; return value.apply(target, args); };
       } });
       clearLiveMemoryCache();
+      // R-14 also puts a Cache API pointer memo in front of KV; drop it too
+      // so each measured request really reads the live manifest from KV.
+      await caches.default.delete(new Request(`https://dropway.invalid/__dropway/ptr/${encodeURIComponent(slug)}`));
       const res = await request(dw, `${ORIGIN}${base}${path}`, { headers: NAV }, { DB, FILES: counted(env.FILES, "r2", ["get", "head", "list"]), CACHE: counted(env.CACHE, "kv", ["get", "getWithMetadata", "list"]) });
       expect(res.status).toBe(200);
       return { counts, html: await res.text() };

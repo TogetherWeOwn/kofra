@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 // the existing Node test project, not the workerd project. No remote writes.
 // Proposed minimal runner contract (the roadmap doesn't prescribe flags):
 // --api <origin> --site <slug> --samples N --interval-ms N --timeout-ms N --json
-// DROPWAY_API_KEY supplies the key without exposing it in process arguments.
+// DROPWAY_API_KEY supplies the key without exposing it in process arguments. // rebrand:keep
 // JSON success exposes p50Ms/p95Ms; errors exit nonzero. The experiment's actual
 // workers.dev URL, date, sample count, p50/p95 and cache probe remain manual
 // evidence for SELF_HOST.md, never fabricated from this local fixture.
@@ -73,7 +73,7 @@ async function fixture(visible: boolean) {
         if (fresh && polls === 3) completedPolls.push(polls);
         res.writeHead(200, {
           "Content-Type": "text/plain", "Cache-Control": "no-store",
-          "X-Dropway-Version": `version-${fresh ? version : Math.max(0, version - 1)}`,
+          "X-Dropway-Version": `version-${fresh ? version : Math.max(0, version - 1)}`, // rebrand:keep
         });
         res.end(fresh ? newBody : oldBody);
       } else {
@@ -97,7 +97,7 @@ function measure(api: string, samples: number, timeoutMs = 2_000) {
   return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
     const child = spawn(process.execPath, [script, "--api", api, "--site", "freshness", "--samples", String(samples),
       "--interval-ms", "10", "--timeout-ms", String(timeoutMs), "--json"], {
-      env: { ...process.env, DROPWAY_API_KEY: KEY }, stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, DROPWAY_API_KEY: KEY }, stdio: ["ignore", "pipe", "pipe"], // rebrand:keep
     });
     let stdout = "";
     let stderr = "";
