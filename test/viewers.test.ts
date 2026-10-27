@@ -768,40 +768,300 @@ describe("notebook output fold containment", () => {
   });
 
   type El = { name: string; attrs: Record<string, string>; children: Array<El | string> };
-  const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
-  const RAW = new Set(["script", "style", "textarea", "title", "xmp"]);
-  const SCOPE = new Set(["html", "table", "td", "th", "caption", "template", "applet", "marquee", "object"]);
-  const CLOSES_P = new Set([
-    "address", "article", "aside", "blockquote", "details", "div", "dl", "figcaption", "figure", "footer", "header", "h1", "h2",
-    "h3", "h4", "h5", "h6", "hr", "main", "nav", "ol", "p", "pre", "section", "summary", "table", "ul",
+  const set = (names: string) => new Set(names.split(" "));
+  const VOID = set("area base basefont bgsound br col embed frame hr img input keygen link meta param source track wbr");
+  const RAW = set("script style textarea title xmp iframe noembed noframes noscript");
+  const HEADING = set("h1 h2 h3 h4 h5 h6");
+  const FORMATTING = set("a b big code em font i nobr s small strike strong tt u");
+  // Start tags that close an open <p>, and end tags that pop to their element when it is in scope.
+  const BLOCK = set(
+    "address article aside blockquote center details dialog dir div dl fieldset figcaption figure footer header hgroup main menu nav ol p search section summary ul",
+  );
+  const BLOCK_END = new Set([...BLOCK, "button", "listing", "pre"]);
+  const SPECIAL = new Set([
+    ...BLOCK_END, ...HEADING, ...set("applet area base basefont bgsound body br caption col colgroup dd dt embed form frame frameset head hr html iframe img input keygen li link marquee meta noembed noframes noscript object param plaintext script select source style table tbody td template textarea tfoot th thead title tr track wbr xmp"),
   ]);
-  const FORMATTING = new Set(["a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"]);
+  const SCOPE = set("#root html table td th caption template applet marquee object");
+  const BUTTON_SCOPE = new Set([...SCOPE, "button"]);
+  const LIST_SCOPE = new Set([...SCOPE, "ol", "ul"]);
+  const TABLE_SCOPE = set("#root html table template");
+  const TABLE_PARTS = set("caption col colgroup tbody td tfoot th thead tr");
+  const SECTIONS = set("tbody thead tfoot");
+  const FOSTER_TARGETS = set("table tbody thead tfoot tr");
   const isAlpha = (c: string | undefined) => c !== undefined && ((c >= "a" && c <= "z") || (c >= "A" && c <= "Z"));
   const isSpace = (c: string | undefined) => c === " " || c === "\n" || c === "\t" || c === "\f" || c === "\r";
 
   /**
-   * Parse HTML into a tree the way a browser's tree builder treats the
-   * elements these fixtures use: character-scan tokenizer (comments, quoted
-   * attribute values, raw-text elements) and the "end tag closes the nearest
-   * open element of that name in scope, else is ignored" rule, which is what
-   * lets a stray </div> or </main> pop an enclosing <details>.
+   * Parse HTML into a tree the way a browser's tree builder does for the
+   * markup these fixtures produce: a character-scan tokenizer (comments,
+   * quoted attribute values, raw-text elements) and the HTML tree
+   * construction rules that decide containment. End tags close only an open
+   * element of that name in scope (else are ignored), which is what lets a
+   * stray </div> or </main> pop an enclosing <details>; <p>, <li>, <dd>/<dt>
+   * and headings close implicitly; table parts outside a table are ignored,
+   * tables imply tbody/tr and close cells, and stray content inside a table
+   * is foster-parented before it. Formatting end tags are simplified: they
+   * pop to their element, or are dropped from the stack when a block sits
+   * inside them (no reparenting).
    */
   const parse = (html: string): El => {
     const root: El = { name: "#root", attrs: {}, children: [] };
     const stack: El[] = [root];
+    const parent = new Map<El, El>();
     const top = () => stack[stack.length - 1]!;
-    const inScope = (name: string) => {
+    const find = (match: (name: string) => boolean, scope: Set<string>) => {
       for (let k = stack.length - 1; k > 0; k--) {
-        if (stack[k]!.name === name) return k;
-        if (SCOPE.has(stack[k]!.name)) return -1;
+        if (match(stack[k]!.name)) return k;
+        if (scope.has(stack[k]!.name)) return -1;
       }
       return -1;
     };
-    const text = (s: string) => {
-      if (s) top().children.push(s);
+    const has = (name: string, scope = SCOPE) => find((n) => n === name, scope);
+    const popTo = (k: number) => {
+      if (k > 0) stack.length = k;
     };
+    const clearTo = (names: Set<string>) => {
+      while (!names.has(top().name) && top() !== root) stack.pop();
+    };
+    // The browser's insertion mode, read off the stack of open elements.
+    const mode = () => {
+      for (let k = stack.length - 1; k > 0; k--) {
+        const n = stack[k]!.name;
+        if (n === "td" || n === "th") return "cell";
+        if (n === "tr") return "row";
+        if (SECTIONS.has(n)) return "section";
+        if (n === "caption") return "caption";
+        if (n === "colgroup") return "colgroup";
+        if (n === "table") return "table";
+        if (n === "template" || n === "html") return "body";
+      }
+      return "body";
+    };
+    let foster = false;
+    const place = (node: El | string) => {
+      const cur = top();
+      const t = foster && FOSTER_TARGETS.has(cur.name) ? stack.map((e) => e.name).lastIndexOf("table") : -1;
+      if (t > 0) {
+        const table = stack[t]!;
+        const into = parent.get(table) ?? stack[t - 1]!;
+        into.children.splice(into.children.indexOf(table), 0, node);
+        if (typeof node !== "string") parent.set(node, into);
+      } else {
+        cur.children.push(node);
+        if (typeof node !== "string") parent.set(node, cur);
+      }
+    };
+    const insert = (name: string, attrs: Record<string, string> = {}, push = !VOID.has(name)) => {
+      const el: El = { name, attrs, children: [] };
+      place(el);
+      if (push) stack.push(el);
+      return el;
+    };
+    const closeP = () => popTo(has("p", BUTTON_SCOPE));
+
+    const bodyStart = (name: string, attrs: Record<string, string>) => {
+      if (name === "html" || name === "body" || name === "head" || name === "frameset" || TABLE_PARTS.has(name)) return;
+      if (BLOCK.has(name) || name === "hr" || name === "pre" || name === "listing" || name === "table" || name === "plaintext") closeP();
+      else if (HEADING.has(name)) {
+        closeP();
+        if (HEADING.has(top().name)) stack.pop();
+      } else if (name === "li" || name === "dd" || name === "dt") {
+        const same = name === "li" ? (n: string) => n === "li" : (n: string) => n === "dd" || n === "dt";
+        for (let k = stack.length - 1; k > 0; k--) {
+          const n = stack[k]!.name;
+          if (same(n)) {
+            popTo(k);
+            break;
+          }
+          if (SPECIAL.has(n) && n !== "address" && n !== "div" && n !== "p") break;
+        }
+        closeP();
+      } else if (name === "button") popTo(has("button"));
+      else if (name === "form") {
+        if (stack.some((e) => e.name === "form")) return;
+        closeP();
+      } else if (name === "a") {
+        const k = stack.map((e) => e.name).lastIndexOf("a");
+        if (k > 0) bodyEnd("a");
+      } else if (name === "option" || name === "optgroup") {
+        if (top().name === "option") stack.pop();
+      }
+      insert(name, attrs);
+    };
+    const bodyEnd = (name: string) => {
+      if (name === "br") return void insert("br");
+      if (name === "p") {
+        const k = has("p", BUTTON_SCOPE);
+        if (k < 0) insert("p", {}, false);
+        else popTo(k);
+        return;
+      }
+      if (BLOCK_END.has(name)) return popTo(has(name));
+      if (name === "li") return popTo(has("li", LIST_SCOPE));
+      if (name === "dd" || name === "dt") return popTo(has(name));
+      if (HEADING.has(name)) return popTo(find((n) => HEADING.has(n), SCOPE));
+      if (name === "form") {
+        const k = has("form");
+        if (k > 0) stack.splice(k, 1);
+        return;
+      }
+      if (FORMATTING.has(name)) {
+        const k = has(name);
+        if (k < 0) return;
+        if (stack.slice(k + 1).some((el) => SPECIAL.has(el.name))) stack.splice(k, 1);
+        else popTo(k);
+        return;
+      }
+      for (let k = stack.length - 1; k > 0; k--) {
+        if (stack[k]!.name === name) return popTo(k);
+        if (SPECIAL.has(stack[k]!.name)) return;
+      }
+    };
+    const inBodyFostered = (fn: () => void) => {
+      foster = true;
+      fn();
+      foster = false;
+    };
+
+    const startTag = (name: string, attrs: Record<string, string>): void => {
+      const m = mode();
+      if (m === "colgroup") {
+        if (name === "col") return void insert("col");
+        stack.pop();
+        return startTag(name, attrs);
+      }
+      if (m === "cell" || m === "caption") {
+        if (!TABLE_PARTS.has(name)) return bodyStart(name, attrs);
+        const k = m === "cell" ? find((n) => n === "td" || n === "th", TABLE_SCOPE) : has("caption", TABLE_SCOPE);
+        if (k < 0) return;
+        popTo(k);
+        return startTag(name, attrs);
+      }
+      if (m === "row") {
+        if (name === "td" || name === "th") {
+          clearTo(set("tr template html"));
+          return void insert(name, attrs);
+        }
+        if (TABLE_PARTS.has(name)) {
+          clearTo(set("tr template html"));
+          stack.pop();
+          return startTag(name, attrs);
+        }
+      }
+      if (m === "section") {
+        if (name === "tr") {
+          clearTo(set("tbody thead tfoot template html"));
+          return void insert(name, attrs);
+        }
+        if (name === "td" || name === "th") {
+          startTag("tr", {});
+          return startTag(name, attrs);
+        }
+        if (TABLE_PARTS.has(name)) {
+          clearTo(set("tbody thead tfoot template html"));
+          stack.pop();
+          return startTag(name, attrs);
+        }
+      }
+      if (m === "table" || m === "section" || m === "row") {
+        const tableCtx = set("table template html");
+        if (name === "caption" || name === "colgroup" || SECTIONS.has(name)) {
+          clearTo(tableCtx);
+          return void insert(name, attrs);
+        }
+        if (name === "col") {
+          startTag("colgroup", {});
+          return startTag(name, attrs);
+        }
+        if (name === "tr" || name === "td" || name === "th") {
+          clearTo(tableCtx);
+          insert("tbody");
+          return startTag(name, attrs);
+        }
+        if (name === "table") {
+          const k = has("table", TABLE_SCOPE);
+          if (k < 0) return;
+          popTo(k);
+          return startTag(name, attrs);
+        }
+        if (name === "style" || name === "script" || name === "template") return void insert(name, attrs);
+        return inBodyFostered(() => bodyStart(name, attrs));
+      }
+      bodyStart(name, attrs);
+    };
+    const endTag = (name: string): void => {
+      const m = mode();
+      if (m === "colgroup") {
+        if (name === "col") return;
+        stack.pop();
+        if (name !== "colgroup") endTag(name);
+        return;
+      }
+      if (m === "cell") {
+        if (name === "td" || name === "th") return popTo(has(name, TABLE_SCOPE));
+        if (name === "table" || name === "tr" || SECTIONS.has(name)) {
+          if (has(name, TABLE_SCOPE) < 0) return;
+          popTo(find((n) => n === "td" || n === "th", TABLE_SCOPE));
+          return endTag(name);
+        }
+        if (TABLE_PARTS.has(name) || name === "body" || name === "html") return;
+        return bodyEnd(name);
+      }
+      if (m === "caption") {
+        if (name === "caption") return popTo(has("caption", TABLE_SCOPE));
+        if (name === "table") {
+          const k = has("caption", TABLE_SCOPE);
+          if (k < 0) return;
+          popTo(k);
+          return endTag(name);
+        }
+        if (TABLE_PARTS.has(name) || name === "body" || name === "html") return;
+        return bodyEnd(name);
+      }
+      if (m === "row") {
+        if (name === "tr") return popTo(has("tr", TABLE_SCOPE));
+        if (name === "table" || SECTIONS.has(name)) {
+          if (has(name, TABLE_SCOPE) < 0 || has("tr", TABLE_SCOPE) < 0) return;
+          popTo(has("tr", TABLE_SCOPE));
+          return endTag(name);
+        }
+      }
+      if (m === "section") {
+        if (SECTIONS.has(name)) return popTo(has(name, TABLE_SCOPE));
+        if (name === "table") {
+          const k = find((n) => SECTIONS.has(n), TABLE_SCOPE);
+          if (k < 0) return;
+          popTo(k);
+          return endTag(name);
+        }
+      }
+      if (m === "table" || m === "section" || m === "row") {
+        if (name === "table") return popTo(has("table", TABLE_SCOPE));
+        if (TABLE_PARTS.has(name) || name === "body" || name === "html") return;
+        return inBodyFostered(() => bodyEnd(name));
+      }
+      if (name === "body" || name === "html") return;
+      bodyEnd(name);
+    };
+    const chars = (s: string) => {
+      if (!s) return;
+      const m = mode();
+      const blank = [...s].every(isSpace);
+      if (m === "colgroup" && !blank) {
+        stack.pop();
+        return chars(s);
+      }
+      if ((m === "table" || m === "section" || m === "row") && FOSTER_TARGETS.has(top().name) && !blank) return inBodyFostered(() => place(s));
+      place(s);
+    };
+
+    const lower = html.toLowerCase();
     let i = 0;
     let buf = "";
+    const flush = () => {
+      chars(buf);
+      buf = "";
+    };
     while (i < html.length) {
       const c = html[i]!;
       if (c !== "<") {
@@ -810,13 +1070,20 @@ describe("notebook output fold containment", () => {
         continue;
       }
       if (html.startsWith("<!--", i)) {
-        const end = html.indexOf("-->", i + 4);
-        i = end < 0 ? html.length : end + 3;
+        flush();
+        if (html.startsWith("<!-->", i)) i += 5;
+        else if (html.startsWith("<!--->", i)) i += 6;
+        else {
+          const a = html.indexOf("-->", i + 4);
+          const b = html.indexOf("--!>", i + 4);
+          i = a < 0 && b < 0 ? html.length : b >= 0 && (a < 0 || b < a) ? b + 4 : a + 3;
+        }
         continue;
       }
       const closing = html[i + 1] === "/";
       const nameAt = closing ? i + 2 : i + 1;
       if (html[i + 1] === "!" || html[i + 1] === "?" || (closing && !isAlpha(html[nameAt]))) {
+        flush();
         const end = html.indexOf(">", i + 1);
         i = end < 0 ? html.length : end + 1;
         continue;
@@ -826,11 +1093,9 @@ describe("notebook output fold containment", () => {
         i++;
         continue;
       }
-      text(buf);
-      buf = "";
       let j = nameAt;
       while (j < html.length && !isSpace(html[j]) && html[j] !== "/" && html[j] !== ">") j++;
-      const name = html.slice(nameAt, j).toLowerCase();
+      const name = lower.slice(nameAt, j);
       const attrs: Record<string, string> = {};
       while (j < html.length && html[j] !== ">") {
         if (isSpace(html[j]) || html[j] === "/") {
@@ -840,7 +1105,7 @@ describe("notebook output fold containment", () => {
         const a = j;
         j++;
         while (j < html.length && !isSpace(html[j]) && html[j] !== "/" && html[j] !== ">" && html[j] !== "=") j++;
-        const attr = html.slice(a, j).toLowerCase();
+        const attr = lower.slice(a, j);
         while (isSpace(html[j])) j++;
         let value = "";
         if (html[j] === "=") {
@@ -859,29 +1124,26 @@ describe("notebook output fold containment", () => {
         }
         if (!(attr in attrs)) attrs[attr] = value;
       }
+      // A tag cut off by the end of input is dropped, as browsers do.
+      if (j >= html.length) break;
+      flush();
       i = j + 1;
       if (closing) {
-        const at = inScope(name);
-        if (at < 0) continue;
-        const special = stack.slice(at + 1).some((el) => !FORMATTING.has(el.name));
-        if (FORMATTING.has(name) && special) stack.splice(at, 1);
-        else stack.length = at;
+        endTag(name);
         continue;
       }
-      if (CLOSES_P.has(name)) {
-        const p = inScope("p");
-        if (p > 0) stack.length = p;
+      startTag(name === "image" ? "img" : name, attrs);
+      if (name === "plaintext") {
+        buf = html.slice(i);
+        i = html.length;
+      } else if (RAW.has(name)) {
+        let end = lower.indexOf(`</${name}`, i);
+        while (end >= 0 && isAlpha(lower[end + 2 + name.length])) end = lower.indexOf(`</${name}`, end + 1);
+        chars(html.slice(i, end < 0 ? html.length : end));
+        i = end < 0 ? html.length : end;
       }
-      const el: El = { name, attrs, children: [] };
-      top().children.push(el);
-      if (RAW.has(name)) {
-        const end = html.toLowerCase().indexOf(`</${name}`, i);
-        el.children.push(html.slice(i, end < 0 ? html.length : end));
-        const close = end < 0 ? -1 : html.indexOf(">", end);
-        i = close < 0 ? html.length : close + 1;
-      } else if (!VOID.has(name)) stack.push(el);
     }
-    text(buf);
+    flush();
     return root;
   };
   const all = (el: El, pred: (e: El) => boolean, out: El[] = []): El[] => {
@@ -979,6 +1241,163 @@ describe("notebook output fold containment", () => {
       expect(page.status).toBe(200);
       expect(page.headers.get("x-kofra-viewer")).toBe("notebook");
       expectContained(await page.text());
+    }
+  });
+
+  const NEXT_SENTINEL = "next-cell-output-sentinel";
+  const twoCells = (first: Record<string, unknown>) => ({
+    metadata: { language_info: { name: "python" } },
+    cells: [
+      ...nbWith(first).cells,
+      {
+        cell_type: "code", execution_count: 2, source: "next_cell_marker = 2",
+        outputs: [{ output_type: "stream", name: "stdout", text: `${NEXT_SENTINEL}\n` }],
+      },
+    ],
+  });
+  const renderTwo = async (first: Record<string, unknown>) =>
+    `<main class="dw-nb">${await sanitizeHtml(renderNotebook(twoCells(first)))}</main>`;
+  const within = (outer: El, inner: El) => all(outer, (e) => e === inner).length > 0;
+  const hasClass = (e: El, name: string) => (e.attrs.class ?? "").split(/\s+/).includes(name);
+
+  /** Two code cells as a browser sees them: the first cell's output cannot annex the second cell. */
+  const expectNextCellFree = (html: string) => {
+    const doc = parse(html);
+    const folds = all(doc, isFold);
+    expect(folds, html).toHaveLength(2);
+    const [fold, next] = folds as [El, El];
+    expect(within(fold, next), html).toBe(false);
+    expect(textOf(fold), html).toContain(SENTINEL);
+    expect(textOf(fold), html).not.toContain(NEXT_SENTINEL);
+    const nextSummary = next.children.filter((ch): ch is El => typeof ch !== "string" && ch.name === "summary");
+    expect(nextSummary.map((s) => textOf(s).trim()), html).toEqual(["Outputs (1)"]);
+    expect(textOf(next), html).toContain(NEXT_SENTINEL);
+    const prompts = all(doc, (e) => hasClass(e, "dw-prompt") && textOf(e).trim() === "In [2]:");
+    expect(prompts, html).toHaveLength(1);
+    const code = all(doc, (e) => e.name === "code" && textOf(e).includes("next_cell_marker"));
+    expect(code, html).toHaveLength(1);
+    const tables = all(doc, (e) => e.name === "table");
+    for (const el of [next, prompts[0]!, code[0]!]) {
+      expect(within(fold, el), html).toBe(false);
+      for (const table of tables) expect(within(table, el), html).toBe(false);
+    }
+    expect(textOf(doc).split(SENTINEL), html).toHaveLength(2);
+    expect(textOf(doc).split(NEXT_SENTINEL), html).toHaveLength(2);
+  };
+
+  it("the containment model applies implied end tags and table annexing as browsers do", () => {
+    const fold = (inner: string) => `<details class="dw-out"><summary>Outputs (2)</summary><div>${inner}</div><pre>${SENTINEL}</pre></details>`;
+    const sentinelInFold = (inner: string) => textOf(all(parse(`<main><div>${fold(inner)}</div></main>`), isFold)[0]!).includes(SENTINEL);
+    // A heading end tag closes whichever heading is open; li closes the previous li and what it holds.
+    expect(sentinelInFold("<h1><div></h2></div>")).toBe(false);
+    expect(sentinelInFold("<h1><div></h2>")).toBe(true);
+    expect(sentinelInFold("<ul><li><div><li></ul></div>")).toBe(false);
+    // </table> closes the open cell and row; table parts outside a table are ignored.
+    expect(sentinelInFold("<table><tr><td><div></table></div>")).toBe(false);
+    expect(sentinelInFold("<td><div></div></div>")).toBe(false);
+    // An unclosed table swallows a following fold, and stray content in a table is moved before it.
+    const annexed = parse(`<main>${fold("<table><tr><td>x")}${fold("")}</main>`);
+    const [first, second] = all(annexed, isFold) as [El, El];
+    expect(within(first, second)).toBe(true);
+    const fostered = parse("<div><table><b>moved</b><tr><td>kept</td></tr></table></div>");
+    const table = all(fostered, (e) => e.name === "table")[0]!;
+    expect(textOf(table)).toBe("kept");
+    expect(textOf(fostered)).toBe("movedkept");
+  });
+
+  const MISNESTED_HTML = [
+    "<section><div></section></div>",
+    "<section><div></section></div></div></div>",
+    "<p><div></p></div></div>",
+    "<ul><li><div><li><div></ul></div></div>",
+    "<h1><div></h2></div></div>",
+    "<b><i>x</b></i></div></div>",
+    "<table><tr><td><div></table></div></div>",
+    "<td><div></div></div>",
+    "<caption><div></caption></div></div>",
+  ];
+  it.each(MISNESTED_HTML)("a misnested text/html output %j cannot pop the fold", async (payload) => {
+    expectContained(await render({ "text/html": payload }));
+  });
+
+  it.each(["<section><div></section></div></div></div>", "<ul><li><div><li><div></ul></div></div>"])(
+    "a misnested text/markdown output %j cannot pop the fold",
+    async (payload) => {
+      expectContained(await render({ "text/markdown": `md-before\n\n${payload}\n\nmd-after` }));
+    },
+  );
+
+  it.each([
+    "<table>",
+    "<table><tr><td>x",
+    "<table><tr><td><div>x",
+    "<ul><li>a<li>b",
+    "<div><div><div>",
+    "<table><thead><a><summary></caption><tbody>",
+  ])("an unclosed text/html output %j cannot annex the next cell", async (payload) => {
+    expectNextCellFree(await renderTwo({ "text/html": payload }));
+  });
+
+  it.each([
+    "<script>var a=1",
+    "<style>p{",
+    "<textarea>x",
+    "<svg><g>",
+    "<template><div>",
+    "<select><option>",
+    "<button>",
+    "<button/>",
+  ])("an unclosed dropped element %j does not swallow the rest of the notebook", async (payload) => {
+    expectNextCellFree(await renderTwo({ "text/html": payload }));
+  });
+
+  it.each(["<svg><title><textarea>x", "<svg><desc><script>var a=1", "<svg><foreignObject><style>p{", "<math><mi><script>var a=1"])(
+    "an unclosed raw-text element %j inside svg or math does not swallow the rest of the notebook",
+    async (payload) => {
+      expectNextCellFree(await renderTwo({ "text/html": payload }));
+    },
+  );
+
+  it.each([
+    ["unterminated anchor tags", "<a ".repeat(53_334)],
+    ["comments", "<!-- x -->".repeat(16_000)],
+    ["open divs then stray paragraph ends", "<div>".repeat(32_000) + "</p>".repeat(40_000)],
+    ["nested list items holding divs", "<li><div>".repeat(17_800)],
+    ["nested table cells", "<table><tr><td>".repeat(10_700)],
+    ["nested svg", "<svg>".repeat(32_000)],
+  ])("renders a ~160 KB text/html output of %s in linear time", (_label, payload) => {
+    const nb = nbWith({ "text/html": payload });
+    const started = performance.now();
+    renderNotebook(nb);
+    const elapsed = performance.now() - started;
+    expect(elapsed).toBeLessThan(1000);
+  }, 120_000);
+
+  it.each([
+    '<table class="dataframe"><thead><tr><th></th><th>value</th></tr></thead><tbody><tr><th>0</th><td>1.5</td></tr></tbody></table>',
+    "<ul><li>a</li><li>b</li></ul>",
+    "<div><div><span>x</span></div></div>",
+  ])("well-formed text/html %j renders unchanged inside the fold", async (payload) => {
+    const html = await render({ "text/html": payload });
+    const fold = expectContained(html);
+    expect(html).toContain(payload);
+    expect(html.indexOf(payload)).toBeGreaterThan(html.indexOf("</summary>"));
+    expect(html.indexOf(payload)).toBeLessThan(html.indexOf(SENTINEL));
+    expect(textOf(fold)).toContain(textOf(parse(payload)));
+  });
+
+  it.each([
+    ["<ul><li>first-item<li>second-item</ul>", ["first-item", "second-item"]],
+    ["<p>para-text<div>block-text</div>", ["para-text", "block-text"]],
+    ["<table><tr><td>cell-one<td>cell-two</table>", ["cell-one", "cell-two"]],
+  ] as const)("sloppy text/html %j keeps all its text inside the fold", async (payload, words) => {
+    const fold = expectContained(await render({ "text/html": payload }));
+    const text = textOf(fold);
+    let at = text.indexOf("Outputs (2)");
+    for (const word of [...words, SENTINEL]) {
+      const next = text.indexOf(word, at + 1);
+      expect(next, `${word} in ${text}`).toBeGreaterThan(at);
+      at = next;
     }
   });
 });
