@@ -28,6 +28,24 @@ const MEDIA_CSS = `
 .dw-fallback{max-width:34rem;margin:15vh auto;text-align:center;color:var(--muted)}
 `;
 
+const IMAGE_CSS = `
+.dw-backgrounds{display:flex;gap:.4rem;align-items:center;justify-content:center;flex-wrap:wrap}
+.dw-backgrounds label{display:inline-flex;align-items:center;gap:.35rem}
+.dw-backgrounds input{margin:0;accent-color:var(--accent)}
+.dw-backgrounds input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.dw-backgrounds label:has(input:checked){border-color:var(--accent);font-weight:600}
+.dw-media:has(#dw-bg-light:checked)>.dw-stage{background:#fff}
+.dw-media:has(#dw-bg-dark:checked)>.dw-stage{background:#000}
+#dw-zoom:checked~.dw-stage img{flex-shrink:0}
+` + MEDIA_CSS;
+
+const IMAGE_BACKGROUNDS = `<div class="dw-backgrounds" role="radiogroup" aria-label="Image background">
+<span class="dw-meta" style="margin:0" aria-hidden="true">Background</span>
+<label class="dw-btn"><input type="radio" name="dw-background" id="dw-bg-checker" value="checker" checked>Checker</label>
+<label class="dw-btn"><input type="radio" name="dw-background" id="dw-bg-light" value="light">Light</label>
+<label class="dw-btn"><input type="radio" name="dw-background" id="dw-bg-dark" value="dark">Dark</label>
+</div>`;
+
 /** Pixel size from the first bytes of a PNG, GIF, JPEG, WebP or BMP file. */
 export function imageSize(b: Uint8Array): { width: number; height: number } | null {
   const u16be = (o: number) => (b[o]! << 8) | b[o + 1]!;
@@ -150,7 +168,7 @@ function folderNavHtml(vc: ViewerContext): string {
 
 export const imageViewer: Viewer = {
   id: "image",
-  version: 3,
+  version: 4,
   etagExtra: folderNavEtag,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "image" && topLevelOnly(mode),
@@ -163,9 +181,10 @@ export const imageViewer: Viewer = {
       .join(" · ");
     return viewerPage(vc, {
       tabs: mediaTabs(vc, "Image"),
-      css: MEDIA_CSS,
+      css: IMAGE_CSS,
       body: `<main class="dw-media"><input type="checkbox" id="dw-zoom" class="dw-toggle">
 <div class="dw-mediabar">${folderNavHtml(vc)}<span class="dw-meta" style="margin:0">${escapeHtml(meta)}</span><label for="dw-zoom" class="dw-btn">Actual size</label></div>
+${IMAGE_BACKGROUNDS}
 <label for="dw-zoom" class="dw-stage dw-checker"><img src="${escapeHtml(vc.fileUrl)}" alt="${escapeHtml(name)}"${dim ? ` width="${dim.width}" height="${dim.height}"` : ""}></label></main>`,
       headers: dim ? { "X-Kofra-Image-Size": `${dim.width}x${dim.height}` } : {},
     });
@@ -174,7 +193,7 @@ export const imageViewer: Viewer = {
 
 export const svgViewer: Viewer = {
   id: "svg",
-  version: 3,
+  version: 4,
   etagExtra: folderNavEtag,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "svg" && topLevelOnly(mode),
@@ -183,11 +202,11 @@ export const svgViewer: Viewer = {
     // Shown through <img>, so scripts inside the SVG never run.
     return viewerPage(vc, {
       tabs: standardTabs(vc, { rendered: "Image", source: true }),
-      // Order-independent (MEDIA_CSS sets no min-width); kept ahead of it so the
-      // style block's rule order matches the body's bar-then-stage order.
-      css: ".dw-stage img{min-width:min(16rem,100%)}" + MEDIA_CSS,
+      // Keep small SVGs legible without reading or embedding their markup.
+      css: ".dw-stage img{min-width:min(16rem,100%)}" + IMAGE_CSS,
       body: `<main class="dw-media"><input type="checkbox" id="dw-zoom" class="dw-toggle">
 <div class="dw-mediabar">${folderNavHtml(vc)}<span class="dw-meta" style="margin:0">${escapeHtml(`${formatBytes(vc.file.size)} · SVG (scripts inside it do not run here)`)}</span><label for="dw-zoom" class="dw-btn">Actual size</label></div>
+${IMAGE_BACKGROUNDS}
 <label for="dw-zoom" class="dw-stage dw-checker"><img src="${escapeHtml(vc.fileUrl)}" alt="${escapeHtml(name)}"></label></main>`,
     });
   },
