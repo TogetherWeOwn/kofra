@@ -4,11 +4,12 @@
 
 ### Markdown viewer
 
-- A Markdown heading that would duplicate an earlier raw-HTML heading id now takes the next
-  free `-1`-style suffix, so every `#fragment` link resolves to exactly one heading. The first
-  heading in document order keeps its id, raw-HTML ids are never rewritten, and documents
-  without the collision render byte-identical output. Cached renders and ETags move from
-  `markdown@3` to `markdown@4` with the change.
+- A Markdown heading that would duplicate an earlier raw-HTML heading id now takes a free
+  `-1`-style suffix without taking an existing heading's fragment destination. Raw-HTML ids
+  are never rewritten; Markdown-before-raw and raw-vs-raw duplicates remain as authored.
+  Comments and sanitizer-dropped content reserve no ids, and documents without the collision
+  render byte-identical output. Cached renders and ETags move from `markdown@3` to `markdown@5`
+  with the change.
 
 ### Sites
 

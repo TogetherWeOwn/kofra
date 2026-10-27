@@ -4,11 +4,11 @@ import { cachedRender } from "./cache";
 import { standardTabs, viewerPage } from "./chrome";
 import { HIGHLIGHT_CSS, highlight, hljsLanguage } from "./highlight";
 import type { Viewer } from "./index";
-import { sanitizeHtml } from "./sanitize";
+import { DROP, sanitizeHtml } from "./sanitize";
 
 // Bump whenever the rendered output changes: this retires cached fragments
 // and render ETags keyed `markdown@<version>/...`.
-const MD_VERSION = 4;
+const MD_VERSION = 5;
 
 const MD_CSS = `
 .dw-md{max-width:48rem;margin:0 auto;padding:2.5rem 1.25rem 5rem}
@@ -57,50 +57,145 @@ export function headingId(text: string): string {
   );
 }
 
-/**
- * Register the ids of raw-HTML headings in one marked `html` token, so a
- * later Markdown heading that would duplicate one takes a suffix instead.
- * Only h1-h6 tags register: any other id (a div panel, a script the sanitizer
- * later drops, ...) is out of scope and claims nothing. Ids are stored
- * verbatim — the sanitizer serves them as authored — and matched exactly,
- * because fragments are case-sensitive. Raw ids are never rewritten.
- */
-function registerRawHeadingIds(html: string, rawIds: Set<string>): void {
-  const re = /<h[1-6]\b[^>]*?\s+id\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html))) {
-    let v = m[1]!;
-    if (v[0] === '"' || v[0] === "'") v = v.slice(1, -1);
-    else if (v.endsWith("/")) v = v.slice(0, -1);
-    if (v) rawIds.add(v);
-  }
+/** Scan raw tokens once, retaining comment/DROP state across inline tokens. */
+function rawHeadingScanner(ids: Set<string>): (html: string) => void {
+  const dropped: string[] = [];
+  const droppedCounts = new Map<string, number>();
+  const voidDrop = new Set(["area", "base", "embed", "frame", "link", "meta", "param"]);
+  const rawTextTags = new Set(["script", "style", "iframe", "noembed", "noframes", "noscript", "title", "textarea", "xmp", "plaintext"]);
+  const tag = /<(\/?)([a-z][a-z0-9:-]*)(?=[\t\n\f\r />])/iy;
+  const space = /[\t\n\f\r ]/;
+  let comment = false;
+  let rawText: string | null = null;
+  return (html) => {
+    let i = 0;
+    while (i < html.length) {
+      if (comment) {
+        const end = /--!?>/g;
+        end.lastIndex = i;
+        const m = end.exec(html);
+        if (!m) return;
+        i = end.lastIndex;
+        comment = false;
+      }
+      i = html.indexOf("<", i);
+      if (i < 0 || rawText === "plaintext") return;
+      if (!rawText && html.startsWith("<!--", i)) {
+        comment = true;
+        i += 4;
+        continue;
+      }
+      if (!rawText && (html[i + 1] === "!" || html[i + 1] === "?")) {
+        const end = html.indexOf(">", i + 2);
+        if (end < 0) return;
+        i = end + 1;
+        continue;
+      }
+      tag.lastIndex = i;
+      const m = tag.exec(html);
+      if (!m) { i++; continue; }
+      const closing = m[1] === "/";
+      const name = m[2]!.toLowerCase();
+      i = tag.lastIndex;
+      if (rawText && !(closing && name === rawText)) continue;
+      let id: string | undefined;
+      let selfClosing = false;
+      // Attribute values may contain '<' and '>'. Never restart at a heading
+      // prefix within a value, or rescan an unterminated tag from each '<'.
+      while (i < html.length && html[i] !== ">") {
+        if (space.test(html[i]!)) { i++; continue; }
+        if (html[i] === "/") { selfClosing = html[i + 1] === ">"; i++; continue; }
+        const start = i;
+        while (i < html.length && !/[\t\n\f\r />=]/.test(html[i]!)) i++;
+        if (i === start) { i++; continue; }
+        const attr = html.slice(start, i).toLowerCase();
+        while (i < html.length && space.test(html[i]!)) i++;
+        let value = "";
+        if (html[i] === "=") {
+          i++;
+          while (i < html.length && space.test(html[i]!)) i++;
+          const quote = html[i];
+          if (quote === '"' || quote === "'") {
+            const valueStart = ++i;
+            while (i < html.length && html[i] !== quote) i++;
+            value = html.slice(valueStart, i);
+            if (i < html.length) i++;
+          } else {
+            const valueStart = i;
+            while (i < html.length && !space.test(html[i]!) && html[i] !== ">") i++;
+            value = html.slice(valueStart, i);
+          }
+        }
+        // HTML keeps the first duplicate attribute. A slash is part of an
+        // unquoted value, not a self-closing marker: id=install/ means install/.
+        if (attr === "id" && id === undefined) id = value;
+      }
+      if (i === html.length) return;
+      i++;
+      if (closing) {
+        if (droppedCounts.get(name)) {
+          let parent: string;
+          do {
+            parent = dropped.pop()!;
+            droppedCounts.set(parent, droppedCounts.get(parent)! - 1);
+          } while (parent !== name);
+        }
+        if (name === rawText) rawText = null;
+      } else if (DROP.has(name)) {
+        if (!voidDrop.has(name) && !(selfClosing && (name === "svg" || name === "math"))) {
+          dropped.push(name);
+          droppedCounts.set(name, (droppedCounts.get(name) ?? 0) + 1);
+        }
+        if (rawTextTags.has(name)) rawText = name;
+      } else if (!dropped.length && /^h[1-6]$/.test(name) && id) {
+        ids.add(id);
+      }
+    }
+  };
 }
 
 function markedFor(): Marked {
   const seen = new Map<string, number>();
+  const headings = new WeakMap<object, { base: string; id: string }>();
+  const reserved = new Set<string>();
+  const nextSuffix = new Map<string, number>();
   const rawIds = new Set<string>();
+  const reserveRaw = rawHeadingScanner(reserved);
+  const registerRaw = rawHeadingScanner(rawIds);
   return new Marked({
     gfm: true,
     breaks: false,
     async: false,
+    walkTokens(token) {
+      if (token.type === "html") reserveRaw(token.text);
+      if (token.type !== "heading") return;
+      const base = headingId(token.text);
+      const n = seen.get(base) ?? 0;
+      const id = n ? `${base}-${n}` : base;
+      seen.set(base, n + 1);
+      headings.set(token, { base, id });
+      reserved.add(id);
+    },
     renderer: {
-      heading(this: { parser: { parseInline(t: Tokens.Generic[]): string } }, { tokens, depth, text }: Tokens.Heading) {
+      heading(this: { parser: { parseInline(t: Tokens.Generic[]): string } }, token: Tokens.Heading) {
+        const { tokens, depth } = token;
         const inner = this.parser.parseInline(tokens);
-        const base = headingId(text);
-        let n = seen.get(base) ?? 0;
-        let id = n ? `${base}-${n}` : base;
-        // The first heading in document order keeps its id; only a Markdown
-        // heading duplicating an earlier raw-HTML id moves, past every id the
-        // raw markup already claimed. Markdown-only numbering is untouched.
-        while (rawIds.has(id)) {
-          n += 1;
-          id = `${base}-${n}`;
+        const original = headings.get(token)!;
+        let id = original.id;
+        // Keep baseline Markdown numbering, including future suffix destinations.
+        // Only an id shadowed by earlier raw HTML may move to a free suffix.
+        if (rawIds.has(id)) {
+          let n = nextSuffix.get(original.base) ?? 1;
+          do {
+            id = `${original.base}-${n++}`;
+          } while (reserved.has(id) || rawIds.has(id));
+          nextSuffix.set(original.base, n);
+          reserved.add(id);
         }
-        seen.set(base, n + 1);
         return `<h${depth} id="${escapeHtml(id)}">${inner}<a class="dw-anchor" href="#${escapeHtml(id)}" aria-label="Link to this section">#</a></h${depth}>\n`;
       },
       html({ text }: Tokens.HTML | Tokens.Tag) {
-        registerRawHeadingIds(text, rawIds);
+        registerRaw(text);
         return text;
       },
       code({ text, lang }: Tokens.Code) {
