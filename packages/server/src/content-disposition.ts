@@ -21,12 +21,20 @@
  * to the historical header (cache/test stability), unless `alwaysExtended`
  * is set — transfer downloads have always sent `filename*`, even for ASCII
  * names, and keep doing so.
+ *
+ * Lone (unpaired) UTF-16 surrogates are legal in published paths, but
+ * `encodeURIComponent` throws `URIError` on them — the download would fail
+ * with the same class of bug this helper exists to fix. They are normalized
+ * to U+FFFD first; valid surrogate pairs pass through untouched.
  */
 export function attachmentDisposition(filename: string, options?: { alwaysExtended?: boolean }): string {
-  const fallback = filename.replace(/[^\x20-\x7e]|["\\]/g, "_");
-  if (!options?.alwaysExtended && /^[\x20-\x7e]*$/.test(filename)) {
+  const name = filename.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, (m) =>
+    m.length === 2 ? m : "\uFFFD",
+  );
+  const fallback = name.replace(/[^\x20-\x7e]|["\\]/g, "_");
+  if (!options?.alwaysExtended && /^[\x20-\x7e]*$/.test(name)) {
     return `attachment; filename="${fallback}"`;
   }
-  const encoded = encodeURIComponent(filename).replace(/['()*]/g, (s) => `%${s.charCodeAt(0).toString(16)}`);
+  const encoded = encodeURIComponent(name).replace(/['()*]/g, (s) => `%${s.charCodeAt(0).toString(16)}`);
   return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
