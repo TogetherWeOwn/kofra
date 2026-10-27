@@ -139,6 +139,36 @@ describe("shift-click line ranges", () => {
     expect(m.hash()).toBe("#L6");
   });
 
+  it("first shift-click stays in the current tab: no new-window navigation", async () => {
+    const m = await mount();
+    const before = snapshot(m);
+    await m.shiftClickLine(6);
+    expect(m.hash()).toBe("#L6");
+    expect(m.highlighted().filter((n) => n !== 6)).toEqual([]);
+    expect(m.historyDepth()).toBe(before.depth + 1);
+    // A real shift-click opens a new window unless the page cancels it. The
+    // harness records that native target; handled selection must cancel it.
+    expect(m.browser.navigations).toEqual([]);
+    expectOnlyFragmentChanged(m, before);
+  });
+
+  it.each([
+    { name: "shift+ctrl", run: (m: Mounted) => m.shiftCtrlClickLine(9) },
+    { name: "shift+meta", run: (m: Mounted) => m.shiftMetaClickLine(9) },
+    { name: "shift+alt", run: (m: Mounted) => m.shiftAltClickLine(9) },
+  ])("shifted modified activation ($name) keeps the current range and retains native semantics", async ({ run }) => {
+    const m = await mount(twelveLines, { initialHash: "#L2-L4" });
+    const depth = m.historyDepth();
+    await run(m);
+    expect(m.hash()).toBe("#L2-L4");
+    expect(m.highlighted()).toEqual([2, 3, 4]);
+    expect(m.historyDepth()).toBe(depth);
+    // Native modified-link behavior opens the target elsewhere; the guard must
+    // leave it uncancelled and the current tab untouched.
+    expect(m.browser.navigations).toHaveLength(1);
+    expect(m.browser.navigations[0]).toContain("#L9");
+  });
+
   it("repeated shift-clicks re-extend from the established first line", async () => {
     const m = await mount();
     await m.clickLine(3);
@@ -231,6 +261,24 @@ describe("keyboard line-range selection", () => {
     expect(m.hash()).toBe("#L4-L9");
     await m.keyboardSelect("6", "6");
     expect(m.hash()).toBe("#L6");
+  });
+
+  it.each([
+    { which: "first" as const },
+    { which: "last" as const },
+  ])("Enter in the $which line input selects the normalized range without leaving the toolbar", async ({ which }) => {
+    const m = await mount();
+    const before = snapshot(m);
+    // Reversed values prove normalization; the handler lives on the input,
+    // not the Select button, so Enter must work from either field.
+    await m.keyboardSelectViaInput(which, "9", "4");
+    expect(m.hash()).toBe("#L4-L9");
+    expect(m.highlighted()).toEqual(range(4, 9));
+    expect(m.historyDepth()).toBe(before.depth + 1);
+    expectOnlyFragmentChanged(m, before);
+    const { first, last, button } = m.rangeControls();
+    expect([first, last, button]).toContain(m.doc.activeElement);
+    expect(m.doc.activeElement).not.toBe(m.doc.body);
   });
 
   it.each([

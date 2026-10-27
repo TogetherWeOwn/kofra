@@ -367,13 +367,34 @@ export async function mount(fixture: Fixture = twelveLines, opts: { initialHash?
       if (el.tag === "label") activateLabel(el);
       else if (el.tag === "a") {
         const href = el.getAttribute("href") ?? "";
-        const modified = init.ctrlKey || init.metaKey || (init.button ?? 0) !== 0;
-        if (href.startsWith("#") && !modified) {
-          const next = browser.url;
-          next.hash = href.slice(1);
-          if (next.href !== browser.href) browser.push(next.href, "anchor-default");
-        } else if (href && !href.startsWith("#") && !modified) {
-          browser.navigations.push(new URL(href, browser.href).href);
+        // Shift and Alt are modified activations in real browsers: shift-click
+        // opens a new window, ctrl/meta/alt open a new tab/window or download.
+        // None of them perform a same-tab fragment navigation. Model that so a
+        // missing preventDefault is observable as a recorded native navigation
+        // instead of a same-tab push that would mask the bug.
+        const modified = init.ctrlKey || init.metaKey || init.altKey || init.shiftKey || (init.button ?? 0) !== 0;
+        if (!href) {
+          // No navigation target.
+        } else if (!modified) {
+          if (href.startsWith("#")) {
+            const next = browser.url;
+            next.hash = href.slice(1);
+            if (next.href !== browser.href) browser.push(next.href, "anchor-default");
+          } else {
+            browser.navigations.push(new URL(href, browser.href).href);
+          }
+        } else {
+          // Native modified-link behavior: the current tab stays put and the
+          // target opens elsewhere. Record the target so handled shift-clicks
+          // can pin its cancellation and unhandled modified clicks can pin its
+          // retention.
+          if (href.startsWith("#")) {
+            const target = new URL(browser.href);
+            target.hash = href.slice(1);
+            browser.navigations.push(target.href);
+          } else {
+            browser.navigations.push(new URL(href, browser.href).href);
+          }
         }
       } else if ((el.tag === "button" || (el.tag === "input" && el.type === "submit")) && el.type === "submit") {
         const form = el.form;
@@ -415,6 +436,36 @@ export async function mount(fixture: Fixture = twelveLines, opts: { initialHash?
     const key = button.dispatch("keydown", { key: "Enter" });
     if (!key.defaultPrevented) await click(button);
     else await settle();
+  }
+
+  /** Press Enter while focused in a range input, modelling implicit submission. */
+  async function pressEnterIn(input: FakeElement): Promise<void> {
+    input.focus();
+    const key = input.dispatch("keydown", { key: "Enter" });
+    if (!key.defaultPrevented) {
+      // Real browsers implicitly submit the surrounding form when Enter is
+      // pressed in a text/number input. The code viewer has no <form> today,
+      // so this stays a no-op there; pin the contract anyway so a future form
+      // wrapper or a missing preventDefault cannot slip through silently.
+      const form = input.form;
+      if (form) {
+        const submit = form.dispatch("submit");
+        if (!submit.defaultPrevented) browser.formSubmits++;
+      }
+    }
+    await settle();
+  }
+
+  /** Fill both range inputs, then press Enter in the named one (not the button). */
+  async function keyboardSelectViaInput(which: "first" | "last", firstValue: string, lastValue: string): Promise<void> {
+    const { first, last } = rangeControls();
+    for (const [input, value] of [[first, firstValue], [last, lastValue]] as const) {
+      input.focus();
+      input.value = value;
+      input.dispatch("input");
+      input.dispatch("change");
+    }
+    await pressEnterIn(which === "first" ? first : last);
   }
 
   function explanations(beforeRegionText: string): string {
@@ -464,8 +515,13 @@ export async function mount(fixture: Fixture = twelveLines, opts: { initialHash?
     clickLine: async (n: number) => click(lineAnchor(n)),
     shiftClickLine: async (n: number) => click(lineAnchor(n), { shiftKey: true }),
     modifiedClickLine: async (n: number) => click(lineAnchor(n), { ctrlKey: true }),
+    shiftCtrlClickLine: async (n: number) => click(lineAnchor(n), { shiftKey: true, ctrlKey: true }),
+    shiftMetaClickLine: async (n: number) => click(lineAnchor(n), { shiftKey: true, metaKey: true }),
+    shiftAltClickLine: async (n: number) => click(lineAnchor(n), { shiftKey: true, altKey: true }),
     rangeControls,
     keyboardSelect,
+    pressEnterIn,
+    keyboardSelectViaInput,
     explanations,
     setHashManual: async (hash: string) => {
       browser.location.hash = hash;
