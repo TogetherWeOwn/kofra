@@ -251,3 +251,63 @@ describe("dashboard ZIP: actionable server refusals", () => {
     await expectRefusal(view, /502|failed|error|unavailable|download/i);
   });
 });
+
+describe("dashboard ZIP: guards that must not regress silently", () => {
+  // Server-generated archives for an empty version are a 22-byte EOCD record.
+  const emptyArchive = () => new Uint8Array([80, 75, 5, 6, ...Array<number>(18).fill(0)]);
+
+  it("keeps a failure visible after the selection moves away mid-download", async () => {
+    const gate = deferred<void>();
+    const stream = countedStream(4, 16, { gate: gate.promise, failAt: 0 });
+    const view = await mount({ response: () => streamedResponse(stream.body) });
+    try {
+      await activate(view);
+      await until(() => view.exports().length === 1, "export started");
+      const liveRow = view.doc.querySelectorAll("tbody tr").find(row => row.querySelectorAll("td").some(cell => /^v2\b/.test(cell.textContent)));
+      const liveFiles = liveRow?.querySelectorAll("button").find(button => button.textContent === "Files");
+      expect(liveFiles, "fixture prerequisite: live history row has a Files action").toBeDefined();
+      liveFiles!.click();
+      await until(() => view.doc.querySelector("#files")!.textContent.includes("Files in v2"), "selection moved to v2");
+    } finally { gate.resolve(); }
+    await until(() => /interrupt/i.test(visibleErrors(view)), "download failure stays visible after the selection moved");
+    expect(visibleErrors(view), "the detached failure names the version it belongs to").toContain(OLD);
+    expect(view.downloads, "no partial/error attachment").toEqual([]);
+    expect(view.created).toEqual([]);
+    assertReadOnly(view);
+  });
+
+  it.each<[string, string | null]>([
+    ["missing header", null],
+    ["bare attachment", "attachment"],
+    ["inline disposition", `inline; filename="${SLUG}-v1.zip"`],
+    ["path traversal", `attachment; filename="../${SLUG}-v1.zip"`],
+    ["non-ZIP extension", `attachment; filename="${SLUG}-v1.html"`],
+    ["unquoted filename", `attachment; filename=${SLUG}-v1.zip`],
+    ["trailing filename* override", `attachment; filename="${SLUG}-v1.zip"; filename*=UTF-8''run.exe`],
+  ])("refuses a success response with an invalid Content-Disposition (%s)", async (_label, disposition) => {
+    const view = await mount({ response: () => {
+      const response = zipResponse(emptyArchive());
+      if (disposition === null) response.headers.delete("Content-Disposition");
+      else response.headers.set("Content-Disposition", disposition);
+      return response;
+    } });
+    await activate(view);
+    await expectRefusal(view, /filename/i);
+  });
+
+  it.each<Record<string, string>>([{}, { "Content-Length": "0" }])("refuses a zero-byte 200 ZIP response %j", async headers => {
+    const view = await mount({ response: () => zipResponse(new Uint8Array(0), headers) });
+    await activate(view);
+    await expectRefusal(view, /empty/i);
+  });
+
+  it("offers Download ZIP for an empty-manifest version and downloads its archive", async () => {
+    const archive = emptyArchive();
+    const view = await mount({ files: [], row: { fileCount: 0, totalBytes: 0 }, response: () => zipResponse(archive) });
+    expect(view.doc.querySelector("#files")!.textContent).toContain("No files in this version");
+    await activate(view);
+    await completed(view);
+    expect(view.exports().map(request => request.url.pathname)).toEqual([exportPath()]);
+    expect(new Uint8Array(await view.downloads[0]!.blob!.arrayBuffer())).toEqual(archive);
+  });
+});

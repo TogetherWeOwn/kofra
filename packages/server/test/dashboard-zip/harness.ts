@@ -30,6 +30,8 @@ export interface Wire { url: URL; method: string; headers: Headers; signal?: Abo
 export interface Options {
   row?: Partial<Version>;
   requested?: string;
+  /** Manifest paths served for the selected version; `[]` exercises the empty-manifest view. */
+  files?: string[];
   response?: (request: Wire) => Response | Promise<Response>;
 }
 
@@ -145,7 +147,8 @@ export async function mount(options: Options = {}) {
     }
     if (path === `${base}/files`) {
       const selected = versions.find(v => v.id === wire.url.searchParams.get("version")) ?? versions[0]!;
-      return json({ version: selected, total: 2, nextCursor: null, files: ["alpha.txt", "beta.txt"].map(path => ({
+      const paths = options.files ?? ["alpha.txt", "beta.txt"];
+      return json({ version: selected, total: paths.length, nextCursor: null, files: paths.map(path => ({
         path, size: 8, sha256: "a".repeat(64), contentType: "text/plain", kind: "text", extension: "txt",
         url: `https://files.test/${SLUG}/${path}`, rawUrl: `${base}/files/${path}`,
       })) });
@@ -169,9 +172,10 @@ export async function mount(options: Options = {}) {
   sandbox.window = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(CLIENT_SCRIPT, sandbox, { filename: "served-dashboard.js" });
-  await until(() => doc.querySelector("#files table") !== null || doc.querySelector("#files .dw-error") !== null, "real dashboard loaded fixture files");
+  await until(() => ["#files table", "#files .dw-error", "#files .dw-empty"].some(selector => doc.querySelector(selector) !== null), "real dashboard loaded fixture files");
   if (row.status !== "pending") {
-    expect(doc.querySelector("#files")!.textContent, "fixture prerequisite: actual script rendered selected version").toContain("alpha.txt");
+    expect(doc.querySelector("#files")!.textContent, "fixture prerequisite: actual script rendered selected version")
+      .toContain(options.files?.length === 0 ? "No files in this version" : "alpha.txt");
   }
   const initialCalls = calls.length;
   const view = {
