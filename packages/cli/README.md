@@ -146,7 +146,7 @@ into your account, stops expiring, and the claim token stops working. `--json` p
 `{ "ok": true, "claimed": true, "alreadyOwned": false, "site": {...}, "url": "..." }`. An unknown
 site and a wrong token both fail with the server's `site_not_found` (exit 4). If you already own
 the site, a server read reports it as unchanged (`alreadyOwned: true`, exit 0) without using the token.
-Prefer a shell history that does not record secrets: the token is an argument.
+The token is a command-line argument, so it can land in shell history; clear it afterwards if that matters (a claimed site's token stops working anyway).
 
 ## Renaming a site
 
