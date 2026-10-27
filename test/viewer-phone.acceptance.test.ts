@@ -5,7 +5,10 @@
  * companion; these tests pin serving, safety, validators and byte identity.
  */
 import { beforeAll, describe, expect, it } from "vitest";
-import { sha256Hex } from "@dropway/core";
+import { sha256Hex, type LiveSite } from "@dropway/core";
+import { VIEWERS, type ViewerContext } from "@dropway/server";
+import { viewerBar } from "../packages/server/src/viewers/chrome";
+import { viewerPhone } from "../packages/server/src/viewers/phone";
 import { form, freshInstance, jsonBody, ORIGIN, type Instance } from "./helpers";
 
 const NAV = { Accept: "text/html", "Sec-Fetch-Dest": "document" };
@@ -134,16 +137,20 @@ describe("viewer Phone: served public-file contract", () => {
     }
   });
 
+  // Old versions are the validators the pre-Phone build issued, so a cached
+  // page carrying one must refresh (200) instead of revalidating (304)
+  // against markup that now includes the Phone disclosure.
   it.each([
-    ["notes.md", "markdown", 2], ["data.json", "json", 1],
-    ["table.csv", "csv", 2], ["plain.txt", "code", 1], ["page.html", "html-frame", 1],
-  ] as const)("invalidates the pre-Phone %s validator, then correctly revalidates refreshed markup", async (path, id, oldVersion) => {
+    ["notes.md", "markdown", 3, 4], ["data.json", "json", 2, 3],
+    ["table.csv", "csv", 3, 4], ["plain.txt", "code", 3, 4], ["page.html", "html-frame", 1, 2],
+  ] as const)("invalidates the pre-Phone %s validator, then correctly revalidates refreshed markup", async (path, id, oldVersion, newVersion) => {
     const hash = await sha256Hex(new TextEncoder().encode(files[path]));
     const legacy = `W/"${id}@${oldVersion}-${hash}"`;
     const refreshed = await dw.call(`${root}${path}?view=1`, { headers: { ...NAV, "If-None-Match": legacy } });
     expect(refreshed.status, "old cached viewer markup must refresh to include Phone").toBe(200);
     const etag = refreshed.headers.get("etag")!;
     expect(etag).not.toBe(legacy);
+    expect(etag, "refreshed markup must carry the exact post-Phone validator").toMatch(new RegExp(`^W/"${id}@${newVersion}-${hash}`));
     await expectPhone(await refreshed.text(), `${ORIGIN}${root}${path}`);
     const conditional = await dw.call(`${root}${path}?view=1`, { headers: { ...NAV, "If-None-Match": etag } });
     expect(conditional.status).toBe(304);
@@ -198,6 +205,83 @@ describe("viewer Phone: site-origin topology", () => {
     const html = await res.text();
     expect(qrSvg(html)).toBeUndefined();
     expect(html).not.toMatch(/<(?:summary|label)\b[^>]*>[^<]*Phone/i);
+  });
+});
+
+describe("viewer Phone: validator versions", () => {
+  // Every viewer's rendered page gained the Phone disclosure, so every
+  // viewer's ETag version must sit above the validator the pre-Phone build
+  // issued; pinning the exact new versions means reverting any single bump
+  // (which would strand cached pre-Phone pages on a 304) fails here.
+  it("pins every built-in viewer at its exact post-Phone version", () => {
+    const expected: Record<string, number> = {
+      source: 4, "html-frame": 2, markdown: 4, notebook: 3, json: 3, csv: 4,
+      svg: 3, image: 3, pdf: 2, video: 2, audio: 2, font: 2, archive: 2,
+      code: 4, binary: 4,
+    };
+    expect(VIEWERS.map((v) => v.id).sort()).toEqual(Object.keys(expected).sort());
+    for (const viewer of VIEWERS) expect(viewer.version ?? 1, viewer.id).toBe(expected[viewer.id]);
+  });
+});
+
+describe("viewer Phone: preview guard (direct)", () => {
+  // The served preview-shaped address above never renders a viewer, so it
+  // cannot catch a deleted `--v` guard. Exercise viewerPhone/viewerBar
+  // directly with preview-shaped inputs instead.
+  const live = (slug: string): LiveSite => ({
+    v: 2, siteId: "site_1", slug, tenantId: "t", versionId: "v", spa: false,
+    renderMarkdown: true, crossOriginIsolation: false, passwordHash: null,
+    expiresAt: null, files: {},
+  });
+  // Only the fields viewerPhone/viewerBar read carry meaning; dw and the
+  // file readers are inert stubs that those two functions never call.
+  function phoneContext(siteBase: string, rawUrl: string): ViewerContext {
+    const url = new URL(rawUrl);
+    const fileUrl = `${siteBase}notes.md`;
+    return {
+      dw: null as unknown as ViewerContext["dw"],
+      request: new Request(url),
+      url,
+      live: live(siteBase.replace(/^\/s\//, "").replace(/\/$/, "") || "foo"),
+      file: { path: "notes.md", sha256: "0".repeat(64), size: 12, contentType: "text/markdown", kind: "markdown" },
+      mode: "view",
+      embed: false,
+      fileUrl,
+      viewUrl: `${fileUrl}?view=1`,
+      sourceUrl: `${fileUrl}?view=source`,
+      rawUrl: `${fileUrl}?raw=1`,
+      downloadUrl: `${fileUrl}?download=1`,
+      siteBase,
+      appViewerUrl: "https://app.example.test/view/notes.md",
+      readText: async () => "",
+      readBytes: async () => new Uint8Array(),
+    };
+  }
+
+  it("renders no Phone for a preview-shaped site base", () => {
+    const vc = phoneContext("/s/foo--v1/", "https://app.example.test/s/foo--v1/notes.md?view=1");
+    expect(viewerPhone(vc)).toBe("");
+    const bar = viewerBar(vc, []);
+    expect(bar).toContain("Download");
+    expect(bar).not.toContain("dw-phone");
+    expect(bar).not.toMatch(/<(?:summary|label)\b[^>]*>[^<]*Phone/);
+  });
+
+  it("renders no Phone for a preview-shaped hostname", () => {
+    const vc = phoneContext("/", "https://foo--v1.files.example.test/notes.md?view=1");
+    expect(viewerPhone(vc)).toBe("");
+    const bar = viewerBar(vc, []);
+    expect(bar).toContain("Download");
+    expect(bar).not.toContain("dw-phone");
+    expect(bar).not.toMatch(/<(?:summary|label)\b[^>]*>[^<]*Phone/);
+  });
+
+  it("renders Phone for a non-preview public address (positive control)", () => {
+    const vc = phoneContext("/s/foo/", "https://app.example.test/s/foo/notes.md?view=1");
+    const phone = viewerPhone(vc);
+    expect(phone).toContain("<summary>Phone</summary>");
+    expect(phone).toContain('href="https://app.example.test/s/foo/notes.md"');
+    expect(viewerBar(vc, [])).toContain("dw-phone");
   });
 });
 

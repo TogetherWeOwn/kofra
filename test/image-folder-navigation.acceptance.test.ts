@@ -393,11 +393,11 @@ describe("image/SVG folder navigation (path mode)", () => {
   it("bumps the image and SVG viewer versions in the ETag, since their markup changed", async () => {
     const imageEtag = (await get("five/03-cat.png")).headers.get("etag")!;
     const imageVersion = Number(imageEtag.match(/^W\/"image@(\d+)-/)?.[1]);
-    expect(imageVersion, imageEtag).toBeGreaterThanOrEqual(2);
+    expect(imageVersion, imageEtag).toBe(3);
 
     const svgEtag = (await get("two/b.svg")).headers.get("etag")!;
     const svgVersion = Number(svgEtag.match(/^W\/"svg@(\d+)-/)?.[1]);
-    expect(svgVersion, svgEtag).toBeGreaterThanOrEqual(2);
+    expect(svgVersion, svgEtag).toBe(3);
   });
 });
 
