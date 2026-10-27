@@ -213,6 +213,7 @@ the local filter.
 | ORG-05 | Opt-in public gallery of the instance's public sites with a JSON feed | P2 | R-50 |
 | ORG-06 | Dashboard version files: sort the loaded manifest by path, kind or exact byte size, ascending/descending, composed with the path filter; client-side only, default Path ascending | P1 | Done |
 | ORG-07 | Dashboard version jump: labelled reference input (live, vN, N or immutable id) with explicit Open submit; one bounded direct lookup per submit, never on typing; history lists the newest 100 only; the management URL records the displayed manifest by immutable id (explicit selections push, traversal and initial load replace; refused traversal restores the displayed id without adding an entry); deleting the inspected version clears its link before reloading live; every file download is pinned to the inspected manifest id | P1 | Done |
+| ORG-08 | Dashboard version files: the path filter announces matching-vs-loaded counts and the matching byte total for the selected version only, distinguishes a genuinely empty manifest from zero matches (query quoted as inert text), and offers a Clear filter recovery that resets only the query and returns focus to the filter; client-side only over the loaded manifest, literal case-insensitive matching | P1 | Done |
 
 ### 4.9 Agent surfaces (AX)
 
@@ -1543,6 +1544,13 @@ CLI hashes and uploads from disk. Credentials as for the CLI.
 10. Light and dark themes follow `prefers-color-scheme`; tables, headings and controls are accessible by keyboard.
 
 ### 10.2 Matrix
+
+Shipped report printing: Markdown, code/text/Source, JSON, CSV and notebook
+viewers use print-only black-on-white styles, path context, wrapped content and
+page-aware tables without viewer controls. Existing caps, notices, selected
+panes and closed disclosures remain; HTML applications own their print styles.
+See [Printing reports](VIEWERS.md#printing-reports) for boundaries and browser
+URL-header settings. This describes repository behavior, not deployment status.
 
 | Kind (`detectFileKind`) | Typical extensions | Rendered view | Source / raw | Viewer cap | Scripts | Pri | Status |
 |---|---|---|---|---|---|---|---|

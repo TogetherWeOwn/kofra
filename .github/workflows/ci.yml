@@ -14,9 +14,7 @@ jobs:
   # unit and end-to-end tests against a local Worker.
   check:
     runs-on: ubuntu-latest
-    # Uncached Playwright browser/OS setup plus four serial suites can exceed 15
-    # minutes on a cold runner; 30 keeps a bound on hung jobs without killing
-    # slow-but-passing runs before the browser suite starts.
+    # Allow slow browser dependency downloads plus the full test and validation suite.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
