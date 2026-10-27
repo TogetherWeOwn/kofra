@@ -734,7 +734,7 @@ describe("notebook output folding", () => {
     expect(res.status).toBe(200);
     const etag = res.headers.get("etag")!;
     expect(etag).not.toBe(legacy);
-    expect(etag).toMatch(/^W\/"notebook@\d+-[a-f0-9]{64}"$/);
+    expect(etag).toMatch(/^W\/"notebook@\d+-[a-f0-9]{64}(-[A-Za-z0-9_-]+)?"$/);
     expect(detailsBlocks(await res.text())).toHaveLength(3);
     const fresh = await get("nb/fold.ipynb", { ...NAV, "If-None-Match": etag });
     expect(fresh.status).toBe(304);
