@@ -1107,7 +1107,11 @@ export function dropwayClient() {
         var dep = await api("/sites/" + encodeURIComponent(slug) + "/deploys", { method: "POST", body: { files: manifest, message: msg }, key: auth });
         if (dep.unchanged) {
           setProgress(1, "Nothing changed.");
-          showResult({ slug: slug, unchanged: true, version: dep.deploy });
+          // Unchanged needs a live version, so it is reachable only when updating
+          // an existing site (the new-site leg above just created an empty one).
+          // Recover that site's authoritative URL with an authorized read.
+          if (updating) await showUnchangedResult(slug, dep.deploy, auth);
+          else showResult({ slug: slug, unchanged: true, version: dep.deploy });
           return;
         }
         var uploads = dep.uploads || [];
@@ -1145,10 +1149,24 @@ export function dropwayClient() {
       }
     }
 
-    function showResult(r) {
+    function showResult(r, opts) {
       setItems([]);
       clear(result);
       var url = r.url || null;
+      var linkRetry = null;
+      if (r.linkUnavailable) {
+        linkRetry = h("button", {
+          type: "button",
+          class: "dw-btn small",
+          text: "Retry getting the link",
+          onclick: function () {
+            if (linkRetry.disabled || !r.onLinkRetry) return;
+            linkRetry.disabled = true;
+            linkRetry.textContent = "Retrying…";
+            r.onLinkRetry();
+          },
+        });
+      }
       add(
         result,
         h(
@@ -1165,7 +1183,17 @@ export function dropwayClient() {
             h("a", { class: "dw-btn", href: "/v/" + encodeURIComponent(r.slug) + "/", text: "Browse files" }),
             key ? h("a", { class: "dw-btn", href: "/dashboard/sites/" + encodeURIComponent(r.slug), text: "Manage" }) : null,
           ),
-          receiptBlock(r),
+          r.linkUnavailable
+            ? h(
+                "div",
+                { class: "dw-small", style: "margin-top:.6rem" },
+                h("p", { text: "The public link could not be retrieved. The publish itself succeeded — nothing changed and nothing was uploaded. Retrying only reads the site link again; it does not publish again." }),
+                h("div", { class: "dw-row", style: "margin-top:.4rem" }, linkRetry),
+              )
+            : null,
+          // No receipt without a usable link: it would record a public
+          // identity with nowhere to open it.
+          r.linkUnavailable ? null : receiptBlock(r),
           r.warnings && r.warnings.length
             ? h("ul", { class: "dw-small" }, r.warnings.map(function (w) {
                 return h("li", { text: w.message });
@@ -1181,10 +1209,66 @@ export function dropwayClient() {
             : null,
         ),
       );
-      if (key) {
+      if (opts && opts.restoreFocus) {
+        var nextAction = linkRetry || $("a.dw-btn", result);
+        if (nextAction) nextAction.focus();
+      }
+      if (key && !(opts && opts.keepDestination)) {
         modeUpd.checked = true;
         slugInput.value = "";
         loadSites(r.slug);
+      }
+    }
+
+    /**
+     * Show an unchanged update with its live link. The unchanged deploy itself
+     * returns the version identity but no URL, so read the site (get_site) with
+     * the publish's own credentials and use only the authoritative URL it
+     * returns — never its live-version pointer, which may have moved on, and
+     * never a URL rebuilt from the slug. A failed or unusable read keeps the
+     * successful "nothing changed" result and offers a retry of the read only.
+     */
+    async function showUnchangedResult(slug, version, auth, restoreFocus) {
+      // A retry runs after run() has finished: hold the same in-flight locks
+      // while it reads, so a new selection cannot race its result rendering.
+      var holdBusy = !state.busy;
+      if (holdBusy) {
+        state.busy = true;
+        publishBtn.disabled = true;
+        setDestinationDisabled(true);
+        setNavDisabled(true);
+      }
+      try {
+        var url = null;
+        try {
+          var res = await api("/sites/" + encodeURIComponent(slug), { key: auth });
+          url = publicReceiptUrl(res && res.site && res.site.url);
+        } catch (e) {
+          url = null;
+        }
+        if (url) {
+          showResult({ slug: slug, unchanged: true, version: version, url: url }, { keepDestination: true, restoreFocus: restoreFocus });
+          return;
+        }
+        showResult(
+          {
+            slug: slug,
+            unchanged: true,
+            version: version,
+            linkUnavailable: true,
+            onLinkRetry: function () {
+              return showUnchangedResult(slug, version, auth, true);
+            },
+          },
+          { keepDestination: true, restoreFocus: restoreFocus },
+        );
+      } finally {
+        if (holdBusy) {
+          state.busy = false;
+          setDestinationDisabled(false);
+          setNavDisabled(false);
+          publishBtn.disabled = !state.items.length || !!state.errors.length;
+        }
       }
     }
 
@@ -2076,7 +2160,7 @@ export function dropwayClient() {
         clear(filesSection);
         add(
           filesSection,
-          h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", text: "0 files" }), filter)),
+          h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", "aria-live": "polite", "aria-atomic": "true", text: plural(rows.length, "loaded file") + " in this selected version · " + exactBytes(0) }), filter)),
           h("div", { class: "dw-empty" }, h("h3", { text: "No files in this version" }), h("p", { class: "dw-small", text: "This version has an empty manifest." })),
         );
         commitSelection(mv, opts, my);
@@ -2148,11 +2232,50 @@ export function dropwayClient() {
         if (sortField === "path") return 0;
         return cmpText(a.path, b.path);
       }
+      // Filter feedback is derived only from the already-loaded rows for this
+      // selected version: updating it never fetches, writes storage or moves
+      // focus (the filter keeps focus while typing). One persistent status
+      // element is updated in place so live announcements are not lost.
+      // aria-live (not role="status") so the checksum copy announcements keep
+      // the section's single status region and existing contracts hold.
+      var filterStatus = h("span", { class: "dw-small dw-muted", "aria-live": "polite", "aria-atomic": "true", text: "" });
+      var noMatch = h("div", { class: "dw-empty", hidden: true, text: "" });
+      var clearFilter = h("button", {
+        type: "button",
+        class: "dw-btn small",
+        text: "Clear filter",
+        hidden: true,
+        onclick: function () {
+          // Reset only the query: sort, checksums, downloads and the
+          // selected immutable version are untouched. Focus returns to the
+          // filter so keyboard users land where they were.
+          filter.value = "";
+          applyFilter();
+          filter.focus();
+        },
+      });
       function applyFilter() {
-        var q = filter.value.trim().toLowerCase();
+        var raw = filter.value;
+        var q = raw.trim().toLowerCase();
+        var matching = 0;
+        var matchingBytes = 0;
         items.forEach(function (it) {
-          it.row.hidden = q && it.row.getAttribute("data-search").indexOf(q) < 0;
+          var show = !q || it.row.getAttribute("data-search").indexOf(q) >= 0;
+          it.row.hidden = !show;
+          if (show) {
+            matching++;
+            matchingBytes += it.file.size || 0;
+          }
         });
+        filterStatus.textContent = q
+          ? matching + " of " + plural(items.length, "loaded file") + " in this selected version match · " + exactBytes(matchingBytes) + " matching"
+          : plural(items.length, "loaded file") + " in this selected version · " + exactBytes(matchingBytes);
+        clearFilter.hidden = !raw;
+        // The query is quoted back as inert text (textContent), never markup;
+        // a nonempty manifest with zero matches is not an empty version.
+        var noMatches = !!q && matching === 0;
+        noMatch.hidden = !noMatches;
+        noMatch.textContent = noMatches ? 'No matching files for "' + raw + '" in the loaded files for this selected version. Clear the filter to show every loaded file.' : "";
       }
       function applySort() {
         items
@@ -2230,9 +2353,10 @@ export function dropwayClient() {
       clear(filesSection);
       add(
         filesSection,
-        h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", text: plural(rows.length, "file") }), sortBar, filter)),
+        h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, filterStatus, sortBar, filter, clearFilter)),
         h("p", { class: "dw-pad dw-small dw-muted", style: "margin:0", text: "SHA-256 manifest checksums for the selected version (v" + mv.number + ", " + mv.id + "). A checksum is not proof of authenticity, provenance, safe content, or independent verification, and does not show the current live download matches — compare it against a trusted source you already have." }),
         h("div", { class: "dw-scroll" }, h("table", { class: "dw-table" }, h("thead", {}, h("tr", {}, sortTh("path", "Path"), sortTh("kind", "Kind", "dw-hide-sm"), sortTh("size", "Size", "num"), h("th", { scope: "col", text: "SHA-256" }), h("th", { scope: "col" }))), tb)),
+        noMatch,
         copyStatus,
         mv.live ? null : h("p", { class: "dw-pad dw-small dw-muted", style: "margin:0", text: "Older versions are not served publicly. Restore this version to view it on the site, or download single files." }),
       );

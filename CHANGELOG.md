@@ -12,6 +12,15 @@
   dashboard share the existing vendored encoder; dashboard QR pixels are unchanged.
   Built-in viewer versions advance to refresh cached validators.
 
+### Dashboard
+
+- The selected-version file table now announces matching-vs-loaded file counts
+  and the matching byte total as you filter by path. A version with files but
+  no matches shows a distinct no-match message with a Clear filter action
+  (instead of a blank table), while a genuinely empty manifest stays labelled
+  as empty. Clearing resets only the query, keeps the selected version and
+  sort, and returns focus to the filter.
+
 ### Path-mode hardening and publish warnings (R-12)
 
 - Publish and finalize return warnings with `fix` text (and `path`/`line` where known),
