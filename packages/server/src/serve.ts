@@ -26,6 +26,7 @@ import { MAX_CSS_REWRITE_BYTES, rewriteCss, rewriteHtml, type PathRewrite } from
 import { PATH_SHIM_VERSION, pathShimScript } from "./path-shim";
 import { injectReportLink, REPORT_LINK_VERSION } from "./report-link";
 import { serveTransfer } from "./transfers";
+import { attachmentDisposition } from "./content-disposition";
 
 /**
  * How a site is being served.
@@ -375,7 +376,7 @@ export async function serveSiteContent(
   } else if (resolved.kind === "not_found") {
     response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", `There is no file at <code>/${escapeHtml(filePath)}</code> on this site.`);
   } else if (resolved.kind === "listing") {
-    response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`);
+    response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`, url.searchParams.get("sort"));
     securityHeaders(response.headers, live, mode);
   } else {
     response = await serveFile(req, dw, url, live, mode, resolved.path, resolved.status, viewers);
@@ -503,7 +504,7 @@ async function serveFile(
   } else {
     h.set("Content-Type", contentType);
   }
-  if (download) h.set("Content-Disposition", `attachment; filename="${(path.split("/").pop() ?? "file").replace(/["\\\r\n]/g, "_")}"`);
+  if (download) h.set("Content-Disposition", attachmentDisposition(path.split("/").pop() ?? "file"));
   securityHeaders(h, live, mode);
 
   if (etagMatches(req, etag)) return new Response(null, { status: 304, headers: h });

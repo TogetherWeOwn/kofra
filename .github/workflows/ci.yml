@@ -14,7 +14,7 @@ jobs:
   # unit and end-to-end tests against a local Worker.
   check:
     runs-on: ubuntu-latest
-    # Cold Chromium/system-package installs must leave time for the full suite.
+    # Allow slow browser dependency downloads plus the full test and validation suite.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
