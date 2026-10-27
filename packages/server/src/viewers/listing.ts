@@ -79,7 +79,7 @@ export function renderListing(live: LiveSite, dir: string, mode: ServeMode, orig
     css: LISTING_CSS,
     head: unfurlHead({
       title,
-      description: `Folder listing · ${counts(true)}`,
+      description: `Folder listing · ${summary}`,
       url: origin + base,
     }),
     body: `<main class="dw-ls"><header><h1>${crumb} /</h1><span class="sum">${summary}${appViewerUrl ? `<a href="${escapeHtml(appViewerUrl)}" rel="nofollow">Browse files</a>` : ""}</span></header><ul>${items.join("")}</ul>${gallery}</main>`,
