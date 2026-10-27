@@ -1,6 +1,7 @@
 import { encodePath, KIND_LABELS } from "@dropway/core";
 import { escapeHtml, formatBytes, htmlPage } from "../html";
 import type { ViewerContext } from "./index";
+import { compareNames } from "./listing";
 import { REPORT_PRINT_CSS } from "./print";
 
 /**
@@ -86,7 +87,7 @@ function siblingLinks(vc: ViewerContext): string {
     .filter((path) => path !== ".dropway" && !path.startsWith(".dropway/"))
     .filter((path) => path.startsWith(dir) && !path.slice(dir.length).includes("/"))
     .map((path) => path.slice(dir.length))
-    .sort((a, b) => a.localeCompare(b));
+    .sort(compareNames);
   const i = names.indexOf(vc.file.path.slice(dir.length));
   if (i < 0 || names.length < 2) return "";
   const link = (name: string | undefined, rel: string, label: string) => name === undefined ? "" :
