@@ -391,13 +391,17 @@ describe("image/SVG folder navigation (path mode)", () => {
   });
 
   it("bumps the image and SVG viewer versions in the ETag, since their markup changed", async () => {
+    // Folder navigation bumped both viewers past the pre-navigation version 2.
+    // Assert "past 2" rather than an exact version so later markup bumps
+    // (Phone disclosure, focus ring, ...) do not stale this pin; the exact
+    // current versions are pinned by the viewer-phone acceptance test.
     const imageEtag = (await get("five/03-cat.png")).headers.get("etag")!;
     const imageVersion = Number(imageEtag.match(/^W\/"image@(\d+)-/)?.[1]);
-    expect(imageVersion, imageEtag).toBe(3);
+    expect(imageVersion, imageEtag).toBeGreaterThan(2);
 
     const svgEtag = (await get("two/b.svg")).headers.get("etag")!;
     const svgVersion = Number(svgEtag.match(/^W\/"svg@(\d+)-/)?.[1]);
-    expect(svgVersion, svgEtag).toBe(3);
+    expect(svgVersion, svgEtag).toBeGreaterThan(2);
   });
 });
 
