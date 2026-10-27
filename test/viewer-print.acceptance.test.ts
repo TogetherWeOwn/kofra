@@ -11,6 +11,8 @@ import { printCapFiles, printFiles } from "./viewer-print.fixtures";
 const NAV = { Accept: "text/html", "Sec-Fetch-Dest": "document" };
 // Observed pre-print validators at the baseline; not imported from production.
 const previousVersions: Record<string, number> = { markdown: 2, code: 1, json: 1, csv: 2, notebook: 1, source: 1 };
+// Unknown kind, but its bytes are UTF-8 text: served by the binary viewer's as-text branch.
+const binaryTextContent = "# yarn lockfile v1\n\nleft-pad@1.3.0:\n  version \"1.3.0\"\n";
 let dw: Instance;
 let slug: string;
 
@@ -19,6 +21,7 @@ beforeAll(async () => {
   const published = await dw.json("/api/v1/publish", {
     method: "POST", key: dw.ownerKey,
     body: form({ ...Object.fromEntries(Object.entries(printFiles).map(([path, file]) => [path, file.content])), ...printCapFiles,
+      "broken.json": '{"name": "print",', "yarn.lock": binaryTextContent,
       "own.html": '<!doctype html><style>@media print{body{color:purple}}</style><p>Application-owned printing</p>' }),
   });
   expect(published.status).toBe(201);
@@ -66,6 +69,34 @@ describe("print stylesheet delivery", () => {
       expect(await fresh.text()).toBe("");
     },
   );
+
+  it("binary text fallback is validator binary@3 and revalidates only the new representation", async () => {
+    const hash = await sha256Hex(new TextEncoder().encode(binaryTextContent));
+    const response = await get("yarn.lock?view=1", { ...NAV, "If-None-Match": `W/"binary@2-${hash}"` });
+    expect(response.headers.get("x-kofra-viewer")).toBe("binary");
+    expect(response.status, "a pre-rotation binary cached response must not survive as 304").toBe(200);
+    expect(response.headers.get("etag")).toBe(`W/"binary@3-${hash}"`);
+    const html = await response.text();
+    expect(html).toContain("it looks like text");
+    expect(printStyles(html).length, "the binary as-text branch renders through the code page, so it must receive print CSS").toBeGreaterThan(0);
+    const fresh = await get("yarn.lock?view=1", { ...NAV, "If-None-Match": `W/"binary@3-${hash}"` });
+    expect(fresh.status).toBe(304);
+    expect(await fresh.text()).toBe("");
+  });
+
+  it("invalid JSON error page still selects inline print treatment", async () => {
+    const response = await get("broken.json");
+    expect(response.headers.get("x-kofra-viewer")).toBe("json");
+    const html = await response.text();
+    expect(html).toContain("This file is not valid JSON");
+    expect(printStyles(html).length, "the invalid-JSON branch must receive print CSS without a new stylesheet request").toBeGreaterThan(0);
+  });
+
+  it("print CSS hides the anonymous report link", async () => {
+    const html = await (await get("report.md")).text();
+    const css = printStyles(html).join("\n");
+    expect(css).toMatch(/body>a\[href\$="\/__dropway\/report"\][^}]*display:none!important/);
+  });
 });
 
 describe("print must not change file/security contracts", () => {
@@ -76,7 +107,7 @@ describe("print must not change file/security contracts", () => {
     const sandbox = "sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation allow-orientation-lock";
     const html = await response.text();
     if (file.viewer === "code") {
-      expect(csp).toBe(`${policy}script-src 'sha256-Twk9Jhol6HvWH3+I645ifLQh+iA9edVEM41FaSic/F8='; ${sandbox}`);
+      expect(csp).toBe(`${policy}script-src 'sha256-8kBw0RLH7SihuFxmhc5HdeB3FJK+v2IMXvuARwK5LZ0='; ${sandbox}`);
       expect([...html.matchAll(/<script\b/gi)]).toHaveLength(1);
     } else {
       // default-src 'none' supplies script-src/connect-src when omitted.
