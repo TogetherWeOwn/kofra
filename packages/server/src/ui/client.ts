@@ -4603,7 +4603,8 @@ export function dropwayClient() {
     // The manifest load rebuilds the toolbar; a mode tab focused while it was in flight must keep focus.
     var heldTab = tools.contains(d.activeElement) && d.activeElement.getAttribute("role") === "tab" ? d.activeElement.id : "";
     go(current, currentMode || mode, false);
-    var heldEl = heldTab && d.getElementById(heldTab);
+    // If the manifest removed the held tab (Source on an image/binary), land on the tab that replaced it.
+    var heldEl = heldTab && (d.getElementById(heldTab) || d.getElementById("dw-view-tab-" + currentMode));
     if (heldEl) heldEl.focus();
     // Push entries carry {p, mode}; record the same for the loaded entry so
     // Back restores the prior file and view mode instead of losing the mode.
