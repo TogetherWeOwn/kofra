@@ -170,7 +170,9 @@ export async function mount(options: Options = {}) {
   vm.createContext(sandbox);
   vm.runInContext(CLIENT_SCRIPT, sandbox, { filename: "served-dashboard.js" });
   await until(() => doc.querySelector("#files table") !== null || doc.querySelector("#files .dw-error") !== null, "real dashboard loaded fixture files");
-  expect(doc.querySelector("#files")!.textContent, "fixture prerequisite: actual script rendered selected version").toContain("alpha.txt");
+  if (row.status !== "pending") {
+    expect(doc.querySelector("#files")!.textContent, "fixture prerequisite: actual script rendered selected version").toContain("alpha.txt");
+  }
   const initialCalls = calls.length;
   const view = {
     doc, row, calls, initialCalls, unexpected, created, revoked, downloads, session, local,

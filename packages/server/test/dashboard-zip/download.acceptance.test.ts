@@ -12,7 +12,7 @@
 import { describe, expect, it } from "vitest";
 import {
   activate, assertReadOnly, countedStream, deferred, expectRefusal, exportPath,
-  KEY, LIVE, MIB, mount, OLD, SLUG, streamedResponse, tick, until, zipResponse,
+  KEY, LIVE, MIB, mount, OLD, SLUG, streamedResponse, tick, until, visibleErrors, zipResponse,
 } from "./harness.ts";
 
 async function completed(view: Awaited<ReturnType<typeof mount>>) {
@@ -102,16 +102,17 @@ describe("dashboard ZIP: conservative metadata preflight", () => {
   });
 
   it("does not download an unfinalized pending version or silently fall back to live", async () => {
-    const view = await mount({ row: { status: "pending", finalizedAt: null }, response: () => Response.json({ error: {
-      code: "missing_blobs", message: "Pending version cannot be exported.", hint: "Upload missing files and finalize before retrying.",
-    } }, { status: 409 }) });
-    const candidates = view.doc.querySelector("#files")!.querySelectorAll("button,a").filter(element => /download zip/i.test(element.textContent));
+    const view = await mount({ row: { status: "pending", finalizedAt: null } });
+    const section = view.doc.querySelector("#files")!;
+    const candidates = section.querySelectorAll("button,a").filter(element => /download zip/i.test(element.textContent));
     candidates[0]?.click();
     await tick();
-    if (view.exports().length) await expectRefusal(view, /pending|finaliz|missing/i);
-    else expect(view.doc.querySelector("#dw-site")!.textContent).toMatch(/pending|finaliz/i);
-    expect(view.exports().every(request => request.url.pathname === exportPath())).toBe(true);
+    expect(visibleErrors(view)).toMatch(/not ready|pending/i);
+    expect(visibleErrors(view)).toMatch(/upload|finaliz/i);
+    expect(section.querySelector("table"), "pending version does not render a ready manifest").toBeNull();
+    expect(view.exports(), "pending preflight refuses before requesting any archive, including live").toEqual([]);
     expect(view.downloads).toEqual([]);
+    expect(view.created).toEqual([]);
     assertReadOnly(view);
   });
 
