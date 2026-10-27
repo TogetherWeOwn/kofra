@@ -63,6 +63,12 @@ kofra versions team-report v3 --json       # one JSON object: { site, version, m
 kofra files team-report --version v3       # files of that version, resolved directly
 ```
 
+Restore and version deletion still select from the newest-500 ready-version list;
+the direct lookup above changes reads only. The proposed
+[explicit historical action contract](../../docs/CLI_HISTORICAL_VERSION_ACTIONS.md)
+compares extending those actions safely. It is design-only, not an available
+feature or implementation approval; omitted restore keeps its current rule.
+
 Runnable local check (from a repo clone, against your own instance):
 
 ```sh
