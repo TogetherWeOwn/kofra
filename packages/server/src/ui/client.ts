@@ -720,7 +720,24 @@ export function dropwayClient() {
     // run() sends. Every setItems call resets it to the complete review.
     var nav = { q: "", cat: "all", order: "path" };
     var navEls = null;
+    // Explicit update destination (opts.site, or the slug lookup below). The
+    // sites list is only its first page, so a nonempty explicit destination
+    // is verified with the existing single-site GET and the slug it returns
+    // is what gets selected and published to. destSeq fences races: every
+    // newer explicit choice (a lookup, a picker change, new-site focus, a
+    // finished publish) invalidates older in-flight lookups, whose late
+    // responses are ignored. While destState is "pending" or "failed" the
+    // update destination is unresolved and publishing stays disabled; it
+    // never falls back to the first listed site or to a new site.
+    var destSeq = 0;
+    var destState = "idle"; // idle | pending | resolved | failed
+    var destSite = null; // { slug, title } returned by the verifying GET
+    var initialSite = opts.site && String(opts.site).trim() ? String(opts.site).trim() : null;
     var siteSelect = h("select", { class: "dw-select", id: "dw-pub-site", "aria-label": "Site to update" }, h("option", { value: "", text: "Loading sites…" }));
+    var lookupInput = h("input", { class: "dw-input", id: "dw-pub-lookup", "aria-label": "Site slug to look up", placeholder: "exact site slug", autocomplete: "off", spellcheck: "false", style: "flex:1 1 10rem;width:auto;min-width:0" });
+    var lookupBtn = h("button", { type: "button", class: "dw-btn", text: "Look up site" });
+    var destStatus = h("div", { class: "dw-small dw-muted", role: "status" });
+    var destError = h("div", { hidden: true });
     var slugInput = h("input", { class: "dw-input", id: "dw-pub-slug", placeholder: "generated if empty", autocomplete: "off", spellcheck: "false", pattern: "[a-z0-9][a-z0-9-]{1,62}" });
     var modeNew = h("input", { type: "radio", name: "dw-pub-mode", value: "new", checked: !opts.site });
     var modeUpd = h("input", { type: "radio", name: "dw-pub-mode", value: "update", checked: !!opts.site });
@@ -953,7 +970,7 @@ export function dropwayClient() {
         renderReview();
         review.open = wasOpen;
       }
-      publishBtn.disabled = !keep.length || state.busy || !!errors.length;
+      refreshPublishBtn();
       clearBtn.hidden = !keep.length;
     }
 
@@ -1054,6 +1071,8 @@ export function dropwayClient() {
       modeUpd.disabled = on;
       slugInput.disabled = on;
       siteSelect.disabled = on;
+      lookupInput.disabled = on;
+      lookupBtn.disabled = on;
       chooseDirBtn.disabled = on;
       chooseFileBtn.disabled = on;
       clearBtn.disabled = on;
@@ -1061,6 +1080,9 @@ export function dropwayClient() {
 
     async function run() {
       if (state.busy || !state.items.length || state.errors.length) return;
+      // An unresolved explicit update must never publish to whatever the
+      // picker happens to show (see the destination state above).
+      if (!anonymous && modeUpd.checked && destUnresolved()) return;
       state.seq++;
       state.busy = true;
       publishBtn.disabled = true;
@@ -1145,7 +1167,7 @@ export function dropwayClient() {
         state.busy = false;
         setDestinationDisabled(false);
         setNavDisabled(false);
-        publishBtn.disabled = !state.items.length || !!state.errors.length;
+        refreshPublishBtn();
       }
     }
 
@@ -1216,8 +1238,107 @@ export function dropwayClient() {
       if (key && !(opts && opts.keepDestination)) {
         modeUpd.checked = true;
         slugInput.value = "";
+        // The slug just published to is verified; keep it selected as the
+        // update destination even if the refreshed first page omits it.
+        destSeq++;
+        destState = "resolved";
+        destSite = { slug: r.slug, title: destSite && destSite.slug === r.slug ? destSite.title : null };
+        clear(destError);
+        destError.hidden = true;
+        destStatus.textContent = "Resolved destination: " + r.slug;
+        lookupInput.value = r.slug;
         loadSites(r.slug);
       }
+    }
+
+    function destUnresolved() {
+      return destState === "pending" || destState === "failed";
+    }
+
+    function refreshPublishBtn() {
+      publishBtn.disabled = !state.items.length || state.busy || !!state.errors.length || (modeUpd.checked && destUnresolved());
+    }
+
+    /** A deliberate newer destination choice supersedes any in-flight lookup. */
+    function invalidateDest() {
+      destSeq++;
+      destState = "idle";
+      destSite = null;
+      clear(destError);
+      destError.hidden = true;
+      destStatus.textContent = "";
+    }
+
+    /** Add the verified site as an option unless the list already has it. */
+    function ensureDestOption(site) {
+      var found = false;
+      Array.prototype.forEach.call(siteSelect.children, function (o) {
+        if (o.value === site.slug) found = true;
+      });
+      if (!found) add(siteSelect, h("option", { value: site.slug, text: site.title ? site.title + " (" + site.slug + ")" : site.slug }));
+    }
+
+    function failDest(err) {
+      destState = "failed";
+      destSite = null;
+      destStatus.textContent = "";
+      var box = errorBox(err, "Could not look up that site");
+      add(box, h("div", { class: "dw-small", text: "Check the slug and look it up again, or choose a site from the list. Nothing was published." }));
+      add(destError, box);
+      destError.hidden = false;
+      refreshPublishBtn();
+    }
+
+    /**
+     * Verify one explicit destination with the existing single-site GET.
+     * The reference is encoded as exactly one path segment and the slug the
+     * server returns (never the typed reference) is selected. Typing alone
+     * never calls this; only the initial explicit destination, Enter in the
+     * lookup field or the lookup button do.
+     */
+    async function lookupDest(reference) {
+      var ref = String(reference === null || reference === undefined ? "" : reference).trim();
+      if (!ref) {
+        destStatus.textContent = "Enter a site slug to look up.";
+        return;
+      }
+      if (!key || state.busy) return;
+      var seq = ++destSeq;
+      destState = "pending";
+      destSite = null;
+      modeUpd.checked = true;
+      clear(destError);
+      destError.hidden = true;
+      destStatus.textContent = "Looking up site " + ref + "…";
+      siteSelect.value = "";
+      refreshPublishBtn();
+      // URL parsing normalizes dot segments even after encodeURIComponent.
+      // Reject them locally after retiring any older lookup's intent.
+      if (/^\.+$/.test(ref)) {
+        failDest(apiError(400, null, "That is not a site slug."));
+        return;
+      }
+      var res;
+      try {
+        res = await api("/sites/" + encodeURIComponent(ref));
+      } catch (e) {
+        if (seq !== destSeq) return; // a newer choice superseded this lookup
+        failDest(e);
+        return;
+      }
+      if (seq !== destSeq) return;
+      var site = res && res.site;
+      if (!site || !site.slug) {
+        failDest(apiError(0, null, "The server did not return that site."));
+        return;
+      }
+      destSite = { slug: site.slug, title: site.title || null };
+      destState = "resolved";
+      ensureDestOption(destSite);
+      siteSelect.value = destSite.slug;
+      lookupInput.value = destSite.slug;
+      destStatus.textContent = "Resolved destination: " + destSite.slug;
+      refreshPublishBtn();
     }
 
     /**
@@ -1267,24 +1388,51 @@ export function dropwayClient() {
           state.busy = false;
           setDestinationDisabled(false);
           setNavDisabled(false);
-          publishBtn.disabled = !state.items.length || !!state.errors.length;
+          refreshPublishBtn();
         }
       }
     }
 
     async function loadSites(select) {
       if (!key) return;
+      var listSeq = destSeq;
       try {
         var res = await api("/sites?limit=200");
+        var current = siteSelect.value;
+        var currentOption = siteSelect.options[siteSelect.selectedIndex];
         clear(siteSelect);
-        if (!res.sites.length) add(siteSelect, h("option", { value: "", text: "No sites yet" }));
+        if (!res.sites.length && !(destState === "resolved" && destSite)) add(siteSelect, h("option", { value: "", text: "No sites yet" }));
         res.sites.forEach(function (s) {
           add(siteSelect, h("option", { value: s.slug, text: s.title ? s.title + " (" + s.slug + ")" : s.slug }));
         });
-        if (select) siteSelect.value = select;
+        // A deliberate picker choice may be a previously verified off-page
+        // option. Keep its label and identity before restoring its value.
+        if (current && currentOption && !res.sites.some(function (s) { return s.slug === current; })) add(siteSelect, currentOption);
+        // Decide the selection when the list lands, not when it was asked
+        // for: a destination verified (or still resolving) meanwhile wins
+        // over the stale select request and over the first listed site.
+        if (destState === "resolved" && destSite) {
+          ensureDestOption(destSite);
+          siteSelect.value = destSite.slug;
+        } else if (destUnresolved()) {
+          siteSelect.value = "";
+        } else if (current && destSeq !== listSeq) {
+          // A newer explicit choice (e.g. the picker) landed while this
+          // list was in flight; the older list response must not move it.
+          siteSelect.value = current;
+        } else if (select) {
+          siteSelect.value = select;
+        } else if (current) {
+          siteSelect.value = current;
+        }
       } catch (e) {
         clear(siteSelect);
-        add(siteSelect, h("option", { value: "", text: "Could not load sites" }));
+        if (destState === "resolved" && destSite) {
+          ensureDestOption(destSite);
+          siteSelect.value = destSite.slug;
+        } else {
+          add(siteSelect, h("option", { value: "", text: "Could not load sites" }));
+        }
       }
     }
 
@@ -1297,14 +1445,54 @@ export function dropwayClient() {
           h("legend", { class: "dw-label", text: "Publish to" }),
           h("div", { class: "dw-grid2" },
             h("label", { class: "dw-check" }, modeNew, h("span", {}, "A new site", h("span", { class: "dw-sub" }, "Name (optional)"), slugInput)),
-            h("label", { class: "dw-check" }, modeUpd, h("span", { style: "flex:1" }, "A new version of", h("span", { class: "dw-sub" }, "Site"), siteSelect)),
+            h(
+              "label",
+              { class: "dw-check" },
+              modeUpd,
+              h(
+                "span",
+                { style: "flex:1" },
+                "A new version of",
+                h("span", { class: "dw-sub" }, "Site"),
+                siteSelect,
+                h("span", { class: "dw-sub" }, "Site slug (if it is not in the list)"),
+                h("div", { class: "dw-row" }, lookupInput, lookupBtn),
+                h("p", { class: "dw-help", text: "The list shows recent sites only. To update an older site, enter its exact slug and look it up; the verified site becomes the destination." }),
+                destStatus,
+                destError,
+              ),
+            ),
           ),
         );
     slugInput.addEventListener("focus", function () {
       modeNew.checked = true;
+      invalidateDest();
+      refreshPublishBtn();
     });
     siteSelect.addEventListener("change", function () {
       modeUpd.checked = true;
+      invalidateDest();
+      refreshPublishBtn();
+    });
+    modeNew.addEventListener("change", function () {
+      invalidateDest();
+      refreshPublishBtn();
+    });
+    modeUpd.addEventListener("change", function () {
+      refreshPublishBtn();
+    });
+    lookupInput.addEventListener("focus", function () {
+      modeUpd.checked = true;
+      refreshPublishBtn();
+    });
+    lookupInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        lookupDest(lookupInput.value);
+      }
+    });
+    lookupBtn.addEventListener("click", function () {
+      lookupDest(lookupInput.value);
     });
     add(
       root,
@@ -1318,7 +1506,12 @@ export function dropwayClient() {
       status,
       result,
     );
-    if (key) loadSites(opts.site);
+    if (key) {
+      loadSites(opts.site);
+      // Verify an explicit destination independently of (and without
+      // waiting for) the first list page above.
+      if (initialSite) lookupDest(initialSite);
+    }
   }
 
   // ------------------------------------------------------------------ QR encoder (vendored)
@@ -2922,6 +3115,26 @@ export function dropwayClient() {
     );
   }
 
+  /** Embed snippet for the provider-served live-version badge. Public sites with a live URL only; nothing is rendered otherwise. */
+  function siteBadgeSection(url, gated) {
+    if (!url || gated) return null;
+    var badge = url + "badge.svg";
+    var markdown = "[![kofra](" + badge + ")](" + url + ")";
+    return h(
+      "section",
+      { class: "dw-section", "data-testid": "site-badge-snippet" },
+      h("header", {}, h("h2", { text: "Embed a version badge" }), h("span", { class: "dw-small dw-muted", text: "Shows the live version and how recently it changed" })),
+      h(
+        "div",
+        { class: "dw-pad" },
+        h("p", { style: "margin:0 0 .5rem" }, h("img", { "data-testid": "site-badge-preview", src: badge, alt: "kofra live version badge", height: "20", style: "height:20px;vertical-align:middle" })),
+        h("code", { "data-testid": "site-badge-markdown", class: "dw-mono", style: "display:block;margin:0 0 .5rem;overflow-wrap:anywhere", text: markdown }),
+        copyButton(markdown, "Copy badge Markdown"),
+        h("p", { class: "dw-small dw-muted", style: "margin:.5rem 0 0", text: "Paste into a README or any page. It never shows exact times, and it stays generic if the site is password protected, expired or removed." }),
+      ),
+    );
+  }
+
   // ------------------------------------------------------------------ pages
 
   var pages = {};
@@ -4038,7 +4251,7 @@ export function dropwayClient() {
       ),
     );
     var qrSection = siteQrSection(site.url, !!(site.settings && site.settings.passwordProtected));
-    add(root, head, qrSection, versionsSection, filesSection, h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "Settings" })), form), renameSection, danger);
+    add(root, head, qrSection, siteBadgeSection(site.url, !!(site.settings && site.settings.passwordProtected)), versionsSection, filesSection, h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "Settings" })), form), renameSection, danger);
     var live = versions.filter(function (v) {
       return v.live;
     })[0];
@@ -4435,6 +4648,8 @@ export function dropwayClient() {
     var tools = d.getElementById("dw-tools");
     var info = d.getElementById("dw-fileinfo");
     var current = P.path || "";
+    var currentMode = null;
+    var panel = d.getElementById("dw-view-panel");
     var manifest = null;
 
     function fileByPath(p) {
@@ -4457,6 +4672,11 @@ export function dropwayClient() {
       return base + "?view=1&embed=1";
     }
 
+    function validMode(p, mode) {
+      var f = fileByPath(p);
+      if (mode === "source" && (!f || TEXT_KINDS.indexOf(f.kind) >= 0)) return mode;
+      return mode === "raw" ? mode : "view";
+    }
     function renderTools(p, mode) {
       clear(tools);
       clear(info);
@@ -4464,19 +4684,47 @@ export function dropwayClient() {
       var isDir = !p || p.charAt(p.length - 1) === "/";
       var kind = f ? f.kind : null;
       var url = siteUrlFor(p);
+      var tabs = [];
+      panel.removeAttribute("role");
+      panel.removeAttribute("aria-labelledby");
       function tab(label, m, enabled) {
         if (!enabled) return null;
-        return h("button", {
+        var button = h("button", {
+          id: "dw-view-tab-" + m,
           type: "button",
           role: "tab",
+          tabindex: mode === m ? 0 : -1,
+          "aria-controls": panel.id,
           "aria-selected": mode === m ? "true" : "false",
           text: label,
+          onfocus: function (ev) {
+            tabs.forEach(function (t) { t.tabIndex = t === ev.currentTarget ? 0 : -1; });
+          },
+          onkeydown: function (ev) {
+            if (ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+            var i = tabs.indexOf(ev.currentTarget);
+            if (ev.key === "ArrowRight") i = (i + 1) % tabs.length;
+            else if (ev.key === "ArrowLeft") i = (i + tabs.length - 1) % tabs.length;
+            else if (ev.key === "Home") i = 0;
+            else if (ev.key === "End") i = tabs.length - 1;
+            else return;
+            ev.preventDefault();
+            tabs[i].focus();
+          },
+          // Native button Enter/Space already dispatch one click. Focus-only keys never navigate.
           onclick: function () {
+            if (mode === m) return;
+            var keepFocus = tabs.indexOf(d.activeElement) >= 0;
             go(p, m, true);
+            if (keepFocus) d.getElementById("dw-view-tab-" + m).focus();
           },
         });
+        tabs.push(button);
+        return button;
       }
       if (!isDir) {
+        panel.setAttribute("role", "tabpanel");
+        panel.setAttribute("aria-labelledby", "dw-view-tab-" + mode);
         add(
           tools,
           h(
@@ -4522,8 +4770,10 @@ export function dropwayClient() {
     }
 
     function go(p, mode, push) {
+      mode = validMode(p, mode);
+      if (push && p === current && mode === currentMode) return;
       current = p;
-      mode = mode || "view";
+      currentMode = mode;
       var src = viewSrc(p, mode);
       if (frame.src !== src) {
         // A fresh iframe instead of a new src: changing src would add a history entry
@@ -4602,7 +4852,7 @@ export function dropwayClient() {
       go(st.p !== undefined ? st.p : P.path || "", st.mode || "view", false);
     });
 
-    var mode = new URLSearchParams(location.search).get("mode") || "view";
+    var mode = validMode(current, new URLSearchParams(location.search).get("mode"));
     renderTools(current, mode);
     if (!authed()) {
       clear(tree);
@@ -4687,10 +4937,15 @@ export function dropwayClient() {
       emptyNote,
       treeBox,
     );
-    go(current, mode, false);
+    // The manifest load rebuilds the toolbar; a mode tab focused while it was in flight must keep focus.
+    var heldTab = tools.contains(d.activeElement) && d.activeElement.getAttribute("role") === "tab" ? d.activeElement.id : "";
+    go(current, currentMode || mode, false);
+    // If the manifest removed the held tab (Source on an image/binary), land on the tab that replaced it.
+    var heldEl = heldTab && (d.getElementById(heldTab) || d.getElementById("dw-view-tab-" + currentMode));
+    if (heldEl) heldEl.focus();
     // Push entries carry {p, mode}; record the same for the loaded entry so
     // Back restores the prior file and view mode instead of losing the mode.
-    history.replaceState({ p: current, mode: mode }, "");
+    history.replaceState({ p: current, mode: currentMode }, "");
     var cur = $("a[aria-current]", tree);
     if (cur) cur.scrollIntoView({ block: "nearest" });
   };

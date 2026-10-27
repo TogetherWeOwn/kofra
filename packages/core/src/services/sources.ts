@@ -13,6 +13,7 @@ import { discardNewSite, findSite, getVersion, serializeSite, serializeVersion, 
 import { resolvePublishTarget } from "./publish";
 import { getSiteByRef, resolveSiteSlug, resolveVersionRef } from "./site-ops";
 import { PENDING_VERSION_TTL_MS } from "./upload-tokens";
+import { versionPreviewUrl } from "./previews";
 export { PENDING_VERSION_TTL_MS } from "./upload-tokens";
 import { uploadItemsFor, type UploadItem } from "./uploads";
 export type { UploadItem } from "./uploads";
@@ -528,7 +529,7 @@ async function completeVersion(
     status,
     unchanged: status === "unchanged",
     url: siteUrl(dc, fresh.slug),
-    versionUrl: `${appOrigin(dc)}/dashboard/sites/${encodeURIComponent(fresh.slug)}?version=${encodeURIComponent(version!.id)}`,
+    versionUrl: await versionPreviewUrl(dc, actor, fresh, version!),
     slug: fresh.slug,
     site: { id: fresh.id, ...serializeSite(dc, fresh, live) },
     version: versionOut,
@@ -758,6 +759,7 @@ export async function finalizeVersionByRef(dc: DropwayContext, p: Principal, sit
       status: (result.live ? "live" : "unchanged") as PublishStatus,
       replayed: result.replayed,
       url: siteUrl(dc, fresh.slug),
+      versionUrl: await versionPreviewUrl(dc, p, fresh, result.version),
       slug: fresh.slug,
       site: { id: fresh.id, ...serializeSite(dc, fresh, live) },
       version: serializeVersion(result.version, fresh.current_version_id),

@@ -26,6 +26,16 @@
   count as the single served file or appear in folder listings, and
   `Service-Worker-Allowed` is platform-owned.
 
+### Sites
+
+- Every site serves an embeddable live-version badge at `<site URL>badge.svg` (path and
+  subdomain mode): a flat SVG with the live version and a coarse age for public sites, and one
+  identical generic image for passworded, expired, deleted, transfer, missing and renamed-away
+  sites. The dashboard site page shows the Markdown snippet for public sites. It reads the cached
+  live manifest (now version 4, which also carries the live version number and time; cached v3
+  entries rebuild from D1 on first read) and is not recorded as a site request. `badge.svg` at a
+  site root is reserved. See `docs/SITE_BADGE.md`.
+
 ### Dashboard
 
 - The selected-version file table now announces matching-vs-loaded file counts

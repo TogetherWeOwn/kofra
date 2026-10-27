@@ -1,7 +1,7 @@
 import { URL_ATTRS, type PathRewrite } from "./path-rewrite";
 
 /**
- * Runtime half of path-mode URL rewriting, for sandboxed sites.
+ * Runtime half of path-mode URL rewriting, for pages without Referer context.
  *
  * In path mode a site lives under a prefix (/s/<slug>/ or /<slug>/). The server
  * rewrites root-relative URLs in HTML and CSS (./path-rewrite), and resolves
@@ -12,8 +12,9 @@ import { URL_ATTRS, type PathRewrite } from "./path-rewrite";
  * So a URL built in JavaScript, such as fetch("/" + "data.json"), would escape
  * the site and 404.
  *
- * This small script is injected into sandboxed path-mode HTML pages, before the
- * page's first script. It applies the same rule as the server-side rewriter at
+ * This small script is injected into sandboxed and private-preview path-mode HTML
+ * pages, before the page's first script. Previews suppress Referer even without a
+ * sandbox. It applies the same rule as the server-side rewriter at
  * run time: a root-relative URL ("/data.json") gets the site prefix; absolute
  * URLs, protocol-relative URLs, relative URLs and paths already under the prefix
  * (or under a `keep` prefix) are left alone. It covers fetch(), XMLHttpRequest,

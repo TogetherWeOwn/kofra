@@ -265,6 +265,8 @@ body.dw-wide{height:100vh;min-height:0;overflow:hidden}
 .dw-vtabs button,.dw-vtabs a{border:0;border-left:1px solid var(--line);background:var(--card);padding:.28rem .7rem;font:inherit;font-size:.82rem;color:var(--muted);cursor:pointer;text-decoration:none}
 .dw-vtabs :first-child{border-left:0}
 .dw-vtabs [aria-selected=true]{color:var(--fg);font-weight:600;box-shadow:inset 0 -2px 0 var(--accent)}
+.dw-vtabs [role=tab]:focus-visible{outline-offset:-3px}
+.dw-view-panel{flex:1;min-height:0;display:flex}
 .dw-frame{flex:1;width:100%;border:0;background:#fff}
 @media (max-width:760px){.dw-main-wide{flex-direction:column}.dw-side{width:auto;max-height:32vh;border-right:0;border-bottom:1px solid var(--line)}}
 `;
@@ -292,7 +294,7 @@ export function viewerPage(c: Context<DropwayEnv>): Response | Promise<Response>
   const body = `<aside class="dw-side" id="dw-tree" aria-label="Files"><div class="dw-tree-note"><a class="dw-title" href="/dashboard/sites/${e(encodeURIComponent(slug))}">${e(slug)}</a>${NOSCRIPT}</div></aside>
 <section class="dw-viewer" aria-label="Preview">
 <div class="dw-vtools"><div id="dw-fileinfo"><span class="dw-mono">${e(path || "/")}</span></div><div id="dw-tools">${tools}</div></div>
-<iframe id="dw-frame" name="dw-frame" class="dw-frame" src="${e(src)}" sandbox="${sandbox}" allow="clipboard-write; fullscreen; autoplay; encrypted-media; picture-in-picture" referrerpolicy="no-referrer" title="${e(`Preview of ${path || slug}`)}"></iframe>
+<div id="dw-view-panel" class="dw-view-panel"><iframe id="dw-frame" name="dw-frame" class="dw-frame" src="${e(src)}" sandbox="${sandbox}" allow="clipboard-write; fullscreen; autoplay; encrypted-media; picture-in-picture" referrerpolicy="no-referrer" title="${e(`Preview of ${path || slug}`)}"></iframe></div>
 </section>`;
   return renderAppPage(c, { title: path ? `${path.split("/").filter(Boolean).pop()} · ${slug}` : slug, page: "viewer", active: "/dashboard", wide: true, data: { slug, path, siteUrl: root }, css: VIEWER_PAGE_CSS, body });
 }

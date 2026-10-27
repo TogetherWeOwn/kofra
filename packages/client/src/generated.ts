@@ -72,7 +72,7 @@ export interface PublishSiteOutput {
   /** Live URL. Share it exactly as returned. */
   url: string;
   slug: string;
-  /** Dashboard link pinned by version id. */
+  /** 24 h signed preview; bearer capability. */
   versionUrl?: string;
   site?: {
     slug: string;
@@ -132,7 +132,7 @@ export interface UpdateSiteFilesOutput {
   status?: "live" | "unchanged" | "awaiting_upload";
   url?: string;
   slug?: string;
-  /** Owner dashboard link pinned to the exact version id; requires the owner's API key in the dashboard. */
+  /** 24 h signed preview; bearer capability. */
   versionUrl?: string;
   site?: {
     slug?: string;
@@ -839,7 +839,7 @@ export type PublishUploadOutput = {
   status?: "live" | "unchanged" | "awaiting_upload";
   url?: string;
   slug?: string;
-  /** Owner dashboard link pinned to the exact version id; requires the owner's API key in the dashboard. */
+  /** 24 h signed preview; bearer capability. */
   versionUrl?: string;
   site?: {
     slug?: string;
@@ -914,6 +914,8 @@ export type PublishUploadOutput = {
 } | {
   url?: string;
   slug?: string;
+  /** Signed exact-version preview link, valid for 24 hours. */
+  versionUrl?: string;
   created?: boolean;
   unchanged?: boolean;
   site?: {
