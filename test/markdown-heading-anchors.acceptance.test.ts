@@ -16,8 +16,8 @@
  * - (a) The first heading in document order keeps its id. Every heading whose
  *   id is unique today keeps it byte-identical. ONLY a Markdown-generated
  *   heading that currently duplicates an earlier raw-HTML heading id takes
- *   the existing duplicate suffix (`-1`, `-2`, ... in occurrence order): that
- *   later occurrence is unreachable by fragment today, so nothing that
+ *   an unused `-1`-style suffix, reserving existing heading destinations first:
+ *   that later occurrence is unreachable by fragment today, so nothing that
  *   resolves today moves. Any renumbering beyond this one exception fails.
  * - (b) Raw-HTML heading ids are author-supplied and never rewritten.
  *   Raw-before-Markdown: the later Markdown heading takes the suffix.
@@ -64,7 +64,7 @@ const fixtures: Record<string, string> = {
   "repro.md": '# Report Title\n\n<h2 id="markdown-section">Raw Section</h2>\n\n## Markdown Section\n\nBody text.\n',
   /** Raw h3 before a Markdown h2: levels need not match for ids to collide. */
   "raw-first-levels.md": '# Report Title\n\n<h3 id="details">Raw Details</h3>\n\n## Details\n\nBody.\n',
-  /** Raw heading, then two Markdown headings with the same slug: -1 then -2. */
+  /** Only the shadowed first Markdown heading moves; the later #notes-1 stays reachable. */
   "raw-first-triple.md": '# Report Title\n\n<h2 id="notes">Raw Notes</h2>\n\n## Notes\n\n## Notes\n',
   /** Markdown first, raw after: both keep their ids exactly as today. */
   "md-first.md": '# Report Title\n\n## Markdown Section\n\n<h2 id="markdown-section">Later Raw</h2>\n',
@@ -265,9 +265,9 @@ describe("collision-safe Markdown heading anchors in workerd", () => {
     expect(idList(headings)).toEqual(["h1:report-title", "h3:details", "h2:details-1"]);
   });
 
-  it("continues the existing suffix sequence after a raw first occurrence (-1, then -2)", async () => {
+  it("moves only the raw-shadowed Markdown heading and preserves the later #notes-1 destination", async () => {
     const headings = await headingsOf("raw-first-triple.md");
-    expect(idList(headings)).toEqual(["h1:report-title", "h2:notes", "h2:notes-1", "h2:notes-2"]);
+    expect(idList(headings)).toEqual(["h1:report-title", "h2:notes", "h2:notes-2", "h2:notes-1"]);
   });
 
   it("keeps the Markdown id when the raw heading comes later, raw id left as authored", async () => {
