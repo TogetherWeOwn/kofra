@@ -154,7 +154,14 @@ input,button{font:inherit}
 .dw-video{max-width:100%;max-height:calc(100vh - 9rem);border-radius:10px;background:#000}
 .dw-audio{width:min(40rem,100%);margin-top:18vh}
 .dw-fallback{max-width:34rem;margin:15vh auto;text-align:center;color:var(--muted)}
-</style><meta name="robots" content="noindex"></head><body><header class="dw-vbar" role="banner">
+</style><meta name="robots" content="noindex">
+<meta property="og:title" content="01 image.png · sibling-navigation-fixture">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://dropway.test/s/sibling-navigation-fixture/media/01%20image.png">
+<meta property="og:description" content="Image · 32 B · image/png">
+<meta name="description" content="Image · 32 B · image/png">
+<meta name="twitter:card" content="summary_large_image">
+<meta property="og:image" content="https://dropway.test/s/sibling-navigation-fixture/media/01%20image.png"></head><body><header class="dw-vbar" role="banner">
 <div class="dw-vfile"><span class="dw-kind">Image</span><span class="dw-crumbs"><a href="/s/sibling-navigation-fixture/">sibling-navigation-fixture</a><span class="dw-sep">/</span><a href="/s/sibling-navigation-fixture/media/">media</a><span class="dw-sep">/</span><strong>01 image.png</strong></span><span class="dw-vmeta">32 B · image/png</span></div>
 <nav class="dw-vtabs" aria-label="View"><a href="/s/sibling-navigation-fixture/media/01%20image.png" aria-current="page" rel="nofollow">Image</a><a href="/s/sibling-navigation-fixture/media/01%20image.png?raw=1" rel="nofollow">Raw</a></nav>
 <nav class="dw-vact" aria-label="File"><a href="/s/sibling-navigation-fixture/media/01%20image.png?download=1" rel="nofollow" download>Download</a><a href="https://dropway.test/v/sibling-navigation-fixture/media/01%20image.png" rel="nofollow" title="Browse every file of this site">Files</a></nav>
@@ -216,7 +223,13 @@ input,button{font:inherit}
 .dw-video{max-width:100%;max-height:calc(100vh - 9rem);border-radius:10px;background:#000}
 .dw-audio{width:min(40rem,100%);margin-top:18vh}
 .dw-fallback{max-width:34rem;margin:15vh auto;text-align:center;color:var(--muted)}
-</style><meta name="robots" content="noindex"></head><body><header class="dw-vbar" role="banner">
+</style><meta name="robots" content="noindex">
+<meta property="og:title" content="02 vector.svg · sibling-navigation-fixture">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://dropway.test/s/sibling-navigation-fixture/media/02%20vector.svg">
+<meta property="og:description" content="SVG image · 67 B · image/svg+xml">
+<meta name="description" content="SVG image · 67 B · image/svg+xml">
+<meta name="twitter:card" content="summary"></head><body><header class="dw-vbar" role="banner">
 <div class="dw-vfile"><span class="dw-kind">SVG image</span><span class="dw-crumbs"><a href="/s/sibling-navigation-fixture/">sibling-navigation-fixture</a><span class="dw-sep">/</span><a href="/s/sibling-navigation-fixture/media/">media</a><span class="dw-sep">/</span><strong>02 vector.svg</strong></span><span class="dw-vmeta">67 B · image/svg+xml</span></div>
 <nav class="dw-vtabs" aria-label="View"><a href="/s/sibling-navigation-fixture/media/02%20vector.svg" aria-current="page" rel="nofollow">Image</a><a href="/s/sibling-navigation-fixture/media/02%20vector.svg?view=source" rel="nofollow">Source</a><a href="/s/sibling-navigation-fixture/media/02%20vector.svg?raw=1" rel="nofollow">Raw</a></nav>
 <nav class="dw-vact" aria-label="File"><a href="/s/sibling-navigation-fixture/media/02%20vector.svg?download=1" rel="nofollow" download>Download</a><a href="https://dropway.test/v/sibling-navigation-fixture/media/02%20vector.svg" rel="nofollow" title="Browse every file of this site">Files</a></nav>
@@ -305,7 +318,13 @@ h1,h2,h3,h4,h5,h6,summary{break-after:avoid}
 img,video{max-width:100%;height:auto}
 .dw-note{max-width:none;break-inside:avoid}
 }
-</style><meta name="robots" content="noindex"></head><body><header class="dw-vbar" role="banner">
+</style><meta name="robots" content="noindex">
+<meta property="og:title" content="only.csv · sibling-navigation-fixture">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://dropway.test/s/sibling-navigation-fixture/alone/only.csv">
+<meta property="og:description" content="Table · 21 B · text/csv">
+<meta name="description" content="Table · 21 B · text/csv">
+<meta name="twitter:card" content="summary"></head><body><header class="dw-vbar" role="banner">
 <div class="dw-vfile"><span class="dw-kind">Table</span><span class="dw-crumbs"><a href="/s/sibling-navigation-fixture/">sibling-navigation-fixture</a><span class="dw-sep">/</span><a href="/s/sibling-navigation-fixture/alone/">alone</a><span class="dw-sep">/</span><strong>only.csv</strong></span><span class="dw-vmeta">21 B · text/csv</span></div>
 <nav class="dw-vtabs" aria-label="View"><a href="/s/sibling-navigation-fixture/alone/only.csv" aria-current="page" rel="nofollow">Table</a><a href="/s/sibling-navigation-fixture/alone/only.csv?view=source" rel="nofollow">Source</a><a href="/s/sibling-navigation-fixture/alone/only.csv?raw=1" rel="nofollow">Raw</a></nav>
 <nav class="dw-vact" aria-label="File"><a href="/s/sibling-navigation-fixture/alone/only.csv?download=1" rel="nofollow" download>Download</a><a href="https://dropway.test/v/sibling-navigation-fixture/alone/only.csv" rel="nofollow" title="Browse every file of this site">Files</a></nav>
@@ -392,5 +411,11 @@ h1,h2,h3,h4,h5,h6,summary{break-after:avoid}
 img,video{max-width:100%;height:auto}
 .dw-note{max-width:none;break-inside:avoid}
 }
-</style><meta name="robots" content="noindex"></head><body><p class="dw-print-title">docs/02 data.csv</p><main class="dw-csv"><p class="dw-csvmeta">1 rows · 2 columns · comma-separated</p><div class="dw-table"><table><thead><tr><th class="rn" scope="col">#</th><th scope="col" title="name">name</th><th scope="col" title="value">value</th></tr></thead><tbody><tr><td class="rn">1</td><td>fixture</td><td class="n">7</td></tr></tbody></table></div></main></body></html>"
+</style><meta name="robots" content="noindex">
+<meta property="og:title" content="02 data.csv · sibling-navigation-fixture">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://dropway.test/s/sibling-navigation-fixture/docs/02%20data.csv">
+<meta property="og:description" content="Table · 21 B · text/csv">
+<meta name="description" content="Table · 21 B · text/csv">
+<meta name="twitter:card" content="summary"></head><body><p class="dw-print-title">docs/02 data.csv</p><main class="dw-csv"><p class="dw-csvmeta">1 rows · 2 columns · comma-separated</p><div class="dw-table"><table><thead><tr><th class="rn" scope="col">#</th><th scope="col" title="name">name</th><th scope="col" title="value">value</th></tr></thead><tbody><tr><td class="rn">1</td><td>fixture</td><td class="n">7</td></tr></tbody></table></div></main></body></html>"
 `;

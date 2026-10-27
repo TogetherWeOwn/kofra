@@ -6,8 +6,9 @@
  * the builder makes them pass without editing this file.
  *
  * Viewer contract (builder: implement exactly this):
- * - id "archive", version 2 (shared-bar sibling navigation). Matches file.kind === "archive" for every view
- *   mode except "source" (document, frame, view). ?view=source on an archive
+ * - id "archive", version 2 (unfurl metadata and shared-bar sibling navigation).
+ *   Matches file.kind === "archive" for every view mode except "source" (document,
+ *   frame, view). ?view=source on an archive
  *   keeps returning the raw bytes because no viewer matches it.
  * - Over-cap, corrupt and non-ZIP archives render THROUGH the archive viewer
  *   (x-kofra-viewer stays "archive"): the binary info page (size/type/kind

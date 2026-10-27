@@ -76,7 +76,7 @@ describe("print stylesheet delivery", () => {
     expect(response.headers.get("x-kofra-viewer")).toBe("binary");
     expect(response.status, "a pre-rotation binary cached response must not survive as 304").toBe(200);
     const etag = response.headers.get("etag")!;
-    expect(etag).toMatch(new RegExp(`^W/"binary@3-${hash}(?:-folder[A-Za-z0-9_-]+)?"$`));
+    expect(etag).toMatch(new RegExp(`^W/"binary@4-${hash}(?:-folder[A-Za-z0-9_-]+)?"$`));
     const html = await response.text();
     expect(html).toContain("it looks like text");
     expect(printStyles(html).length, "the binary as-text branch renders through the code page, so it must receive print CSS").toBeGreaterThan(0);
