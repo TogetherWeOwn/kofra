@@ -741,3 +741,244 @@ describe("notebook output folding", () => {
     expect(await fresh.text()).toBe("");
   });
 });
+
+/**
+ * Notebook output fold containment: paired acceptance contract.
+ *
+ * No text/html or text/markdown output may close (or forge) the generated
+ * per-cell fold. A later output of the same cell must still sit inside the
+ * single `details.dw-out` after the browser parses the page, whatever end
+ * tags, details/summary tags or markup hidden in comments, dropped elements
+ * or attribute values the earlier output carries. Benign markup renders
+ * unchanged inside the fold.
+ */
+describe("notebook output fold containment", () => {
+  const SENTINEL = "later-output-sentinel";
+  const nbWith = (first: Record<string, unknown>) => ({
+    metadata: { language_info: { name: "python" } },
+    cells: [
+      {
+        cell_type: "code", execution_count: 1, source: "containment_marker = 1",
+        outputs: [
+          { output_type: "display_data", data: first },
+          { output_type: "stream", name: "stdout", text: `${SENTINEL}\n` },
+        ],
+      },
+    ],
+  });
+
+  type El = { name: string; attrs: Record<string, string>; children: Array<El | string> };
+  const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
+  const RAW = new Set(["script", "style", "textarea", "title", "xmp"]);
+  const SCOPE = new Set(["html", "table", "td", "th", "caption", "template", "applet", "marquee", "object"]);
+  const CLOSES_P = new Set([
+    "address", "article", "aside", "blockquote", "details", "div", "dl", "figcaption", "figure", "footer", "header", "h1", "h2",
+    "h3", "h4", "h5", "h6", "hr", "main", "nav", "ol", "p", "pre", "section", "summary", "table", "ul",
+  ]);
+  const FORMATTING = new Set(["a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"]);
+  const isAlpha = (c: string | undefined) => c !== undefined && ((c >= "a" && c <= "z") || (c >= "A" && c <= "Z"));
+  const isSpace = (c: string | undefined) => c === " " || c === "\n" || c === "\t" || c === "\f" || c === "\r";
+
+  /**
+   * Parse HTML into a tree the way a browser's tree builder treats the
+   * elements these fixtures use: character-scan tokenizer (comments, quoted
+   * attribute values, raw-text elements) and the "end tag closes the nearest
+   * open element of that name in scope, else is ignored" rule, which is what
+   * lets a stray </div> or </main> pop an enclosing <details>.
+   */
+  const parse = (html: string): El => {
+    const root: El = { name: "#root", attrs: {}, children: [] };
+    const stack: El[] = [root];
+    const top = () => stack[stack.length - 1]!;
+    const inScope = (name: string) => {
+      for (let k = stack.length - 1; k > 0; k--) {
+        if (stack[k]!.name === name) return k;
+        if (SCOPE.has(stack[k]!.name)) return -1;
+      }
+      return -1;
+    };
+    const text = (s: string) => {
+      if (s) top().children.push(s);
+    };
+    let i = 0;
+    let buf = "";
+    while (i < html.length) {
+      const c = html[i]!;
+      if (c !== "<") {
+        buf += c;
+        i++;
+        continue;
+      }
+      if (html.startsWith("<!--", i)) {
+        const end = html.indexOf("-->", i + 4);
+        i = end < 0 ? html.length : end + 3;
+        continue;
+      }
+      const closing = html[i + 1] === "/";
+      const nameAt = closing ? i + 2 : i + 1;
+      if (html[i + 1] === "!" || html[i + 1] === "?" || (closing && !isAlpha(html[nameAt]))) {
+        const end = html.indexOf(">", i + 1);
+        i = end < 0 ? html.length : end + 1;
+        continue;
+      }
+      if (!isAlpha(html[nameAt])) {
+        buf += c;
+        i++;
+        continue;
+      }
+      text(buf);
+      buf = "";
+      let j = nameAt;
+      while (j < html.length && !isSpace(html[j]) && html[j] !== "/" && html[j] !== ">") j++;
+      const name = html.slice(nameAt, j).toLowerCase();
+      const attrs: Record<string, string> = {};
+      while (j < html.length && html[j] !== ">") {
+        if (isSpace(html[j]) || html[j] === "/") {
+          j++;
+          continue;
+        }
+        const a = j;
+        j++;
+        while (j < html.length && !isSpace(html[j]) && html[j] !== "/" && html[j] !== ">" && html[j] !== "=") j++;
+        const attr = html.slice(a, j).toLowerCase();
+        while (isSpace(html[j])) j++;
+        let value = "";
+        if (html[j] === "=") {
+          j++;
+          while (isSpace(html[j])) j++;
+          const q = html[j];
+          if (q === '"' || q === "'") {
+            const end = html.indexOf(q, j + 1);
+            value = html.slice(j + 1, end < 0 ? html.length : end);
+            j = end < 0 ? html.length : end + 1;
+          } else {
+            const v = j;
+            while (j < html.length && !isSpace(html[j]) && html[j] !== ">") j++;
+            value = html.slice(v, j);
+          }
+        }
+        if (!(attr in attrs)) attrs[attr] = value;
+      }
+      i = j + 1;
+      if (closing) {
+        const at = inScope(name);
+        if (at < 0) continue;
+        const special = stack.slice(at + 1).some((el) => !FORMATTING.has(el.name));
+        if (FORMATTING.has(name) && special) stack.splice(at, 1);
+        else stack.length = at;
+        continue;
+      }
+      if (CLOSES_P.has(name)) {
+        const p = inScope("p");
+        if (p > 0) stack.length = p;
+      }
+      const el: El = { name, attrs, children: [] };
+      top().children.push(el);
+      if (RAW.has(name)) {
+        const end = html.toLowerCase().indexOf(`</${name}`, i);
+        el.children.push(html.slice(i, end < 0 ? html.length : end));
+        const close = end < 0 ? -1 : html.indexOf(">", end);
+        i = close < 0 ? html.length : close + 1;
+      } else if (!VOID.has(name)) stack.push(el);
+    }
+    text(buf);
+    return root;
+  };
+  const all = (el: El, pred: (e: El) => boolean, out: El[] = []): El[] => {
+    for (const child of el.children) {
+      if (typeof child === "string") continue;
+      if (pred(child)) out.push(child);
+      all(child, pred, out);
+    }
+    return out;
+  };
+  const textOf = (el: El): string => el.children.map((ch) => (typeof ch === "string" ? ch : textOf(ch))).join("");
+  const isFold = (e: El) => e.name === "details" && (e.attrs.class ?? "").split(/\s+/).includes("dw-out");
+  const countOf = (haystack: string, needle: string) => haystack.toLowerCase().split(needle).length - 1;
+
+  /** The cell's fold as a browser sees it in the viewer's <main> wrapper. */
+  const expectContained = (html: string) => {
+    expect(countOf(html, "<details"), html).toBe(1);
+    const doc = parse(html);
+    expect(all(doc, (e) => e.name === "details"), html).toHaveLength(1);
+    const folds = all(doc, isFold);
+    expect(folds, html).toHaveLength(1);
+    const fold = folds[0]!;
+    const summaries = fold.children.filter((ch): ch is El => typeof ch !== "string" && ch.name === "summary");
+    expect(summaries.map((s) => textOf(s).trim()), html).toEqual(["Outputs (2)"]);
+    expect(textOf(fold), html).toContain(SENTINEL);
+    expect(textOf(doc).split(SENTINEL), html).toHaveLength(2);
+    const close = html.toLowerCase().indexOf("</details>");
+    expect(html.indexOf(SENTINEL), html).toBeGreaterThan(html.toLowerCase().indexOf("<details"));
+    expect(html.indexOf(SENTINEL), html).toBeLessThan(close);
+    return fold;
+  };
+  const render = async (first: Record<string, unknown>) =>
+    `<main class="dw-nb">${await sanitizeHtml(renderNotebook(nbWith(first)))}</main>`;
+
+  it("the containment model sees a stray end tag pop an enclosing details", () => {
+    const leaked = parse(`<main><div><details class="dw-out"><summary>Outputs (2)</summary><div></div></div><pre>${SENTINEL}</pre></details></div></main>`);
+    expect(textOf(all(leaked, isFold)[0]!)).not.toContain(SENTINEL);
+    const kept = parse(`<main><div><details class="dw-out"><summary>Outputs (2)</summary><div><a title='</div>'>x</a></div><pre>${SENTINEL}</pre></details></div></main>`);
+    expect(textOf(all(kept, isFold)[0]!)).toContain(SENTINEL);
+  });
+
+  const HOSTILE_HTML = [
+    "</details>",
+    "</DETAILS >",
+    "</summary>",
+    "<details>",
+    "</div>",
+    "</div></div></div>",
+    "</main>",
+    "<!-- <div> --></div>",
+    "<template><div></template></div>",
+    "<script>var a='<div>'</script></div>",
+    "<a title='</div>'>x</a>",
+    '<details title="</div>">',
+  ];
+  it.each(HOSTILE_HTML)("a text/html output %j cannot close or forge the fold", async (payload) => {
+    expectContained(await render({ "text/html": payload }));
+  });
+
+  it.each(["</div>", "</div></div>"])("a text/markdown output %j cannot close the fold", async (payload) => {
+    expectContained(await render({ "text/markdown": `md-before\n\n${payload}\n\nmd-after` }));
+  });
+
+  it.each([
+    "<table><tr><td>1</td></tr></table>",
+    "<div><b>x</b></div>",
+    '<p>a</p><div class="x">y</div>',
+  ])("benign text/html %j renders unchanged inside the fold", async (payload) => {
+    const html = await render({ "text/html": payload });
+    const fold = expectContained(html);
+    expect(html).toContain(payload);
+    expect(html.indexOf(payload)).toBeGreaterThan(html.indexOf("</summary>"));
+    expect(html.indexOf(payload)).toBeLessThan(html.indexOf(SENTINEL));
+    expect(textOf(fold)).toContain(textOf(parse(payload)));
+  });
+
+  it("a text/html output that leaves a div open keeps the later output inside the fold", async () => {
+    const html = await render({ "text/html": "<div>unclosed-div-sentinel" });
+    const fold = expectContained(html);
+    expect(textOf(fold)).toContain("unclosed-div-sentinel");
+    expect(textOf(fold).indexOf("unclosed-div-sentinel")).toBeLessThan(textOf(fold).indexOf(SENTINEL));
+  });
+
+  it("keeps the fold contained on the served viewer page", async () => {
+    const dw = await freshInstance();
+    const files: Record<string, string> = {
+      "c/main.ipynb": JSON.stringify(nbWith({ "text/html": "</main>" })),
+      "c/divs.ipynb": JSON.stringify(nbWith({ "text/html": "</div></div></div>" })),
+      "c/md.ipynb": JSON.stringify(nbWith({ "text/markdown": "md-before\n\n</div></div>\n\nmd-after" })),
+    };
+    const res = await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, body: form(files) });
+    expect(res.status).toBe(201);
+    for (const path of Object.keys(files)) {
+      const page = await dw.call(`/s/${res.body.slug}/${path}`, { headers: NAV });
+      expect(page.status).toBe(200);
+      expect(page.headers.get("x-kofra-viewer")).toBe("notebook");
+      expectContained(await page.text());
+    }
+  });
+});
