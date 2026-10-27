@@ -1107,7 +1107,11 @@ export function dropwayClient() {
         var dep = await api("/sites/" + encodeURIComponent(slug) + "/deploys", { method: "POST", body: { files: manifest, message: msg }, key: auth });
         if (dep.unchanged) {
           setProgress(1, "Nothing changed.");
-          showResult({ slug: slug, unchanged: true, version: dep.deploy });
+          // Unchanged needs a live version, so it is reachable only when updating
+          // an existing site (the new-site leg above just created an empty one).
+          // Recover that site's authoritative URL with an authorized read.
+          if (updating) await showUnchangedResult(slug, dep.deploy, auth);
+          else showResult({ slug: slug, unchanged: true, version: dep.deploy });
           return;
         }
         var uploads = dep.uploads || [];
@@ -1145,10 +1149,24 @@ export function dropwayClient() {
       }
     }
 
-    function showResult(r) {
+    function showResult(r, opts) {
       setItems([]);
       clear(result);
       var url = r.url || null;
+      var linkRetry = null;
+      if (r.linkUnavailable) {
+        linkRetry = h("button", {
+          type: "button",
+          class: "dw-btn small",
+          text: "Retry getting the link",
+          onclick: function () {
+            if (linkRetry.disabled || !r.onLinkRetry) return;
+            linkRetry.disabled = true;
+            linkRetry.textContent = "Retrying…";
+            r.onLinkRetry();
+          },
+        });
+      }
       add(
         result,
         h(
@@ -1165,7 +1183,17 @@ export function dropwayClient() {
             h("a", { class: "dw-btn", href: "/v/" + encodeURIComponent(r.slug) + "/", text: "Browse files" }),
             key ? h("a", { class: "dw-btn", href: "/dashboard/sites/" + encodeURIComponent(r.slug), text: "Manage" }) : null,
           ),
-          receiptBlock(r),
+          r.linkUnavailable
+            ? h(
+                "div",
+                { class: "dw-small", style: "margin-top:.6rem" },
+                h("p", { text: "The public link could not be retrieved. The publish itself succeeded — nothing changed and nothing was uploaded. Retrying only reads the site link again; it does not publish again." }),
+                h("div", { class: "dw-row", style: "margin-top:.4rem" }, linkRetry),
+              )
+            : null,
+          // No receipt without a usable link: it would record a public
+          // identity with nowhere to open it.
+          r.linkUnavailable ? null : receiptBlock(r),
           r.warnings && r.warnings.length
             ? h("ul", { class: "dw-small" }, r.warnings.map(function (w) {
                 return h("li", { text: w.message });
@@ -1181,10 +1209,66 @@ export function dropwayClient() {
             : null,
         ),
       );
-      if (key) {
+      if (opts && opts.restoreFocus) {
+        var nextAction = linkRetry || $("a.dw-btn", result);
+        if (nextAction) nextAction.focus();
+      }
+      if (key && !(opts && opts.keepDestination)) {
         modeUpd.checked = true;
         slugInput.value = "";
         loadSites(r.slug);
+      }
+    }
+
+    /**
+     * Show an unchanged update with its live link. The unchanged deploy itself
+     * returns the version identity but no URL, so read the site (get_site) with
+     * the publish's own credentials and use only the authoritative URL it
+     * returns — never its live-version pointer, which may have moved on, and
+     * never a URL rebuilt from the slug. A failed or unusable read keeps the
+     * successful "nothing changed" result and offers a retry of the read only.
+     */
+    async function showUnchangedResult(slug, version, auth, restoreFocus) {
+      // A retry runs after run() has finished: hold the same in-flight locks
+      // while it reads, so a new selection cannot race its result rendering.
+      var holdBusy = !state.busy;
+      if (holdBusy) {
+        state.busy = true;
+        publishBtn.disabled = true;
+        setDestinationDisabled(true);
+        setNavDisabled(true);
+      }
+      try {
+        var url = null;
+        try {
+          var res = await api("/sites/" + encodeURIComponent(slug), { key: auth });
+          url = publicReceiptUrl(res && res.site && res.site.url);
+        } catch (e) {
+          url = null;
+        }
+        if (url) {
+          showResult({ slug: slug, unchanged: true, version: version, url: url }, { keepDestination: true, restoreFocus: restoreFocus });
+          return;
+        }
+        showResult(
+          {
+            slug: slug,
+            unchanged: true,
+            version: version,
+            linkUnavailable: true,
+            onLinkRetry: function () {
+              return showUnchangedResult(slug, version, auth, true);
+            },
+          },
+          { keepDestination: true, restoreFocus: restoreFocus },
+        );
+      } finally {
+        if (holdBusy) {
+          state.busy = false;
+          setDestinationDisabled(false);
+          setNavDisabled(false);
+          publishBtn.disabled = !state.items.length || !!state.errors.length;
+        }
       }
     }
 
