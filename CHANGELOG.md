@@ -174,6 +174,10 @@
 
 ### Extension API
 
+- Bump `EXTENSION_API_VERSION` to 5: `Viewer` gains an optional `etagExtra(file, live)` that adds render
+  identity (for example linked neighbours) to the viewer ETag. The server percent-encodes the viewer id
+  and this value in the ETag, so any string is safe; built-in viewers' ETags are unchanged.
+
 - Bump `EXTENSION_API_VERSION` to 4: Principal adds an upload-only variant
   (versionId, expiresAt in epoch milliseconds, ip), and DropwayConfig adds
   urlFetchMaxBytes. Custom identity/policy adapters must keep upload principals
