@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Markdown viewer
+
+- A Markdown heading that would duplicate an earlier raw-HTML heading id now takes the next
+  free `-1`-style suffix, so every `#fragment` link resolves to exactly one heading. The first
+  heading in document order keeps its id, raw-HTML ids are never rewritten, and documents
+  without the collision render byte-identical output. Cached renders and ETags move from
+  `markdown@3` to `markdown@4` with the change.
+
 ### Sites
 
 - Every site serves an embeddable live-version badge at `<site URL>badge.svg` (path and
