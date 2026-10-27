@@ -128,13 +128,13 @@ If a site is renamed or its old slug is retargeted between requests, the same
 version ID MUST NOT be replaced: resolution on a site without that ID returns
 404. Do not retry via a new slug, convert this into site deletion, or claim that
 site-ID input closes the in-service rename/ownership race. That latter race is
-included in D3's unresolved server-fencing disposition.
+covered by the server-fencing prerequisites in section 5.1.
 
 Numeric refs agree with IDs only for the same fixture/lookup moment. Agents
 intending a previously inspected object MUST carry its ID, not reconstruct a
 number. A target becoming live **between requests** should hit the service's
 `version_is_live` check. An interleaving **inside** that service is the unfenced
-case in section 1, not solved by this CLI proposal (decision D3 below).
+case in section 1, not solved by this CLI proposal (prerequisites P1 and P2, section 5.1).
 
 ### 3.3 Receipts and recovery
 
@@ -194,7 +194,7 @@ No automatic POST/DELETE retry on network/5xx/409, no retry loop in the CLI, and
 no new key/header. On an unknown outcome, read the same ID/site, report what can
 be observed, and require a fresh intentional invocation; a current live pointer
 or 404 cannot prove who performed the action. This is not exactly-once behavior.
-Whether 429 is guaranteed pre-effect is a required security disposition (D3).
+Whether 429 is guaranteed pre-effect is prerequisite P3 (section 5.1).
 Omitted restore's existing retry behavior is documented, not silently changed.
 
 ### 3.5 Offline dry-run for the changed action surface
@@ -261,9 +261,9 @@ transport is not used. Each table row is a separately parameterized test.
 | H10 confirmation | Non-TTY or `--json` delete without `--yes`; terminal mismatch; terminal match | First two: `confirmation_required` or `not_confirmed`/2, no DELETE. Match or `--yes`: only selected version DELETE; never whole-site DELETE. No non-TTY prompt. |
 | H11 dry-run | Both explicit actions, with/without `--api`, `--json`, `--yes`, missing key, unreadable config; also absent version, `--dry-run=false`, `--dry-run=0`, `--no-dry-run`, repeated target/mode flags, and execution without `--api` | Valid plan equals §3.5, exit 0; zero network/filesystem/prompt calls. All listed invalid modes refuse `usage`/2 with zero reads/requests. Malformed refs still refuse. |
 | H12 omitted compatibility | `restore history-site`; F with live outside list; F with no previous candidate | Existing list-only algorithm/receipt unchanged, including fallback when live is absent and `no_previous_version`/4; no direct GET added. Baseline this separately from explicit-ref tests. |
-| H13 retry / unknown result | GET 503 then success; action 503/network loss; bounded 429 then success; deletion succeeded but response lost | Reads retry within existing bounds. Explicit mutations never retry 503/network or change ID; return exit 7 and actual error. 429 retries same immutable request only if D3 permits. A later 404 is not synthesized success/replay. |
+| H13 retry / unknown result | GET 503 then success; action 503/network loss; bounded 429 then success; deletion succeeded but response lost | Reads retry within existing bounds. Explicit mutations never retry 503/network or change ID; return exit 7 and actual error. 429 retries same immutable request only once P3 is satisfied. A later 404 is not synthesized success/replay. |
 | H14 envelope / malformed success | GET/action return existing error metadata; GET 200 with missing/invalid ID/status/live/site or mismatched ID/number | Error fields pass through unchanged. Malformed/mismatched GET refuses `invalid_version_response`/1 before mutation; stdout is exactly one JSON value, no credentials/upload links. |
-| H15 service race characterization | Pause DELETE after non-live read, restore that ID concurrently, then resume; pause restore after target lookup, delete target, then resume | Characterize current unfenced results in disposable service tests. Do **not** label them safe or make a CLI-only fix pass this safety gate. Implementation cannot start until D3 records whether a separate server-fence prerequisite is required. |
+| H15 service race characterization | Pause DELETE after non-live read, restore that ID concurrently, then resume; pause restore after target lookup, delete target, then resume | Characterize current unfenced results in disposable service tests. Do **not** label them safe or make a CLI-only fix pass this safety gate. Implementation cannot start until prerequisites P1–P4 (section 5.1) merge. |
 
 Also retain unchanged site-delete, legacy-brand, binary `--version`, explicit
 read and surplus-positional suites; never edit their protected acceptance files.
@@ -271,7 +271,8 @@ No new acceptance tests are authored by this documentation slice.
 
 ## 5. Decisions and implementation STOP
 
-All items below are **pending**, not approvals inferred from merging this doc:
+D1, D2 and D4 are **pending**, not approvals inferred from merging this doc.
+D3 is dispositioned in section 5.1:
 
 - **D1 — intent:** accept direct selection of any existing ready historical
   version for explicit CLI actions, while leaving omitted restore, listing,
@@ -280,15 +281,56 @@ All items below are **pending**, not approvals inferred from merging this doc:
   the ref grammar/`live` refusal, offline plan schema and no confirmation change
   for restore? Recommendation: accept as a bounded CLI contract; keep deletion
   confirmation and site-delete behavior intact.
-- **D3 — security disposition:** explicitly assess expanded destructive-target
-  reach, pending exclusion, confirmation/foreign-scope behavior, non-atomic
-  service checks, unknown outcomes and whether 429 is pre-effect. Recommendation:
-  **do not authorize a CLI-only activation while the live-delete/restore races
-  are unresolved**; decide whether separately bounded service fencing is a
-  prerequisite. No new endpoint or server changes are authorized here.
+- **D3 — security disposition (recorded, see 5.1):** approve with mandatory
+  server prerequisites; a CLI-only activation is not authorized.
 - **D4 — error contract:** accept the proposed CLI-only
   `invalid_version_response` code and existing-code reuse for local pending/live
   refusals; server code/hint/metadata fidelity remains unchanged.
+
+### 5.1 D3 disposition: prerequisites before any implementation
+
+Security disposition: **approve with mandatory prerequisites; do not authorize
+CLI-only activation.** Without them there is no safe scope: the change widens
+destructive reach to all ready history (and sequential-number enumeration)
+while check-then-act races, slug re-resolution across the CLI's two requests and
+post-effect retries stay unfenced. Per-request authorization bounds privilege
+(unknown and foreign sites both return 404) but does not pin (site, version,
+live) across requests.
+
+With the prerequisites, the safe scope is: explicit `vN`/`N`/`ver_` refs
+resolved by direct GET beyond the newest-500 window; pending versions stay
+unreachable from the CLI (a wrapper convenience, **not** a security boundary,
+since the server read APIs already serve pending IDs); confirmation and scopes
+unchanged; the returned immutable ID pinned for the mutation.
+
+Each prerequisite is its own bounded card, merged in order before an
+implementation card starts:
+
+- **P1 — atomic restore.** Existence, site ownership and expected-live
+  compare-and-swap in one batch, reusing the `finalizeDeploy` conditional-update
+  and conflict pattern (`packages/core/src/services/deploys.ts`). A live pointer
+  that moved returns 409 (CLI exit 5, no retry); a target deleted between check
+  and flip must fail, never leave a dangling pointer.
+- **P2 — atomic delete and confirm parity.** Move the non-live fence inside the
+  mutating batch. Enforce server-side `confirm=slug` on HTTP
+  `DELETE /versions/{id}` to match the MCP handler; today the HTTP handler skips
+  it and the CLI sends none.
+- **P3 — retry proof.** Show every layer that can emit 429/5xx on these routes
+  is strictly pre-commit, or drop automatic retry on mutating POST/DELETE (429
+  surfaces as exit 7, explicit re-run) and add idempotency-key replay. Narrowing
+  restore to 429-only does not by itself prove pre-effect. Never synthesize
+  success from a later 404 or live-pointer read.
+- **P4 — pending/mode bar stays server-side.** Restore keeps rejecting non-ready
+  versions; delete's allowance for pending non-live versions is accepted
+  explicitly, not described as unchanged.
+
+Conditions on the later implementation card: bind confirmation to the immutable
+ID actually mutated (the prompt today shows slug and display number while the
+request sends a hidden ID); race tests gate on the server fence across
+live-move, publish, restore, delete and rename interleavings, not CLI behavior
+alone; number-reuse and enumeration-expansion risks are accepted in writing;
+staging end-to-end only; no new grants or scopes. Implementation stays stopped
+until P1–P4 merge.
 
 Record product intent and security dispositions in the associated task decision
 record before a future bounded implementation card starts. A docs review is not
