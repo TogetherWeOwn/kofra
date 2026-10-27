@@ -199,6 +199,38 @@ for (const separate of [false, true]) describe(`manual View mode tabs (${separat
     } finally { await view.context.close(); }
   });
 
+  it.each(["bytes.bin", "photo.png"])("unavailable Source mode in the URL falls back to the first mode for %s without a dead tab stop", async path => {
+    const view = await visit(fixture, path, 360, "source");
+    try {
+      await selected(view.page, "rendered");
+      await roving(view.page, "rendered");
+      await wiring(view.page, "rendered");
+      // frame() pins the rendered iframe URL exactly (view=1 for these kinds),
+      // so a fallback that still loads ?view=source fails here.
+      await frame(view, fixture, path, "rendered");
+      const available = await group(view.page).getByRole("tab").evaluateAll(tabs => tabs.filter(tab => !(tab as any).disabled && tab.getAttribute("aria-disabled") !== "true").length);
+      expect(available).toBe(2);
+      if (await mode(view.page, "source").count()) {
+        expect(await mode(view.page, "source").evaluate(el => (el as any).disabled || el.getAttribute("aria-disabled") === "true")).toBe(true);
+        expect(await mode(view.page, "source").evaluate(el => (el as any).tabIndex)).toBe(-1);
+        expect(await mode(view.page, "source").getAttribute("aria-selected")).toBe("false");
+      }
+      expect(await group(view.page).evaluate(el => el.contains(el.ownerDocument.activeElement)), "fallback on load must not grab focus").toBe(false);
+      expect(view.errors).toEqual([]);
+    } finally { await view.context.close(); }
+  });
+
+  it("an unknown mode in the URL falls back to the first mode", async () => {
+    const view = await visit(fixture, "note.txt", 1100, "garbage");
+    try {
+      await selected(view.page, "rendered");
+      await roving(view.page, "rendered");
+      await wiring(view.page, "rendered");
+      await frame(view, fixture, "note.txt", "rendered");
+      expect(view.errors).toEqual([]);
+    } finally { await view.context.close(); }
+  });
+
   it("file navigation reconciles Source to a valid mode without stealing focus", async () => {
     const view = await visit(fixture, "note.txt", 360, "source");
     try {
