@@ -213,7 +213,7 @@ describe("viewer toggle focus (rendered contract)", () => {
     const res = await get(path);
     expect(res.status).toBe(200);
     const etag = res.headers.get("etag")!;
-    const m = new RegExp(`^W/"${viewerId}@(\\d+)-[a-f0-9]{64}"$`).exec(etag);
+    const m = new RegExp(`^W/"${viewerId}@(\\d+)-[a-f0-9]{64}(?:-nav[a-z0-9]+)?"$`).exec(etag);
     expect(m, `${viewerId} ETag shape: ${etag}`).not.toBeNull();
     // Viewer ETags derive from the viewer version; the pre-change pages were
     // version 1, so anything still at 1 can be answered 304 with the old
