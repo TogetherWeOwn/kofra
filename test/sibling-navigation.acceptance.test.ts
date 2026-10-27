@@ -1,8 +1,10 @@
 /** Protected test-first contract. Build on this artifact; do not edit it in the implementation PR. */
 import { env } from "cloudflare:test";
-import { clearLiveMemoryCache } from "@dropway/core";
+import { clearLiveMemoryCache, type LiveSite } from "@dropway/core";
 import { zipSync, strToU8 } from "fflate";
 import { beforeAll, describe, expect, it } from "vitest";
+import { viewerBar } from "../packages/server/src/viewers/chrome";
+import { toViewerFile, type ViewerContext } from "../packages/server/src/viewers/index";
 import { databaseBoundary, request } from "./delivery-review-fixtures";
 import { freshInstance, jsonBody, ORIGIN, type Instance } from "./helpers";
 import { create, instance as transferInstance, recipientFile, SITES } from "./transfer-fixtures";
@@ -108,6 +110,92 @@ describe("same-folder sibling navigation", () => {
       const links = await anchors((await view(order[i]!.slice(base.length))).html);
       expect(links.map(l => l.href).sort()).toEqual([order[i - 1], order[i + 1]].filter(Boolean).sort());
     }
+  });
+
+  it("never names stored .dropway entries as siblings of visible root files", async () => {
+    const name = "sibling-dropway-fixture";
+    await publish(dw, name, {
+      ".dropway/notes.txt": "hidden nested\n",
+      "omega.txt": "last visible\n",
+      ".dropway": "hidden root\n",
+      "alpha.txt": "first visible\n",
+    });
+    // Unfiltered, the root ".dropway" entry sorts before "alpha.txt", so the
+    // first visible file would gain it as a Previous neighbour.
+    const first = await dw.call(`/s/${name}/alpha.txt`, { headers: NAV });
+    expect(first.status).toBe(200);
+    const firstLinks = await anchors(await first.text());
+    expect(firstLinks).toHaveLength(1);
+    expectLink(firstLinks[0], "next", `/s/${name}/omega.txt`, "omega.txt");
+    const last = await dw.call(`/s/${name}/omega.txt`, { headers: NAV });
+    expect(last.status).toBe(200);
+    const lastLinks = await anchors(await last.text());
+    expect(lastLinks).toHaveLength(1);
+    expectLink(lastLinks[0], "prev", `/s/${name}/alpha.txt`, "alpha.txt");
+    expect([...firstLinks, ...lastLinks].some(l => l.href.includes(".dropway") || l.title.includes(".dropway"))).toBe(false);
+  });
+
+  it("orders collation-equal siblings as the listing does, end to end", async () => {
+    // Canonically equivalent spellings: English collation equates them, and
+    // the listing breaks the tie by code unit (NFD "e" before NFC "é").
+    const nfc = "\u00e9clair.txt";
+    const nfd = "e\u0301clair.txt";
+    const name = "sibling-collation-fixture";
+    // Publish NFC first: the opposite of listing order.
+    await publish(dw, name, { [nfc]: "nfc\n", "z-last.txt": "last\n", [nfd]: "nfd\n", "a-first.txt": "first\n" });
+    const siteBase = `/s/${name}/`;
+    const nfdRes = await dw.call(`${siteBase}${encodeURIComponent(nfd)}`, { headers: NAV });
+    expect(nfdRes.status).toBe(200);
+    const nfdLinks = await anchors(await nfdRes.text());
+    expect(nfdLinks).toHaveLength(2);
+    expectLink(nfdLinks.find(l => l.rel === "prev"), "prev", `${siteBase}a-first.txt`, "a-first.txt");
+    expectLink(nfdLinks.find(l => l.rel === "next"), "next", `${siteBase}${encodeURIComponent(nfc)}`, nfc);
+    const nfcRes = await dw.call(`${siteBase}${encodeURIComponent(nfc)}`, { headers: NAV });
+    expect(nfcRes.status).toBe(200);
+    const nfcLinks = await anchors(await nfcRes.text());
+    expect(nfcLinks).toHaveLength(2);
+    expectLink(nfcLinks.find(l => l.rel === "prev"), "prev", `${siteBase}${encodeURIComponent(nfd)}`, nfd);
+    expectLink(nfcLinks.find(l => l.rel === "next"), "next", `${siteBase}z-last.txt`, "z-last.txt");
+  });
+
+  it("breaks collation-equal sibling ties by code unit, independent of manifest order", async () => {
+    const nfc = "\u00e9clair.txt";
+    const nfd = "e\u0301clair.txt";
+    // The publish pipeline hands viewers a path-ordered manifest, which
+    // already puts NFD before NFC, so the tiebreak itself is pinned
+    // directly (as in the listing collation suite): the same entries in
+    // NFC-first manifest order must still link NFD before NFC. Plain
+    // localeCompare equates the pair and would keep manifest order.
+    const entry = (): [string, number, string] => ["0".repeat(64), 4, "text/plain"];
+    const files = Object.fromEntries([nfc, "z-last.txt", nfd, "a-first.txt"].map(path => [path, entry()]));
+    const live = { v: 3, slug: "sibling-collation-fixture", files } as unknown as LiveSite;
+    const siteBase = "/s/sibling-collation-fixture/";
+    const barFor = (path: string) => viewerBar({
+      dw: {},
+      request: new Request(`${ORIGIN}${siteBase}${encodeURIComponent(path)}`),
+      url: new URL(`${ORIGIN}${siteBase}${encodeURIComponent(path)}`),
+      live,
+      file: toViewerFile(path, "0".repeat(64), 4, "text/plain"),
+      mode: "document",
+      embed: false,
+      fileUrl: `${siteBase}${encodeURIComponent(path)}`,
+      viewUrl: `${siteBase}${encodeURIComponent(path)}?view=1`,
+      sourceUrl: `${siteBase}${encodeURIComponent(path)}?view=source`,
+      rawUrl: `${siteBase}${encodeURIComponent(path)}?raw=1`,
+      downloadUrl: `${siteBase}${encodeURIComponent(path)}?download=1`,
+      siteBase,
+      appViewerUrl: `${siteBase}${encodeURIComponent(path)}`,
+      readText: async () => "x\n",
+      readBytes: async () => new Uint8Array([120, 10]),
+    } as unknown as ViewerContext, []);
+    const nfdLinks = await anchors(barFor(nfd));
+    expect(nfdLinks).toHaveLength(2);
+    expectLink(nfdLinks.find(l => l.rel === "prev"), "prev", `${siteBase}a-first.txt`, "a-first.txt");
+    expectLink(nfdLinks.find(l => l.rel === "next"), "next", `${siteBase}${encodeURIComponent(nfc)}`, nfc);
+    const nfcLinks = await anchors(barFor(nfc));
+    expect(nfcLinks).toHaveLength(2);
+    expectLink(nfcLinks.find(l => l.rel === "prev"), "prev", `${siteBase}${encodeURIComponent(nfd)}`, nfd);
+    expectLink(nfcLinks.find(l => l.rel === "next"), "next", `${siteBase}z-last.txt`, "z-last.txt");
   });
 
   it("escapes hostile sibling names and encodes path segments without carrying request credentials or modes", async () => {
