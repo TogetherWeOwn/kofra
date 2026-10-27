@@ -21,6 +21,13 @@ const files = {
   "folder/child.txt": "Folder child\n",
   'folder/雪 & <phone> "quote" #?.md': "# Hostile filename, inert chrome\n",
 };
+// One image per folder, so folderNavEtag adds no suffix and the validator
+// main issued is exactly `W/"<id>@<version>-<sha256>"`.
+const media = {
+  "vector/shape.svg": '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1"/></svg>\n',
+  "raster/pixel.png": "not really a png; the image viewer renders without dimensions\n",
+};
+const fixtures: Record<string, string> = { ...files, ...media };
 
 // Extract an actual image, not an unrelated icon or a text mention of QR.
 function qrSvg(html: string): string | undefined {
@@ -61,7 +68,7 @@ describe("viewer Phone: served public-file contract", () => {
   beforeAll(async () => {
     dw = await freshInstance();
     const published = await dw.json("/api/v1/publish", {
-      key: dw.ownerKey, ...jsonBody({ files: Object.entries(files).map(([path, content]) => ({ path, content })) }),
+      key: dw.ownerKey, ...jsonBody({ files: Object.entries(fixtures).map(([path, content]) => ({ path, content })) }),
     });
     expect(published.status).toBe(201);
     root = `/s/${published.body.slug}/`;
@@ -139,12 +146,15 @@ describe("viewer Phone: served public-file contract", () => {
 
   // Old versions are the validators the pre-Phone build issued, so a cached
   // page carrying one must refresh (200) instead of revalidating (304)
-  // against markup that now includes the Phone disclosure.
+  // against markup that now includes the Phone disclosure. The @3 json, svg
+  // and image rows are the validators main issues for its focus-fix markup
+  // without Phone: merged markup differs from both parents, so it needs @4.
   it.each([
-    ["notes.md", "markdown", 3, 4], ["data.json", "json", 2, 3],
+    ["notes.md", "markdown", 3, 4], ["data.json", "json", 2, 4], ["data.json", "json", 3, 4],
     ["table.csv", "csv", 3, 4], ["plain.txt", "code", 3, 4], ["page.html", "html-frame", 1, 2],
-  ] as const)("invalidates the pre-Phone %s validator, then correctly revalidates refreshed markup", async (path, id, oldVersion, newVersion) => {
-    const hash = await sha256Hex(new TextEncoder().encode(files[path]));
+    ["vector/shape.svg", "svg", 3, 4], ["raster/pixel.png", "image", 3, 4],
+  ] as const)("invalidates the pre-Phone %s %s@%i validator, then correctly revalidates refreshed markup", async (path, id, oldVersion, newVersion) => {
+    const hash = await sha256Hex(new TextEncoder().encode(fixtures[path]));
     const legacy = `W/"${id}@${oldVersion}-${hash}"`;
     const refreshed = await dw.call(`${root}${path}?view=1`, { headers: { ...NAV, "If-None-Match": legacy } });
     expect(refreshed.status, "old cached viewer markup must refresh to include Phone").toBe(200);
@@ -215,8 +225,8 @@ describe("viewer Phone: validator versions", () => {
   // (which would strand cached pre-Phone pages on a 304) fails here.
   it("pins every built-in viewer at its exact post-Phone version", () => {
     const expected: Record<string, number> = {
-      source: 4, "html-frame": 2, markdown: 4, notebook: 3, json: 3, csv: 4,
-      svg: 3, image: 3, pdf: 2, video: 2, audio: 2, font: 2, archive: 2,
+      source: 4, "html-frame": 2, markdown: 4, notebook: 3, json: 4, csv: 4,
+      svg: 4, image: 4, pdf: 2, video: 2, audio: 2, font: 2, archive: 2,
       code: 4, binary: 4,
     };
     expect(VIEWERS.map((v) => v.id).sort()).toEqual(Object.keys(expected).sort());
