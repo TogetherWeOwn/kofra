@@ -216,6 +216,62 @@ describe("file-not-found recovery links (path mode)", () => {
   });
 });
 
+/**
+ * The visible text of the page's first `<code>` element (the echoed
+ * request path), with entities decoded, found by plain string search.
+ */
+function codeText(html: string): string {
+  const start = html.indexOf("<code>");
+  const end = html.indexOf("</code>", start);
+  expect(start, "page echoes the path in <code>").toBeGreaterThanOrEqual(0);
+  expect(end, "<code> is closed").toBeGreaterThan(start);
+  return decodeEntities(html.slice(start + "<code>".length, end).replaceAll("&#123;", "{"));
+}
+
+describe("file-not-found recovery links (names the page template must not interpret)", () => {
+  it("a requested name containing {app} stays inert text and adds no instance-home anchor", async () => {
+    const dw = await freshInstance();
+    await publish(dw, "brace-recovery", { "guides/kept.txt": "kept", "{app}/kept.txt": "kept too" });
+
+    const cases: Array<{ path: string; shown: string; dir: string }> = [
+      { path: "/s/brace-recovery/guides/%7Bapp%7D.txt", shown: "/guides/{app}.txt", dir: "guides/" },
+      { path: "/s/brace-recovery/%7Bapp%7D/missing.txt", shown: "/{app}/missing.txt", dir: "%7Bapp%7D/" },
+    ];
+    for (const { path, shown, dir } of cases) {
+      const html = await systemHtml(await dw.call(path, { headers: NAV }), 404);
+      const links = anchors(html);
+      expect(links.map((a) => a.href), path).toEqual([
+        "/s/brace-recovery/",
+        `/s/brace-recovery/${dir}`,
+        `${ORIGIN}/v/brace-recovery/${dir}`,
+      ]);
+      expect(links[2]!.text, path).toBe("Browse files");
+      expect(links.some((a) => a.href === ORIGIN), path).toBe(false);
+      expect(codeText(html), path).toBe(shown);
+    }
+  });
+
+  it("private .dropway config never becomes the nearest ancestor or any link", async () => {
+    const dw = await freshInstance();
+    await publish(dw, "private-recovery", {
+      "index.html": "<p>home page</p>",
+      "guides/kept.txt": "kept",
+      ".dropway/config.json": '{"note":"valid"}',
+    });
+
+    for (const path of ["/s/private-recovery/.dropway/config.json", "/s/private-recovery/.dropway/missing.json"]) {
+      const html = await systemHtml(await dw.call(path, { headers: NAV }), 404);
+      const links = anchors(html);
+      expect(links.map((a) => a.href), path).toEqual(["/s/private-recovery/", `${ORIGIN}/v/private-recovery/`]);
+      expect(links[1]!.text, path).toBe("Browse files");
+      for (const link of links) {
+        expect(link.href, path).not.toContain(".dropway");
+        expect(link.text, path).not.toContain(".dropway");
+      }
+    }
+  });
+});
+
 describe("file-not-found recovery links (separate sites origin)", () => {
   it("builds home and ancestor hrefs from the /<slug>/ base, not a hard-coded /s/ prefix", async () => {
     const dw = await freshInstance({ appOrigin: ORIGIN, sitesOrigin: "https://sites.example" });
