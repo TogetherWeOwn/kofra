@@ -55,6 +55,7 @@ const PLACEHOLDER_RE = /:([A-Za-z_][A-Za-z0-9_]*)/g;
  * by being overwritten.
  */
 const BLOCKED_HEADERS = new Set([
+  "accept-ch",
   "accept-ranges",
   "age",
   "alt-svc",
@@ -73,7 +74,10 @@ const BLOCKED_HEADERS = new Set([
   "host",
   "keep-alive",
   "location",
+  "nel",
   "refresh",
+  "report-to",
+  "reporting-endpoints",
   "server",
   "service-worker-allowed",
   "set-cookie",
@@ -350,8 +354,16 @@ export function parseSiteConfigJson(json: string | null | undefined): SiteConfig
   if (Array.isArray(obj.warnings)) {
     for (const w of obj.warnings) {
       if (!w || typeof w !== "object") continue;
-      const { code, message } = w as Record<string, unknown>;
-      if (typeof code === "string" && typeof message === "string") config.warnings.push({ code, message });
+      const { code, message, path, line, fix } = w as Record<string, unknown>;
+      if (typeof code === "string" && typeof message === "string") {
+        config.warnings.push({
+          code,
+          message,
+          ...(typeof path === "string" ? { path } : {}),
+          ...(typeof line === "number" ? { line } : {}),
+          ...(typeof fix === "string" ? { fix } : {}),
+        });
+      }
     }
   }
   return config;

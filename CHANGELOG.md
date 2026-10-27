@@ -213,7 +213,11 @@
   `viewers` and `ttl_seconds` on site rows, optional `config_json` on version
   rows, and the public `@dropway/core` site-config parsers/matchers. Fields
   are additive and optional, so existing viewers, adapters and service
-  callers keep working unchanged; `EXTENSION_API_VERSION` stays 4.
+  callers keep working unchanged without an additional extension API bump.
+- Bump `EXTENSION_API_VERSION` to 5: `Viewer` gains an optional `etagExtra(file, live)` that adds render
+  identity (for example linked neighbours) to the viewer ETag. The server percent-encodes the viewer id
+  and this value in the ETag, so any string is safe; built-in viewers' ETags are unchanged.
+
 - Bump `EXTENSION_API_VERSION` to 4: Principal adds an upload-only variant
   (versionId, expiresAt in epoch milliseconds, ip), and DropwayConfig adds
   urlFetchMaxBytes. Custom identity/policy adapters must keep upload principals

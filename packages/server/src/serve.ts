@@ -318,6 +318,18 @@ function etagMatches(req: Request, etag: string): boolean {
   });
 }
 
+// Viewer ids and etagExtra output may be any string — including lone
+// (unpaired) UTF-16 surrogates, on which encodeURIComponent throws URIError.
+// Normalize those to U+FFFD first (same approach as content-disposition.ts);
+// valid surrogate pairs pass through untouched.
+function etagSegment(value: string): string {
+  return encodeURIComponent(
+    value.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, (m) =>
+      m.length === 2 ? m : "\uFFFD",
+    ),
+  );
+}
+
 const flag = (sp: URLSearchParams, name: string) => sp.has(name) && sp.get(name) !== "0" && sp.get(name) !== "false";
 
 /** Which view a request asks for: ?view=source, ?view=1, or a browser navigation (top level or iframe). null = raw bytes. */
@@ -442,10 +454,11 @@ export async function serveSiteContent(
 
   // `_redirects` rules run before file resolution; the first non-self match
   // wins (self-looping rules are skipped, so `/* /index.html` style
-  // catch-alls cannot loop on their destination).
-  const redirect = findSiteRedirect(live.config, requestPath);
+  // catch-alls cannot loop on their destination). Robots keep their dedicated
+  // response below, even when a catch-all matches them (SRV-12).
+  const redirect = filePath === "robots.txt" ? null : findSiteRedirect(live.config, requestPath);
   if (redirect) {
-    let location = redirect.destination.startsWith("/") ? `${mode.base}${redirect.destination.slice(1)}` : redirect.destination;
+    let location = redirect.destination.startsWith("/") ? `${mode.base}${redirect.destination.replace(/^\/+/, "")}` : redirect.destination;
     if (!redirect.destination.includes("?") && url.search) location += url.search;
     const h = new Headers({ Location: location, "Cache-Control": cacheControlFor(filePath, live) });
     applySiteHeaders(h, live, requestPath);
@@ -531,7 +544,7 @@ async function serveFile(
     // The shared bar links live siblings even when this file's bytes are unchanged.
     // Images/SVG have their own validator; embeds do not render the shared bar.
     const folderVariant = !embed && viewer.id !== "image" && viewer.id !== "svg" ? `-folder${live.versionId}` : "";
-    const etag = `W/"${viewer.id}@${viewer.version ?? 1}-${sha256}${viewer.etagExtra?.(file, live) ?? ""}${folderVariant}${embed ? "-e" : ""}${reportVariant}"`;
+    const etag = `W/"${etagSegment(viewer.id)}@${viewer.version ?? 1}-${sha256}${etagSegment(viewer.etagExtra?.(file, live) ?? "")}${folderVariant}${embed ? "-e" : ""}${reportVariant}"`;
     const h = new Headers();
     if (etagMatches(req, etag)) {
       h.set("ETag", etag);
@@ -581,7 +594,12 @@ async function serveFile(
     else out.set("ETag", etag);
     out.set("Cache-Control", live.passwordHash ? "private, no-store" : viewerCacheControl?.includes("no-store") ? viewerCacheControl : out.get("Cache-Control") ?? "public, max-age=0, must-revalidate");
     out.set("Vary", "Accept, Sec-Fetch-Dest");
-    out.set("X-Kofra-Viewer", viewer.id);
+    // Headers.set throws on CR, LF and NUL: a viewer id containing them would
+    // 500 an otherwise healthy render. Omit this diagnostic header for such
+    // ids; the ETag above already carries the encoded identity.
+    if (!viewer.id.includes("\r") && !viewer.id.includes("\n") && !viewer.id.includes("\0")) {
+      out.set("X-Kofra-Viewer", viewer.id);
+    }
     out.delete("Content-Length");
     securityHeaders(out, live, mode);
     let page = new Response(head ? null : rendered.body, { status, headers: out });

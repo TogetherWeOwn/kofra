@@ -120,7 +120,9 @@ Path mode is interim. Root-relative URLs (`/assets/app.js`) would escape the
 Site-config patterns use whole-segment `:placeholders` and one trailing `*` splat;
 adjacent captures are rejected to keep request matching bounded, as is a `:splat`
 placeholder combined with a trailing splat. Header values and redirect destinations
-must fit HTTP's byte-string representation; anything else becomes a warning.
+must fit HTTP's byte-string representation, and header values are limited to 4096
+characters; anything else becomes a warning. Stored warnings retain their path,
+line and fix details on unchanged publishes and repeated finalization.
 
 Site-config files: after the password gate, `_redirects` rules run before
 file resolution (first non-self match wins; a rule pointing at its own path is
@@ -128,19 +130,24 @@ skipped so later rules still apply and catch-alls cannot loop), and
 `_redirects`/`_headers` themselves always answer 404. `_headers` entries apply to file and rendered-viewer responses (including configured
 redirect responses), under the platform security headers, which are applied afterwards
 and win; platform-owned headers (cookies, length, type, validators, CSP, framing,
-`X-Kofra-*`) cannot be set at all, and a gated site's `Cache-Control` stays
+`X-Kofra-*`, service-worker scope and origin-wide reporting/client-hint policies)
+cannot be set at all, and a gated site's `Cache-Control` stays
 `private, no-store`. Otherwise the cache matrix is: gated `private, no-store`;
 any site shipping `.wasm` revalidates; fingerprinted build outputs are
 immutable for a year; HTML and other unfingerprinted files revalidate. A
 site's own `robots.txt` is served verbatim; without one, a `noindex` site
 (anonymous, expiring, or the `noindex` setting) gets a generated
-disallow-all and any other site a plain 404 — never the SPA fallback.
+disallow-all and any other site a plain 404 — never a configured redirect or the
+SPA fallback. Substituted root-relative redirect destinations stay on the site's
+origin, even if a captured splat starts with a slash.
 
 ### Version previews
 
 `<slug>--v<N>` uses the same path/subdomain topology as the live site, but resolves
-its ready version and current site settings directly from D1 (`services/previews.ts`).
-It never reads or repairs the live KV pointer, so newly published bytes are available
+its ready version and current SPA, Markdown, isolation and password settings directly
+from D1 (`services/previews.ts`). The preview manifest does not yet carry parsed
+hosting rules or the `viewers` switch; parity with those live-site settings is a
+separate follow-up. It never reads or repairs the live KV pointer, so newly published bytes are available
 even during live-cache propagation. Pending versions and transfer sites are not previewable.
 
 Access requires a credential that can read the site or a signed `dw_preview` capability
@@ -276,6 +283,15 @@ The dashboard never renders user content on the app origin: files open in an
 iframe on the sites origin (with `allow-same-origin` only when that origin is
 not the app origin), and downloads go through a forced-download blob.
 
+The loaded version's file detail offers **Download ZIP** through the authenticated
+immutable-ID export route. Browser downloads require known metadata of at most
+16 MiB stored bytes and 1,000 files; pending, larger or unknown versions show an
+explanation and the authenticated REST/CLI route instead. The client verifies
+`X-Kofra-Version`, ZIP type and the server attachment filename, reads at most
+32 MiB of actual response bytes, and offers no attachment until the stream is
+complete. The file selection and filter stay intact. These browser limits do not
+change the server export limits.
+
 Drag-and-drop publishing hashes files in the browser (SHA-256), sends the
 manifest to `POST /api/v1/sites/:slug/deploys`, uploads only the blobs the
 server reports missing (4 at a time, retried on 429/5xx), then finalizes. A
@@ -340,7 +356,7 @@ tables in their own migrations or their own D1 database.
 
 ## Extension points: `createDropway(options)`
 
-`@dropway/server` exports `EXTENSION_API_VERSION = 4` for this public embedding
+`@dropway/server` exports `EXTENSION_API_VERSION = 5` for this public embedding
 contract. Update it and the Extension API section in `CHANGELOG.md` when changing
 the contract. `test/extension-contract.test.ts` exercises every existing extension
 point with fake adapters and real emulated D1/R2/KV bindings; it runs in public CI.
