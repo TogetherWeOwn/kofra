@@ -236,11 +236,14 @@ it("conditional requests never revalidate the pre-fix styling (disposable runtim
     const etag = res.headers.get("etag")!;
     const m = new RegExp(`^W/"${viewerId}@(\\d+)-`).exec(etag);
     expect(m, `${viewerId} ETag: ${etag}`).not.toBeNull();
-    expect(Number(m![1]), `${viewerId} viewer version bumped past the pre-change 1`).toBeGreaterThan(1);
+    // Every pre-fix page (image, SVG and JSON alike) was viewer version 2.
+    expect(Number(m![1]), `${viewerId} viewer version bumped past the pre-change 2`).toBeGreaterThan(2);
     await res.text();
-    const stale = await fetch(fileUrl(path), { headers: { ...NAV, "If-None-Match": etag.replace(/@\d+-/, "@1-") } });
+    const staleTag = etag.replace(/@\d+-/, "@2-");
+    expect(staleTag, `${viewerId}: the stale validator differs from the current one`).not.toBe(etag);
+    const stale = await fetch(fileUrl(path), { headers: { ...NAV, "If-None-Match": staleTag } });
     expect(stale.status, `${viewerId}: pre-change validator must not match`).toBe(200);
-    await stale.text();
+    expect(await stale.text(), `${viewerId}: revalidated body carries a focus indicator rule`).toContain(":focus-visible");
     const current = await fetch(fileUrl(path), { headers: { ...NAV, "If-None-Match": etag } });
     expect(current.status, `${viewerId}: current validator still 304s`).toBe(304);
   }

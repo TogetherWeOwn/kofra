@@ -82,6 +82,9 @@ function hasCheckedRule(html: string, inputRef: string, target: RegExp): boolean
   );
 }
 
+/** The image, SVG and JSON viewer version every pre-focus-fix ETag carries. */
+const PRE_CHANGE_VERSION = 2;
+
 const MEDIABAR_LABEL = /dw-mediabar[^~]*label|label\s*\[\s*for\s*=\s*"?dw-zoom"?\s*\]/;
 const treeLabel = /label\s*\[\s*for\s*=\s*"?dw-jt-tree"?\s*\]/;
 const prettyLabel = /label\s*\[\s*for\s*=\s*"?dw-jt-pretty"?\s*\]/;
@@ -215,11 +218,12 @@ describe("viewer toggle focus (rendered contract)", () => {
     const etag = res.headers.get("etag")!;
     const m = new RegExp(`^W/"${viewerId}@(\\d+)-[a-f0-9]{64}(?:-nav[a-z0-9]+)?"$`).exec(etag);
     expect(m, `${viewerId} ETag shape: ${etag}`).not.toBeNull();
-    // Viewer ETags derive from the viewer version; the pre-change pages were
-    // version 1, so anything still at 1 can be answered 304 with the old
-    // (focus-less) styling. This includes the JSON viewer: its CSS is
-    // rendered into every page, so its version interaction must move too.
-    expect(Number(m![1]), `${viewerId} viewer version must be bumped past the pre-change 1`).toBeGreaterThan(1);
+    // Viewer ETags derive from the viewer version. The pre-change pages were
+    // version 2 for all three viewers (image/SVG gained folder navigation at
+    // 2, JSON gained print CSS at 2), so anything still at 2 can be answered
+    // 304 with the old (focus-less) styling. This includes the JSON viewer:
+    // its CSS is rendered into every page, so its version must move too.
+    expect(Number(m![1]), `${viewerId} viewer version must be bumped past the pre-change ${PRE_CHANGE_VERSION}`).toBeGreaterThan(PRE_CHANGE_VERSION);
   });
 
   it.each([
@@ -230,12 +234,52 @@ describe("viewer toggle focus (rendered contract)", () => {
     const res = await get(path);
     const etag = res.headers.get("etag")!;
     expect(etag, `${viewerId} serves an ETag`).toMatch(new RegExp(`^W/"${viewerId}@\\d+-`));
-    // The validator a browser cached before the focus fix existed.
-    const stale = etag.replace(/@\d+-/, "@1-");
+    // The exact validator a browser cached before the focus fix existed.
+    const stale = etag.replace(/@\d+-/, `@${PRE_CHANGE_VERSION}-`);
+    expect(stale, `${viewerId}: the stale validator differs from the current one`).not.toBe(etag);
     const revalidated = await get(path, { ...NAV, "If-None-Match": stale });
     expect(revalidated.status, `${viewerId}: pre-change validator must not match`).toBe(200);
     expect(await revalidated.text(), `${viewerId}: revalidated body carries a focus indicator rule`).toContain(":focus-visible");
     const current = await get(path, { ...NAV, "If-None-Match": etag });
     expect(current.status, `${viewerId}: current validator still short-circuits`).toBe(304);
+  });
+});
+
+describe("viewer toggle focus (JSON without a Pretty pane)", () => {
+  let dw: Instance;
+  let slug: string;
+  // 300k one-digit numbers: compact ~600 KB (under the 2 MiB JSON viewer
+  // cap), pretty-printed ~1.5 MB (over the viewer's 1 MiB pretty limit), so
+  // the page renders the tree but no Pretty pane.
+  const big = `[${new Array(300_000).fill(1).join(",")}]`;
+
+  beforeAll(async () => {
+    expect(big.length, "compact fixture stays under the JSON viewer cap").toBeLessThan(2 * 1024 * 1024);
+    expect(JSON.stringify(JSON.parse(big), null, 2).length, "pretty text exceeds the pretty limit").toBeGreaterThan(1024 * 1024);
+    dw = await freshInstance();
+    const res = await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, body: form({ "data/big.json": big }) });
+    expect(res.status).toBe(201);
+    slug = res.body.slug;
+  });
+
+  it("renders no Pretty radio, label or pane, and Tree keeps its focus indicator", async () => {
+    const res = await dw.call(`/s/${slug}/data/big.json`, { headers: NAV });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-kofra-viewer")).toBe("json");
+    const html = await res.text();
+    // Assert on markup, not the bare id: the shared stylesheet still names
+    // #dw-jt-pretty / label[for=dw-jt-pretty] / .dw-jpretty selectors.
+    expect(html, "no Pretty radio input: arrowing to it would hide the tree with nothing to show").not.toMatch(/<input\b[^>]*\bid="?dw-jt-pretty\b/);
+    expect(html, "no Pretty tab label").not.toMatch(/<label\b[^>]*\bfor="?dw-jt-pretty\b/);
+    expect(html, "no Pretty pane").not.toMatch(/<div\b[^>]*\bclass="[^"]*\bdw-jpretty\b/);
+    // The Tree radio, tab label and pane remain, in sibling order.
+    const tree = html.indexOf('<input type="radio" name="dw-jt" id="dw-jt-tree" class="dw-toggle" checked>');
+    const tabs = html.indexOf('<div class="dw-jtabs"><label for="dw-jt-tree">Tree</label></div>');
+    const pane = html.indexOf('<div class="dw-jpane dw-jtree">');
+    expect(tree, "checked Tree radio").toBeGreaterThan(-1);
+    expect(tabs, "Tree is the only tab label and follows the radio").toBeGreaterThan(tree);
+    expect(pane, "tree pane follows the tab labels").toBeGreaterThan(tabs);
+    expect(hasCheckedRule(html, "#dw-jt-tree", /\.dw-jtree/), "checked Tree still shows the tree pane").toBe(true);
+    expect(hasFocusIndicatorRule(html, ["#dw-jt-tree"], treeLabel), "Tree radio focus outlines the Tree label").toBe(true);
   });
 });
