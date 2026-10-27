@@ -241,6 +241,17 @@ conditional ETags; raw/download bytes, the no-script viewer CSP and the 4 MiB /
 | `/dashboard/settings` | Account, members, instance configuration, `uiSlots.settingsSections` |
 | `/v/:slug/*path` (`/view/...` redirects) | File browser: tree, view tabs, and the file in a sandboxed iframe on the sites origin. The tree combines a case-insensitive path filter with the manifest file kind (All by default); the count covers loaded files only, matching ancestors stay discoverable, and Clear restores All plus an empty path filter without changing the displayed file |
 
+The file browser keeps `mode`, `filter` and `kind` in its app URL, restoring them
+on reload and Back/Forward. Path matching remains literal, case-insensitive and
+trimmed; counts cover only the loaded manifest. Filter edits replace the current
+history entry; file/mode navigation pushes one entry with both filters. Clear
+removes only the filters, never the displayed file or mode. **Copy browser view
+link** explicitly shares an app URL containing the literal filter text and grants
+no access; **Copy link** remains the clean public file URL. Only the three display
+parameters enter the browser-view link, never arbitrary query fields, fragments,
+credentials or history objects. Filters are not stored or sent to the sites frame,
+raw/download requests or additional API calls.
+
 Pages are server-rendered shells. One first-party script,
 `/__dropway/ui/app-<hash>.js`, fills in data from the public REST API, using the
 API key the person signed in with (sessionStorage, or localStorage when they tick

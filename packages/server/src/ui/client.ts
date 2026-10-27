@@ -4779,6 +4779,37 @@ export function dropwayClient() {
       if (mode === "source" && (!f || TEXT_KINDS.indexOf(f.kind) >= 0)) return mode;
       return mode === "raw" ? mode : "view";
     }
+    // Construct share/navigation URLs from explicit display fields, never history.state
+    // or the full current URL (which may contain unrelated query fields or a fragment).
+    function browserViewUrl(p, mode) {
+      var url = new URL("/v/" + encodeURIComponent(slug) + "/" + encodePath(p), location.origin);
+      var params = new URLSearchParams(location.search);
+      var query = params.get("filter") || "";
+      var kind = params.get("kind");
+      if (mode !== "view") url.searchParams.set("mode", mode);
+      if (query) url.searchParams.set("filter", query);
+      if (kinds && kinds.indexOf(kind) >= 0) url.searchParams.set("kind", kind);
+      return url;
+    }
+    function restoreFilters() {
+      if (!filter || !kindSel) return;
+      var params = new URLSearchParams(location.search);
+      filter.value = params.get("filter") || "";
+      var kind = params.get("kind");
+      kindSel.value = kinds.indexOf(kind) >= 0 ? kind : "";
+      applyFilter();
+    }
+    function replaceDisplayState() {
+      // In-place edits/Clear only own display fields; leave unrelated local query fields alone.
+      var url = new URL(location.href);
+      url.searchParams.delete("mode");
+      url.searchParams.delete("filter");
+      url.searchParams.delete("kind");
+      if (currentMode !== "view") url.searchParams.set("mode", currentMode);
+      if (filter.value) url.searchParams.set("filter", filter.value);
+      if (kindSel.value) url.searchParams.set("kind", kindSel.value);
+      history.replaceState({ p: current, mode: currentMode }, "", url.pathname + url.search + url.hash);
+    }
     function renderTools(p, mode) {
       clear(tools);
       clear(info);
@@ -4861,8 +4892,23 @@ export function dropwayClient() {
               })
             : null,
           h("button", { type: "button", class: "dw-btn small", text: "Copy link", onclick: function (ev) { copyText(url, ev.currentTarget); } }),
+          h("button", {
+            type: "button", class: "dw-btn small", text: "Copy browser view link",
+            "aria-label": "Copy browser view link", "aria-describedby": "dw-browser-link-note",
+            onclick: async function (ev) {
+              var btn = ev.currentTarget;
+              var hadFocus = d.activeElement === btn;
+              var ok = await copyText(browserViewUrl(current, currentMode || mode).href, btn);
+              if (hadFocus && d.activeElement === d.body && btn.isConnected) btn.focus();
+              toast(ok ? "Browser view link copied." : "Could not copy browser view link.", !ok);
+            },
+          }),
           h("a", { class: "dw-btn small", href: url, target: "_blank", rel: "noopener", text: "Open" }),
         ),
+        h("span", {
+          id: "dw-browser-link-note", class: "dw-small dw-muted",
+          text: "A browser view link contains the literal filter text and grants no access. Copy link shares only the public file URL.",
+        }),
       );
       add(
         info,
@@ -4891,8 +4937,7 @@ export function dropwayClient() {
         if (a.getAttribute("data-path") === p) a.setAttribute("aria-current", "page");
         else a.removeAttribute("aria-current");
       });
-      var url = "/v/" + encodeURIComponent(slug) + "/" + encodePath(p) + (mode !== "view" ? "?mode=" + mode : "");
-      if (push) history.pushState({ p: p, mode: mode }, "", url);
+      if (push) history.pushState({ p: p, mode: mode }, "", browserViewUrl(p, mode));
       d.title = (p.split("/").pop() || slug) + " · " + slug + " · " + boot.instanceName;
     }
 
@@ -4949,9 +4994,15 @@ export function dropwayClient() {
       return ul;
     }
 
-    window.addEventListener("popstate", function (e) {
-      var st = e.state || {};
-      go(st.p !== undefined ? st.p : P.path || "", st.mode || "view", false);
+    window.addEventListener("popstate", function () {
+      // The address is canonical, including entries with missing or unrelated history objects.
+      var prefix = "/v/" + encodeURIComponent(slug) + "/";
+      if (location.pathname.indexOf(prefix) !== 0) return;
+      var path;
+      try { path = decodeURIComponent(location.pathname.slice(prefix.length)); } catch (e) { return; }
+      go(path, new URLSearchParams(location.search).get("mode"), false);
+      restoreFilters();
+      if (filter && kindSel) replaceDisplayState();
     });
 
     var mode = validMode(current, new URLSearchParams(location.search).get("mode"));
@@ -5020,14 +5071,18 @@ export function dropwayClient() {
       emptyNote.hidden = matching > 0;
       emptyNote.textContent = total === 0 ? "No files in this version" : "No matching files";
     }
-    filter.addEventListener("input", applyFilter);
-    kindSel.addEventListener("change", applyFilter);
+    function updateFilters() {
+      applyFilter();
+      replaceDisplayState();
+    }
+    filter.addEventListener("input", updateFilters);
+    kindSel.addEventListener("change", updateFilters);
     reset.addEventListener("click", function () {
       filter.value = "";
       kindSel.value = "";
-      applyFilter();
+      updateFilters();
     });
-    applyFilter();
+    restoreFilters();
     clear(tree);
     add(
       tree,
@@ -5045,9 +5100,8 @@ export function dropwayClient() {
     // If the manifest removed the held tab (Source on an image/binary), land on the tab that replaced it.
     var heldEl = heldTab && (d.getElementById(heldTab) || d.getElementById("dw-view-tab-" + currentMode));
     if (heldEl) heldEl.focus();
-    // Push entries carry {p, mode}; record the same for the loaded entry so
-    // Back restores the prior file and view mode instead of losing the mode.
-    history.replaceState({ p: current, mode: currentMode }, "");
+    // Normalize defaults/unknown kinds in this entry, without adding an entry or changing the frame.
+    replaceDisplayState();
     var cur = $("a[aria-current]", tree);
     if (cur) cur.scrollIntoView({ block: "nearest" });
   };
