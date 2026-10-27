@@ -3,6 +3,9 @@
  * refuses files that contain one of these unless --allow-secrets is passed.
  * Patterns are specific on purpose (fixed prefixes and lengths) to keep false
  * positives rare in minified bundles. Matched values are never printed.
+ * The CLI runs on Node and cannot import @dropway/core; keep this list in sync
+ * with `packages/core/src/lib/secrets.ts`, which the server uses for the
+ * `possible_secret` warning on the REST and MCP publish paths.
  */
 export const SECRET_PATTERNS: Array<{ kind: string; re: RegExp }> = [
   { kind: "private_key", re: /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/ },
