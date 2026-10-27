@@ -3115,6 +3115,26 @@ export function dropwayClient() {
     );
   }
 
+  /** Embed snippet for the provider-served live-version badge. Public sites with a live URL only; nothing is rendered otherwise. */
+  function siteBadgeSection(url, gated) {
+    if (!url || gated) return null;
+    var badge = url + "badge.svg";
+    var markdown = "[![kofra](" + badge + ")](" + url + ")";
+    return h(
+      "section",
+      { class: "dw-section", "data-testid": "site-badge-snippet" },
+      h("header", {}, h("h2", { text: "Embed a version badge" }), h("span", { class: "dw-small dw-muted", text: "Shows the live version and how recently it changed" })),
+      h(
+        "div",
+        { class: "dw-pad" },
+        h("p", { style: "margin:0 0 .5rem" }, h("img", { "data-testid": "site-badge-preview", src: badge, alt: "kofra live version badge", height: "20", style: "height:20px;vertical-align:middle" })),
+        h("code", { "data-testid": "site-badge-markdown", class: "dw-mono", style: "display:block;margin:0 0 .5rem;overflow-wrap:anywhere", text: markdown }),
+        copyButton(markdown, "Copy badge Markdown"),
+        h("p", { class: "dw-small dw-muted", style: "margin:.5rem 0 0", text: "Paste into a README or any page. It never shows exact times, and it stays generic if the site is password protected, expired or removed." }),
+      ),
+    );
+  }
+
   // ------------------------------------------------------------------ pages
 
   var pages = {};
@@ -4231,7 +4251,7 @@ export function dropwayClient() {
       ),
     );
     var qrSection = siteQrSection(site.url, !!(site.settings && site.settings.passwordProtected));
-    add(root, head, qrSection, versionsSection, filesSection, h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "Settings" })), form), renameSection, danger);
+    add(root, head, qrSection, siteBadgeSection(site.url, !!(site.settings && site.settings.passwordProtected)), versionsSection, filesSection, h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "Settings" })), form), renameSection, danger);
     var live = versions.filter(function (v) {
       return v.live;
     })[0];
