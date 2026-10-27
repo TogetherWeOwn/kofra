@@ -1,7 +1,7 @@
 /** Node-only download orchestration. Remote bytes are always bounded read_file pages. */
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, open, readdir, rename, unlink } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { CliError, EXIT, type DropwayClient, type ExitCode } from "./client.ts";
 
 interface FileInfo {
@@ -50,7 +50,8 @@ async function localStat(path: string) {
 }
 
 /** This preflight never creates anything, even when the destination is absent. */
-export async function checkPullDirectory(dir: string, force: boolean): Promise<void> {
+export async function checkPullDirectory(dir: string, force: boolean, cwd: string): Promise<void> {
+  await checkAncestors(dir, cwd);
   const info = await localStat(dir);
   if (!info) return;
   if (!info.isDirectory() || info.isSymbolicLink()) {
@@ -58,6 +59,26 @@ export async function checkPullDirectory(dir: string, force: boolean): Promise<v
   }
   if (!force && (await readdir(dir)).length) {
     throw new CliError({ code: "pull_directory_not_empty", message: "The pull destination is not empty.", hint: "Choose an empty directory, or use --force to overwrite pulled paths and preserve local extras.", exitCode: EXIT.usage });
+  }
+}
+
+/**
+ * A symlink or file above the destination would redirect every write. The
+ * working directory and its own ancestors are the user's chosen location and
+ * stay trusted (e.g. /tmp or /var symlinks on some systems); everything the
+ * destination path adds below that point must be a plain directory.
+ */
+async function checkAncestors(dir: string, cwd: string): Promise<void> {
+  const trusted = (path: string) => cwd === path || cwd.startsWith(path.endsWith(sep) ? path : path + sep);
+  const ancestors: string[] = [];
+  for (let path = dirname(dir); path !== dirname(path); path = dirname(path)) ancestors.push(path);
+  for (const path of ancestors.reverse()) {
+    if (trusted(path)) continue;
+    const info = await localStat(path);
+    if (!info) return;
+    if (!info.isDirectory() || info.isSymbolicLink()) {
+      throw new CliError({ code: "invalid_pull_directory", message: "A parent of the pull destination is a symlink or not a directory.", hint: "Choose a destination whose parent directories are plain directories.", exitCode: EXIT.usage });
+    }
   }
 }
 

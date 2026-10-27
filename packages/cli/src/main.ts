@@ -623,7 +623,7 @@ No files are deleted, credentials saved, or project links changed.`,
   async run(p, io, out) {
     const slug = positional(p, 0, "site", this.usage);
     const dir = resolve(io.cwd, positional(p, 1, "dir", this.usage));
-    await checkPullDirectory(dir, bool(p, "force") === true);
+    await checkPullDirectory(dir, bool(p, "force") === true, io.cwd);
     const inst = await resolveInstance(p, io);
     const client = makeClient(io, inst.api, requireKey(inst));
     const { version } = await getVersionDirect(client, slug, str(p, "version") ?? "live");
