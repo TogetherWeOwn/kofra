@@ -84,6 +84,108 @@ describe("extension viewer ETag contract", () => {
     expect(revalidated.headers.get("etag")).toBe(etag);
   });
 
+  it("renders when etagExtra holds a lone surrogate, normalized to U+FFFD", async () => {
+    const viewer: Viewer = {
+      id: "contract-etag", version: 1, maxBytes: 1024,
+      matches: (file) => file.path === "fixture.txt",
+      etagExtra: () => "x\ud800y",
+      async render(context) {
+        return new Response(`Contract view: ${await context.readText()}`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      },
+    };
+    const dw = await freshInstance({}, { viewers: [viewer] });
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey,
+      body: form({ "fixture.txt": "hello" }, { slug: "surrogate-extra" }),
+    });
+    expect(published.status).toBe(201);
+    const path = "/s/surrogate-extra/fixture.txt?view=1";
+    const rendered = await dw.call(path);
+    expect(rendered.status).toBe(200);
+    expect(await rendered.text()).toBe("Contract view: hello");
+    const etag = rendered.headers.get("etag");
+    expect(etag).toMatch(ENTITY_TAG);
+    expect(etag).toContain("x%EF%BF%BDy");
+    const revalidated = await dw.call(path, { headers: { "If-None-Match": etag! } });
+    expect(revalidated.status).toBe(304);
+    expect(revalidated.headers.get("etag")).toBe(etag);
+    expect(await revalidated.text()).toBe("");
+  });
+
+  it("renders when the custom viewer id holds a lone surrogate", async () => {
+    const viewer: Viewer = {
+      id: "bad\ud800viewer", version: 1, maxBytes: 1024,
+      matches: (file) => file.path === "fixture.txt",
+      async render(context) {
+        return new Response(`Contract view: ${await context.readText()}`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      },
+    };
+    const dw = await freshInstance({}, { viewers: [viewer] });
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey,
+      body: form({ "fixture.txt": "hello" }, { slug: "surrogate-viewer" }),
+    });
+    expect(published.status).toBe(201);
+    const path = "/s/surrogate-viewer/fixture.txt?view=1";
+    const rendered = await dw.call(path);
+    expect(rendered.status).toBe(200);
+    expect(await rendered.text()).toBe("Contract view: hello");
+    const etag = rendered.headers.get("etag");
+    expect(etag).toMatch(ENTITY_TAG);
+    const revalidated = await dw.call(path, { headers: { "If-None-Match": etag! } });
+    expect(revalidated.status).toBe(304);
+    expect(revalidated.headers.get("etag")).toBe(etag);
+  });
+
+  it("renders when the custom viewer id holds a newline, without leaking it in viewer headers", async () => {
+    const viewer: Viewer = {
+      id: "bad\nviewer", version: 1, maxBytes: 1024,
+      matches: (file) => file.path === "fixture.txt",
+      async render(context) {
+        return new Response(`Contract view: ${await context.readText()}`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      },
+    };
+    const dw = await freshInstance({}, { viewers: [viewer] });
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey,
+      body: form({ "fixture.txt": "hello" }, { slug: "newline-viewer" }),
+    });
+    expect(published.status).toBe(201);
+    const path = "/s/newline-viewer/fixture.txt?view=1";
+    const rendered = await dw.call(path);
+    expect(rendered.status).toBe(200);
+    expect(rendered.headers.get("x-kofra-viewer")).toBeNull();
+    expect(rendered.headers.get("x-dropway-viewer")).toBeNull();
+    expect(await rendered.text()).toBe("Contract view: hello");
+    const etag = rendered.headers.get("etag");
+    expect(etag).toMatch(ENTITY_TAG);
+    const revalidated = await dw.call(path, { headers: { "If-None-Match": etag! } });
+    expect(revalidated.status).toBe(304);
+    expect(revalidated.headers.get("etag")).toBe(etag);
+  });
+
+  it("renders when the custom viewer id holds a NUL, without viewer headers", async () => {
+    const viewer: Viewer = {
+      id: "bad\u0000viewer", version: 1, maxBytes: 1024,
+      matches: (file) => file.path === "fixture.txt",
+      async render(context) {
+        return new Response(`Contract view: ${await context.readText()}`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      },
+    };
+    const dw = await freshInstance({}, { viewers: [viewer] });
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey,
+      body: form({ "fixture.txt": "hello" }, { slug: "nul-viewer" }),
+    });
+    expect(published.status).toBe(201);
+    const rendered = await dw.call("/s/nul-viewer/fixture.txt?view=1");
+    expect(rendered.status).toBe(200);
+    expect(rendered.headers.get("x-kofra-viewer")).toBeNull();
+    expect(rendered.headers.get("x-dropway-viewer")).toBeNull();
+    expect(await rendered.text()).toBe("Contract view: hello");
+    expect(rendered.headers.get("etag")).toMatch(ENTITY_TAG);
+  });
+
   it("preserves the ordinary built-in code viewer ETag bytes", async () => {
     const dw = await freshInstance();
     const published = await dw.json("/api/v1/publish", {
