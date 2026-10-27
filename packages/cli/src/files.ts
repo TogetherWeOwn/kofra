@@ -170,3 +170,51 @@ export async function collectFiles(path: string, opts: CollectOptions = {}): Pro
     omissions,
   };
 }
+
+const MAX_SITE_PATH = 1024;
+
+/**
+ * Validate the site path of piped bytes before any stdin read or network call.
+ * Mirrors the server's `normaliseFilePath` and its `__dropway/` reservation
+ * (packages/core/src/lib/paths.ts, services/deploys.ts); the CLI cannot import
+ * @dropway/core, so keep the two in sync. Returns the normalised path.
+ */
+export function normaliseStdinPath(input: string): string {
+  const segments = input.replace(/\\/g, "/").trim().replace(/^(?:\.\/)+/, "").replace(/^\/+/, "").split("/").filter((s) => s !== "" && s !== ".");
+  const bad = (message: string, hint?: string) => new CliError({ code: "invalid_path", message, hint: hint ?? "Use a non-empty site-relative path of at most 1,024 characters, without .. or control characters.", exitCode: EXIT.invalid });
+  if (!segments.length) throw bad(`File path "${input}" is empty.`, "Use names like index.html or assets/app.js.");
+  if (segments.includes("..")) throw bad(`File path "${input}" contains "..".`, "Paths must stay inside the site root.");
+  // eslint-disable-next-line no-control-regex
+  if (segments.some((s) => /[\u0000-\u001f\u007f]/.test(s))) throw bad(`File path "${input}" contains control characters.`);
+  const path = segments.join("/");
+  if (path.length > MAX_SITE_PATH) throw bad(`File path is longer than ${MAX_SITE_PATH} characters.`);
+  if (path === "__dropway" || path.startsWith("__dropway/")) {
+    throw new CliError({
+      code: "reserved_path",
+      message: `Paths under __dropway/ are reserved for the server ("${path}").`,
+      hint: "Rename the folder, for example to _dropway/ or assets/.",
+      exitCode: EXIT.invalid,
+    });
+  }
+  if (new IgnoreMatcher([]).ignoresWithParents(path)) {
+    throw new CliError({
+      code: "ignored_file",
+      message: `Refusing to publish ${path}: files like it (credentials, VCS and OS metadata) are never published.`,
+      hint: "Rename the file if it is safe to make public.",
+      exitCode: EXIT.usage,
+    });
+  }
+  return path;
+}
+
+/** Wrap already-read piped bytes as the single file `path` (from `normaliseStdinPath`), hashed and secret-scanned like a file on disk. */
+export function collectStdinFile(path: string, bytes: Uint8Array, opts: Pick<CollectOptions, "allowSecrets"> = {}): Collected {
+  const secrets = !opts.allowSecrets && looksTextual(bytes) ? findSecrets(path, new TextDecoder("latin1").decode(bytes)) : [];
+  const file: SourceFile = {
+    path,
+    size: bytes.byteLength,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    body: async () => bytes,
+  };
+  return { kind: "file", root: "-", files: [file], totalBytes: file.size, ignored: [], secrets, skippedLinks: [], omissions: [] };
+}
