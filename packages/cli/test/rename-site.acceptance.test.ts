@@ -172,6 +172,16 @@ describe("rename explicit arguments and acknowledgement", () => {
     expect(body.error.hint.trim()).not.toBe("");
   });
 
+  it.each([".", ".."])("refuses dot-segment source %s locally even with --yes", async source => {
+    const r = await cli(["rename", source, TARGET, "--yes", "--json"]);
+    expect(r.code, r.stdout + r.stderr).toBe(2);
+    expect(r.seen).toEqual([]);
+    const body = object(r);
+    expect(body).toMatchObject({ ok: false, exitCode: 2, error: { hint: expect.any(String) } });
+    expect(body.error.code).not.toBe("unknown_command");
+    expect(body.error.hint.trim()).not.toBe("");
+  });
+
   it.each(["--no-yes", "--yes=false"])("does not treat %s as acknowledgement", async flag => {
     const r = await cli(["rename", SOURCE, TARGET, flag, "--json"]);
     expect(r.code).toBe(2);
@@ -266,6 +276,27 @@ describe("one acknowledged rename and truthful output", () => {
     }
   });
 
+  it.each(["2034-08-09T10:11:12.000Z", null])("human subdomain output reconstructs the exact old URL and uses only the returned deadline %j", async redirectUntil => {
+    const url = "https://server-canonical.sites.example.net/";
+    const body = { ...success, slug: "server-canonical", url, redirectUntil,
+      site: { ...renamedSite, slug: "server-canonical", url } };
+    const r = await cli(["rename", SOURCE, TARGET, "--yes"], { body });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    oneRename(r);
+    const text = r.stdout + r.stderr;
+    expect(text).toContain("Old URL: https://old-report.sites.example.net/");
+    expect(text).toContain(`New URL: ${url}`);
+    expect(text).not.toContain("https://new-report.sites.example.net/");
+    unchangedLinks(text);
+    expect(text).not.toMatch(/\b\d+[-\s]*(?:hours?|days?|months?|years?)\b|\btransfer/i);
+    expect(text.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/g) ?? []).toEqual(redirectUntil ? [redirectUntil] : []);
+    if (!redirectUntil) {
+      for (const line of text.split("\n").filter(line => /redirect/i.test(line))) {
+        expect(line).toMatch(/no redirect|not redirect|without[^\n]*redirect|redirect[^\n]*(?:not |none|null|unavailable|disabled)/i);
+      }
+    }
+  });
+
   it("human no-op identifies no change and still warns about saved mappings", async () => {
     const body = { ...success, renamed: false, oldSlug: SOURCE, slug: SOURCE, redirectUntil: null,
       url: `${API}/s/${SOURCE}/`, site: { ...renamedSite, slug: SOURCE, url: `${API}/s/${SOURCE}/` } };
@@ -278,6 +309,28 @@ describe("one acknowledged rename and truthful output", () => {
 });
 
 describe("stable rename refusal and network exits", () => {
+  it.each([false, true])("requires authentication for an acknowledged rename without anonymous-publishing advice (JSON=%s)", async machine => {
+    const r = await cli(["rename", SOURCE, TARGET, "--yes", "--api", API, ...(machine ? ["--json"] : [])], { noConfig: true });
+    expect(r.code, r.stdout + r.stderr).toBe(3);
+    expect(r.seen).toEqual([]);
+    const text = r.stdout + r.stderr;
+    expect(text).not.toMatch(/anonymous/i);
+    if (machine) {
+      const body = object(r);
+      expect(body).toMatchObject({ ok: false, exitCode: 3, error: { code: "not_logged_in" } });
+      expect(body.error.message).toMatch(/\brenam(?:e|ing)\b/i);
+      expect(body.error.hint).toMatch(/kofra login/i);
+      expect(body.error.hint).toContain("KOFRA_API_KEY");
+      expect(body.error.hint).toContain("--key");
+    } else {
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toMatch(/\brenam(?:e|ing)\b/i);
+      expect(r.stderr).toMatch(/kofra login/i);
+      expect(r.stderr).toContain("KOFRA_API_KEY");
+      expect(r.stderr).toContain("--key");
+    }
+  });
+
   it.each([
     [400, "invalid_slug", 6], [409, "slug_taken", 5], [409, "slug_reserved", 5],
     [404, "site_not_found", 4], [403, "insufficient_scope", 3],
