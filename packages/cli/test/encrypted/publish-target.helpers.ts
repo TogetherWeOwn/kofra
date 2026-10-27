@@ -196,6 +196,20 @@ export class TargetWorld {
 
 export const selector = (f: Fixture) => f.page.locator("#dw-pub-site");
 export const publishButton = (f: Fixture) => f.page.getByRole("button", { name: "Publish", exact: true });
+// Hashing, manifest, uploads and finalize share this bounded protocol deadline,
+// not the 2.5-second locator/action timeout used by the rest of the driver.
+export const publishProtocolTimeout = 15_000;
+export async function publishAndWaitForFinalize(f: Fixture, slug?: string) {
+  const [response] = await Promise.all([
+    f.page.waitForResponse((r: any) => {
+      const path = new URL(r.url()).pathname;
+      return r.request().method() === "POST" && /^\/api\/v1\/sites\/[^/]+\/deploys\/[^/]+\/finalize$/.test(path)
+        && (slug === undefined || path.startsWith(`/api/v1/sites/${slug}/deploys/`));
+    }, { timeout: publishProtocolTimeout }),
+    publishButton(f).click(),
+  ]);
+  return response;
+}
 export const listReads = (f: Fixture) => f.wire.filter(r => r.method === "GET" && r.path === "/api/v1/sites");
 export const singleReads = (f: Fixture) => f.wire.filter(r => r.method === "GET" && /^\/api\/v1\/sites\/[^/]+$/.test(r.path));
 export const writes = (f: Fixture) => f.wire.filter(r => r.method !== "GET");

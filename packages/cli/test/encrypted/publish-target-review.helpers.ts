@@ -1,6 +1,6 @@
 import { expect } from "vitest";
 import {
-  deferred, publishButton, settle, writes,
+  deferred, publishAndWaitForFinalize, publishButton, settle, writes,
 } from "./publish-target.helpers.ts";
 import type { Fixture, TargetWorld } from "./publish-target.helpers.ts";
 
@@ -40,7 +40,7 @@ export function installServedGuardMutant(world: TargetWorld) {
   };
 }
 
-/** Supplemental-only utilities; the original protected driver stays unchanged. */
+/** Supplemental-only utilities layered on the shared protected driver. */
 export const lookupButton = (f: Fixture) => f.page.getByRole("button", { name: /look\s*up|find|resolve|load site/i });
 export const feedback = (f: Fixture) => f.page.locator('#dw-publish [role="alert"]');
 export const announcements = (f: Fixture) => f.page.locator('#dw-publish [role="status"], #dw-publish [aria-live]');
@@ -76,10 +76,7 @@ export async function forcedPublishIsInert(f: Fixture) {
 }
 
 export async function finishPublish(f: Fixture, origin: string, slug: string, create = false) {
-  const finalized = f.page.waitForResponse((r: any) => r.request().method() === "POST"
-    && new URL(r.url()).pathname.startsWith(`/api/v1/sites/${slug}/deploys/`) && r.url().endsWith("/finalize"));
-  await publishButton(f).click();
-  expect((await finalized).status()).toBe(200);
+  expect((await publishAndWaitForFinalize(f, slug)).status()).toBe(200);
   await expect.poll(() => f.page.locator(`#dw-publish a[href="${origin}/s/${slug}/"]`).count()).toBeGreaterThan(0);
   const mutations = writes(f);
   expect(mutations.filter(r => r.method === "POST" && r.path === "/api/v1/sites")).toHaveLength(create ? 1 : 0);

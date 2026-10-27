@@ -23,7 +23,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   TargetWorld, alternate, chooseFiles, deferred, failedClosed, listed, listReads,
-  lookup, lookupInput, older, publishButton, resolved, selector, settle,
+  lookup, lookupInput, older, publishAndWaitForFinalize, publishButton, publishProtocolTimeout, resolved, selector, settle,
   singleReads, updateMode, writes,
 } from "../../cli/test/encrypted/publish-target.helpers.ts";
 import type { Fixture } from "../../cli/test/encrypted/publish-target.helpers.ts";
@@ -35,10 +35,7 @@ afterEach(async () => {
 }, 30_000);
 
 async function published(f: Fixture, slug: string) {
-  const finalized = f.page.waitForResponse((r: any) => r.request().method() === "POST"
-    && r.url().includes(`/api/v1/sites/${slug}/deploys/`) && r.url().endsWith("/finalize"));
-  await publishButton(f).click();
-  expect((await finalized).status()).toBe(200);
+  expect((await publishAndWaitForFinalize(f, slug)).status()).toBe(200);
   await expect.poll(() => f.page.locator(`#dw-publish a[href="${world.origin}/s/${slug}/"]`).count(), {
     message: "the finalized destination is rendered in the publisher receipt",
   }).toBeGreaterThan(0);
@@ -108,11 +105,13 @@ describe("Publish update: destination beyond the first 200 sites", () => {
     // stale list response can keep the selected destination outside that page;
     // merely resetting to the newest row must not accidentally pass this test.
     f.results.set("/api/v1/sites", await world.request("/sites?limit=200"));
-    const refresh = f.page.waitForResponse((r: any) => r.request().method() === "GET"
-      && new URL(r.url()).pathname === "/api/v1/sites");
     await chooseFiles(f);
-    await published(f, older);
-    await (await refresh).finished();
+    const [refresh] = await Promise.all([
+      f.page.waitForResponse((r: any) => r.request().method() === "GET"
+        && new URL(r.url()).pathname === "/api/v1/sites", { timeout: publishProtocolTimeout }),
+      published(f, older),
+    ]);
+    await refresh.finished();
     await settle(f);
     await resolved(f, older);
     expect(singleReads(f).every(r => r.path === `/api/v1/sites/${older}`)).toBe(true);
@@ -331,9 +330,7 @@ describe("Publish target: unchanged-surface controls", () => {
     expect(await f.page.locator('#dw-publish input[value="new"]').isChecked()).toBe(true);
     await f.page.locator("#dw-pub-slug").fill("disposable-new-destination");
     await chooseFiles(f);
-    const finalized = f.page.waitForResponse((r: any) => r.url().endsWith("/finalize") && r.request().method() === "POST");
-    await publishButton(f).click();
-    expect((await finalized).status()).toBe(200);
+    expect((await publishAndWaitForFinalize(f)).status()).toBe(200);
     expect(writes(f).filter(r => r.path === "/api/v1/sites")).toHaveLength(1);
     expect(singleReads(f)).toEqual([]);
   });
@@ -341,9 +338,7 @@ describe("Publish target: unchanged-surface controls", () => {
   it("leaves anonymous quick publishing unchanged", async () => {
     const f = await world.open({ anonymous: true });
     await chooseFiles(f);
-    const finalized = f.page.waitForResponse((r: any) => r.url().endsWith("/finalize") && r.request().method() === "POST");
-    await publishButton(f).click();
-    expect((await finalized).status()).toBe(200);
+    expect((await publishAndWaitForFinalize(f)).status()).toBe(200);
     expect(writes(f).filter(r => r.path === "/api/v1/sites")).toHaveLength(1);
     expect(singleReads(f)).toEqual([]);
     expect(listReads(f)).toEqual([]);
