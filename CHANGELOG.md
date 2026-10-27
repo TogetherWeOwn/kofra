@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### Path-mode hardening and publish warnings (R-12)
+
+- Publish and finalize return warnings with `fix` text (and `path`/`line` where known),
+  computed from the stored bytes over a bounded scan: `root_absolute_paths` (path mode),
+  `spa_without_base`, `uses_browser_storage` (when the site will be sandboxed),
+  `wasm_without_coi` (renamed from `wasm_without_cross_origin_isolation`),
+  `possible_secret` (file and line; matched values are never included) and
+  `invalid_config` (a `.dropway/*.json` file that is not valid JSON). `no_index` now
+  carries fix text too. Replayed finalizes and unchanged republishes (including
+  file-source REST/MCP publishes and updates) return the same warnings instead of an
+  empty list. Advisory database-read failures return no warnings without failing a
+  successful publication; bounded blob reads run concurrently in deterministic order.
+- A page navigation with a same-origin `Referer` inside an SPA site to a path the site
+  lacks now 307-redirects to that path inside the site (SRV-02), where the SPA fallback
+  serves it; app routes, paths with a file extension and sub-resource requests are
+  untouched. On a separate sites origin, existing destination sites (even empty or
+  expired), renamed-away slugs (their 308 redirect) and version addresses keep their
+  own routing instead of being captured by the referring SPA.
+- Publishing a path under `__dropway/` is refused with the new `reserved_path` error on
+  every publish path (the manifest, one-shot and file-source flows share the check).
+- `.dropway` and `.dropway/*` files are stored with the version (owner read-back works)
+  but are never served from the sites origin, including through the single-file root
+  shortcut, and no longer appear in folder listings. A directory holding only private
+  entries answers 404 instead of an empty listing or a redirect.
+
+### Versions naming
+
+- Version creation and finalize move under `/versions`
+  (`POST /api/v1/sites/{slug}/versions` and `POST .../versions/{id}/finalize`).
+  The historical `/deploys` paths keep working as aliases with the same bodies
+  and responses (plus additive `version` and `links` fields on manifest
+  results). REST version references accept `live`, `vN`, `N` or an id, as the
+  tools already did.
+- `get_version` now returns `upload`/`uploads` with fresh upload items for
+  pending versions (dwu_ tokens only for keys that may write the site), and
+  missing-blob finalize errors carry a true `totalMissing` count.
+
 ### Publish v2
 
 - REST JSON publishing now uses the same flat file sources as MCP: content,

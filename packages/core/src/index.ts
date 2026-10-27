@@ -21,6 +21,7 @@ export * from "./lib/mime";
 export * from "./lib/paths";
 export * from "./lib/slug";
 export * from "./lib/filetypes";
+export * from "./lib/secrets";
 
 export * from "./services/events";
 export * from "./services/identity";
@@ -39,3 +40,4 @@ export * from "./services/sources";
 export * from "./services/transfers";
 export * from "./services/transfer-downloads";
 export * from "./services/version-export";
+export * from "./services/uploads";

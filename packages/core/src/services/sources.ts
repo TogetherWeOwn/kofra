@@ -8,12 +8,14 @@ import { stringField } from "../lib/input";
 import { normaliseFilePath } from "../lib/paths";
 import type { Principal } from "../principal";
 import { blobScope, putVerifiedBlob } from "./blobs";
-import { createDeploy, finalizeDeploy, parseDeployOptions, versionConflict, type Warning } from "./deploys";
+import { createDeploy, deployWarnings, finalizeDeploy, parseDeployOptions, versionConflict, type Warning } from "./deploys";
 import { discardNewSite, findSite, getVersion, serializeSite, serializeVersion, type SiteRow, type VersionRow } from "./sites";
 import { resolvePublishTarget } from "./publish";
 import { getSiteByRef, resolveSiteSlug, resolveVersionRef } from "./site-ops";
-import { createUploadToken, PENDING_VERSION_TTL_MS } from "./upload-tokens";
+import { PENDING_VERSION_TTL_MS } from "./upload-tokens";
 export { PENDING_VERSION_TTL_MS } from "./upload-tokens";
+import { uploadItemsFor, type UploadItem } from "./uploads";
+export type { UploadItem } from "./uploads";
 
 /**
  * File sources for agents (SPEC 9.2 FileInput): each file names exactly one of
@@ -443,44 +445,6 @@ export async function resolveFileInputs(
 
 // ---------------------------------------------------------------- results
 
-export interface UploadItem {
-  path: string;
-  paths: string[];
-  sha256: string;
-  size: number;
-  method: "PUT";
-  url: string;
-  headers: Record<string, string>;
-  curl: string;
-}
-
-const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
-
-async function uploadItemsFor(dc: DropwayContext, version: VersionRow, entries: Array<{ path: string; sha256: string; size: number; contentType: string }>, missing: Iterable<string>): Promise<UploadItem[]> {
-  const authorization = `Bearer ${await createUploadToken(dc, version)}`;
-  const bySha = new Map<string, Array<{ path: string; size: number; contentType: string }>>();
-  for (const e of entries) bySha.set(e.sha256, [...(bySha.get(e.sha256) ?? []), e]);
-  const origin = appOrigin(dc);
-  const items: UploadItem[] = [];
-  for (const sha of missing) {
-    const es = bySha.get(sha);
-    if (!es?.length) continue;
-    const url = `${origin}/api/v1/blobs/${sha}`;
-    const ct = es[0]!.contentType;
-    items.push({
-      path: es[0]!.path,
-      paths: es.map((e) => e.path),
-      sha256: sha,
-      size: es[0]!.size,
-      method: "PUT",
-      url,
-      headers: { "Content-Type": ct, Authorization: authorization },
-      curl: `curl -fsS -X PUT ${shellQuote(url)} -H ${shellQuote(`Authorization: ${authorization}`)} -H ${shellQuote(`Content-Type: ${ct}`)} --data-binary @${shellQuote(es[0]!.path)}`,
-    });
-  }
-  return items;
-}
-
 export type PublishStatus = "live" | "unchanged" | "awaiting_upload";
 
 export interface NextStep {
@@ -515,6 +479,7 @@ async function completeVersion(
   if (deploy.unchanged) {
     status = "unchanged";
     version = site.current_version_id ? await getVersion(dc, site.id, site.current_version_id) : null;
+    warnings = await deployWarnings(dc, site, deploy.deploy.id);
   } else {
     const missing = new Set(deploy.missing);
     const scope = blobScope({ tenantId: site.tenant_id, siteId: site.id });
@@ -806,6 +771,8 @@ export async function finalizeVersionByRef(dc: DropwayContext, p: Principal, sit
       throw new ApiError(409, "missing_blobs", e.message, "PUT the raw bytes of each item in details.uploads to its url (same Authorization header), then call finalize_version again.", {
         missing: [...missing],
         uploads: items,
+        upload: { versionId: version.id, expiresAt: new Date(version.created_at + PENDING_VERSION_TTL_MS).toISOString(), items },
+        ...(e.details?.totalMissing !== undefined ? { totalMissing: e.details.totalMissing } : {}),
       });
     }
     throw e;

@@ -31,7 +31,7 @@ The first three feature branches are merged into `main` on top of the baseline b
 |---|---|---|
 | R-01 | Done | Open-core guard and self-test in CI (npm, Yarn, pnpm and Bun text locks); `EXTENSION_API_VERSION = 1`, Extension API changelog and contract tests for every existing extension point. |
 | R-04 | Partial | File sources (`content`, `url`, `sha256` + upload link, `copyFrom`) and idempotency keys for agent writes. |
-| R-05 | Partial | Partial updates (`PATCH /api/v1/sites/:slug/files`), `GET` version status, rename. |
+| R-05 | Done | Canonical `/versions` routes with `/deploys` kept as aliases, partial updates (`PATCH /api/v1/sites/:slug/files`), `GET` version status returning fresh upload items, fresh upload items in `missing_blobs`, rename. |
 | R-06 | Done | Remote MCP server at `/mcp` (Streamable HTTP) with a tool for every core capability, toolsets and read-only mode. |
 | R-07, R-08 | Done | Viewer bar with Rendered / Source / Raw, HTML frame, code highlighting, Markdown, JSON, CSV, images, SVG, PDF, video, audio, fonts, notebooks, binary info, cached renders. |
 | R-09, R-10 | Done | `kofra` CLI: publish (hash locally, upload only missing files), list, versions, restore, delete, login, whoami, setup, `api`. Not yet published to npm. |

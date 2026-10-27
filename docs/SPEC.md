@@ -93,17 +93,17 @@ What Kofra is not:
 | ID | Feature | Pri | Status |
 |---|---|---|---|
 | PUB-01 | One-call publish `POST /api/v1/publish`: multipart (`-F path=@file`), a `.zip` body, one raw file, or JSON with inline files. Creates a site or, with `?slug=`/`site`, replaces all files of an existing one | P0 | Done |
-| PUB-02 | Manifest publish: send `{path, size, sha256, contentType?}` for every file; the server answers with only the hashes it still needs; upload those; finalize atomically | P0 | Done (as `/deploys`; renamed `/versions` in R-05) |
+| PUB-02 | Manifest publish: send `{path, size, sha256, contentType?}` for every file; the server answers with only the hashes it still needs; upload those; finalize atomically | P0 | Done (`/versions`; `/deploys` kept as an alias) |
 | PUB-03 | File sources in JSON and MCP, one per file: `content` (utf8), `content`+`encoding:"base64"` (small binaries), `url` (server fetches it, SSRF-guarded), `sha256`+`size` (already stored), `copyFrom` (another site, version or path) | P0 | Implemented (R-04); deployment verification pending |
 | PUB-04 | Upload links: the response lists `PUT <app>/api/v1/blobs/<sha256>` targets with a ready `curl` line and a short-lived upload token scoped to the pending version. One egress host; no R2 credentials needed | P0 | Implemented for JSON/MCP file sources (R-04); deployment verification pending |
 | PUB-05 | Byte-identical republish returns `status: "unchanged"` and mints no version; settings in the same call still apply | P0 | Done |
 | PUB-06 | Stale-write protection: `baseVersionId` returns `409 version_conflict` naming the live version, who published it and when | P0 | Done |
-| PUB-07 | Partial update `PATCH /api/v1/sites/{site}/files` (`update_site_files`): write, delete and move paths relative to a base version; everything else carries over by hash | P0 | R-05 |
+| PUB-07 | Partial update `PATCH /api/v1/sites/{site}/files` (`update_site_files`): write, delete and move paths relative to a base version; everything else carries over by hash | P0 | Done |
 | PUB-08 | `Idempotency-Key` on every create (24 h); finalize, restore and delete are idempotent | P0 | JSON publish and registered keyed writes use atomic D1 replay; legacy raw/multipart/ZIP publishing is not keyed. Finalize replay done |
 | PUB-09 | Client attribution: `X-Kofra-Client: <harness>/<detail>` header or MCP `clientInfo`, stored per version | P0 | Done (header); MCP in R-06 |
 | PUB-10 | Version message (like a commit message, up to 200 chars) | P0 | Done |
-| PUB-11 | Pending versions expire after 1 hour; finalizing with missing bytes returns `409 missing_blobs` with fresh upload links | P0 | Partial (expiry done); R-05 |
-| PUB-12 | Publish warnings: root-absolute paths in path mode, SPA without a base path, browser storage on a sandboxed origin, `.wasm` without cross-origin isolation, possible secrets, invalid config files | P0 | R-12 |
+| PUB-11 | Pending versions expire after 1 hour; finalizing with missing bytes returns `409 missing_blobs` with fresh upload links | P0 | Done |
+| PUB-12 | Publish warnings: root-absolute paths in path mode, SPA without a base path, browser storage on a sandboxed origin, `.wasm` without cross-origin isolation, possible secrets, invalid config files | P0 | Done (R-12) |
 | PUB-13 | Files larger than one request (above about 95 MB): multipart upload through the Worker, resumable | P1 | R-35 |
 | PUB-14 | `archiveUrl` (publish a zip from a URL) and chat-client attachments (`{download_url, file_name}`) as sources | P1 | R-35 |
 | PUB-15 | Duplicate a site server-side (immediately live) | P1 | Done |
@@ -118,7 +118,7 @@ What Kofra is not:
 | ID | Feature | Pri | Status |
 |---|---|---|---|
 | SRV-01 | Three serving modes: subdomain (each site its own origin), path on a dedicated sites origin, path on the app origin (always sandboxed). Section 11.2 | P0 | Done |
-| SRV-02 | Path mode keeps sites inside `/<slug>/`: HTML and CSS root-relative URLs are rewritten; URLs built at runtime are resolved by `Referer` with a 307 (unsandboxed pages) or by an injected run-time shim (sandboxed pages, which send no Referer); navigations inside an SPA fall back to the SPA. Interim until an instance has a domain | P0 | Done (SPA navigation fallback in R-12) |
+| SRV-02 | Path mode keeps sites inside `/<slug>/`: HTML and CSS root-relative URLs are rewritten; URLs built at runtime are resolved by `Referer` with a 307 (unsandboxed pages) or by an injected run-time shim (sandboxed pages, which send no Referer); navigations inside an SPA fall back to the SPA. Interim until an instance has a domain | P0 | Done |
 | SRV-03 | Index resolution: `index.html`, `index.htm`, `index.md`, `README.md`; a one-file site serves that file at `/`; folders without an index get a listing; `404.html`; SPA fallback | P0 | Done |
 | SRV-04 | Headers: `ETag` (sha256), `Range`/206, pre-compressed `.br`/`.gz` with `Content-Encoding`, `X-Kofra-Version`, `X-Robots-Tag: noindex` on expiring sites, `X-Content-Type-Options: nosniff` | P0 | Done |
 | SRV-05 | Cache policy matrix (HTML and unfingerprinted files revalidate; fingerprinted files immutable; gated sites `private, no-store`; sites with `.wasm` revalidate) | P0 | Partial; R-27 |
@@ -1188,16 +1188,16 @@ Codes are stable forever.
 | DELETE | `/api/v1/sites/{site}` | `delete_site` | `sites:delete` | P0 | Done (scope R-17; freed name held per R-59) |
 | POST | `/api/v1/sites/{site}/claim` | `claim_site` | `sites:write` | P0 | Done |
 | POST | `/api/v1/sites/{site}/duplicate` | `duplicate_site` | `sites:write` | P1 | Done |
-| POST | `/api/v1/sites/{site}/rename` | `rename_site` | `sites:write` | P2 | Done (R-59: old name 308s + redirectUntil; vanity and gallery stay R-50) |
+| POST | `/api/v1/sites/{site}/rename` | `rename_site` | `sites:write` | P2 | Done (R-59: old name 308s + redirectUntil; dashboard rename and configured name-retention guidance included; vanity and gallery stay R-50) |
 
 **Versions**
 
 | Method | Path | Tool | Scope | Pri | Status |
 |---|---|---|---|---|---|
-| POST | `/api/v1/sites/{site}/versions` (alias `/deploys`) | - (`publish_site` covers it) | `sites:write` | P0 | Done as `/deploys` |
+| POST | `/api/v1/sites/{site}/versions` (alias `/deploys`) | - (`publish_site` covers it) | `sites:write` | P0 | Done |
 | GET | `/api/v1/sites/{site}/versions` | `list_versions` | `sites:read` | P0 | Done |
-| GET | `/api/v1/sites/{site}/versions/{version}` | `get_version` | `sites:read` | P0 | Partial (`/deploys/{id}`); R-05 |
-| POST | `/api/v1/sites/{site}/versions/{version}/finalize` | `finalize_version` | `sites:write` | P0 | Done as `/deploys/{id}/finalize` |
+| GET | `/api/v1/sites/{site}/versions/{version}` | `get_version` | `sites:read` | P0 | Done (status, counts, missing files; write keys also get fresh upload items) |
+| POST | `/api/v1/sites/{site}/versions/{version}/finalize` (alias `/deploys/{id}/finalize`) | `finalize_version` | `sites:write` | P0 | Done |
 | POST | `/api/v1/sites/{site}/versions/{version}/restore` | `restore_version` | `sites:write` | P0 | Done |
 | DELETE | `/api/v1/sites/{site}/versions/{version}` | `delete_version` | `sites:delete` | P1 | Done |
 | GET | `/api/v1/sites/{site}/diff?from=&to=` | `diff_versions` | `sites:read` | P1 | R-20 |
@@ -1526,7 +1526,12 @@ CLI hashes and uploads from disk. Credentials as for the CLI.
    `page.html?view=1` serves the **viewer frame**: the bar plus the page in an iframe, so a person can flip
    between the rendered page and its source. (R-07)
 5. Each viewer has a size cap. Above it the file is served raw (or, for text, as the first part with a
-   "showing first N KB" note and links).
+   "showing first N KB" note and links). For the shipped JSON, CSV and notebook viewers the exact
+   input caps, read budgets, rendered-output limits and fallbacks are the canonical
+   [viewer-limits reference](VIEWERS.md); where an older row below disagrees with that page or the
+   viewer code, the code and that page are right. JSON and notebooks above their input cap fall
+   through to the code view (first 1 MiB shown), not straight to raw bytes; CSV has no input cap and
+   is bounded instead by its 4 MiB read budget and 2,000 rendered data rows.
 6. Viewer pages get `VIEWER_CSP` (no scripts) by default. A viewer that needs scripts (P1 sorting,
    search, diagrams) uses a per-response nonce and loads only first-party files from
    `/__dropway/assets/`. User content is always escaped or run through an allowlist sanitizer (Markdown
@@ -1548,13 +1553,13 @@ CLI hashes and uploads from disk. Credentials as for the CLI.
 | pdf | `.pdf` | Browser's built-in PDF viewer in an embed, with a download fallback | raw | - | none | P0 | R-08 |
 | video | `.mp4 .webm .mov .ogv` | `<video controls>` with Range | raw | - | none | P0 | R-08 |
 | audio | `.mp3 .wav .ogg .m4a .flac .aac` | `<audio controls>` | raw | - | none | P0 | R-08 |
-| json | `.json`, `.geojson`, `.webmanifest` | Collapsible tree from `<details>` elements, pretty-printed values, key counts | highlighted | 5 MB (pretty-print only up to 20 MB) | none (P0); search (P1) | P0 | R-08 |
+| json | `.json`, `.geojson`, `.webmanifest` | Collapsible tree from `<details>` elements, pretty-printed values, key counts | highlighted | 2 MiB (2,097,152 bytes) input; tree 20,000 nodes and 2,000 per string; Pretty pane only when its output is at most 1,048,576 (see [VIEWERS.md](VIEWERS.md)) | none (P0); search planned (P1, R-34, not shipped) | P0 | Shipped viewer (R-08); search R-34 |
 | json lines | `.jsonl .ndjson` | One collapsible row per line, first 2,000 lines | highlighted | 10 MB | none | P1 | R-34 |
-| csv | `.csv .tsv` | Table with header detection, row and column counts, first 2,000 rows | raw | 10 MB | none (P0); sort and filter (P1) | P0 | R-08 |
+| csv | `.csv .tsv` | Table: first row always shown as the header (no header detection), row and column counts, first 2,000 data rows | raw | No input cap; reads the first 4 MiB (4,194,304 bytes), 1,000 per cell (see [VIEWERS.md](VIEWERS.md)) | none (P0); header detection, sort and filter planned (P1, R-34, not shipped) | P0 | Shipped viewer (R-08); header detection/sort/filter R-34 |
 | code | 60+ languages via `languageFor` (`.js .ts .py .go .rs .sql .sh ...`) | Highlighted, line numbers, `#L10-L20` anchors, wrap toggle | raw | 1 MB | none | P0 | R-07 |
 | config | `.yaml .yml .toml .ini .xml` | Highlighted (P0); collapsible tree for YAML/TOML (P1) | raw | 1 MB | none | P0 / P1 | R-07 / R-34 |
 | text | `.txt .log`, `text/*` | Monospace with line numbers, wrap toggle | raw | 2 MB | none | P0 | R-07 |
-| notebook | `.ipynb` | Cells: Markdown, highlighted code, outputs (text, images, sanitized HTML) | JSON source | 10 MB | none | P1 | R-34 |
+| notebook | `.ipynb` | Cells: Markdown, highlighted code, outputs (text, images, sanitized HTML) | JSON source | 20 MiB (20,971,520 bytes) input; clipped output text 100,000 each (see [VIEWERS.md](VIEWERS.md)) | none | P1 | Shipped viewer; further VIEW-03 work R-34 |
 | diff | `.diff .patch` | Colored unified diff with file headers | raw | 1 MB | none | P1 | R-34 |
 | diagram | `.mmd .mermaid` (and fenced blocks in Markdown) | Rendered diagram (Mermaid, `securityLevel: strict`) | source | 256 KB | first-party | P1 | R-34 |
 | font | `.woff .woff2 .ttf .otf` | Specimen: alphabet, sizes, sample text | download | 10 MB | none | P1 | R-34 |
@@ -1597,7 +1602,7 @@ Path mode is interim. It exists so an instance works on `workers.dev` with no do
   `SITES_SANDBOX=true`.
 - Root-absolute URLs are handled by HTML/CSS rewriting, `Referer` redirects (unsandboxed pages) and an
   injected run-time shim (sandboxed pages: no Referer is ever sent from an opaque origin). Import
-  specifiers, `location.href` and `pushState` with root-relative URLs should be relative. Publish warnings (R-12) say this with the exact framework fix.
+  specifiers, `location.href` and `pushState` with root-relative URLs should be relative. Publish warnings say this with the exact framework fix.
 
 `SITES_SANDBOX` (default `auto` since 2026-10-22):
 
@@ -1802,7 +1807,7 @@ Workspaces 24, Variables 3, Billing 4, Support 1.
 | Byte-identical republish `unchanged` | Same | P0 | Done |
 | Update in place, settings as patches | `publish_site` with `site`, `update_site_settings` | P0 | Done |
 | `baseVersionId` -> 409 | Same, with `next` | P0 | Done |
-| Finalize `warnings[]` | Publish warnings (more kinds) | P0 | R-12 |
+| Finalize `warnings[]` | Publish warnings (more kinds) | P0 | Done (R-12) |
 | Client attribution header and badge | `X-Kofra-Client`, MCP `clientInfo` | P0 | Done / R-06 |
 | `urls[]` (slug, domain, label...) | `site.urls[]` (slug, domain, mount) | P1 | R-33 |
 | TTL | `ttlSeconds` | P1 | R-27 |
@@ -1823,7 +1828,7 @@ Workspaces 24, Variables 3, Billing 4, Support 1.
 | Serving precedence, listings, gallery | Same, plus README under listings | P0 | Done / R-08 |
 | Markdown render + toggle + `?raw=1` | Same | P0 | Done |
 | JSON, CSV, code, text, SVG served raw | Rendered viewers for all of them, with raw toggle | P0 | R-07, R-08 |
-| Headers, Range, edge compression, WASM handling, COOP/COEP, pre-compressed files | Same | P0 / P1 | Done (warning R-12) |
+| Headers, Range, edge compression, WASM handling, COOP/COEP, pre-compressed files | Same | P0 / P1 | Done |
 | New version live in about 10 s | Version URL at once; live URL within about 60 s; `--wait` confirms | P0 | R-13, R-14 |
 | Owner-only preview hosts `{versionId}--{slug}` | `<slug>--v<N>` with signed links | P0 | R-13 |
 | Thumbnails and OG cards | Browser Run screenshots | P1 | R-20 |

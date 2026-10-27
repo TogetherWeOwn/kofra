@@ -19,29 +19,29 @@ export interface WhoamiOutput {
 export interface PublishSiteInput {
   /** Every file of the site. */
   files: ({
-    /** Path inside the site, e.g. "index.html", "docs/guide.md", "assets/app.js". */
+    /** Path inside the site, e.g. "index.html" or "docs/guide.md". */
     path: string;
-    /** The file itself: text (encoding "utf8", up to 1 MB) or base64 bytes (encoding "base64", up to 256 KB). For bigger or binary files prefer url or sha256. */
+    /** Text (encoding "utf8", up to 1 MB) or base64 bytes (up to 256 KB). For bigger/binary files prefer url or sha256. */
     content?: string;
-    /** How content is encoded. Default "utf8". */
+    /** Default "utf8". */
     encoding?: "utf8" | "base64";
-    /** Public https URL to download. URL_FETCH_MAX_BYTES (default 100 MiB), 30 s, 3 redirects; file/request caps also apply. */
+    /** Public https URL (URL_FETCH_MAX_BYTES default 100 MiB; 30 s, 3 redirects; other caps). */
     url?: string;
-    /** Request headers for the url download, e.g. Authorization. Used once, never stored. */
+    /** Headers for the url download, e.g. Authorization; used once, never stored. */
     headers?: Record<string, string>;
-    /** Hex SHA-256 of the bytes. Already stored: reused at once. Not stored: the result lists an upload link (PUT the bytes, then finalize_version). */
+    /** Hex SHA-256 of the bytes. Stored: reused at once. Not stored: the result lists an upload link (PUT, then finalize_version). */
     sha256?: string;
-    /** Size in bytes. Required with sha256 when the bytes are not stored yet. */
+    /** Bytes; required with sha256 if not stored yet. */
     size?: number;
-    /** Copy a file you already published: from a site you can read (default: this site), a version (default: live) and a path (default: the same path). */
+    /** Copy a published file: site you can read (default: this site), version (default: live), path (default: same). */
     copyFrom?: {
-      /** Site slug, site_... id, or site URL. */
+      /** Site slug, site_... id or URL. */
       site?: string;
-      /** A version: "live", "v3" or "3" (version number 3), or a version id (ver_...). */
+      /** "live", "v3"/"3", or a ver_... id. */
       version?: string;
       path?: string;
     };
-    /** MIME type. Default: from the file extension. */
+    /** MIME type; default from extension. */
     contentType?: string;
   })[];
   /** Optional. Slug, id or URL of your existing site to replace, or a new slug (3-56 chars: a-z, 0-9, single hyphens). */
@@ -50,11 +50,11 @@ export interface PublishSiteInput {
   title?: string | null;
   /** One or two sentences about the site. */
   description?: string | null;
-  /** Single-page app: unknown paths serve index.html instead of a 404. */
+  /** SPA: unknown paths serve index.html instead of 404. */
   spa?: boolean;
-  /** Browsers see .md files rendered as pages (default true); false serves them raw. */
+  /** Render .md files as pages for browsers (default true); false serves raw. */
   renderMarkdown?: boolean;
-  /** Send COOP/COEP headers (needed for SharedArrayBuffer and threaded WebAssembly). */
+  /** Send COOP/COEP headers (for SharedArrayBuffer/threaded WASM). */
   crossOriginIsolation?: boolean;
   /** Optional visitor password (see set_site_access). */
   password?: string;
@@ -69,7 +69,7 @@ export interface PublishSiteOutput {
   /** Live URL. Share it exactly as returned. */
   url: string;
   slug: string;
-  /** Owner dashboard link pinned by version id. */
+  /** Dashboard link pinned by version id. */
   versionUrl?: string;
   site?: {
     slug: string;
@@ -79,9 +79,16 @@ export interface PublishSiteOutput {
   };
   version?: Record<string, unknown> | null;
   files?: Record<string, unknown>;
-  /** Only when status is awaiting_upload: items to PUT, then finalize. */
+  /** Only for awaiting_upload: items to PUT, then finalize. */
   upload?: Record<string, unknown>;
-  warnings?: unknown[];
+  warnings?: {
+    code?: string;
+    message?: string;
+    path?: string;
+    line?: number;
+    fix?: string;
+    [key: string]: unknown;
+  }[];
   next?: unknown[];
   [key: string]: unknown;
 }
@@ -184,7 +191,14 @@ export interface UpdateSiteFilesOutput {
     [key: string]: unknown;
   };
   changes?: Record<string, unknown>;
-  warnings?: Record<string, unknown>[];
+  warnings?: {
+    code?: string;
+    message?: string;
+    path?: string;
+    line?: number;
+    fix?: string;
+    [key: string]: unknown;
+  }[];
   next?: Record<string, unknown>[];
   [key: string]: unknown;
 }
@@ -284,11 +298,11 @@ export interface ListFilesInput {
 export type ListFilesOutput = Record<string, unknown>;
 
 export interface ReadFileInput {
-  /** Site slug, site_... id, or site URL. */
+  /** Site slug, site_... id or URL. */
   site: string;
   /** File path, e.g. "index.html". */
   path: string;
-  /** A version: "live", "v3" or "3" (version number 3), or a version id (ver_...). */
+  /** "live", "v3"/"3", or a ver_... id. */
   version?: string;
   /** Default "auto". */
   encoding?: "auto" | "text" | "base64";
@@ -572,7 +586,7 @@ export interface RenameSiteOutput {
 }
 
 export interface DuplicateSiteInput {
-  /** Site slug, site_... id, or site URL. */
+  /** Site slug, site_... id or URL. */
   site: string;
   /** 3-56 chars: a-z, 0-9, single hyphens. */
   newSlug: string;
@@ -635,6 +649,33 @@ export interface GetVersionOutput {
     [key: string]: unknown;
   };
   missing?: string[];
+  upload?: {
+    versionId?: string;
+    expiresAt?: string;
+    items?: {
+      path?: string;
+      paths?: string[];
+      sha256?: string;
+      size?: number;
+      method?: "PUT";
+      url?: string;
+      headers?: Record<string, string>;
+      curl?: string;
+      [key: string]: unknown;
+    }[];
+    [key: string]: unknown;
+  };
+  uploads?: {
+    path?: string;
+    paths?: string[];
+    sha256?: string;
+    size?: number;
+    method?: "PUT";
+    url?: string;
+    headers?: Record<string, string>;
+    curl?: string;
+    [key: string]: unknown;
+  }[];
   [key: string]: unknown;
 }
 
@@ -839,7 +880,14 @@ export type PublishUploadOutput = {
     [key: string]: unknown;
   };
   changes?: Record<string, unknown>;
-  warnings?: Record<string, unknown>[];
+  warnings?: {
+    code?: string;
+    message?: string;
+    path?: string;
+    line?: number;
+    fix?: string;
+    [key: string]: unknown;
+  }[];
   next?: Record<string, unknown>[];
   [key: string]: unknown;
 } | {
@@ -896,6 +944,9 @@ export type PublishUploadOutput = {
   warnings?: {
     code?: string;
     message?: string;
+    path?: string;
+    line?: number;
+    fix?: string;
     [key: string]: unknown;
   }[];
   /** Anonymous publishes only; shown once. */
@@ -1065,7 +1116,7 @@ export const OPERATIONS = {
   "whoami": { method: "GET", path: "/api/v1/me", summary: "Who am I" },
   "publish_site": { method: "POST", path: "/api/v1/publish-sources", summary: "Publish a site" },
   "update_site_files": { method: "PATCH", path: "/api/v1/sites/{slug}/files", summary: "Change some files" },
-  "finalize_version": { method: "POST", path: "/api/v1/sites/{slug}/deploys/{id}/finalize", summary: "Make an uploaded version live" },
+  "finalize_version": { method: "POST", path: "/api/v1/sites/{slug}/versions/{id}/finalize", summary: "Make an uploaded version live" },
   "get_site": { method: "GET", path: "/api/v1/sites/{slug}", summary: "Get a site" },
   "list_sites": { method: "GET", path: "/api/v1/sites", summary: "List sites" },
   "list_files": { method: "GET", path: "/api/v1/sites/{slug}/files", summary: "List files" },
@@ -1095,7 +1146,7 @@ export const OPERATIONS = {
   "setup_instance": { method: "POST", path: "/api/v1/setup", summary: "First run: create the owner (bootstrap key only)" },
   "recover_owner_key": { method: "POST", path: "/api/v1/setup/recover", summary: "Mint a new owner key (bootstrap key only)" },
   "publish_upload": { method: "POST", path: "/api/v1/publish", summary: "Publish files in one call and get a live URL" },
-  "create_version": { method: "POST", path: "/api/v1/sites/{slug}/deploys", summary: "Start a version from a file manifest (upload only what is missing)" },
+  "create_version": { method: "POST", path: "/api/v1/sites/{slug}/versions", summary: "Start a version from a file manifest (upload only what is missing)" },
   "get_deploy": { method: "GET", path: "/api/v1/sites/{slug}/deploys/{id}", summary: "Pending version status (missing files)" },
   "upload_blob": { method: "PUT", path: "/api/v1/blobs/{sha256}", summary: "Upload one file's raw bytes" },
   "get_file_bytes": { method: "GET", path: "/api/v1/sites/{slug}/files/{path}", summary: "Read one file's raw bytes (ETag = sha256)" },

@@ -84,6 +84,27 @@ export const HTTP_SCOPES: Record<string, any> = {
     { type: "string", description: '"*" or space-separated scopes' },
   ],
 };
+export const HTTP_UPLOAD_ITEM: Record<string, any> = {
+  type: "object",
+  properties: {
+    path: { type: "string" },
+    paths: { type: "array", items: { type: "string" } },
+    sha256: { type: "string" },
+    size: { type: "integer" },
+    method: { const: "PUT" },
+    url: { type: "string" },
+    headers: { type: "object", additionalProperties: { type: "string" } },
+    curl: { type: "string" },
+  },
+};
+export const HTTP_UPLOAD: Record<string, any> = {
+  type: "object",
+  properties: {
+    versionId: { type: "string" },
+    expiresAt: { type: "string" },
+    items: { type: "array", items: HTTP_UPLOAD_ITEM },
+  },
+};
 export const HTTP_DEPLOY: Record<string, any> = {
   type: "object",
   properties: {
@@ -178,7 +199,13 @@ export const HTTP_PUBLISH_RESULT: Record<string, any> = {
       type: "array",
       items: {
         type: "object",
-        properties: { code: { type: "string" }, message: { type: "string" } },
+        properties: {
+          code: { type: "string" },
+          message: { type: "string" },
+          path: { type: "string" },
+          line: { type: "integer" },
+          fix: { type: "string" },
+        },
       },
     },
     claimToken: {
@@ -218,7 +245,19 @@ export const HTTP_AGENT_PUBLISH_RESULT: Record<string, any> = {
       },
     },
     changes: { type: "object" },
-    warnings: { type: "array", items: { type: "object" } },
+    warnings: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          code: { type: "string" },
+          message: { type: "string" },
+          path: { type: "string" },
+          line: { type: "integer" },
+          fix: { type: "string" },
+        },
+      },
+    },
     next: { type: "array", items: { type: "object" } },
   },
 };
