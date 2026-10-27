@@ -1317,6 +1317,7 @@ Sites origin:
 | any path declared in `.dropway/proxy.json` | Proxy route | P1 | R-31 |
 | `/__dropway/assets/<hash>.<ext>` | Our viewer scripts and styles (static assets) | P1 | R-34 |
 | `/__dropway/report` | Abuse report form | P1 | R-37 |
+| `<site>/badge.svg` | Live-version badge: SVG with the live version and coarse age for public sites; one identical generic SVG otherwise ([SITE_BADGE](SITE_BADGE.md)) | P1 | Done |
 
 Reserved: slugs never contain `--` and never match the reserved list; file paths under `__dropway/` are
 rejected at publish; files under `.dropway/` are stored but never served.

@@ -25,6 +25,7 @@ import { renderListing } from "./viewers/listing";
 import { MAX_CSS_REWRITE_BYTES, rewriteCss, rewriteHtml, type PathRewrite } from "./path-rewrite";
 import { PATH_SHIM_VERSION, pathShimScript } from "./path-shim";
 import { injectReportLink, REPORT_LINK_VERSION } from "./report-link";
+import { badgeFor, badgeResponse } from "./site-badge";
 import { serveTransfer } from "./transfers";
 import { attachmentDisposition } from "./content-disposition";
 
@@ -50,6 +51,8 @@ export const SITE_SANDBOX =
   "sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation allow-orientation-lock";
 
 const PASSWORD_PATH = "__dropway/password";
+/** Reserved at a site root: the provider-served live-version badge (a published file of this name is not served). */
+const BADGE_PATH = "badge.svg";
 
 export type Resolved =
   | { kind: "file"; path: string; status: number }
@@ -291,11 +294,17 @@ export async function serveSite(
   const method = req.method.toUpperCase();
   // Transfer gates never depend on an eventually consistent live manifest.
   const transfer = await dw.env.DB.prepare("SELECT mode FROM sites WHERE slug = ? UNION ALL SELECT 'transfer' AS mode FROM transfer_slug_tombstones WHERE slug = ? AND NOT EXISTS (SELECT 1 FROM sites WHERE slug = ?) LIMIT 1").bind(slug, slug, slug).first<{ mode: string }>();
+  const badge = (method === "GET" || method === "HEAD") && requestPathToFilePath(pathname) === BADGE_PATH;
   if (transfer?.mode === "transfer") {
+    // The badge never reaches the transfer handler: no download is counted or attributed.
+    if (badge) return badgeResponse(badgeFor(null), method);
     const path = requestPathToFilePath(pathname);
     if (path === null) return new Response("Not found", { status: 404 });
     return serveTransfer(req, dw, slug, path);
   }
+  // Credentials, cookies and Fetch Metadata are never read: the same bytes for everyone.
+  // Not recorded as a site request (no analytics point, no usage meter, no hook).
+  if (badge) return badgeResponse(badgeFor(await getLiveSite(dw, slug)), method);
   if (method === "OPTIONS") {
     // Password-protected sites are not readable cross-origin, so their preflights grant nothing.
     const gated = !!(await getLiveSite(dw, slug))?.passwordHash;
