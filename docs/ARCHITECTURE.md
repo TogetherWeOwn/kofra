@@ -197,10 +197,12 @@ conditional ETags; raw/download bytes, the no-script viewer CSP and the 4 MiB /
 Pages are server-rendered shells. One first-party script,
 `/__dropway/ui/app-<hash>.js`, fills in data from the public REST API, using the
 API key the person signed in with (sessionStorage, or localStorage when they tick
-"keep me signed in"; no cookies). The script is the source text of
-`dropwayClient()` in `ui/client.ts`, so there is no build step and nothing for an
-embedding app to configure. Keep that function self-contained and build DOM with
-its `h()` helper, never `innerHTML`.
+"keep me signed in"; no cookies). The script calls the serialized
+`dropwayClient` from `ui/client.ts` with the serialized `createQrEncoder` factory
+from `qr.js`, so there is no build step and nothing for an embedding app to
+configure. Both functions must remain closure-free: the client receives the QR
+factory as its only external dependency. Build DOM with its `h()` helper, never
+`innerHTML`.
 
 App pages use `appScriptCsp()`: scripts from `'self'` only, frames, images and
 `connect-src` limited to this origin and the sites origin, `frame-ancestors 'none'`.
