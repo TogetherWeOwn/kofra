@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type Viewer } from "@dropway/server";
+import { VIEWERS, type Viewer } from "@dropway/server";
 import { form, freshInstance } from "./helpers";
 
 // RFC 9110 entity-tag: quotes delimit the opaque tag; embedded quotes, controls
@@ -95,8 +95,13 @@ describe("extension viewer ETag contract", () => {
     const rendered = await dw.call(path);
     expect(rendered.status).toBe(200);
     expect(rendered.headers.get("x-kofra-viewer")).toBe("code");
-    const etag = 'W/"code@1-2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"';
+    // Derive the version from the registry so a code viewer bump does not
+    // break the pin; the bytes around it must stay unescaped.
+    const code = VIEWERS.find((viewer) => viewer.id === "code");
+    expect(code).toBeDefined();
+    const etag = `W/"code@${code!.version ?? 1}-2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"`;
     expect(rendered.headers.get("etag")).toBe(etag);
+    expect(etag).toMatch(/^W\/"code@\d+-[0-9a-f]{64}"$/);
     const revalidated = await dw.call(path, { headers: { "If-None-Match": etag } });
     expect(revalidated.status).toBe(304);
     expect(revalidated.headers.get("etag")).toBe(etag);
