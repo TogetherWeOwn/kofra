@@ -64,10 +64,11 @@ const MAGIC: Array<[RegExp, string]> = [
 
 export const binaryViewer: Viewer = {
   id: "binary",
-  // Bumped with the code viewer's line-range selection (the as-text branch
-  // renders through codePage) and the shared-link head tags: each lineage
-  // shipped different bytes at version 2, so the merged render moves to 3.
-  version: 3,
+  // Bumped with the code viewer's line-range selection, report print treatment
+  // and the shared-link head tags: the as-text branch renders through
+  // codePage, and each lineage shipped different bytes at version 3, so the
+  // merged render moves to 4.
+  version: 4,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => mode === "view" && BINARY_KINDS.has(file.kind),
   async render(vc) {

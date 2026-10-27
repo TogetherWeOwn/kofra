@@ -19,7 +19,10 @@ import type { Viewer, ViewerContext } from "./index";
 /** At most this much text is shown; the rest is one click away (Raw, Download). */
 export const SHOW_MAX_BYTES = 1024 * 1024;
 
-const CODE_VERSION = 3;
+// 4 rotates the merged line-range selection, report print treatment and
+// shared-link head tags: each changed codePage output after branching, so
+// none of the parents' 3 identifies the merged bytes.
+const CODE_VERSION = 4;
 
 /** The highlighting language for a file of this kind, or null for plain text. */
 export function codeLanguage(path: string, kind: FileKind): string | null {
@@ -101,6 +104,7 @@ export async function codePage(vc: ViewerContext, opts: { text: string; truncate
   return viewerPage(vc, {
     tabs: opts.tabs,
     body,
+    print: true,
     css: CODE_CSS + RANGE_CSS + HIGHLIGHT_CSS,
     script: CODE_SCRIPT,
     csp: viewerCsp({ scriptHashes: [await scriptHash(CODE_SCRIPT)] }),

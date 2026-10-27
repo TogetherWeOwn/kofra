@@ -11,7 +11,9 @@ import { sanitizeHtml } from "./sanitize";
  * with their execution count, outputs shown (text, errors, PNG/JPEG/GIF/SVG
  * images, HTML and Markdown through the sanitizer). Nothing executes.
  */
-const NB_VERSION = 2;
+// 3: report print treatment and shared-link head tags each changed the page after
+// branching; neither parent's 2 identifies the merged bytes.
+const NB_VERSION = 3;
 const MAX_OUTPUT_TEXT = 100_000;
 
 const NB_CSS = `
@@ -97,6 +99,7 @@ export const notebookViewer: Viewer = {
     });
     return viewerPage(vc, {
       tabs: standardTabs(vc, { rendered: "Notebook", source: true }),
+      print: true,
       css: NB_CSS + HIGHLIGHT_CSS,
       body: `<main class="dw-nb">${r.html}</main>`,
       headers: { "X-Kofra-Render-Cache": r.cache },
