@@ -245,6 +245,7 @@ export const SITE_OPERATIONS = [
     method: "POST",
     path: "/api/v1/sites/{site}/duplicate",
     summary: "Duplicate a site's live version into a new slug",
+    cli: { command: ["duplicate"], positional: ["site", "newSlug"] },
     toolset: "sites",
     scopes: ["sites:write"],
     description:

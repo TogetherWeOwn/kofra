@@ -297,6 +297,92 @@ export function dropwayClient() {
     });
   }
 
+  /** Keep receipt fields on one line; reject unsafe values rather than sanitizing them. */
+  function publicReceiptField(value) {
+    return typeof value === "string" && value && !/[\s\u0000-\u001f\u007f-\u009f]/.test(value) ? value : null;
+  }
+
+  /** A publish response URL that is safe to share, or null. Never stripped or rebuilt. */
+  function publicReceiptUrl(url) {
+    if (!publicReceiptField(url)) return null;
+    var u;
+    try {
+      u = new URL(url);
+    } catch (e) {
+      return null;
+    }
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    if (u.username || u.password || u.search || u.hash) return null;
+    return url;
+  }
+
+  /** Plain-text public receipt: allowlisted response fields only, never secrets. */
+  function publicReceiptText(siteUrl, version) {
+    var lines = [];
+    var clean = publicReceiptUrl(siteUrl);
+    if (clean) lines.push("Site URL: " + clean);
+    if (version && publicReceiptField(version.id)) lines.push("Version ID: " + version.id);
+    if (version && typeof version.number === "number") lines.push("Version: " + version.number);
+    if (version && typeof version.fileCount === "number") lines.push("Files: " + version.fileCount);
+    if (version && typeof version.totalBytes === "number") lines.push("Total bytes: " + version.totalBytes);
+    return lines.join("\n");
+  }
+
+  /** Copyable public receipt for a publish result. Local only: no requests, no persistence. */
+  function receiptBlock(r) {
+    var text = publicReceiptText(r.url, r.version);
+    if (!text) return null;
+    var busy = false;
+    var label = "Copy public details";
+    var note = h("div", { class: "dw-small", role: "status", text: "" });
+    var area = h("textarea", {
+      class: "dw-input dw-mono",
+      readonly: true,
+      rows: String(text.split("\n").length),
+      spellcheck: "false",
+      "aria-label": "Public details",
+      value: text,
+    });
+    var btn = h("button", {
+      type: "button",
+      class: "dw-btn small",
+      text: label,
+      onclick: function () {
+        if (busy) return;
+        busy = true;
+        btn.disabled = true;
+        btn.textContent = "Copying…";
+        var after = function (ok) {
+          busy = false;
+          btn.disabled = false;
+          btn.textContent = label;
+          note.textContent = ok
+            ? "Public details copied."
+            : "Could not copy automatically. Select the text above and copy it manually.";
+        };
+        try {
+          var p = navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(text) : null;
+          if (p && p.then) p.then(function () { after(true); }, function () { after(false); });
+          else after(false);
+        } catch (e) {
+          after(false);
+        }
+      },
+    });
+    return h(
+      "div",
+      { style: "margin-top:.6rem" },
+      h("div", { class: "dw-label", text: "Public details" }),
+      area,
+      h("div", { class: "dw-row", style: "margin-top:.4rem" }, btn),
+      note,
+      h("p", {
+        class: "dw-small dw-muted",
+        text: "The live site URL can change when a new version is published. This version receipt records what was published; it is not an immutable or pinned preview, and sharing it does not change access restrictions or passwords.",
+      }),
+    );
+  }
+
   /** Modal confirmation. typeToConfirm: the user must type this value. Resolves true or false. */
   function confirmBox(opts) {
     return new Promise(function (resolve) {
@@ -312,7 +398,7 @@ export function dropwayClient() {
           opts.message ? h("p", { class: "dw-muted", text: opts.message }) : null,
           input ? h("label", { class: "dw-label", text: "Type " + opts.typeToConfirm + " to confirm" }) : null,
           input,
-          h("div", { class: "dw-row" }, h("button", { class: "dw-btn", value: "cancel", text: "Cancel" }), ok),
+          h("div", { class: "dw-row" }, h("button", { type: "button", class: "dw-btn", value: "cancel", text: "Cancel", onclick: function () { dlg.close("cancel"); } }), ok),
         ),
       );
       if (input)
@@ -629,6 +715,11 @@ export function dropwayClient() {
     // blocked until reselected). seq: selection generation; a drop that resolves
     // after a newer selection (or after a publish started) is stale and ignored.
     var state = { items: [], skipped: [], errors: [], busy: false, seq: 0 };
+    // Review navigation (search, visibility, ordering). Presentation only: it
+    // never touches state.items, state.skipped, the ignore policy or what
+    // run() sends. Every setItems call resets it to the complete review.
+    var nav = { q: "", cat: "all", order: "path" };
+    var navEls = null;
     var siteSelect = h("select", { class: "dw-select", id: "dw-pub-site", "aria-label": "Site to update" }, h("option", { value: "", text: "Loading sites…" }));
     var slugInput = h("input", { class: "dw-input", id: "dw-pub-slug", placeholder: "generated if empty", autocomplete: "off", spellcheck: "false", pattern: "[a-z0-9][a-z0-9-]{1,62}" });
     var modeNew = h("input", { type: "radio", name: "dw-pub-mode", value: "new", checked: !opts.site });
@@ -682,10 +773,16 @@ export function dropwayClient() {
       errors = [];
       var keep = [];
       var skipped = [];
+      var skipRows = [];
       stripCommonRoot(selection).forEach(function (it) {
         var why = ignored(it.path);
-        if (why) skipped.push(it.path + " (" + why + (it.error ? "; " + (it.error.kind === "directory" ? "contents unreadable" : "unreadable") : "") + ")");
-        else if (it.error) errors.push(it.error);
+        if (why) {
+          var entry = it.path + " (" + why + (it.error ? "; " + (it.error.kind === "directory" ? "contents unreadable" : "unreadable") : "") + ")";
+          skipped.push(entry);
+          // The full "path (reason)" text stays the row; the path alone
+          // drives review search and ordering, never the reason.
+          skipRows.push({ path: it.path, text: entry });
+        } else if (it.error) errors.push(it.error);
         else keep.push(it);
       });
       state.items = keep;
@@ -727,8 +824,18 @@ export function dropwayClient() {
       // The review lists the exact normalized inventory publish() will send:
       // every included path with its byte size, every excluded path with its
       // ignore reason. It reads no file contents and makes no requests.
+      // Navigation (search, visibility, ordering) only re-renders these rows:
+      // default is the complete review in deterministic Path order, included
+      // group first. Size orders included bytes descending (equal sizes fall
+      // back to Path order); exclusions always stay Path-ordered last, and an
+      // unreadable exclusion keeps its "unreadable" note instead of a guessed
+      // size. Hidden rows are still uploaded; Clear restores the full review.
       var wasOpen = review.open;
       clear(review);
+      nav.q = "";
+      nav.cat = "all";
+      nav.order = "path";
+      navEls = null;
       if (!keep.length && !skipped.length) {
         review.hidden = true;
       } else {
@@ -736,23 +843,114 @@ export function dropwayClient() {
         var label = keep.length ? "Review " + plural(keep.length, "file") + " · " + bytes(total) : "Review selection";
         if (skipped.length) label += " · " + plural(skipped.length, "excluded file");
         add(review, h("summary", { text: label }));
-        if (keep.length) {
-          add(review, h("p", { class: "dw-small dw-muted dw-review-h", text: zip ? "Archive" : "Included (" + keep.length + ")" }));
-          var included = h("ul", { class: "dw-review-list" });
-          keep.forEach(function (it) {
-            add(included, h("li", { class: "dw-review-row" }, h("code", { class: "dw-mono", text: it.path }), " · " + bytes(it.file.size)));
+        var search = h("input", { class: "dw-input", type: "search", placeholder: "Search paths", "aria-label": "Search review by path", autocomplete: "off", spellcheck: "false" });
+        var navOption = function (value, text) {
+          var o = h("option", { text: text });
+          o.value = value;
+          o.setAttribute("value", value);
+          return o;
+        };
+        var catSel = h("select", { class: "dw-select", "aria-label": "Review visibility" }, navOption("all", "All"), navOption("included", "Included"), navOption("excluded", "Excluded"));
+        catSel.value = "all";
+        var orderSel = h("select", { class: "dw-select", "aria-label": "Review order" }, navOption("path", "Path"), navOption("size", "Size"));
+        orderSel.value = "path";
+        var clearNav = h("button", { type: "button", class: "dw-btn small", text: "Clear filters" });
+        var counts = h("p", { class: "dw-small dw-muted", role: "status" });
+        // Controls stay mounted while typing: only the emitted tail (headings,
+        // lists, notes) is re-rendered, so focus never detaches mid-query.
+        var tail = [];
+        add(review, h("div", { class: "dw-review-nav" }, search, catSel, orderSel, clearNav));
+        add(review, h("p", { class: "dw-small dw-muted", text: keep.length ? "Search, visibility and ordering only change this review. All included files are uploaded." : "Search, visibility and ordering only change this review." }));
+        add(review, counts);
+        var cmpPath = function (a, b) {
+          return a < b ? -1 : a > b ? 1 : 0;
+        };
+        var renderReview = function () {
+          var q = nav.q;
+          var showIncluded = nav.cat !== "excluded";
+          var showExcluded = nav.cat !== "included";
+          var visKeep = showIncluded
+            ? keep.filter(function (it) {
+                return !q || it.path.toLowerCase().indexOf(q) >= 0;
+              })
+            : [];
+          var visSkip = showExcluded
+            ? skipRows.filter(function (r) {
+                return !q || r.path.toLowerCase().indexOf(q) >= 0;
+              })
+            : [];
+          // Sorted copies only: the normalized inventory keeps selection
+          // order, which is the manifest order run() sends.
+          var byPath = function (a, b) {
+            return cmpPath(a.path, b.path);
+          };
+          visSkip.sort(byPath);
+          if (nav.order === "size") {
+            visKeep.sort(function (a, b) {
+              return b.file.size - a.file.size || cmpPath(a.path, b.path);
+            });
+          } else {
+            visKeep.sort(byPath);
+          }
+          counts.textContent = visKeep.length + " of " + keep.length + " included files · " + visSkip.length + " of " + skipRows.length + " excluded paths";
+          tail.forEach(function (n) {
+            n.remove();
           });
-          add(review, included);
-          if (zip) add(review, h("p", { class: "dw-small dw-muted", text: "This archive is unpacked by the server; its entries cannot be listed before upload." }));
-        }
-        if (skipped.length) {
-          add(review, h("p", { class: "dw-small dw-muted dw-review-h", text: "Excluded (" + skipped.length + ")" }));
-          var excluded = h("ul", { class: "dw-review-list" });
-          skipped.forEach(function (entry) {
-            add(excluded, reviewRow(entry));
-          });
-          add(review, excluded);
-        }
+          tail = [];
+          var emit = function (n) {
+            add(review, n);
+            tail.push(n);
+          };
+          if (visKeep.length) {
+            emit(h("p", { class: "dw-small dw-muted dw-review-h", text: zip ? "Archive" : "Included (" + keep.length + ")" }));
+            var included = h("ul", { class: "dw-review-list" });
+            visKeep.forEach(function (it) {
+              add(included, h("li", { class: "dw-review-row" }, h("code", { class: "dw-mono", text: it.path }), " · " + bytes(it.file.size)));
+            });
+            emit(included);
+            if (zip) emit(h("p", { class: "dw-small dw-muted", text: "This archive is unpacked by the server; its entries cannot be listed before upload." }));
+          }
+          if (visSkip.length) {
+            emit(h("p", { class: "dw-small dw-muted dw-review-h", text: "Excluded (" + skipRows.length + ")" }));
+            var excluded = h("ul", { class: "dw-review-list" });
+            visSkip.forEach(function (r) {
+              add(excluded, reviewRow(r.text));
+            });
+            emit(excluded);
+          }
+          if (!visKeep.length && !visSkip.length) emit(h("p", { class: "dw-small dw-muted", text: "No matching files in this review." }));
+        };
+        search.addEventListener("input", function () {
+          if (state.busy) return;
+          // Literal substring on the path only: never a regex, never the
+          // exclusion reason.
+          nav.q = search.value.trim().toLowerCase();
+          renderReview();
+        });
+        catSel.addEventListener("change", function () {
+          if (state.busy) return;
+          nav.cat = catSel.value;
+          renderReview();
+        });
+        orderSel.addEventListener("change", function () {
+          if (state.busy) return;
+          nav.order = orderSel.value;
+          renderReview();
+        });
+        clearNav.addEventListener("click", function () {
+          if (state.busy) return;
+          nav.q = "";
+          nav.cat = "all";
+          nav.order = "path";
+          search.value = "";
+          catSel.value = "all";
+          orderSel.value = "path";
+          renderReview();
+          search.focus();
+        });
+        navEls = { search: search, cat: catSel, order: orderSel, clear: clearNav };
+        if (state.busy) setNavDisabled(true);
+        renderReview();
         review.open = wasOpen;
       }
       publishBtn.disabled = !keep.length || state.busy || !!errors.length;
@@ -841,6 +1039,15 @@ export function dropwayClient() {
       status.textContent = text;
     }
 
+    /** Review navigation locks with the destination while a publish runs. */
+    function setNavDisabled(on) {
+      if (!navEls) return;
+      navEls.search.disabled = on;
+      navEls.cat.disabled = on;
+      navEls.order.disabled = on;
+      navEls.clear.disabled = on;
+    }
+
     /** Destination controls bound to the active publish; frozen while it runs. */
     function setDestinationDisabled(on) {
       modeNew.disabled = on;
@@ -858,6 +1065,7 @@ export function dropwayClient() {
       state.busy = true;
       publishBtn.disabled = true;
       setDestinationDisabled(true);
+      setNavDisabled(true);
       clear(result);
       var auth = key;
       var claim = null;
@@ -899,7 +1107,11 @@ export function dropwayClient() {
         var dep = await api("/sites/" + encodeURIComponent(slug) + "/deploys", { method: "POST", body: { files: manifest, message: msg }, key: auth });
         if (dep.unchanged) {
           setProgress(1, "Nothing changed.");
-          showResult({ slug: slug, unchanged: true, version: dep.deploy });
+          // Unchanged needs a live version, so it is reachable only when updating
+          // an existing site (the new-site leg above just created an empty one).
+          // Recover that site's authoritative URL with an authorized read.
+          if (updating) await showUnchangedResult(slug, dep.deploy, auth);
+          else showResult({ slug: slug, unchanged: true, version: dep.deploy });
           return;
         }
         var uploads = dep.uploads || [];
@@ -932,14 +1144,29 @@ export function dropwayClient() {
       } finally {
         state.busy = false;
         setDestinationDisabled(false);
+        setNavDisabled(false);
         publishBtn.disabled = !state.items.length || !!state.errors.length;
       }
     }
 
-    function showResult(r) {
+    function showResult(r, opts) {
       setItems([]);
       clear(result);
       var url = r.url || null;
+      var linkRetry = null;
+      if (r.linkUnavailable) {
+        linkRetry = h("button", {
+          type: "button",
+          class: "dw-btn small",
+          text: "Retry getting the link",
+          onclick: function () {
+            if (linkRetry.disabled || !r.onLinkRetry) return;
+            linkRetry.disabled = true;
+            linkRetry.textContent = "Retrying…";
+            r.onLinkRetry();
+          },
+        });
+      }
       add(
         result,
         h(
@@ -956,6 +1183,17 @@ export function dropwayClient() {
             h("a", { class: "dw-btn", href: "/v/" + encodeURIComponent(r.slug) + "/", text: "Browse files" }),
             key ? h("a", { class: "dw-btn", href: "/dashboard/sites/" + encodeURIComponent(r.slug), text: "Manage" }) : null,
           ),
+          r.linkUnavailable
+            ? h(
+                "div",
+                { class: "dw-small", style: "margin-top:.6rem" },
+                h("p", { text: "The public link could not be retrieved. The publish itself succeeded — nothing changed and nothing was uploaded. Retrying only reads the site link again; it does not publish again." }),
+                h("div", { class: "dw-row", style: "margin-top:.4rem" }, linkRetry),
+              )
+            : null,
+          // No receipt without a usable link: it would record a public
+          // identity with nowhere to open it.
+          r.linkUnavailable ? null : receiptBlock(r),
           r.warnings && r.warnings.length
             ? h("ul", { class: "dw-small" }, r.warnings.map(function (w) {
                 return h("li", { text: w.message });
@@ -971,10 +1209,66 @@ export function dropwayClient() {
             : null,
         ),
       );
-      if (key) {
+      if (opts && opts.restoreFocus) {
+        var nextAction = linkRetry || $("a.dw-btn", result);
+        if (nextAction) nextAction.focus();
+      }
+      if (key && !(opts && opts.keepDestination)) {
         modeUpd.checked = true;
         slugInput.value = "";
         loadSites(r.slug);
+      }
+    }
+
+    /**
+     * Show an unchanged update with its live link. The unchanged deploy itself
+     * returns the version identity but no URL, so read the site (get_site) with
+     * the publish's own credentials and use only the authoritative URL it
+     * returns — never its live-version pointer, which may have moved on, and
+     * never a URL rebuilt from the slug. A failed or unusable read keeps the
+     * successful "nothing changed" result and offers a retry of the read only.
+     */
+    async function showUnchangedResult(slug, version, auth, restoreFocus) {
+      // A retry runs after run() has finished: hold the same in-flight locks
+      // while it reads, so a new selection cannot race its result rendering.
+      var holdBusy = !state.busy;
+      if (holdBusy) {
+        state.busy = true;
+        publishBtn.disabled = true;
+        setDestinationDisabled(true);
+        setNavDisabled(true);
+      }
+      try {
+        var url = null;
+        try {
+          var res = await api("/sites/" + encodeURIComponent(slug), { key: auth });
+          url = publicReceiptUrl(res && res.site && res.site.url);
+        } catch (e) {
+          url = null;
+        }
+        if (url) {
+          showResult({ slug: slug, unchanged: true, version: version, url: url }, { keepDestination: true, restoreFocus: restoreFocus });
+          return;
+        }
+        showResult(
+          {
+            slug: slug,
+            unchanged: true,
+            version: version,
+            linkUnavailable: true,
+            onLinkRetry: function () {
+              return showUnchangedResult(slug, version, auth, true);
+            },
+          },
+          { keepDestination: true, restoreFocus: restoreFocus },
+        );
+      } finally {
+        if (holdBusy) {
+          state.busy = false;
+          setDestinationDisabled(false);
+          setNavDisabled(false);
+          publishBtn.disabled = !state.items.length || !!state.errors.length;
+        }
       }
     }
 
@@ -1027,9 +1321,1616 @@ export function dropwayClient() {
     if (key) loadSites(opts.site);
   }
 
+  // ------------------------------------------------------------------ QR encoder (vendored)
+  //
+  // Matrix core of QR Code Generator for JavaScript (qrcode-generator 2.0.4),
+  // Copyright (c) 2009 Kazuhiko Arase, MIT license. Renderers (table, SVG,
+  // GIF, ASCII, canvas), the GIF writer, the SJIS helper and the UMD wrapper
+  // are stripped: the dashboard needs only addData/make/isDark/getModuleCount
+  // in byte mode, and draws the modules to its own canvas, so no image
+  // endpoint or third-party request is needed at runtime.
+  //
+  // MIT License permission notice: Permission is hereby granted, free of
+  // charge, to any person obtaining a copy of this software and associated
+  // documentation files (the "Software"), to deal in the Software without
+  // restriction, including without limitation the rights to use, copy, modify,
+  // merge, publish, distribute, sublicense, and/or sell copies of the Software,
+  // and to permit persons to whom the Software is furnished to do so, subject
+  // to the following conditions: The above copyright notice and this permission
+  // notice shall be included in all copies or substantial portions of the
+  // Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+  // EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+  // MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+  // NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+  // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+  // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+  // USE OR OTHER DEALINGS IN THE SOFTWARE.
+  var qrcode = function() {
+
+  //---------------------------------------------------------------------
+  // qrcode
+  //---------------------------------------------------------------------
+
+  /**
+   * qrcode
+   * @param typeNumber 1 to 40
+   * @param errorCorrectionLevel 'L','M','Q','H'
+   */
+  var qrcode = function(typeNumber, errorCorrectionLevel) {
+
+    var PAD0 = 0xEC;
+    var PAD1 = 0x11;
+
+    var _typeNumber = typeNumber;
+    var _errorCorrectionLevel = QRErrorCorrectionLevel[errorCorrectionLevel];
+    var _modules = null;
+    var _moduleCount = 0;
+    var _dataCache = null;
+    var _dataList = [];
+
+    var _this = {};
+
+    var makeImpl = function(test, maskPattern) {
+
+      _moduleCount = _typeNumber * 4 + 17;
+      _modules = function(moduleCount) {
+        var modules = new Array(moduleCount);
+        for (var row = 0; row < moduleCount; row += 1) {
+          modules[row] = new Array(moduleCount);
+          for (var col = 0; col < moduleCount; col += 1) {
+            modules[row][col] = null;
+          }
+        }
+        return modules;
+      }(_moduleCount);
+
+      setupPositionProbePattern(0, 0);
+      setupPositionProbePattern(_moduleCount - 7, 0);
+      setupPositionProbePattern(0, _moduleCount - 7);
+      setupPositionAdjustPattern();
+      setupTimingPattern();
+      setupTypeInfo(test, maskPattern);
+
+      if (_typeNumber >= 7) {
+        setupTypeNumber(test);
+      }
+
+      if (_dataCache == null) {
+        _dataCache = createData(_typeNumber, _errorCorrectionLevel, _dataList);
+      }
+
+      mapData(_dataCache, maskPattern);
+    };
+
+    var setupPositionProbePattern = function(row, col) {
+
+      for (var r = -1; r <= 7; r += 1) {
+
+        if (row + r <= -1 || _moduleCount <= row + r) continue;
+
+        for (var c = -1; c <= 7; c += 1) {
+
+          if (col + c <= -1 || _moduleCount <= col + c) continue;
+
+          if ( (0 <= r && r <= 6 && (c == 0 || c == 6) )
+              || (0 <= c && c <= 6 && (r == 0 || r == 6) )
+              || (2 <= r && r <= 4 && 2 <= c && c <= 4) ) {
+            _modules[row + r][col + c] = true;
+          } else {
+            _modules[row + r][col + c] = false;
+          }
+        }
+      }
+    };
+
+    var getBestMaskPattern = function() {
+
+      var minLostPoint = 0;
+      var pattern = 0;
+
+      for (var i = 0; i < 8; i += 1) {
+
+        makeImpl(true, i);
+
+        var lostPoint = QRUtil.getLostPoint(_this);
+
+        if (i == 0 || minLostPoint > lostPoint) {
+          minLostPoint = lostPoint;
+          pattern = i;
+        }
+      }
+
+      return pattern;
+    };
+
+    var setupTimingPattern = function() {
+
+      for (var r = 8; r < _moduleCount - 8; r += 1) {
+        if (_modules[r][6] != null) {
+          continue;
+        }
+        _modules[r][6] = (r % 2 == 0);
+      }
+
+      for (var c = 8; c < _moduleCount - 8; c += 1) {
+        if (_modules[6][c] != null) {
+          continue;
+        }
+        _modules[6][c] = (c % 2 == 0);
+      }
+    };
+
+    var setupPositionAdjustPattern = function() {
+
+      var pos = QRUtil.getPatternPosition(_typeNumber);
+
+      for (var i = 0; i < pos.length; i += 1) {
+
+        for (var j = 0; j < pos.length; j += 1) {
+
+          var row = pos[i];
+          var col = pos[j];
+
+          if (_modules[row][col] != null) {
+            continue;
+          }
+
+          for (var r = -2; r <= 2; r += 1) {
+
+            for (var c = -2; c <= 2; c += 1) {
+
+              if (r == -2 || r == 2 || c == -2 || c == 2
+                  || (r == 0 && c == 0) ) {
+                _modules[row + r][col + c] = true;
+              } else {
+                _modules[row + r][col + c] = false;
+              }
+            }
+          }
+        }
+      }
+    };
+
+    var setupTypeNumber = function(test) {
+
+      var bits = QRUtil.getBCHTypeNumber(_typeNumber);
+
+      for (var i = 0; i < 18; i += 1) {
+        var mod = (!test && ( (bits >> i) & 1) == 1);
+        _modules[Math.floor(i / 3)][i % 3 + _moduleCount - 8 - 3] = mod;
+      }
+
+      for (var i = 0; i < 18; i += 1) {
+        var mod = (!test && ( (bits >> i) & 1) == 1);
+        _modules[i % 3 + _moduleCount - 8 - 3][Math.floor(i / 3)] = mod;
+      }
+    };
+
+    var setupTypeInfo = function(test, maskPattern) {
+
+      var data = (_errorCorrectionLevel << 3) | maskPattern;
+      var bits = QRUtil.getBCHTypeInfo(data);
+
+      // vertical
+      for (var i = 0; i < 15; i += 1) {
+
+        var mod = (!test && ( (bits >> i) & 1) == 1);
+
+        if (i < 6) {
+          _modules[i][8] = mod;
+        } else if (i < 8) {
+          _modules[i + 1][8] = mod;
+        } else {
+          _modules[_moduleCount - 15 + i][8] = mod;
+        }
+      }
+
+      // horizontal
+      for (var i = 0; i < 15; i += 1) {
+
+        var mod = (!test && ( (bits >> i) & 1) == 1);
+
+        if (i < 8) {
+          _modules[8][_moduleCount - i - 1] = mod;
+        } else if (i < 9) {
+          _modules[8][15 - i - 1 + 1] = mod;
+        } else {
+          _modules[8][15 - i - 1] = mod;
+        }
+      }
+
+      // fixed module
+      _modules[_moduleCount - 8][8] = (!test);
+    };
+
+    var mapData = function(data, maskPattern) {
+
+      var inc = -1;
+      var row = _moduleCount - 1;
+      var bitIndex = 7;
+      var byteIndex = 0;
+      var maskFunc = QRUtil.getMaskFunction(maskPattern);
+
+      for (var col = _moduleCount - 1; col > 0; col -= 2) {
+
+        if (col == 6) col -= 1;
+
+        while (true) {
+
+          for (var c = 0; c < 2; c += 1) {
+
+            if (_modules[row][col - c] == null) {
+
+              var dark = false;
+
+              if (byteIndex < data.length) {
+                dark = ( ( (data[byteIndex] >>> bitIndex) & 1) == 1);
+              }
+
+              var mask = maskFunc(row, col - c);
+
+              if (mask) {
+                dark = !dark;
+              }
+
+              _modules[row][col - c] = dark;
+              bitIndex -= 1;
+
+              if (bitIndex == -1) {
+                byteIndex += 1;
+                bitIndex = 7;
+              }
+            }
+          }
+
+          row += inc;
+
+          if (row < 0 || _moduleCount <= row) {
+            row -= inc;
+            inc = -inc;
+            break;
+          }
+        }
+      }
+    };
+
+    var createBytes = function(buffer, rsBlocks) {
+
+      var offset = 0;
+
+      var maxDcCount = 0;
+      var maxEcCount = 0;
+
+      var dcdata = new Array(rsBlocks.length);
+      var ecdata = new Array(rsBlocks.length);
+
+      for (var r = 0; r < rsBlocks.length; r += 1) {
+
+        var dcCount = rsBlocks[r].dataCount;
+        var ecCount = rsBlocks[r].totalCount - dcCount;
+
+        maxDcCount = Math.max(maxDcCount, dcCount);
+        maxEcCount = Math.max(maxEcCount, ecCount);
+
+        dcdata[r] = new Array(dcCount);
+
+        for (var i = 0; i < dcdata[r].length; i += 1) {
+          dcdata[r][i] = 0xff & buffer.getBuffer()[i + offset];
+        }
+        offset += dcCount;
+
+        var rsPoly = QRUtil.getErrorCorrectPolynomial(ecCount);
+        var rawPoly = qrPolynomial(dcdata[r], rsPoly.getLength() - 1);
+
+        var modPoly = rawPoly.mod(rsPoly);
+        ecdata[r] = new Array(rsPoly.getLength() - 1);
+        for (var i = 0; i < ecdata[r].length; i += 1) {
+          var modIndex = i + modPoly.getLength() - ecdata[r].length;
+          ecdata[r][i] = (modIndex >= 0)? modPoly.getAt(modIndex) : 0;
+        }
+      }
+
+      var totalCodeCount = 0;
+      for (var i = 0; i < rsBlocks.length; i += 1) {
+        totalCodeCount += rsBlocks[i].totalCount;
+      }
+
+      var data = new Array(totalCodeCount);
+      var index = 0;
+
+      for (var i = 0; i < maxDcCount; i += 1) {
+        for (var r = 0; r < rsBlocks.length; r += 1) {
+          if (i < dcdata[r].length) {
+            data[index] = dcdata[r][i];
+            index += 1;
+          }
+        }
+      }
+
+      for (var i = 0; i < maxEcCount; i += 1) {
+        for (var r = 0; r < rsBlocks.length; r += 1) {
+          if (i < ecdata[r].length) {
+            data[index] = ecdata[r][i];
+            index += 1;
+          }
+        }
+      }
+
+      return data;
+    };
+
+    var createData = function(typeNumber, errorCorrectionLevel, dataList) {
+
+      var rsBlocks = QRRSBlock.getRSBlocks(typeNumber, errorCorrectionLevel);
+
+      var buffer = qrBitBuffer();
+
+      for (var i = 0; i < dataList.length; i += 1) {
+        var data = dataList[i];
+        buffer.put(data.getMode(), 4);
+        buffer.put(data.getLength(), QRUtil.getLengthInBits(data.getMode(), typeNumber) );
+        data.write(buffer);
+      }
+
+      // calc num max data.
+      var totalDataCount = 0;
+      for (var i = 0; i < rsBlocks.length; i += 1) {
+        totalDataCount += rsBlocks[i].dataCount;
+      }
+
+      if (buffer.getLengthInBits() > totalDataCount * 8) {
+        throw 'code length overflow. ('
+          + buffer.getLengthInBits()
+          + '>'
+          + totalDataCount * 8
+          + ')';
+      }
+
+      // end code
+      if (buffer.getLengthInBits() + 4 <= totalDataCount * 8) {
+        buffer.put(0, 4);
+      }
+
+      // padding
+      while (buffer.getLengthInBits() % 8 != 0) {
+        buffer.putBit(false);
+      }
+
+      // padding
+      while (true) {
+
+        if (buffer.getLengthInBits() >= totalDataCount * 8) {
+          break;
+        }
+        buffer.put(PAD0, 8);
+
+        if (buffer.getLengthInBits() >= totalDataCount * 8) {
+          break;
+        }
+        buffer.put(PAD1, 8);
+      }
+
+      return createBytes(buffer, rsBlocks);
+    };
+
+    _this.addData = function(data, mode) {
+
+      mode = mode || 'Byte';
+
+      var newData = null;
+
+      switch(mode) {
+      case 'Numeric' :
+        newData = qrNumber(data);
+        break;
+      case 'Alphanumeric' :
+        newData = qrAlphaNum(data);
+        break;
+      case 'Byte' :
+        newData = qr8BitByte(data);
+        break;
+      case 'Kanji' :
+        newData = qrKanji(data);
+        break;
+      default :
+        throw 'mode:' + mode;
+      }
+
+      _dataList.push(newData);
+      _dataCache = null;
+    };
+
+    _this.isDark = function(row, col) {
+      if (row < 0 || _moduleCount <= row || col < 0 || _moduleCount <= col) {
+        throw row + ',' + col;
+      }
+      return _modules[row][col];
+    };
+
+    _this.getModuleCount = function() {
+      return _moduleCount;
+    };
+
+    _this.make = function() {
+      if (_typeNumber < 1) {
+        var typeNumber = 1;
+
+        for (; typeNumber < 40; typeNumber++) {
+          var rsBlocks = QRRSBlock.getRSBlocks(typeNumber, _errorCorrectionLevel);
+          var buffer = qrBitBuffer();
+
+          for (var i = 0; i < _dataList.length; i++) {
+            var data = _dataList[i];
+            buffer.put(data.getMode(), 4);
+            buffer.put(data.getLength(), QRUtil.getLengthInBits(data.getMode(), typeNumber) );
+            data.write(buffer);
+          }
+
+          var totalDataCount = 0;
+          for (var i = 0; i < rsBlocks.length; i++) {
+            totalDataCount += rsBlocks[i].dataCount;
+          }
+
+          if (buffer.getLengthInBits() <= totalDataCount * 8) {
+            break;
+          }
+        }
+
+        _typeNumber = typeNumber;
+      }
+
+      makeImpl(false, getBestMaskPattern() );
+    };
+
+    return _this;
+  };
+
+  //---------------------------------------------------------------------
+  // qrcode.stringToBytes
+  //---------------------------------------------------------------------
+
+  qrcode.stringToBytesFuncs = {
+    'default' : function(s) {
+      var bytes = [];
+      for (var i = 0; i < s.length; i += 1) {
+        var c = s.charCodeAt(i);
+        bytes.push(c & 0xff);
+      }
+      return bytes;
+    }
+  };
+
+  qrcode.stringToBytes = qrcode.stringToBytesFuncs['default'];
+
+  //---------------------------------------------------------------------
+  // QRMode
+  //---------------------------------------------------------------------
+
+  var QRMode = {
+    MODE_NUMBER :    1 << 0,
+    MODE_ALPHA_NUM : 1 << 1,
+    MODE_8BIT_BYTE : 1 << 2,
+    MODE_KANJI :     1 << 3
+  };
+
+  //---------------------------------------------------------------------
+  // QRErrorCorrectionLevel
+  //---------------------------------------------------------------------
+
+  var QRErrorCorrectionLevel = {
+    L : 1,
+    M : 0,
+    Q : 3,
+    H : 2
+  };
+
+  //---------------------------------------------------------------------
+  // QRMaskPattern
+  //---------------------------------------------------------------------
+
+  var QRMaskPattern = {
+    PATTERN000 : 0,
+    PATTERN001 : 1,
+    PATTERN010 : 2,
+    PATTERN011 : 3,
+    PATTERN100 : 4,
+    PATTERN101 : 5,
+    PATTERN110 : 6,
+    PATTERN111 : 7
+  };
+
+  //---------------------------------------------------------------------
+  // QRUtil
+  //---------------------------------------------------------------------
+
+  var QRUtil = function() {
+
+    var PATTERN_POSITION_TABLE = [
+      [],
+      [6, 18],
+      [6, 22],
+      [6, 26],
+      [6, 30],
+      [6, 34],
+      [6, 22, 38],
+      [6, 24, 42],
+      [6, 26, 46],
+      [6, 28, 50],
+      [6, 30, 54],
+      [6, 32, 58],
+      [6, 34, 62],
+      [6, 26, 46, 66],
+      [6, 26, 48, 70],
+      [6, 26, 50, 74],
+      [6, 30, 54, 78],
+      [6, 30, 56, 82],
+      [6, 30, 58, 86],
+      [6, 34, 62, 90],
+      [6, 28, 50, 72, 94],
+      [6, 26, 50, 74, 98],
+      [6, 30, 54, 78, 102],
+      [6, 28, 54, 80, 106],
+      [6, 32, 58, 84, 110],
+      [6, 30, 58, 86, 114],
+      [6, 34, 62, 90, 118],
+      [6, 26, 50, 74, 98, 122],
+      [6, 30, 54, 78, 102, 126],
+      [6, 26, 52, 78, 104, 130],
+      [6, 30, 56, 82, 108, 134],
+      [6, 34, 60, 86, 112, 138],
+      [6, 30, 58, 86, 114, 142],
+      [6, 34, 62, 90, 118, 146],
+      [6, 30, 54, 78, 102, 126, 150],
+      [6, 24, 50, 76, 102, 128, 154],
+      [6, 28, 54, 80, 106, 132, 158],
+      [6, 32, 58, 84, 110, 136, 162],
+      [6, 26, 54, 82, 110, 138, 166],
+      [6, 30, 58, 86, 114, 142, 170]
+    ];
+    var G15 = (1 << 10) | (1 << 8) | (1 << 5) | (1 << 4) | (1 << 2) | (1 << 1) | (1 << 0);
+    var G18 = (1 << 12) | (1 << 11) | (1 << 10) | (1 << 9) | (1 << 8) | (1 << 5) | (1 << 2) | (1 << 0);
+    var G15_MASK = (1 << 14) | (1 << 12) | (1 << 10) | (1 << 4) | (1 << 1);
+
+    var _this = {};
+
+    var getBCHDigit = function(data) {
+      var digit = 0;
+      while (data != 0) {
+        digit += 1;
+        data >>>= 1;
+      }
+      return digit;
+    };
+
+    _this.getBCHTypeInfo = function(data) {
+      var d = data << 10;
+      while (getBCHDigit(d) - getBCHDigit(G15) >= 0) {
+        d ^= (G15 << (getBCHDigit(d) - getBCHDigit(G15) ) );
+      }
+      return ( (data << 10) | d) ^ G15_MASK;
+    };
+
+    _this.getBCHTypeNumber = function(data) {
+      var d = data << 12;
+      while (getBCHDigit(d) - getBCHDigit(G18) >= 0) {
+        d ^= (G18 << (getBCHDigit(d) - getBCHDigit(G18) ) );
+      }
+      return (data << 12) | d;
+    };
+
+    _this.getPatternPosition = function(typeNumber) {
+      return PATTERN_POSITION_TABLE[typeNumber - 1];
+    };
+
+    _this.getMaskFunction = function(maskPattern) {
+
+      switch (maskPattern) {
+
+      case QRMaskPattern.PATTERN000 :
+        return function(i, j) { return (i + j) % 2 == 0; };
+      case QRMaskPattern.PATTERN001 :
+        return function(i, j) { return i % 2 == 0; };
+      case QRMaskPattern.PATTERN010 :
+        return function(i, j) { return j % 3 == 0; };
+      case QRMaskPattern.PATTERN011 :
+        return function(i, j) { return (i + j) % 3 == 0; };
+      case QRMaskPattern.PATTERN100 :
+        return function(i, j) { return (Math.floor(i / 2) + Math.floor(j / 3) ) % 2 == 0; };
+      case QRMaskPattern.PATTERN101 :
+        return function(i, j) { return (i * j) % 2 + (i * j) % 3 == 0; };
+      case QRMaskPattern.PATTERN110 :
+        return function(i, j) { return ( (i * j) % 2 + (i * j) % 3) % 2 == 0; };
+      case QRMaskPattern.PATTERN111 :
+        return function(i, j) { return ( (i * j) % 3 + (i + j) % 2) % 2 == 0; };
+
+      default :
+        throw 'bad maskPattern:' + maskPattern;
+      }
+    };
+
+    _this.getErrorCorrectPolynomial = function(errorCorrectLength) {
+      var a = qrPolynomial([1], 0);
+      for (var i = 0; i < errorCorrectLength; i += 1) {
+        a = a.multiply(qrPolynomial([1, QRMath.gexp(i)], 0) );
+      }
+      return a;
+    };
+
+    _this.getLengthInBits = function(mode, type) {
+
+      if (1 <= type && type < 10) {
+
+        // 1 - 9
+
+        switch(mode) {
+        case QRMode.MODE_NUMBER    : return 10;
+        case QRMode.MODE_ALPHA_NUM : return 9;
+        case QRMode.MODE_8BIT_BYTE : return 8;
+        case QRMode.MODE_KANJI     : return 8;
+        default :
+          throw 'mode:' + mode;
+        }
+
+      } else if (type < 27) {
+
+        // 10 - 26
+
+        switch(mode) {
+        case QRMode.MODE_NUMBER    : return 12;
+        case QRMode.MODE_ALPHA_NUM : return 11;
+        case QRMode.MODE_8BIT_BYTE : return 16;
+        case QRMode.MODE_KANJI     : return 10;
+        default :
+          throw 'mode:' + mode;
+        }
+
+      } else if (type < 41) {
+
+        // 27 - 40
+
+        switch(mode) {
+        case QRMode.MODE_NUMBER    : return 14;
+        case QRMode.MODE_ALPHA_NUM : return 13;
+        case QRMode.MODE_8BIT_BYTE : return 16;
+        case QRMode.MODE_KANJI     : return 12;
+        default :
+          throw 'mode:' + mode;
+        }
+
+      } else {
+        throw 'type:' + type;
+      }
+    };
+
+    _this.getLostPoint = function(qrcode) {
+
+      var moduleCount = qrcode.getModuleCount();
+
+      var lostPoint = 0;
+
+      // LEVEL1
+
+      for (var row = 0; row < moduleCount; row += 1) {
+        for (var col = 0; col < moduleCount; col += 1) {
+
+          var sameCount = 0;
+          var dark = qrcode.isDark(row, col);
+
+          for (var r = -1; r <= 1; r += 1) {
+
+            if (row + r < 0 || moduleCount <= row + r) {
+              continue;
+            }
+
+            for (var c = -1; c <= 1; c += 1) {
+
+              if (col + c < 0 || moduleCount <= col + c) {
+                continue;
+              }
+
+              if (r == 0 && c == 0) {
+                continue;
+              }
+
+              if (dark == qrcode.isDark(row + r, col + c) ) {
+                sameCount += 1;
+              }
+            }
+          }
+
+          if (sameCount > 5) {
+            lostPoint += (3 + sameCount - 5);
+          }
+        }
+      };
+
+      // LEVEL2
+
+      for (var row = 0; row < moduleCount - 1; row += 1) {
+        for (var col = 0; col < moduleCount - 1; col += 1) {
+          var count = 0;
+          if (qrcode.isDark(row, col) ) count += 1;
+          if (qrcode.isDark(row + 1, col) ) count += 1;
+          if (qrcode.isDark(row, col + 1) ) count += 1;
+          if (qrcode.isDark(row + 1, col + 1) ) count += 1;
+          if (count == 0 || count == 4) {
+            lostPoint += 3;
+          }
+        }
+      }
+
+      // LEVEL3
+
+      for (var row = 0; row < moduleCount; row += 1) {
+        for (var col = 0; col < moduleCount - 6; col += 1) {
+          if (qrcode.isDark(row, col)
+              && !qrcode.isDark(row, col + 1)
+              &&  qrcode.isDark(row, col + 2)
+              &&  qrcode.isDark(row, col + 3)
+              &&  qrcode.isDark(row, col + 4)
+              && !qrcode.isDark(row, col + 5)
+              &&  qrcode.isDark(row, col + 6) ) {
+            lostPoint += 40;
+          }
+        }
+      }
+
+      for (var col = 0; col < moduleCount; col += 1) {
+        for (var row = 0; row < moduleCount - 6; row += 1) {
+          if (qrcode.isDark(row, col)
+              && !qrcode.isDark(row + 1, col)
+              &&  qrcode.isDark(row + 2, col)
+              &&  qrcode.isDark(row + 3, col)
+              &&  qrcode.isDark(row + 4, col)
+              && !qrcode.isDark(row + 5, col)
+              &&  qrcode.isDark(row + 6, col) ) {
+            lostPoint += 40;
+          }
+        }
+      }
+
+      // LEVEL4
+
+      var darkCount = 0;
+
+      for (var col = 0; col < moduleCount; col += 1) {
+        for (var row = 0; row < moduleCount; row += 1) {
+          if (qrcode.isDark(row, col) ) {
+            darkCount += 1;
+          }
+        }
+      }
+
+      var ratio = Math.abs(100 * darkCount / moduleCount / moduleCount - 50) / 5;
+      lostPoint += ratio * 10;
+
+      return lostPoint;
+    };
+
+    return _this;
+  }();
+
+  //---------------------------------------------------------------------
+  // QRMath
+  //---------------------------------------------------------------------
+
+  var QRMath = function() {
+
+    var EXP_TABLE = new Array(256);
+    var LOG_TABLE = new Array(256);
+
+    // initialize tables
+    for (var i = 0; i < 8; i += 1) {
+      EXP_TABLE[i] = 1 << i;
+    }
+    for (var i = 8; i < 256; i += 1) {
+      EXP_TABLE[i] = EXP_TABLE[i - 4]
+        ^ EXP_TABLE[i - 5]
+        ^ EXP_TABLE[i - 6]
+        ^ EXP_TABLE[i - 8];
+    }
+    for (var i = 0; i < 255; i += 1) {
+      LOG_TABLE[EXP_TABLE[i] ] = i;
+    }
+
+    var _this = {};
+
+    _this.glog = function(n) {
+
+      if (n < 1) {
+        throw 'glog(' + n + ')';
+      }
+
+      return LOG_TABLE[n];
+    };
+
+    _this.gexp = function(n) {
+
+      while (n < 0) {
+        n += 255;
+      }
+
+      while (n >= 256) {
+        n -= 255;
+      }
+
+      return EXP_TABLE[n];
+    };
+
+    return _this;
+  }();
+
+  //---------------------------------------------------------------------
+  // qrPolynomial
+  //---------------------------------------------------------------------
+
+  function qrPolynomial(num, shift) {
+
+    if (typeof num.length == 'undefined') {
+      throw num.length + '/' + shift;
+    }
+
+    var _num = function() {
+      var offset = 0;
+      while (offset < num.length && num[offset] == 0) {
+        offset += 1;
+      }
+      var _num = new Array(num.length - offset + shift);
+      for (var i = 0; i < num.length - offset; i += 1) {
+        _num[i] = num[i + offset];
+      }
+      return _num;
+    }();
+
+    var _this = {};
+
+    _this.getAt = function(index) {
+      return _num[index];
+    };
+
+    _this.getLength = function() {
+      return _num.length;
+    };
+
+    _this.multiply = function(e) {
+
+      var num = new Array(_this.getLength() + e.getLength() - 1);
+
+      for (var i = 0; i < _this.getLength(); i += 1) {
+        for (var j = 0; j < e.getLength(); j += 1) {
+          num[i + j] ^= QRMath.gexp(QRMath.glog(_this.getAt(i) ) + QRMath.glog(e.getAt(j) ) );
+        }
+      }
+
+      return qrPolynomial(num, 0);
+    };
+
+    _this.mod = function(e) {
+
+      if (_this.getLength() - e.getLength() < 0) {
+        return _this;
+      }
+
+      var ratio = QRMath.glog(_this.getAt(0) ) - QRMath.glog(e.getAt(0) );
+
+      var num = new Array(_this.getLength() );
+      for (var i = 0; i < _this.getLength(); i += 1) {
+        num[i] = _this.getAt(i);
+      }
+
+      for (var i = 0; i < e.getLength(); i += 1) {
+        num[i] ^= QRMath.gexp(QRMath.glog(e.getAt(i) ) + ratio);
+      }
+
+      // recursive call
+      return qrPolynomial(num, 0).mod(e);
+    };
+
+    return _this;
+  };
+
+  //---------------------------------------------------------------------
+  // QRRSBlock
+  //---------------------------------------------------------------------
+
+  var QRRSBlock = function() {
+
+    var RS_BLOCK_TABLE = [
+
+      // L
+      // M
+      // Q
+      // H
+
+      // 1
+      [1, 26, 19],
+      [1, 26, 16],
+      [1, 26, 13],
+      [1, 26, 9],
+
+      // 2
+      [1, 44, 34],
+      [1, 44, 28],
+      [1, 44, 22],
+      [1, 44, 16],
+
+      // 3
+      [1, 70, 55],
+      [1, 70, 44],
+      [2, 35, 17],
+      [2, 35, 13],
+
+      // 4
+      [1, 100, 80],
+      [2, 50, 32],
+      [2, 50, 24],
+      [4, 25, 9],
+
+      // 5
+      [1, 134, 108],
+      [2, 67, 43],
+      [2, 33, 15, 2, 34, 16],
+      [2, 33, 11, 2, 34, 12],
+
+      // 6
+      [2, 86, 68],
+      [4, 43, 27],
+      [4, 43, 19],
+      [4, 43, 15],
+
+      // 7
+      [2, 98, 78],
+      [4, 49, 31],
+      [2, 32, 14, 4, 33, 15],
+      [4, 39, 13, 1, 40, 14],
+
+      // 8
+      [2, 121, 97],
+      [2, 60, 38, 2, 61, 39],
+      [4, 40, 18, 2, 41, 19],
+      [4, 40, 14, 2, 41, 15],
+
+      // 9
+      [2, 146, 116],
+      [3, 58, 36, 2, 59, 37],
+      [4, 36, 16, 4, 37, 17],
+      [4, 36, 12, 4, 37, 13],
+
+      // 10
+      [2, 86, 68, 2, 87, 69],
+      [4, 69, 43, 1, 70, 44],
+      [6, 43, 19, 2, 44, 20],
+      [6, 43, 15, 2, 44, 16],
+
+      // 11
+      [4, 101, 81],
+      [1, 80, 50, 4, 81, 51],
+      [4, 50, 22, 4, 51, 23],
+      [3, 36, 12, 8, 37, 13],
+
+      // 12
+      [2, 116, 92, 2, 117, 93],
+      [6, 58, 36, 2, 59, 37],
+      [4, 46, 20, 6, 47, 21],
+      [7, 42, 14, 4, 43, 15],
+
+      // 13
+      [4, 133, 107],
+      [8, 59, 37, 1, 60, 38],
+      [8, 44, 20, 4, 45, 21],
+      [12, 33, 11, 4, 34, 12],
+
+      // 14
+      [3, 145, 115, 1, 146, 116],
+      [4, 64, 40, 5, 65, 41],
+      [11, 36, 16, 5, 37, 17],
+      [11, 36, 12, 5, 37, 13],
+
+      // 15
+      [5, 109, 87, 1, 110, 88],
+      [5, 65, 41, 5, 66, 42],
+      [5, 54, 24, 7, 55, 25],
+      [11, 36, 12, 7, 37, 13],
+
+      // 16
+      [5, 122, 98, 1, 123, 99],
+      [7, 73, 45, 3, 74, 46],
+      [15, 43, 19, 2, 44, 20],
+      [3, 45, 15, 13, 46, 16],
+
+      // 17
+      [1, 135, 107, 5, 136, 108],
+      [10, 74, 46, 1, 75, 47],
+      [1, 50, 22, 15, 51, 23],
+      [2, 42, 14, 17, 43, 15],
+
+      // 18
+      [5, 150, 120, 1, 151, 121],
+      [9, 69, 43, 4, 70, 44],
+      [17, 50, 22, 1, 51, 23],
+      [2, 42, 14, 19, 43, 15],
+
+      // 19
+      [3, 141, 113, 4, 142, 114],
+      [3, 70, 44, 11, 71, 45],
+      [17, 47, 21, 4, 48, 22],
+      [9, 39, 13, 16, 40, 14],
+
+      // 20
+      [3, 135, 107, 5, 136, 108],
+      [3, 67, 41, 13, 68, 42],
+      [15, 54, 24, 5, 55, 25],
+      [15, 43, 15, 10, 44, 16],
+
+      // 21
+      [4, 144, 116, 4, 145, 117],
+      [17, 68, 42],
+      [17, 50, 22, 6, 51, 23],
+      [19, 46, 16, 6, 47, 17],
+
+      // 22
+      [2, 139, 111, 7, 140, 112],
+      [17, 74, 46],
+      [7, 54, 24, 16, 55, 25],
+      [34, 37, 13],
+
+      // 23
+      [4, 151, 121, 5, 152, 122],
+      [4, 75, 47, 14, 76, 48],
+      [11, 54, 24, 14, 55, 25],
+      [16, 45, 15, 14, 46, 16],
+
+      // 24
+      [6, 147, 117, 4, 148, 118],
+      [6, 73, 45, 14, 74, 46],
+      [11, 54, 24, 16, 55, 25],
+      [30, 46, 16, 2, 47, 17],
+
+      // 25
+      [8, 132, 106, 4, 133, 107],
+      [8, 75, 47, 13, 76, 48],
+      [7, 54, 24, 22, 55, 25],
+      [22, 45, 15, 13, 46, 16],
+
+      // 26
+      [10, 142, 114, 2, 143, 115],
+      [19, 74, 46, 4, 75, 47],
+      [28, 50, 22, 6, 51, 23],
+      [33, 46, 16, 4, 47, 17],
+
+      // 27
+      [8, 152, 122, 4, 153, 123],
+      [22, 73, 45, 3, 74, 46],
+      [8, 53, 23, 26, 54, 24],
+      [12, 45, 15, 28, 46, 16],
+
+      // 28
+      [3, 147, 117, 10, 148, 118],
+      [3, 73, 45, 23, 74, 46],
+      [4, 54, 24, 31, 55, 25],
+      [11, 45, 15, 31, 46, 16],
+
+      // 29
+      [7, 146, 116, 7, 147, 117],
+      [21, 73, 45, 7, 74, 46],
+      [1, 53, 23, 37, 54, 24],
+      [19, 45, 15, 26, 46, 16],
+
+      // 30
+      [5, 145, 115, 10, 146, 116],
+      [19, 75, 47, 10, 76, 48],
+      [15, 54, 24, 25, 55, 25],
+      [23, 45, 15, 25, 46, 16],
+
+      // 31
+      [13, 145, 115, 3, 146, 116],
+      [2, 74, 46, 29, 75, 47],
+      [42, 54, 24, 1, 55, 25],
+      [23, 45, 15, 28, 46, 16],
+
+      // 32
+      [17, 145, 115],
+      [10, 74, 46, 23, 75, 47],
+      [10, 54, 24, 35, 55, 25],
+      [19, 45, 15, 35, 46, 16],
+
+      // 33
+      [17, 145, 115, 1, 146, 116],
+      [14, 74, 46, 21, 75, 47],
+      [29, 54, 24, 19, 55, 25],
+      [11, 45, 15, 46, 46, 16],
+
+      // 34
+      [13, 145, 115, 6, 146, 116],
+      [14, 74, 46, 23, 75, 47],
+      [44, 54, 24, 7, 55, 25],
+      [59, 46, 16, 1, 47, 17],
+
+      // 35
+      [12, 151, 121, 7, 152, 122],
+      [12, 75, 47, 26, 76, 48],
+      [39, 54, 24, 14, 55, 25],
+      [22, 45, 15, 41, 46, 16],
+
+      // 36
+      [6, 151, 121, 14, 152, 122],
+      [6, 75, 47, 34, 76, 48],
+      [46, 54, 24, 10, 55, 25],
+      [2, 45, 15, 64, 46, 16],
+
+      // 37
+      [17, 152, 122, 4, 153, 123],
+      [29, 74, 46, 14, 75, 47],
+      [49, 54, 24, 10, 55, 25],
+      [24, 45, 15, 46, 46, 16],
+
+      // 38
+      [4, 152, 122, 18, 153, 123],
+      [13, 74, 46, 32, 75, 47],
+      [48, 54, 24, 14, 55, 25],
+      [42, 45, 15, 32, 46, 16],
+
+      // 39
+      [20, 147, 117, 4, 148, 118],
+      [40, 75, 47, 7, 76, 48],
+      [43, 54, 24, 22, 55, 25],
+      [10, 45, 15, 67, 46, 16],
+
+      // 40
+      [19, 148, 118, 6, 149, 119],
+      [18, 75, 47, 31, 76, 48],
+      [34, 54, 24, 34, 55, 25],
+      [20, 45, 15, 61, 46, 16]
+    ];
+
+    var qrRSBlock = function(totalCount, dataCount) {
+      var _this = {};
+      _this.totalCount = totalCount;
+      _this.dataCount = dataCount;
+      return _this;
+    };
+
+    var _this = {};
+
+    var getRsBlockTable = function(typeNumber, errorCorrectionLevel) {
+
+      switch(errorCorrectionLevel) {
+      case QRErrorCorrectionLevel.L :
+        return RS_BLOCK_TABLE[(typeNumber - 1) * 4 + 0];
+      case QRErrorCorrectionLevel.M :
+        return RS_BLOCK_TABLE[(typeNumber - 1) * 4 + 1];
+      case QRErrorCorrectionLevel.Q :
+        return RS_BLOCK_TABLE[(typeNumber - 1) * 4 + 2];
+      case QRErrorCorrectionLevel.H :
+        return RS_BLOCK_TABLE[(typeNumber - 1) * 4 + 3];
+      default :
+        return undefined;
+      }
+    };
+
+    _this.getRSBlocks = function(typeNumber, errorCorrectionLevel) {
+
+      var rsBlock = getRsBlockTable(typeNumber, errorCorrectionLevel);
+
+      if (typeof rsBlock == 'undefined') {
+        throw 'bad rs block @ typeNumber:' + typeNumber +
+            '/errorCorrectionLevel:' + errorCorrectionLevel;
+      }
+
+      var length = rsBlock.length / 3;
+
+      var list = [];
+
+      for (var i = 0; i < length; i += 1) {
+
+        var count = rsBlock[i * 3 + 0];
+        var totalCount = rsBlock[i * 3 + 1];
+        var dataCount = rsBlock[i * 3 + 2];
+
+        for (var j = 0; j < count; j += 1) {
+          list.push(qrRSBlock(totalCount, dataCount) );
+        }
+      }
+
+      return list;
+    };
+
+    return _this;
+  }();
+
+  //---------------------------------------------------------------------
+  // qrBitBuffer
+  //---------------------------------------------------------------------
+
+  var qrBitBuffer = function() {
+
+    var _buffer = [];
+    var _length = 0;
+
+    var _this = {};
+
+    _this.getBuffer = function() {
+      return _buffer;
+    };
+
+    _this.getAt = function(index) {
+      var bufIndex = Math.floor(index / 8);
+      return ( (_buffer[bufIndex] >>> (7 - index % 8) ) & 1) == 1;
+    };
+
+    _this.put = function(num, length) {
+      for (var i = 0; i < length; i += 1) {
+        _this.putBit( ( (num >>> (length - i - 1) ) & 1) == 1);
+      }
+    };
+
+    _this.getLengthInBits = function() {
+      return _length;
+    };
+
+    _this.putBit = function(bit) {
+
+      var bufIndex = Math.floor(_length / 8);
+      if (_buffer.length <= bufIndex) {
+        _buffer.push(0);
+      }
+
+      if (bit) {
+        _buffer[bufIndex] |= (0x80 >>> (_length % 8) );
+      }
+
+      _length += 1;
+    };
+
+    return _this;
+  };
+
+  //---------------------------------------------------------------------
+  // qrNumber
+  //---------------------------------------------------------------------
+
+  var qrNumber = function(data) {
+
+    var _mode = QRMode.MODE_NUMBER;
+    var _data = data;
+
+    var _this = {};
+
+    _this.getMode = function() {
+      return _mode;
+    };
+
+    _this.getLength = function(buffer) {
+      return _data.length;
+    };
+
+    _this.write = function(buffer) {
+
+      var data = _data;
+
+      var i = 0;
+
+      while (i + 2 < data.length) {
+        buffer.put(strToNum(data.substring(i, i + 3) ), 10);
+        i += 3;
+      }
+
+      if (i < data.length) {
+        if (data.length - i == 1) {
+          buffer.put(strToNum(data.substring(i, i + 1) ), 4);
+        } else if (data.length - i == 2) {
+          buffer.put(strToNum(data.substring(i, i + 2) ), 7);
+        }
+      }
+    };
+
+    var strToNum = function(s) {
+      var num = 0;
+      for (var i = 0; i < s.length; i += 1) {
+        num = num * 10 + chatToNum(s.charAt(i) );
+      }
+      return num;
+    };
+
+    var chatToNum = function(c) {
+      if ('0' <= c && c <= '9') {
+        return c.charCodeAt(0) - '0'.charCodeAt(0);
+      }
+      throw 'illegal char :' + c;
+    };
+
+    return _this;
+  };
+
+  //---------------------------------------------------------------------
+  // qrAlphaNum
+  //---------------------------------------------------------------------
+
+  var qrAlphaNum = function(data) {
+
+    var _mode = QRMode.MODE_ALPHA_NUM;
+    var _data = data;
+
+    var _this = {};
+
+    _this.getMode = function() {
+      return _mode;
+    };
+
+    _this.getLength = function(buffer) {
+      return _data.length;
+    };
+
+    _this.write = function(buffer) {
+
+      var s = _data;
+
+      var i = 0;
+
+      while (i + 1 < s.length) {
+        buffer.put(
+          getCode(s.charAt(i) ) * 45 +
+          getCode(s.charAt(i + 1) ), 11);
+        i += 2;
+      }
+
+      if (i < s.length) {
+        buffer.put(getCode(s.charAt(i) ), 6);
+      }
+    };
+
+    var getCode = function(c) {
+
+      if ('0' <= c && c <= '9') {
+        return c.charCodeAt(0) - '0'.charCodeAt(0);
+      } else if ('A' <= c && c <= 'Z') {
+        return c.charCodeAt(0) - 'A'.charCodeAt(0) + 10;
+      } else {
+        switch (c) {
+        case ' ' : return 36;
+        case '$' : return 37;
+        case '%' : return 38;
+        case '*' : return 39;
+        case '+' : return 40;
+        case '-' : return 41;
+        case '.' : return 42;
+        case '/' : return 43;
+        case ':' : return 44;
+        default :
+          throw 'illegal char :' + c;
+        }
+      }
+    };
+
+    return _this;
+  };
+
+  //---------------------------------------------------------------------
+  // qr8BitByte
+  //---------------------------------------------------------------------
+
+  var qr8BitByte = function(data) {
+
+    var _mode = QRMode.MODE_8BIT_BYTE;
+    var _data = data;
+    var _bytes = qrcode.stringToBytes(data);
+
+    var _this = {};
+
+    _this.getMode = function() {
+      return _mode;
+    };
+
+    _this.getLength = function(buffer) {
+      return _bytes.length;
+    };
+
+    _this.write = function(buffer) {
+      for (var i = 0; i < _bytes.length; i += 1) {
+        buffer.put(_bytes[i], 8);
+      }
+    };
+
+    return _this;
+  };
+
+  //---------------------------------------------------------------------
+  // qrKanji
+  //---------------------------------------------------------------------
+
+  var qrKanji = function(data) {
+
+    var _mode = QRMode.MODE_KANJI;
+    var _data = data;
+
+    var stringToBytes = qrcode.stringToBytesFuncs['SJIS'];
+    if (!stringToBytes) {
+      throw 'sjis not supported.';
+    }
+    !function(c, code) {
+      // self test for sjis support.
+      var test = stringToBytes(c);
+      if (test.length != 2 || ( (test[0] << 8) | test[1]) != code) {
+        throw 'sjis not supported.';
+      }
+    }('\u53cb', 0x9746);
+
+    var _bytes = stringToBytes(data);
+
+    var _this = {};
+
+    _this.getMode = function() {
+      return _mode;
+    };
+
+    _this.getLength = function(buffer) {
+      return ~~(_bytes.length / 2);
+    };
+
+    _this.write = function(buffer) {
+
+      var data = _bytes;
+
+      var i = 0;
+
+      while (i + 1 < data.length) {
+
+        var c = ( (0xff & data[i]) << 8) | (0xff & data[i + 1]);
+
+        if (0x8140 <= c && c <= 0x9FFC) {
+          c -= 0x8140;
+        } else if (0xE040 <= c && c <= 0xEBBF) {
+          c -= 0xC140;
+        } else {
+          throw 'illegal char at ' + (i + 1) + '/' + c;
+        }
+
+        c = ( (c >>> 8) & 0xff) * 0xC0 + (c & 0xff);
+
+        buffer.put(c, 13);
+
+        i += 2;
+      }
+
+      if (i < data.length) {
+        throw 'illegal char at ' + (i + 1);
+      }
+    };
+
+    return _this;
+  };
+
+  qrcode.stringToBytesFuncs['UTF-8'] = function(s) {
+    // http://stackoverflow.com/questions/18729405/how-to-convert-utf8-string-to-byte-array
+    function toUTF8Array(str) {
+      var utf8 = [];
+      for (var i=0; i < str.length; i++) {
+        var charcode = str.charCodeAt(i);
+        if (charcode < 0x80) utf8.push(charcode);
+        else if (charcode < 0x800) {
+          utf8.push(0xc0 | (charcode >> 6),
+              0x80 | (charcode & 0x3f));
+        }
+        else if (charcode < 0xd800 || charcode >= 0xe000) {
+          utf8.push(0xe0 | (charcode >> 12),
+              0x80 | ((charcode>>6) & 0x3f),
+              0x80 | (charcode & 0x3f));
+        }
+        // surrogate pair
+        else {
+          i++;
+          // UTF-16 encodes 0x10000-0x10FFFF by
+          // subtracting 0x10000 and splitting the
+          // 20 bits of 0x0-0xFFFFF into two halves
+          charcode = 0x10000 + (((charcode & 0x3ff)<<10)
+            | (str.charCodeAt(i) & 0x3ff));
+          utf8.push(0xf0 | (charcode >>18),
+              0x80 | ((charcode>>12) & 0x3f),
+              0x80 | ((charcode>>6) & 0x3f),
+              0x80 | (charcode & 0x3f));
+        }
+      }
+      return utf8;
+    }
+    return toUTF8Array(s);
+  };
+
+  qrcode.stringToBytes = qrcode.stringToBytesFuncs['UTF-8'];
+
+  return qrcode;
+}();
+
+  // ------------------------------------------------------------------ site QR code
+  //
+  // The site page shows a QR code that opens the live site on a phone. The
+  // matrix comes from the vendored encoder above and is drawn to a canvas, so
+  // the PNG data URL is generated entirely client-side: no new endpoint, no
+  // image service, no third-party request, and no CSP change (img-src data:
+  // is already allowed). The payload is always the site's clean public live
+  // URL exactly as the API returned it; a password-gated site gets the same
+  // payload plus a notice, and the password itself is never touched here.
+
+  /** PNG data URL of the QR matrix for `text` (auto version, ECC M, quiet zone 4). */
+  function qrPngDataURL(text) {
+    var qr = qrcode(0, "M");
+    qr.addData(text);
+    qr.make();
+    var count = qr.getModuleCount();
+    var cell = 8;
+    var quiet = 4;
+    var size = (count + quiet * 2) * cell;
+    var canvas = d.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    var ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas 2d is unavailable.");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = "#000000";
+    for (var r = 0; r < count; r++) {
+      for (var c = 0; c < count; c++) {
+        if (qr.isDark(r, c)) ctx.fillRect((c + quiet) * cell, (r + quiet) * cell, cell, cell);
+      }
+    }
+    return canvas.toDataURL("image/png");
+  }
+
+  /** "Open on your phone" section for the site page: QR + adjacent URL, or a state. */
+  function siteQrSection(url, gated) {
+    var head = h("header", {}, h("h2", { text: "Open on your phone" }));
+    if (!url) {
+      return h(
+        "section",
+        { class: "dw-section" },
+        head,
+        h("div", { class: "dw-pad" }, h("p", { "data-testid": "site-qr-empty", style: "margin:0", text: "No live URL yet, so there is no QR code. Publish a version and the code appears here." })),
+      );
+    }
+    var img;
+    try {
+      img = h("img", {
+        class: "dw-qr-img",
+        "data-testid": "site-qr-image",
+        src: qrPngDataURL(url),
+        alt: url,
+        "data-qr-payload": url,
+        style: "width:12rem;max-width:100%;height:auto;background:#ffffff;border:1px solid var(--line);border-radius:var(--radius)",
+      });
+    } catch (e) {
+      return h(
+        "section",
+        { class: "dw-section" },
+        head,
+        h("div", { class: "dw-pad" }, h("div", { class: "dw-error", role: "alert", "data-testid": "site-qr-error", text: "The QR code could not be generated in this browser." })),
+      );
+    }
+    return h(
+      "section",
+      { class: "dw-section", "data-testid": "site-qr" },
+      h("header", {}, h("h2", { text: "Open on your phone" }), h("span", { class: "dw-small dw-muted", text: "Scan with your phone camera" })),
+      h(
+        "div",
+        { class: "dw-pad dw-row", style: "align-items:flex-start;gap:1rem" },
+        img,
+        h(
+          "div",
+          { style: "min-width:0" },
+          h("p", { "data-testid": "site-qr-url", style: "margin:0 0 .5rem;overflow-wrap:anywhere" }, h("a", { href: url, target: "_blank", rel: "noopener", text: url }), " ", copyButton(url, "Copy site URL")),
+          gated ? h("p", { class: "dw-small", "data-testid": "site-qr-gated-notice", style: "margin:0", text: "Visitors need the site password after scanning." }) : null,
+        ),
+      ),
+    );
+  }
+
   // ------------------------------------------------------------------ pages
 
   var pages = {};
+  // Latest site-page traversal handler: pages.site() re-runs after restore,
+  // delete and settings saves, and must replace (not stack) its listener.
+  var sitePopstate = null;
+  // Generation of the latest pages.site() run: work started by an earlier
+  // run must not commit (view, URL or history) over its replacement.
+  var siteRun = 0;
 
   pages.home = async function () {
     wireTabs(d);
@@ -1308,11 +3209,16 @@ export function dropwayClient() {
 
   pages.site = async function () {
     if (!requireAuth()) return;
+    var mySiteRun = ++siteRun;
     renderAccount();
     var slug = P.slug;
     var root = d.getElementById("dw-site");
     clear(root);
-    add(root, skeleton(5));
+    add(
+      root,
+      skeleton(5),
+      h("section", { class: "dw-section", "aria-busy": "true", "aria-label": "Loading QR code" }, h("div", { class: "dw-pad", "data-testid": "site-qr-loading", text: "Loading QR code…" })),
+    );
     var site, versions, files, linkedVersion, linkedVersionError;
     var requestedVersion = new URL(location.href).searchParams.get("version");
     try {
@@ -1327,14 +3233,143 @@ export function dropwayClient() {
       site = r[0].site;
       versions = r[1].versions;
       linkedVersion = r[2] && r[2].version;
+      // A newer re-run already owns this page; rendering now would replace it.
+      if (mySiteRun !== siteRun) return;
     } catch (e) {
+      if (mySiteRun !== siteRun) return;
       clear(root);
-      add(root, errorBox(e, "Could not load " + slug), h("a", { class: "dw-btn", href: "/dashboard", text: "Back to sites" }));
+      add(
+        root,
+        errorBox(e, "Could not load " + slug),
+        h("div", { class: "dw-section" }, h("div", { class: "dw-pad", role: "alert", "data-testid": "site-qr-error", text: "The QR code is unavailable because the site could not be loaded." })),
+        h("a", { class: "dw-btn", href: "/dashboard", text: "Back to sites" }),
+      );
       return;
     }
     d.title = (site.title || site.slug) + " · " + boot.instanceName;
     clear(root);
     var filesSection = h("section", { class: "dw-section", id: "files" });
+    var duplicateAttempt = null;
+    var duplicateDialog = null;
+    var duplicateButton = h("button", { type: "button", class: "dw-btn", text: "Duplicate site", onclick: openDuplicate });
+    function openDuplicate() {
+      if (duplicateDialog) return;
+      var busy = false;
+      var destination = h("input", { class: "dw-input", id: "dw-duplicate-slug", name: "newSlug", required: true, minlength: "3", maxlength: "56", autocomplete: "off", autocapitalize: "none", spellcheck: "false", "aria-describedby": "dw-duplicate-slug-help" });
+      var message = h("textarea", { class: "dw-input", id: "dw-duplicate-message", name: "message", maxlength: "500", rows: "2" });
+      var feedback = h("div", { "aria-live": "polite", style: "overflow-wrap:anywhere" });
+      var submit = h("button", { type: "submit", class: "dw-btn primary", text: "Duplicate site" });
+      var cancel = h("button", { type: "button", class: "dw-btn", text: "Cancel", onclick: function () { dlg.close(); } });
+      var form = h(
+        "form",
+        {},
+        h("h2", { id: "dw-duplicate-title", text: "Duplicate site" }),
+        h("p", { id: "dw-duplicate-warning", class: "dw-callout", text: "This creates a separate site from the source's live files, live immediately. Passwords and access protection are not copied. Re-apply protection on the copy before sharing it. Only SPA mode is carried over; all other settings reset to instance defaults. The original site is unchanged." }),
+        h("div", { class: "dw-field" },
+          h("label", { class: "dw-label", for: "dw-duplicate-slug", text: "Destination slug" }), destination,
+          h("p", { class: "dw-help", id: "dw-duplicate-slug-help", text: "3–56 lowercase letters, digits and single hyphens; start and end with a letter or digit. Choose an unused name." })),
+        h("div", { class: "dw-field" }, h("label", { class: "dw-label", for: "dw-duplicate-message", text: "Version message (optional)" }), message),
+        feedback,
+        h("div", { class: "dw-row" }, cancel, submit),
+      );
+      var dlg = h("dialog", { class: "dw-dialog", "aria-labelledby": "dw-duplicate-title", "aria-describedby": "dw-duplicate-warning" }, form);
+      duplicateDialog = dlg;
+      dlg.addEventListener("cancel", function (event) {
+        if (busy) event.preventDefault();
+      });
+      dlg.addEventListener("close", function () {
+        dlg.remove();
+        duplicateDialog = null;
+        duplicateButton.focus();
+      });
+      // Native modal Tab handling still cycles through the browser UI, which
+      // leaves focus on the page body between the last and first controls.
+      // Keep the cycle among this dialog's enabled, tabbable controls instead.
+      dlg.addEventListener("keydown", function (event) {
+        if (event.key !== "Tab") return;
+        var focusable = $$("a[href], button, input, textarea, select, [tabindex]", dlg).filter(function (el) {
+          return !el.disabled && el.tabIndex >= 0;
+        });
+        if (!focusable.length) {
+          event.preventDefault();
+          return;
+        }
+        var active = d.activeElement;
+        if (event.shiftKey && (active === focusable[0] || focusable.indexOf(active) < 0)) {
+          event.preventDefault();
+          focusable[focusable.length - 1].focus();
+        } else if (!event.shiftKey && (active === focusable[focusable.length - 1] || focusable.indexOf(active) < 0)) {
+          event.preventDefault();
+          focusable[0].focus();
+        }
+      });
+      function setBusy(value) {
+        busy = value;
+        dlg.setAttribute("aria-busy", String(value));
+        destination.disabled = message.disabled = submit.disabled = cancel.disabled = value;
+        submit.textContent = value ? "Duplicating…" : "Duplicate site";
+      }
+      // An edit starts a new submission, even when the previous request's outcome
+      // was unknown. Closing/reopening alone retains the last attempt for replay.
+      function changed() { duplicateAttempt = null; }
+      destination.addEventListener("input", changed);
+      message.addEventListener("input", changed);
+      if (duplicateAttempt) {
+        destination.value = duplicateAttempt.body.newSlug;
+        message.value = duplicateAttempt.body.message || "";
+      }
+      form.addEventListener("submit", async function (event) {
+        event.preventDefault();
+        if (busy) return;
+        clear(feedback);
+        var newSlug = destination.value;
+        if (!/^[a-z0-9][a-z0-9-]{1,54}[a-z0-9]$/.test(newSlug) || newSlug.indexOf("--") >= 0) {
+          add(feedback, errorBox({ message: "Enter a valid destination slug.", hint: "Use 3–56 lowercase letters, digits and single hyphens, starting and ending with a letter or digit.", code: "invalid_slug" }));
+          destination.focus();
+          return;
+        }
+        if (message.value.length > 500) {
+          add(feedback, errorBox({ message: "The version message is too long.", hint: "Use at most 500 characters.", code: "invalid_request" }));
+          message.focus();
+          return;
+        }
+        var body = { newSlug: newSlug };
+        if (message.value) body.message = message.value;
+        var signature = JSON.stringify(body);
+        if (!duplicateAttempt || duplicateAttempt.signature !== signature) {
+          duplicateAttempt = { signature: signature, body: body, key: crypto.randomUUID() };
+        }
+        setBusy(true);
+        try {
+          var result = await api("/sites/" + encodeURIComponent(site.slug) + "/duplicate", { method: "POST", body: duplicateAttempt.body, headers: { "Idempotency-Key": duplicateAttempt.key } });
+          // Links and receipt use only the returned identity, never the requested name.
+          var copy = result && result.site;
+          var copyUrl = null;
+          try { if (result && typeof result.url === "string") copyUrl = new URL(result.url); } catch (e) {}
+          if (!copy || typeof copy.slug !== "string" || !copy.slug || !copyUrl || ["http:", "https:"].indexOf(copyUrl.protocol) < 0) throw new Error("The server did not return a valid copy identity and URL. Retry this submission to recover its result.");
+          clear(form);
+          add(form,
+            h("h2", { id: "dw-duplicate-title", text: "Site duplicated" }),
+            h("div", { role: "status", style: "overflow-wrap:anywhere" },
+              h("p", { text: "Created a separate site: " + copy.slug }),
+              h("p", {}, h("a", { href: result.url, target: "_blank", rel: "noopener", text: result.url }))),
+            h("p", { id: "dw-duplicate-warning", class: "dw-callout", text: "Passwords and access protection were not copied. Re-apply protection before sharing the new site." }),
+            h("div", { class: "dw-row" },
+              h("button", { type: "button", class: "dw-btn", text: "Close", onclick: function () { dlg.close(); } }),
+              h("a", { class: "dw-btn primary", href: "/dashboard/sites/" + encodeURIComponent(copy.slug), text: "Manage copy" })),
+          );
+          duplicateAttempt = null;
+          $("button", form).focus();
+        } catch (error) {
+          add(feedback, errorBox(error, "Could not duplicate site"));
+        } finally {
+          setBusy(false);
+        }
+      });
+      d.body.appendChild(dlg);
+      dlg.showModal();
+      destination.focus();
+    }
     var head = h(
       "div",
       { class: "dw-pagehead" },
@@ -1350,16 +3385,25 @@ export function dropwayClient() {
         { class: "dw-row" },
         h("a", { class: "dw-btn", href: "/v/" + encodeURIComponent(slug) + "/", text: "Browse files" }),
         h("a", { class: "dw-btn", href: "/dashboard/publish?site=" + encodeURIComponent(slug), text: "Publish update" }),
+        duplicateButton,
         h("a", { class: "dw-btn primary", href: site.url, target: "_blank", rel: "noopener", text: "Open site" }),
       ),
     );
 
+    // Mutations that reload this page must not detach another action's feedback.
+    var siteMutationPending = false;
+    function setSiteMutationPending(pending) {
+      siteMutationPending = pending;
+      $$("button[data-site-mutation]", root).forEach(function (button) {
+        button.disabled = pending;
+      });
+    }
     var vBody = h("tbody");
     versions.forEach(function (v) {
       vBody.appendChild(
         h(
           "tr",
-          {},
+          { "data-search": ["v" + v.number, v.id, v.message || "", v.client || "", v.source || ""].join(" ").toLowerCase() },
           h("td", {}, h("strong", { text: "v" + v.number }), " ", v.live ? h("span", { class: "dw-badge live", text: "Live" }) : null),
           h("td", { class: "dw-small" }, v.message ? h("span", { text: v.message }) : h("span", { class: "dw-muted", text: "No message" }), h("span", { class: "dw-sub", text: [v.client, v.source].filter(Boolean).join(" · ") })),
           h("td", { class: "num dw-small" }, plural(v.fileCount, "file"), h("span", { class: "dw-sub", text: bytes(v.totalBytes) })),
@@ -1367,7 +3411,7 @@ export function dropwayClient() {
           h(
             "td",
             { class: "act" },
-            h("button", { type: "button", class: "dw-btn small", text: "Files", onclick: function () { showFiles(v); filesSection.scrollIntoView({ behavior: "smooth" }); } }),
+            h("button", { type: "button", class: "dw-btn small", text: "Files", onclick: function () { showFiles(v, { history: "push", clearFirst: true }); filesSection.scrollIntoView({ behavior: "smooth" }); } }),
             " ",
             v.live
               ? null
@@ -1375,16 +3419,18 @@ export function dropwayClient() {
                   type: "button",
                   class: "dw-btn small",
                   text: "Restore",
-                  onclick: async function (ev) {
-                    var btn = ev.currentTarget;
-                    btn.disabled = true;
+                  "data-site-mutation": "",
+                  onclick: async function () {
+                    if (siteMutationPending) return;
+                    setSiteMutationPending(true);
                     try {
                       await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id) + "/restore", { method: "POST" });
                       toast("v" + v.number + " is live again.");
                       pages.site();
                     } catch (e) {
                       toast(e.message, true);
-                      btn.disabled = false;
+                    } finally {
+                      setSiteMutationPending(false);
                     }
                   },
                 }),
@@ -1396,15 +3442,29 @@ export function dropwayClient() {
                   class: "dw-btn small danger",
                   text: "Delete",
                   "aria-label": "Delete version " + v.number,
-                  onclick: async function () {
-                    var ok = await confirmBox({ title: "Delete v" + v.number + "?", message: "The version and its file list are removed for good (use this for a version that leaked something). Other versions are not affected.", confirmText: "Delete version" });
-                    if (!ok) return;
+                  "data-site-mutation": "",
+                  onclick: async function (ev) {
+                    if (siteMutationPending) return;
+                    var trigger = ev.currentTarget;
+                    setSiteMutationPending(true);
                     try {
+                      var ok = await confirmBox({ title: "Delete v" + v.number + "?", message: "The version and its file list are removed for good (use this for a version that leaked something). Other versions are not affected.", confirmText: "Delete version" });
+                      if (!ok) return;
                       await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id), { method: "DELETE" });
                       toast("v" + v.number + " deleted.");
+                      // A successful deletion must not reload its now-invalid
+                      // explicit link; unrelated inspected versions stay put.
+                      var url = new URL(location.href);
+                      if (url.searchParams.get("version") === v.id) {
+                        url.searchParams.delete("version");
+                        history.replaceState(null, "", url.pathname + url.search + url.hash);
+                      }
                       pages.site();
                     } catch (e) {
                       toast(e.message, true);
+                    } finally {
+                      setSiteMutationPending(false);
+                      if ($$("button", root).indexOf(trigger) >= 0) trigger.focus();
                     }
                   },
                 }),
@@ -1412,44 +3472,214 @@ export function dropwayClient() {
         ),
       );
     });
+    var versionFilter = h("input", { id: "dw-version-filter", class: "dw-input", type: "search", placeholder: "Version, id, message, client or source", "aria-describedby": "dw-version-scope", style: "flex:1 1 12rem;min-width:0" });
+    var versionClear = h("button", { type: "button", class: "dw-btn", text: "Clear" });
+    var versionCount = h("p", { class: "dw-help", role: "status", "aria-live": "polite", "aria-atomic": "true" });
+    var versionTable = h("div", { class: "dw-scroll" }, h("table", { class: "dw-table" }, h("thead", {}, h("tr", {}, h("th", { text: "Version" }), h("th", { text: "Message" }), h("th", { class: "num", text: "Files" }), h("th", { class: "num dw-hide-sm", text: "Published" }), h("th", {}))), vBody));
+    var noVersionMatches = h("div", { class: "dw-empty", hidden: true }, h("h3", { text: "No matching versions" }), h("p", { text: "Try another filter or Clear to show the loaded versions." }));
+    function filterVersions() {
+      var q = versionFilter.value.trim().toLowerCase();
+      var matching = 0;
+      // Only hide existing rows: their immutable-id action closures and the
+      // separately selected file manifest stay untouched, in server order.
+      $$("tr[data-search]", vBody).forEach(function (tr) {
+        tr.hidden = !!(q && tr.getAttribute("data-search").indexOf(q) < 0);
+        if (!tr.hidden) matching++;
+      });
+      versionCount.textContent = plural(matching, "match", "matches") + " of " + plural(versions.length, "loaded version") + ".";
+      versionTable.hidden = !matching;
+      noVersionMatches.hidden = !versions.length || !!matching;
+    }
+    versionFilter.addEventListener("input", filterVersions);
+    versionClear.addEventListener("click", function () {
+      versionFilter.value = "";
+      filterVersions();
+      versionFilter.focus();
+    });
+    // Explicit version jump: open any version by reference (live, v3, 3 or an
+    // immutable id), including versions older than the newest-100 rows.
+    // Typing never fetches; each submit makes one bounded get_version lookup,
+    // then loads the manifest pinned to the returned immutable id.
+    var jumpInput = h("input", { class: "dw-input", id: "dw-version-ref", name: "version", type: "text", style: "max-width:14rem", placeholder: "live, v3, 3, or id", autocomplete: "off", spellcheck: "false", "aria-describedby": "dw-version-jump-help" });
+    var jumpStatus = h("p", { class: "dw-small dw-muted", style: "margin:.4rem 0 0", role: "status", text: "" });
+    var jumpErrorBox = h("div", { role: "alert", text: "" });
+    var jumpForm = h(
+      "form",
+      { class: "dw-pad", id: "dw-version-jump", style: "padding-top:.75rem;padding-bottom:.75rem" },
+      h("div", { class: "dw-row" }, h("label", { class: "dw-label", style: "margin:0", for: "dw-version-ref", text: "Version" }), jumpInput, h("button", { type: "submit", class: "dw-btn", text: "Open" })),
+      h("p", { class: "dw-help", id: "dw-version-jump-help", text: "Open any version by reference. Nothing is fetched until you submit." }),
+      jumpStatus,
+      jumpErrorBox,
+    );
+    jumpForm.addEventListener("submit", function (e) {
+      e.preventDefault();
+      openVersionRef(jumpInput.value, { history: "push" });
+    });
     var versionsSection = h(
       "section",
       { class: "dw-section" },
-      h("header", {}, h("h2", { text: "Versions" }), h("span", { class: "dw-small dw-muted", text: plural(versions.length, "version") + ". Restoring is instant: it only moves the live pointer." })),
+      h("header", {}, h("h2", { text: "Versions" }), h("span", { class: "dw-small dw-muted", text: plural(versions.length, "version") + (versions.length >= 100 ? " (newest 100)" : "") + ". Restoring is instant: it only moves the live pointer." })),
+      jumpForm,
+      h("div", { class: "dw-pad" },
+        h("label", { class: "dw-label", for: "dw-version-filter", text: "Filter loaded versions" }),
+        h("div", { class: "dw-row" }, versionFilter, versionClear),
+        h("p", { id: "dw-version-scope", class: "dw-help", text: "Only the newest 100 versions are loaded. This filters loaded versions, not all history." }),
+        versionCount,
+      ),
       versions.length
-        ? h("div", { class: "dw-scroll" }, h("table", { class: "dw-table" }, h("thead", {}, h("tr", {}, h("th", { text: "Version" }), h("th", { text: "Message" }), h("th", { class: "num", text: "Files" }), h("th", { class: "num dw-hide-sm", text: "Published" }), h("th", {}))), vBody))
+        ? versionTable
         : h("div", { class: "dw-empty" }, h("h3", { text: "Nothing published yet" }), h("a", { class: "dw-btn primary", href: "/dashboard/publish?site=" + encodeURIComponent(slug), text: "Publish files" })),
+      noVersionMatches,
     );
+    filterVersions();
 
-    var filesReq = 0;
-    async function showFiles(v) {
-      var my = ++filesReq;
-      clear(filesSection);
-      add(filesSection, h("header", {}, h("h2", { text: "Files in v" + v.number + (v.live ? " (live)" : "") })), skeleton(3));
+    // One token per selection attempt, whatever its source (history row,
+    // version jump, traversal): a completion holding a stale token must not
+    // touch the view, the URL, or the announced state. The token is per
+    // page run, so completions also check mySiteRun: a selection still in
+    // flight when this page re-runs belongs to a replaced closure.
+    var selectionReq = 0;
+    var displayedReq = 0;
+    var currentSelection = null;
+    function setJumpError(message, hint, opts) {
+      clear(jumpErrorBox);
+      add(jumpErrorBox, errorBox({ message: message, hint: hint }, null));
+      // A refused traversal retains the manifest: reconcile this entry's URL
+      // with that view, without pushing another history entry.
+      if (opts && opts.history === "replace" && currentSelection && mySiteRun === siteRun) recordSelection(currentSelection.id, "replace");
+    }
+    function clearJumpError() {
+      clear(jumpErrorBox);
+    }
+    function setJumpLoading(on) {
+      jumpStatus.textContent = on ? "Opening version…" : "";
+    }
+    // The management URL always names the displayed manifest by immutable
+    // id: explicit selections (history row, version jump) push an entry so
+    // Back returns to the previous version; traversal and the initial load
+    // replace the current entry instead of manufacturing new ones.
+    function selectionUrl(id) {
+      try {
+        var u = new URL(location.href);
+        u.searchParams.set("version", id);
+        return u.pathname + u.search + u.hash;
+      } catch (e) {
+        return null;
+      }
+    }
+    function recordSelection(id, mode) {
+      var url = selectionUrl(id);
+      if (!url || typeof history === "undefined") return;
+      try {
+        if (mode === "push" && typeof history.pushState === "function") history.pushState({ v: id }, "", url);
+        else if (typeof history.replaceState === "function") history.replaceState({ v: id }, "", url);
+        else if (typeof history.pushState === "function") history.pushState({ v: id }, "", url);
+      } catch (e) {}
+    }
+    function commitSelection(mv, opts, my) {
+      if (mySiteRun !== siteRun) return;
+      displayedReq = my;
+      currentSelection = { id: mv.id, number: mv.number };
+      setJumpLoading(false);
+      clearJumpError();
+      if (opts.history) recordSelection(mv.id, opts.history);
+    }
+    // One path segment, never decoded: empty, dot-only and separator-like
+    // references fail before any request; anything else goes out literally
+    // encoded so "%2F" cannot become a second segment.
+    function validVersionRef(ref) {
+      if (!ref) return false;
+      var t = ref.trim();
+      if (!t || /^\.+$/.test(t)) return false;
+      return !/[\/?#\\\x00-\x1f\x7f]/.test(t);
+    }
+    async function openVersionRef(raw, opts) {
+      opts = opts || {};
+      var my = ++selectionReq;
+      var ref = (raw || "").trim();
+      if (!validVersionRef(ref)) {
+        setJumpLoading(false);
+        setJumpError("Enter a version reference: live, v3, 3, or a version id.", "Check the reference and try again.", opts);
+        // Explicit submits return focus for correction; traversal must not
+        // steal it while the person is moving through history.
+        if (opts.focus !== false) jumpInput.focus();
+        return;
+      }
+      clearJumpError();
+      setJumpLoading(true);
+      var found;
+      try {
+        found = await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(ref));
+      } catch (e) {
+        if (my !== selectionReq || mySiteRun !== siteRun) return;
+        setJumpLoading(false);
+        setJumpError(e.message || "Could not open that version.", "Check the reference and try again." + (e.hint ? " " + e.hint : ""), opts);
+        return;
+      }
+      if (my !== selectionReq || mySiteRun !== siteRun) return;
+      var v = found && found.version;
+      if (!v || v.status === "pending") {
+        setJumpLoading(false);
+        if (!v) setJumpError("That version reference did not resolve.", "Check the reference and try again.", opts);
+        else setJumpError("Version v" + v.number + " is not ready yet.", "Choose a ready version from the history, or retry once its upload finishes.", opts);
+        return;
+      }
+      // showFiles takes the next token and loads the manifest pinned to the
+      // returned immutable id, even when the version is not among the rows.
+      showFiles(v, { history: opts.history || "push" });
+    }
+    async function showFiles(v, opts) {
+      opts = opts || {};
+      var my = ++selectionReq;
+      var hadSelection = !!currentSelection;
+      // History rows swap panels at once; jumps and traversal keep the valid
+      // view until the replacement (or its failure) is known.
+      if (!hadSelection || opts.clearFirst) {
+        clear(filesSection);
+        add(filesSection, h("header", {}, h("h2", { text: "Files in v" + v.number + (v.live ? " (live)" : "") })), skeleton(3));
+      }
+      setJumpLoading(true);
       var data;
       try {
         // Always pin the selected version by immutable ID: a live-row snapshot
         // may already be stale by the time this request lands.
         data = await api("/sites/" + encodeURIComponent(slug) + "/files?version=" + encodeURIComponent(v.id));
       } catch (e) {
-        if (my !== filesReq) return;
-        clear(filesSection);
-        add(filesSection, h("div", { class: "dw-pad" }, errorBox(e, "Could not load files")));
+        if (my !== selectionReq || mySiteRun !== siteRun) return;
+        setJumpLoading(false);
+        if (!hadSelection || opts.clearFirst) {
+          clear(filesSection);
+          add(filesSection, h("div", { class: "dw-pad" }, errorBox(e, "Could not load files")));
+        } else {
+          setJumpError(e.message || "Could not load files.", e.hint, opts);
+        }
         return;
       }
-      if (my !== filesReq) return;
+      if (my !== selectionReq || mySiteRun !== siteRun) return;
       // Identity comes from the response, never the clicked row: the live
       // pointer may have moved between selection and retrieval.
       var mv = (data && data.version) || { id: v.id, number: v.number, live: v.live };
+      if (mv.status === "pending") {
+        setJumpLoading(false);
+        var notReady = { message: "Version v" + mv.number + " is not ready yet.", hint: "Choose a ready version from the history, or retry once its upload finishes." };
+        if (!hadSelection || opts.clearFirst) {
+          clear(filesSection);
+          add(filesSection, h("div", { class: "dw-pad" }, errorBox(notReady, "Version not ready")));
+        } else {
+          setJumpError(notReady.message, notReady.hint, opts);
+        }
+        return;
+      }
       var rows = (data && data.files) || [];
       var filter = h("input", { class: "dw-input", type: "search", placeholder: "Filter files", "aria-label": "Filter files" });
       if (!rows.length) {
         clear(filesSection);
         add(
           filesSection,
-          h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", text: "0 files" }), filter)),
+          h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", "aria-live": "polite", "aria-atomic": "true", text: plural(rows.length, "loaded file") + " in this selected version · " + exactBytes(0) }), filter)),
           h("div", { class: "dw-empty" }, h("h3", { text: "No files in this version" }), h("p", { class: "dw-small", text: "This version has an empty manifest." })),
         );
+        commitSelection(mv, opts, my);
         return;
       }
       var copyStatus = h("p", { class: "dw-pad dw-small", style: "margin:0", role: "status", text: "" });
@@ -1482,10 +3712,10 @@ export function dropwayClient() {
                 clearTimeout(copyTimer);
                 copyStatus.textContent = "";
                 copyText(f.sha256, btn).then(function (ok) {
-                  if (attempt !== copyReq || my !== filesReq) return;
+                  if (attempt !== copyReq || my !== displayedReq) return;
                   // A separate task makes identical results observable again.
                   copyTimer = setTimeout(function () {
-                    if (attempt !== copyReq || my !== filesReq) return;
+                    if (attempt !== copyReq || my !== displayedReq) return;
                     copyStatus.textContent = ok
                       ? "Copied SHA-256 for " + f.path + "."
                       : "Copy failed for " + f.path + ". Select the checksum and copy it yourself.";
@@ -1494,7 +3724,9 @@ export function dropwayClient() {
               },
             }),
             " ",
-            h("button", { type: "button", class: "dw-btn small", text: "Download", onclick: function (ev) { downloadFile(slug, f.path, mv.live ? null : mv.id, ev.currentTarget); } }),
+            // Pin every download to the inspected manifest: even a live-marked
+            // row describes immutable bytes, and the live pointer may move on.
+            h("button", { type: "button", class: "dw-btn small", text: "Download", onclick: function (ev) { downloadFile(slug, f.path, mv.id, ev.currentTarget); } }),
           ),
         );
         tb.appendChild(tr);
@@ -1516,11 +3748,50 @@ export function dropwayClient() {
         if (sortField === "path") return 0;
         return cmpText(a.path, b.path);
       }
+      // Filter feedback is derived only from the already-loaded rows for this
+      // selected version: updating it never fetches, writes storage or moves
+      // focus (the filter keeps focus while typing). One persistent status
+      // element is updated in place so live announcements are not lost.
+      // aria-live (not role="status") so the checksum copy announcements keep
+      // the section's single status region and existing contracts hold.
+      var filterStatus = h("span", { class: "dw-small dw-muted", "aria-live": "polite", "aria-atomic": "true", text: "" });
+      var noMatch = h("div", { class: "dw-empty", hidden: true, text: "" });
+      var clearFilter = h("button", {
+        type: "button",
+        class: "dw-btn small",
+        text: "Clear filter",
+        hidden: true,
+        onclick: function () {
+          // Reset only the query: sort, checksums, downloads and the
+          // selected immutable version are untouched. Focus returns to the
+          // filter so keyboard users land where they were.
+          filter.value = "";
+          applyFilter();
+          filter.focus();
+        },
+      });
       function applyFilter() {
-        var q = filter.value.trim().toLowerCase();
+        var raw = filter.value;
+        var q = raw.trim().toLowerCase();
+        var matching = 0;
+        var matchingBytes = 0;
         items.forEach(function (it) {
-          it.row.hidden = q && it.row.getAttribute("data-search").indexOf(q) < 0;
+          var show = !q || it.row.getAttribute("data-search").indexOf(q) >= 0;
+          it.row.hidden = !show;
+          if (show) {
+            matching++;
+            matchingBytes += it.file.size || 0;
+          }
         });
+        filterStatus.textContent = q
+          ? matching + " of " + plural(items.length, "loaded file") + " in this selected version match · " + exactBytes(matchingBytes) + " matching"
+          : plural(items.length, "loaded file") + " in this selected version · " + exactBytes(matchingBytes);
+        clearFilter.hidden = !raw;
+        // The query is quoted back as inert text (textContent), never markup;
+        // a nonempty manifest with zero matches is not an empty version.
+        var noMatches = !!q && matching === 0;
+        noMatch.hidden = !noMatches;
+        noMatch.textContent = noMatches ? 'No matching files for "' + raw + '" in the loaded files for this selected version. Clear the filter to show every loaded file.' : "";
       }
       function applySort() {
         items
@@ -1598,13 +3869,15 @@ export function dropwayClient() {
       clear(filesSection);
       add(
         filesSection,
-        h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", text: plural(rows.length, "file") }), sortBar, filter)),
+        h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, filterStatus, sortBar, filter, clearFilter)),
         h("p", { class: "dw-pad dw-small dw-muted", style: "margin:0", text: "SHA-256 manifest checksums for the selected version (v" + mv.number + ", " + mv.id + "). A checksum is not proof of authenticity, provenance, safe content, or independent verification, and does not show the current live download matches — compare it against a trusted source you already have." }),
         h("div", { class: "dw-scroll" }, h("table", { class: "dw-table" }, h("thead", {}, h("tr", {}, sortTh("path", "Path"), sortTh("kind", "Kind", "dw-hide-sm"), sortTh("size", "Size", "num"), h("th", { scope: "col", text: "SHA-256" }), h("th", { scope: "col" }))), tb)),
+        noMatch,
         copyStatus,
         mv.live ? null : h("p", { class: "dw-pad dw-small dw-muted", style: "margin:0", text: "Older versions are not served publicly. Restore this version to view it on the site, or download single files." }),
       );
       applySort();
+      commitSelection(mv, opts, my);
     }
 
     var s = site.settings;
@@ -1621,18 +3894,22 @@ export function dropwayClient() {
       h("div", { class: "dw-field", style: "margin-top:.9rem" },
         h("label", { class: "dw-label", for: "dw-s-pw", text: s.passwordProtected ? "Password (set; type a new one to change it)" : "Password (optional)" }),
         h("div", { class: "dw-row" }, h("input", { class: "dw-input", id: "dw-s-pw", name: "password", type: "password", autocomplete: "new-password", minlength: "4", maxlength: "200", style: "max-width:18rem" }),
-          s.passwordProtected ? h("button", { type: "button", class: "dw-btn", text: "Remove password", onclick: async function () { await saveSettings({ password: null }, "Password removed."); } }) : null),
+          s.passwordProtected ? h("button", { type: "button", class: "dw-btn", "data-site-mutation": "", text: "Remove password", onclick: async function () { await saveSettings({ password: null }, "Password removed."); } }) : null),
         h("p", { class: "dw-help", text: "Visitors must enter it. Changing it signs everyone out." }),
       ),
-      h("div", { class: "dw-row" }, h("button", { type: "submit", class: "dw-btn primary", text: "Save settings" })),
+      h("div", { class: "dw-row" }, h("button", { type: "submit", class: "dw-btn primary", "data-site-mutation": "", text: "Save settings" })),
     );
     async function saveSettings(body, msg) {
+      if (siteMutationPending) return;
+      setSiteMutationPending(true);
       try {
         await api("/sites/" + encodeURIComponent(slug), { method: "PATCH", body: body });
         toast(msg || "Saved.");
         pages.site();
       } catch (e) {
         toast(e.message + (e.hint ? " " + e.hint : ""), true);
+      } finally {
+        setSiteMutationPending(false);
       }
     }
     form.addEventListener("submit", function (e) {
@@ -1642,6 +3919,92 @@ export function dropwayClient() {
       if (f.password.value) body.password = f.password.value;
       saveSettings(body);
     });
+    var renamePending = false;
+    var renameInput = h("input", { class: "dw-input", id: "dw-s-new-slug", name: "newSlug", type: "text", autocomplete: "off", autocapitalize: "none", spellcheck: "false", "aria-describedby": "dw-s-rename-help dw-s-rename-feedback" });
+    var renameFeedback = h("div", { id: "dw-s-rename-feedback", role: "status", "aria-live": "polite" });
+    var renameSubmit = h("button", { type: "submit", class: "dw-btn primary", "data-site-mutation": "", text: "Rename site" });
+    var renameCancel = h("button", {
+      type: "button", class: "dw-btn", text: "Cancel",
+      onclick: function () {
+        if (renamePending) return;
+        renameInput.value = "";
+        renameInput.removeAttribute("aria-invalid");
+        clear(renameFeedback);
+        renameInput.focus();
+      },
+    });
+    var renameForm = h(
+      "form", { class: "dw-pad", "aria-label": "Rename site" },
+      h("p", { class: "dw-small" }, "Current slug: ", h("strong", { class: "dw-mono", text: site.slug })),
+      h("div", { class: "dw-field" },
+        h("label", { class: "dw-label", for: "dw-s-new-slug", text: "Proposed slug" }), renameInput,
+        h("p", { class: "dw-help", id: "dw-s-rename-help", text: "Use 3–56 characters: letters, digits and single hyphens. Renaming changes the site URL. The server decides whether the name is available and how long the old name stays bound." })),
+      h("div", { class: "dw-row" }, renameSubmit, renameCancel), renameFeedback,
+    );
+    renameForm.addEventListener("submit", async function (e) {
+      e.preventDefault();
+      if (siteMutationPending) return;
+      clear(renameFeedback);
+      renameInput.removeAttribute("aria-invalid");
+      if (renameInput.value.trim().toLowerCase() === site.slug) {
+        renameFeedback.textContent = "This site already has that name. Nothing changed.";
+        renameInput.focus();
+        return;
+      }
+      renamePending = true;
+      setSiteMutationPending(true);
+      renameForm.setAttribute("aria-busy", "true");
+      renameInput.disabled = renameSubmit.disabled = renameCancel.disabled = true;
+      renameSubmit.textContent = "Rename site…";
+      try {
+        var renamed = await api("/sites/" + encodeURIComponent(slug) + "/rename", { method: "POST", body: { newSlug: renameInput.value } });
+        var invalidReceipt = "Could not confirm the rename response. Reload this site before trying again.";
+        if (!renamed || typeof renamed.renamed !== "boolean" || typeof renamed.slug !== "string" || !renamed.slug || typeof renamed.url !== "string") throw new Error(invalidReceipt);
+        var returnedUrl;
+        try { returnedUrl = new URL(renamed.url); } catch (err) { throw new Error(invalidReceipt); }
+        if (["https:", "http:"].indexOf(returnedUrl.protocol) < 0 || returnedUrl.username || returnedUrl.password) throw new Error(invalidReceipt);
+        if (!renamed.renamed) {
+          renameFeedback.textContent = "This site already has that name. Nothing changed.";
+          renameInput.focus();
+          return;
+        }
+        var receipt = h("section", { class: "dw-section", tabindex: "-1", role: "status", "aria-live": "polite", "aria-labelledby": "dw-rename-result" },
+          h("header", {}, h("h2", { id: "dw-rename-result", text: "Renamed to " + renamed.slug })),
+        );
+        var details = h("div", { class: "dw-pad", style: "overflow-wrap:anywhere" },
+          h("p", {}, "Previous slug: ", h("strong", { class: "dw-mono", text: renamed.oldSlug || site.slug })),
+          h("p", {}, "Old URL: ", h("span", { text: site.url })),
+          h("p", {}, "New URL: ", h("a", { href: renamed.url, target: "_blank", rel: "noopener", text: renamed.url })),
+        );
+        var deadline = renamed.redirectUntil && new Date(renamed.redirectUntil);
+        if (deadline && Number.isFinite(deadline.getTime())) {
+          add(details, h("p", {}, "Returned redirect deadline: ", h("time", { datetime: renamed.redirectUntil, text: deadline.toLocaleString() }), "."),
+            h("p", { class: "dw-small dw-muted", text: deadline.getTime() > Date.now()
+              ? "The old URL redirects (308) to the new URL until this deadline. The old name remains bound to this site during that configured lifetime. Redirects are not promised after the deadline."
+              : "This redirect deadline has expired. No active 308 redirect is guaranteed. Name retention follows the configured policy." }));
+        } else {
+          add(details, h("p", { class: "dw-small dw-muted", text: "No redirect deadline was provided. An active 308 redirect from the old URL is not guaranteed. The old name remains subject to the configured retention policy." }));
+        }
+        add(details, h("a", { class: "dw-btn primary", href: "/dashboard/sites/" + encodeURIComponent(renamed.slug), text: "Manage " + renamed.slug }));
+        add(receipt, details);
+        // Retire old-slug controls; management resumes only with the confirmed identity.
+        clear(root);
+        add(root, receipt);
+        d.title = renamed.slug + " · " + boot.instanceName;
+        receipt.focus();
+      } catch (err) {
+        add(renameFeedback, errorBox(err, "Could not rename site"));
+        renameInput.setAttribute("aria-invalid", "true");
+      } finally {
+        renamePending = false;
+        setSiteMutationPending(false);
+        renameForm.removeAttribute("aria-busy");
+        renameInput.disabled = renameSubmit.disabled = renameCancel.disabled = false;
+        renameSubmit.textContent = "Rename site";
+        if ($$("form", root).indexOf(renameForm) >= 0) renameInput.focus();
+      }
+    });
+    var renameSection = h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "Rename site" })), renameForm);
     var danger = h(
       "section",
       { class: "dw-section" },
@@ -1649,32 +4012,70 @@ export function dropwayClient() {
       h(
         "div",
         { class: "dw-pad dw-row", style: "justify-content:space-between" },
-        h("span", { class: "dw-small dw-muted", text: "The URL stops working at once and the name is freed. Files no other site uses are removed by the hourly cleanup." }),
+        h("span", { class: "dw-small dw-muted", text: "The URL stops serving this site at once. Its name and any retained old names are held according to the configured name-retention policy. Deletion does not make a name immediately available to another tenant. Files no other site uses are removed by the hourly cleanup." }),
         h("button", {
           type: "button",
           class: "dw-btn danger",
           text: "Delete site",
-          onclick: async function () {
-            var ok = await confirmBox({ title: "Delete " + slug + "?", message: "Every version goes with it. This cannot be undone from the dashboard.", confirmText: "Delete site", typeToConfirm: slug });
-            if (!ok) return;
+          "data-site-mutation": "",
+          onclick: async function (ev) {
+            if (siteMutationPending) return;
+            var trigger = ev.currentTarget;
+            setSiteMutationPending(true);
             try {
-              await api("/sites/" + encodeURIComponent(slug), { method: "DELETE" });
+              var ok = await confirmBox({ title: "Delete " + slug + "?", message: "Every version goes with it. This cannot be undone from the dashboard.", confirmText: "Delete site", typeToConfirm: slug });
+              if (!ok) return;
+              await api("/sites/" + encodeURIComponent(slug), { method: "DELETE", body: { confirm: slug } });
               location.href = "/dashboard?deleted=" + encodeURIComponent(slug);
             } catch (e) {
               toast(e.message, true);
+            } finally {
+              setSiteMutationPending(false);
+              if ($$("button", root).indexOf(trigger) >= 0) trigger.focus();
             }
           },
         }),
       ),
     );
-    add(root, head, versionsSection, filesSection, h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "Settings" })), form), danger);
+    var qrSection = siteQrSection(site.url, !!(site.settings && site.settings.passwordProtected));
+    add(root, head, qrSection, versionsSection, filesSection, h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "Settings" })), form), renameSection, danger);
     var live = versions.filter(function (v) {
       return v.live;
     })[0];
-    var selected = requestedVersion ? linkedVersion : live;
-    if (selected) showFiles(selected);
-    else if (requestedVersion) add(filesSection, h("div", { class: "dw-pad" }, errorBox(linkedVersionError || { message: "This version is unavailable." }, "Version unavailable")));
-    else filesSection.hidden = true;
+    if (typeof window !== "undefined" && window.addEventListener) {
+      if (sitePopstate && typeof window.removeEventListener === "function") {
+        try {
+          window.removeEventListener("popstate", sitePopstate);
+        } catch (e) {}
+      }
+      sitePopstate = function () {
+        var ref = null;
+        try {
+          ref = new URL(location.href).searchParams.get("version");
+        } catch (e) {}
+        if (ref && currentSelection && ref === currentSelection.id) {
+          // Forward can return to the displayed view while Back's request is
+          // still pending. Even this no-op navigation supersedes that request.
+          ++selectionReq;
+          setJumpLoading(false);
+          clearJumpError();
+          return;
+        }
+        if (ref) openVersionRef(ref, { history: "replace", focus: false });
+        else if (live) showFiles(live, { history: "replace" });
+      };
+      window.addEventListener("popstate", sitePopstate);
+    }
+    if (requestedVersion && linkedVersion && linkedVersion.status === "pending") {
+      // A pending link names unfinished bytes: report it, never render it as
+      // an inspected version, and never fall back to live.
+      add(filesSection, h("div", { class: "dw-pad" }, errorBox({ message: "Version v" + linkedVersion.number + " is not ready yet — its upload has not finished.", hint: "Choose a ready version from the history, or retry once the upload finishes." }, "Version not ready")));
+    } else {
+      var selected = requestedVersion ? linkedVersion : live;
+      if (selected) showFiles(selected, { history: requestedVersion ? "replace" : null });
+      else if (requestedVersion) add(filesSection, h("div", { class: "dw-pad" }, errorBox(linkedVersionError || { message: "This version is unavailable." }, "Version unavailable")));
+      else filesSection.hidden = true;
+    }
   };
 
   async function downloadFile(slug, path, versionId, btn) {

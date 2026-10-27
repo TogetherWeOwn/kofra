@@ -26,6 +26,7 @@ import { MAX_CSS_REWRITE_BYTES, rewriteCss, rewriteHtml, type PathRewrite } from
 import { PATH_SHIM_VERSION, pathShimScript } from "./path-shim";
 import { injectReportLink, REPORT_LINK_VERSION } from "./report-link";
 import { serveTransfer } from "./transfers";
+import { attachmentDisposition } from "./content-disposition";
 
 /**
  * How a site is being served.
@@ -63,8 +64,14 @@ export function isNavigation(req: Request): boolean {
   return (req.headers.get("accept") ?? "").includes("text/html");
 }
 
-function hasChildren(files: LiveSite["files"], dir: string): boolean {
-  for (const k in files) if (k.startsWith(dir)) return true;
+/** Private configuration paths are stored with the version but never served. */
+function isPrivatePath(p: string): boolean {
+  return p === ".dropway" || p.startsWith(".dropway/");
+}
+
+/** A directory counts for serving only when it holds at least one non-private entry. */
+function hasVisibleChildren(files: LiveSite["files"], dir: string): boolean {
+  for (const k in files) if (k.startsWith(dir) && !isPrivatePath(k)) return true;
   return false;
 }
 
@@ -75,16 +82,20 @@ function hasChildren(files: LiveSite["files"], dir: string): boolean {
 export function resolvePath(live: LiveSite, p: string, req: Request, mode: ServeMode, fallbacks = true): Resolved {
   const files = live.files;
   const search = new URL(req.url).search;
+  // .dropway and .dropway/* are stored with the version (site configuration) but never
+  // served: not as a file, not raw, not as a listing, and not through the SPA fallback.
+  // A directory holding only private entries therefore answers as if it were absent.
+  if (isPrivatePath(p)) return { kind: "not_found" };
   if (p === "" || p.endsWith("/")) {
     for (const name of INDEX_NAMES) if (files[p + name]) return { kind: "file", path: p + name, status: 200 };
     if (p === "") {
       const keys = Object.keys(files);
-      if (keys.length === 1) return { kind: "file", path: keys[0]!, status: 200 };
+      if (keys.length === 1 && keys[0] !== ".dropway" && !keys[0]!.startsWith(".dropway/")) return { kind: "file", path: keys[0]!, status: 200 };
     }
-    if (hasChildren(files, p)) return { kind: "listing", dir: p };
+    if (hasVisibleChildren(files, p)) return { kind: "listing", dir: p };
   } else {
     if (files[p]) return { kind: "file", path: p, status: 200 };
-    if (hasChildren(files, `${p}/`)) return { kind: "redirect", location: `${mode.base}${encodePath(p)}/${search}` };
+    if (hasVisibleChildren(files, `${p}/`)) return { kind: "redirect", location: `${mode.base}${encodePath(p)}/${search}` };
     if (files[`${p}.html`]) return { kind: "file", path: `${p}.html`, status: 200 };
     if (files[`${p}.htm`]) return { kind: "file", path: `${p}.htm`, status: 200 };
   }
@@ -347,7 +358,7 @@ export async function serveSite(
   } else if (resolved.kind === "not_found") {
     response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", `There is no file at <code>/${escapeHtml(filePath)}</code> on this site.`);
   } else if (resolved.kind === "listing") {
-    response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`);
+    response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`, url.searchParams.get("sort"));
     securityHeaders(response.headers, live, mode);
   } else {
     response = await serveFile(req, dw, url, live, mode, resolved.path, resolved.status, viewers);
@@ -382,7 +393,7 @@ async function serveFile(
   // Rendered views: see ./viewers (one per file kind, plus ?view=source).
   if (viewer && viewMode) {
     const embed = flag(sp, "embed");
-    const etag = `W/"${viewer.id}@${viewer.version ?? 1}-${sha256}${embed ? "-e" : ""}${reportVariant}"`;
+    const etag = `W/"${viewer.id}@${viewer.version ?? 1}-${sha256}${viewer.etagExtra?.(file, live) ?? ""}${embed ? "-e" : ""}${reportVariant}"`;
     const h = new Headers();
     if (etagMatches(req, etag)) {
       h.set("ETag", etag);
@@ -419,8 +430,14 @@ async function serveFile(
     });
     const out = new Headers(rendered.headers);
     if (!out.has("Content-Security-Policy")) out.set("Content-Security-Policy", VIEWER_CSP);
-    out.set("ETag", etag);
-    out.set("Cache-Control", live.passwordHash ? "private, no-store" : "public, max-age=0, must-revalidate");
+    // A viewer may mark its page non-storable (a fallback for a transient
+    // failure, never a verdict on the stored bytes). Honor that policy and
+    // withhold the success ETag: revalidating the fallback as if it were
+    // the healthy render would strand browsers on it after recovery.
+    const viewerCacheControl = out.get("Cache-Control");
+    if (viewerCacheControl?.includes("no-store")) out.delete("ETag");
+    else out.set("ETag", etag);
+    out.set("Cache-Control", live.passwordHash ? "private, no-store" : viewerCacheControl ?? "public, max-age=0, must-revalidate");
     out.set("Vary", "Accept, Sec-Fetch-Dest");
     out.set("X-Kofra-Viewer", viewer.id);
     out.delete("Content-Length");
@@ -469,7 +486,7 @@ async function serveFile(
   } else {
     h.set("Content-Type", contentType);
   }
-  if (download) h.set("Content-Disposition", `attachment; filename="${(path.split("/").pop() ?? "file").replace(/["\\\r\n]/g, "_")}"`);
+  if (download) h.set("Content-Disposition", attachmentDisposition(path.split("/").pop() ?? "file"));
   securityHeaders(h, live, mode);
 
   if (etagMatches(req, etag)) return new Response(null, { status: 304, headers: h });

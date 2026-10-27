@@ -23,13 +23,16 @@ describe("operation registry: existing REST contracts", () => {
       expect(registered.has(`${method} ${pathShape(route.path)}`), `${route.method} ${route.path}`).toBe(true);
     }
     // These paths predate the registry; neither migration nor route discovery may drop them.
+    // /deploys is the pre-rename name; it stays working as an alias of /versions.
     for (const route of [
       "POST /api/v1/publish",
       "GET /api/v1/me",
       "POST /api/v1/setup",
       "POST /api/v1/setup/recover",
       "POST /api/v1/sites/{}/deploys",
+      "POST /api/v1/sites/{}/versions",
       "POST /api/v1/sites/{}/deploys/{}/finalize",
+      "POST /api/v1/sites/{}/versions/{}/finalize",
       "PUT /api/v1/blobs/{}",
       "GET /api/v1/sites/{}/versions",
       "PATCH /api/v1/sites/{}/files",

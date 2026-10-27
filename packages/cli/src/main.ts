@@ -44,6 +44,8 @@ interface Command {
   summary: string;
   usage: string;
   flags: FlagSpecs;
+  /** Exact maximum number of positional arguments; surplus is refused in run() before the command (and any side effect) starts. */
+  maxPositionals: number;
   details?: string;
   run(p: Parsed, io: Io, out: Output): Promise<number>;
 }
@@ -273,6 +275,31 @@ async function readSecretInput(io: Io, question: string): Promise<string> {
   return "";
 }
 
+/** Remove exactly one trailing line terminator (`\r\n` or `\n`), nothing else. */
+function stripLineTerminator(v: string): string {
+  if (v.endsWith("\r\n")) return v.slice(0, -2);
+  if (v.endsWith("\n")) return v.slice(0, -1);
+  return v;
+}
+
+/**
+ * Read a visitor password without changing it: the instance hashes and
+ * verifies passwords byte-exactly, so (unlike API/bootstrap keys above)
+ * surrounding spaces are part of the password. Only the one trailing line
+ * terminator from the pipe/prompt is removed. Empty or whitespace-only
+ * input still reads as "no password" and is refused before networking.
+ */
+async function readPasswordInput(io: Io, question: string): Promise<string> {
+  if (!io.stdinIsTTY) {
+    const v = stripLineTerminator(await io.readStdin());
+    if (v.trim()) return v;
+  } else if (io.stderrIsTTY) {
+    const v = stripLineTerminator(await io.prompt(question, { hidden: true }));
+    if (v.trim()) return v;
+  }
+  return "";
+}
+
 const versionLabel = (v: VersionInfo | null | undefined) => (v ? `v${v.number}` : "-");
 
 // ---------------------------------------------------------------- commands
@@ -280,6 +307,7 @@ const versionLabel = (v: VersionInfo | null | undefined) => (v ? `v${v.number}` 
 const publishCmd: Command = {
   summary: "Publish a folder, a file or a .zip to a live URL",
   usage: "kofra publish <path> [--site <name>] [--json]",
+  maxPositionals: 1,
   flags: {
     site: { kind: "string", short: "s" },
     new: { kind: "boolean" },
@@ -466,6 +494,7 @@ server policy, quotas or limits, and it is not the server's dry run.`,
 const listCmd: Command = {
   summary: "List your sites",
   usage: "kofra list [--limit <n>] [--all]",
+  maxPositionals: 0,
   flags: { limit: { kind: "string" }, all: { kind: "boolean" }, cursor: { kind: "string" } },
   async run(p, io, out) {
     const inst = await resolveInstance(p, io);
@@ -496,6 +525,7 @@ const listCmd: Command = {
 const siteCmd: Command = {
   summary: "Show one site",
   usage: "kofra site <name>",
+  maxPositionals: 1,
   flags: {},
   async run(p, io, out) {
     const slug = positional(p, 0, "name", this.usage);
@@ -593,6 +623,7 @@ Examples:
 const filesCmd: Command = {
   summary: "List the files of a site's live (or given) version",
   usage: "kofra files <name> [--version <v>]",
+  maxPositionals: 1,
   flags: { version: { kind: "string" } },
   details: `The version may be "live", "v3", "3" or a version id; it is read
 directly from the server, so versions older than the newest 500 work too.
@@ -615,6 +646,17 @@ Without --version, the live version's files are listed.`,
   },
 };
 
+/**
+ * A response versionId is only a safe continuation when the server resolves
+ * it as an id: never live, numeric, vN or blank (mirror of resolveVersionRef
+ * in site-ops, which trims and matches "live" and /^v?(\d{1,9})$/i first).
+ */
+function isImmutableVersionId(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const id = value.trim();
+  return id !== "" && id.toLowerCase() !== "live" && !/^v?\d{1,9}$/i.test(id);
+}
+
 interface ReadFilePage {
   path: string;
   versionId: string;
@@ -635,6 +677,7 @@ interface ReadFilePage {
 const readFileCmd: Command = {
   summary: "Read one file's content (one bounded page)",
   usage: "kofra read-file <site> <path> [--version <v>] [--offset <n>] [--length <n>] [--encoding auto|text|base64]",
+  maxPositionals: 2,
   flags: {
     version: { kind: "string" },
     offset: { kind: "string" },
@@ -652,7 +695,9 @@ nextOffset, content, url, rawUrl). Without --json, stdout carries only
 the page content byte-for-byte (no added newline; base64 stays base64,
 so redirection is safe) and the page metadata goes to stderr, so
 pipes get clean content and truncation is never silent (shown even with
---quiet).
+--quiet). A truncated page prints a continuation pinned to the returned
+immutable version id, so the next page reads the same version even
+after live moves; a page without one fails instead of guessing.
 
 Examples:
   kofra read-file my-site index.html
@@ -660,7 +705,6 @@ Examples:
   kofra read-file my-site big.txt --length 65536 --json
   kofra read-file my-site big.txt --offset 65536 --length 65536`,
   async run(p, io, out) {
-    if (p.positionals.length > 2) throw new UsageError(`Too many arguments. Usage: ${this.usage}`);
     const slug = positional(p, 0, "site", this.usage);
     const filePath = positional(p, 1, "path", this.usage);
     const version = str(p, "version");
@@ -688,6 +732,17 @@ Examples:
     if (out.json) {
       out.result(data as unknown as Record<string, unknown>, () => data.content);
     } else {
+      // A requested "live"/"v3"/"3" (or no --version at all) may resolve to
+      // a different version by the time the agent continues, so the
+      // continuation always pins the id this page was actually read from.
+      if (data.truncated && data.nextOffset !== null && !isImmutableVersionId(data.versionId)) {
+        throw new CliError({
+          code: "bad_read_file_version",
+          message: `The read-file response for ${slug} ${filePath} carries no immutable version id; refusing to print a continuation that could read another version.`,
+          hint: "Re-run with an explicit version id (`kofra versions <site>` lists them). If this repeats, report the response to the instance operator.",
+          exitCode: EXIT.error,
+        });
+      }
       // Human output is the content byte-for-byte: no added newline, so
       // redirection stays safe and base64 can be decoded as-is.
       io.stdout(data.content);
@@ -696,7 +751,7 @@ Examples:
       let line = `${data.path} — ${formatBytes(data.size)} (${data.contentType}), encoding ${data.encoding}, version ${data.versionId}, ${range}. SHA-256: ${data.sha256}`;
       if (data.truncated && data.nextOffset !== null) {
         const cont = [`kofra read-file ${shellQuote(slug)} ${shellQuote(data.path)}`, `--offset ${data.nextOffset}`];
-        if (version !== undefined) cont.push(`--version ${shellQuote(version)}`);
+        cont.push(`--version ${shellQuote(data.versionId)}`);
         if (length !== undefined) cont.push(`--length ${length}`);
         if (encoding !== undefined) cont.push(`--encoding ${encoding}`);
         line += `\nTruncated: continue with: ${cont.join(" ")}`;
@@ -710,6 +765,7 @@ Examples:
 const versionsCmd: Command = {
   summary: "List a site's versions, or inspect one",
   usage: "kofra versions <name> [ref]",
+  maxPositionals: 2,
   flags: {},
   details: `Inspect one version directly, without paging history (this works even
 for versions older than the newest 500 the list shows):
@@ -745,6 +801,7 @@ first; older versions stay inspectable by ref as above.`,
 const restoreCmd: Command = {
   summary: "Make an older version live again (default: the one before the live version)",
   usage: "kofra restore <name> [v<N> | <N> | <versionId>]",
+  maxPositionals: 2,
   flags: {},
   async run(p, io, out) {
     const slug = positional(p, 0, "name", this.usage);
@@ -760,6 +817,7 @@ const restoreCmd: Command = {
 const deleteCmd: Command = {
   summary: "Delete a site (or one non-live version with --version)",
   usage: "kofra delete <name> [--version <v>] --yes",
+  maxPositionals: 1,
   flags: { yes: { kind: "boolean", short: "y" }, version: { kind: "string" } },
   async run(p, io, out) {
     const slug = positional(p, 0, "name", this.usage);
@@ -780,9 +838,94 @@ const deleteCmd: Command = {
   },
 };
 
+const accessCmd: Command = {
+  summary: "Set who can open a site (public or password-protected)",
+  usage: "kofra access <site> --mode <public|password|restricted|private> --yes [--json]",
+  maxPositionals: 1,
+  flags: {
+    mode: { kind: "string" },
+    yes: { kind: "boolean", short: "y" },
+    "dry-run": { kind: "boolean" },
+  },
+  details: `The site is explicit: pass its slug, id or URL (never inferred from ./dropway.json).
+
+Options:
+  --mode <mode>   public (anyone with the link) or password (visitors must
+                  enter the password). restricted and private are not available
+                  on this edition yet: the server answers 501 feature_unavailable.
+  --yes, -y       Required: confirm the change (never prompts, even in a terminal).
+  --dry-run       Print the plan without contacting the instance (no --yes or
+                  key needed): one JSON object with planVersion, site, mode and
+                  passwordSupplied. The password itself never appears.
+  --json          Print exactly one JSON object on stdout.
+
+With --mode password the visitor password comes from piped stdin, or from one
+no-echo prompt in a terminal; empty input is refused before anything is sent.
+Only the trailing newline is removed: surrounding spaces are part of the
+password and are sent exactly as entered.
+Changing the password signs everyone out. The password is never printed, logged
+or echoed back in errors.
+
+Examples:
+  kofra access my-site --mode public --yes
+  echo "$PASSWORD" | kofra access my-site --mode password --yes --json
+  kofra access my-site --mode password --dry-run --json`,
+  async run(p, io, out) {
+    const site = positional(p, 0, "site", this.usage);
+    const mode = str(p, "mode");
+    if (!mode) throw new UsageError(`Missing --mode. Usage: ${this.usage}`);
+    if (mode !== "public" && mode !== "password" && mode !== "restricted" && mode !== "private") {
+      throw new UsageError(`--mode must be public, password, restricted or private (got ${JSON.stringify(mode)}).`);
+    }
+    if (bool(p, "dry-run") === true) {
+      // Offline plan: no instance resolution, no key, no requests, no writes.
+      // Never prompts and never fails for a missing password.
+      let passwordSupplied = false;
+      if (mode === "password" && !io.stdinIsTTY) passwordSupplied = stripLineTerminator(await io.readStdin()).trim() !== "";
+      out.result({ dryRun: true, planVersion: 1, site, mode, passwordSupplied }, () =>
+        mode === "password"
+          ? `Dry run: would set ${site} access to password (${passwordSupplied ? "password supplied" : "no password supplied"}).`
+          : `Dry run: would set ${site} access to ${mode}${mode === "public" ? " (visitors would not need a password)" : ""}.`,
+      );
+      return EXIT.ok;
+    }
+    if (bool(p, "yes") !== true) {
+      throw new CliError({
+        code: "confirmation_required",
+        message: `Refusing to change ${site} access without confirmation.`,
+        hint: "Re-run with --yes.",
+        exitCode: EXIT.usage,
+      });
+    }
+    let password = "";
+    if (mode === "password") {
+      password = await readPasswordInput(io, "Visitor password: ");
+      if (!password) {
+        throw new CliError({
+          code: "missing_password",
+          message: "Missing the visitor password.",
+          hint: "Pipe the visitor password on stdin or run in a terminal to be prompted.",
+          exitCode: EXIT.usage,
+        });
+      }
+    }
+    const inst = await resolveInstance(p, io);
+    const client = makeClient(io, inst.api, requireKey(inst, "Setting site access"));
+    const typedMode = mode as "public" | "password" | "restricted" | "private";
+    const data = await client.setSiteAccess(mode === "password" ? { slug: site, mode: typedMode, password } : { slug: site, mode: typedMode });
+    out.result({ site: data.site, access: data.access }, () => {
+      if (mode === "password") return `${site} is now password-protected: visitors need the password to open it.\nChanging the password signs everyone out.`;
+      if (mode === "public") return `${site} is now public: visitors do not need a password to open it.\nChanging the password signs everyone out.`;
+      return `${site} access mode is now ${mode}.`;
+    });
+    return EXIT.ok;
+  },
+};
+
 const whoamiCmd: Command = {
   summary: "Show the instance and the identity of your key",
   usage: "kofra whoami",
+  maxPositionals: 0,
   flags: {},
   async run(p, io, out) {
     const inst = await resolveInstance(p, io);
@@ -808,6 +951,7 @@ const whoamiCmd: Command = {
 const loginCmd: Command = {
   summary: "Save an API key for an instance",
   usage: "kofra login [--api <url>] [--key <dw_...>]   (or pipe the key on stdin)",
+  maxPositionals: 0,
   flags: {},
   details: `The key is checked against the instance, then saved to ${"<config dir>/credentials.json"}
 (mode 0600; config dir: $KOFRA_CONFIG_DIR, $XDG_CONFIG_HOME/dropway or ~/.config/dropway).
@@ -839,6 +983,7 @@ the owner key on a new instance with: kofra setup --api <url> --email <you>`,
 const logoutCmd: Command = {
   summary: "Forget the saved key for an instance",
   usage: "kofra logout [--api <url>]",
+  maxPositionals: 0,
   flags: {},
   async run(p, io, out) {
     const creds = await readCredentials(io.env);
@@ -854,6 +999,7 @@ const logoutCmd: Command = {
 const setupCmd: Command = {
   summary: "First run of a new instance: create the owner and save their API key",
   usage: "kofra setup --api <url> --email <you@example.com>   (bootstrap key from $KOFRA_BOOTSTRAP_KEY, stdin or a prompt)",
+  maxPositionals: 0,
   flags: { email: { kind: "string" }, name: { kind: "string" }, "show-key": { kind: "boolean" }, save: { kind: "boolean" } },
   details: `Uses the instance's ADMIN_BOOTSTRAP_KEY secret once to create the owner.
 The owner API key is saved like \`kofra login\` (the full key is printed only with
@@ -927,6 +1073,7 @@ function isKeyItem(value: unknown): value is KeyItem {
 const keysCmd: Command = {
   summary: "List your API keys (safe metadata only, never the secrets)",
   usage: "kofra keys ls [--all] [--json]",
+  maxPositionals: 1,
   flags: { all: { kind: "boolean" } },
   details: `List API keys as safe metadata only: id, name, prefix, scopes, site
 restriction, expiry and last use. The secrets themselves are never shown.
@@ -941,11 +1088,10 @@ members' keys when your key has the members:write scope; otherwise --all
 still lists only your own keys. Create and revoke keys with the generic
 command, e.g.: kofra api POST /keys --data '{"name":"ci"}'`,
   async run(p, io, out) {
-    const [sub, ...rest] = p.positionals;
+    const [sub] = p.positionals;
     if (sub !== "ls") {
       throw new UsageError(sub === undefined ? `Missing subcommand. Usage: ${this.usage}` : `Unknown keys subcommand "${sub}". Usage: ${this.usage}`);
     }
-    if (rest.length > 0) throw new UsageError(`Unexpected argument "${rest[0]}". Usage: ${this.usage}`);
     const inst = await resolveInstance(p, io);
     const client = makeClient(io, inst.api, requireKey(inst, "Listing keys"));
     const { data } = await client.get<unknown>(bool(p, "all") === true ? "/keys?all=true" : "/keys");
@@ -1031,9 +1177,73 @@ function operationDetail(row: Record<string, unknown>, withSchema: boolean): str
   return lines.join("\n");
 }
 
+const duplicateCmd: Command = {
+  summary: "Duplicate a live site: duplicate <source> <new-slug>",
+  usage: "kofra duplicate <source> <new-slug> [--message <text>] [--idempotency-key <key>] [--dry-run] [--json]",
+  maxPositionals: 2,
+  flags: {
+    message: { kind: "string", short: "m" },
+    "idempotency-key": { kind: "string" },
+    "dry-run": { kind: "boolean" },
+  },
+  details: `Both targets are required: source is a slug, site id or site URL. Neither
+is inferred from a local project mapping. The existing live manifest becomes
+version 1 of a new site; no local files are read or uploaded and no links are saved.
+Only SPA mode is copied. Passwords/access gates and other settings are not copied;
+re-apply protection explicitly. The destination is live immediately, not opened
+in a browser or automatically protected.
+
+--dry-run emits one schemaVersion: 1 JSON plan even without --json. It is entirely
+offline: no instance, credentials or files are read, and no source id is resolved.
+--idempotency-key preserves an explicit key (1-255 printable ASCII characters,
+no spaces); otherwise one is generated per invocation. Invalid keys are rejected
+before any I/O, including with --dry-run. To recover an unknown outcome, repeat
+the identical source, new slug and message with the same explicit key (within the
+server's 24h window).
+Mutations retry only rate-limit refusals, not network failures or server errors.
+
+Examples:
+  kofra duplicate template template-copy --message "Template snapshot"
+  kofra duplicate site_abc123 template-copy --idempotency-key copy-01 --json
+  kofra duplicate template template-copy --dry-run`,
+  async run(p, io, out) {
+    const source = positional(p, 0, "source", this.usage);
+    const newSlug = positional(p, 1, "new-slug", this.usage);
+    if (!source.trim() || !newSlug.trim()) {
+      throw new UsageError(`Exactly two nonempty targets are required. Usage: ${this.usage}`);
+    }
+    const explicitKey = str(p, "idempotency-key");
+    if (explicitKey !== undefined && !/^[\x21-\x7e]{1,255}$/.test(explicitKey)) {
+      throw new UsageError("--idempotency-key must be 1-255 printable ASCII characters without spaces.");
+    }
+    const message = str(p, "message");
+    if (bool(p, "dry-run")) {
+      io.stdout(`${JSON.stringify({ schemaVersion: 1, operation: "duplicate_site", source, newSlug, ...(message !== undefined ? { message } : {}) }, null, 2)}\n`);
+      return EXIT.ok;
+    }
+    const inst = await resolveInstance(p, io);
+    const client = makeClient(io, inst.api, requireKey(inst));
+    // Generate once, outside the SDK's bounded rate-limit retry loop.
+    const idempotencyKey = explicitKey ?? crypto.randomUUID();
+    const result = await client.duplicateSite({ site: source, newSlug, ...(message !== undefined ? { message } : {}) }, { idempotencyKey });
+    out.result(result, () => `${result.url}\nDuplicated into ${result.slug} (${plural(result.fileCount, "file")}, ${formatBytes(result.totalBytes)}).`);
+    out.note("Only SPA mode is copied. Passwords/access gates and other settings are not copied; re-apply protection explicitly.");
+    if (result.note) out.note(result.note);
+    if (Array.isArray(result.warnings)) {
+      for (const warning of result.warnings) {
+        if (warning && typeof warning === "object" && typeof warning.message === "string") {
+          out.note(`Warning (${warning.code}): ${warning.message}${typeof warning.fix === "string" ? ` ${warning.fix}` : ""}`);
+        }
+      }
+    }
+    return EXIT.ok;
+  },
+};
+
 const operationsCmd: Command = {
   summary: "List API operations, or inspect one, without running anything",
   usage: "kofra operations [operationId] [--schema] [--json]",
+  maxPositionals: 1,
   flags: { schema: { kind: "boolean" } },
   details: `Reads the instance's public operation catalog (GET /api/v1/operations): the
 operation ids, methods, paths, required scopes and CLI paths. Nothing is
@@ -1049,8 +1259,7 @@ Examples:
   kofra operations list_versions --json
   kofra operations create_site --schema --json`,
   async run(p, io, out) {
-    const [id, extra] = p.positionals;
-    if (extra !== undefined) throw new UsageError(`Too many arguments. Usage: ${this.usage}`);
+    const [id] = p.positionals;
     const withSchema = bool(p, "schema") === true;
     if (withSchema && id === undefined) throw new UsageError(`--schema needs an operation id. Usage: ${this.usage}`);
     const inst = await resolveInstance(p, io);
@@ -1094,6 +1303,7 @@ Examples:
 const apiCmd: Command = {
   summary: "Call any REST endpoint (escape hatch)",
   usage: "kofra api <operationId | [METHOD] path> [--data <json> | --data @file.json | --data -]",
+  maxPositionals: 2,
   flags: { data: { kind: "string", short: "d" } },
   details: `Paths are relative to /api/v1 (e.g. /me, /sites, /keys). Examples:
   kofra api /sites/my-site
@@ -1156,6 +1366,7 @@ const apiCmd: Command = {
 
 const COMMANDS: Record<string, Command> = {
   publish: publishCmd,
+  duplicate: duplicateCmd,
   list: listCmd,
   site: siteCmd,
   rename: renameCmd,
@@ -1164,6 +1375,7 @@ const COMMANDS: Record<string, Command> = {
   versions: versionsCmd,
   restore: restoreCmd,
   delete: deleteCmd,
+  access: accessCmd,
   whoami: whoamiCmd,
   keys: keysCmd,
   login: loginCmd,
@@ -1234,6 +1446,10 @@ export async function run(argv: string[], io: Io): Promise<number> {
   }
   try {
     const p = parseArgs(argv.slice(1), { ...GLOBAL, ...command.flags });
+    // Refuse surplus positionals here, before the command body runs: no
+    // filesystem stat/read, instance/key resolution, network call, stdin
+    // read, prompt or write may precede this check.
+    if (p.positionals.length > command.maxPositionals) throw new UsageError(`Too many arguments. Usage: ${command.usage}`);
     if (bool(p, "help")) {
       io.stdout(`${commandHelp(name, command)}\n`);
       return EXIT.ok;

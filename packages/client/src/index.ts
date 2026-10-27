@@ -13,6 +13,7 @@ export {
   type BytesResult,
   type CallOptions,
   type ClientOptions,
+  type DropwayNextCall,
   type FetchLike,
   type OperationMeta,
   type RequestOptions,

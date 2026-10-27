@@ -11,7 +11,7 @@ describe("operation command table: REST wire input", () => {
     { id: "get_version", method: "GET", path: "/api/v1/sites/{slug}/versions/{id}", required: ["slug", "id"] },
     { id: "restore_version", method: "POST", path: "/api/v1/sites/{slug}/versions/{id}/restore", required: ["slug", "id"] },
     { id: "delete_version", method: "DELETE", path: "/api/v1/sites/{slug}/versions/{id}", required: ["slug", "id"] },
-    { id: "finalize_version", method: "POST", path: "/api/v1/sites/{slug}/deploys/{id}/finalize", required: ["slug", "id"] },
+    { id: "finalize_version", method: "POST", path: "/api/v1/sites/{slug}/versions/{id}/finalize", required: ["slug", "id"] },
     { id: "revoke_api_key", method: "DELETE", path: "/api/v1/keys/{id}", required: ["id"] },
   ])("$id requires its REST path fields, not MCP-only arguments", async ({ id, method, path, required }) => {
     const dw = await freshInstance();
@@ -37,7 +37,7 @@ describe("operation command table: REST wire input", () => {
     const result = await dw.json("/api/v1/operations");
     expect(result.status).toBe(200);
     const row = commandRows(result.body).find((entry) => entry.id === "create_version");
-    expect(row).toMatchObject({ method: "POST", path: "/api/v1/sites/{slug}/deploys" });
+    expect(row).toMatchObject({ method: "POST", path: "/api/v1/sites/{slug}/versions" });
     expect.soft([...(row!.inputSchema.required ?? [])].sort()).toEqual(["files", "slug"]);
     expect(row!.inputSchema.properties).toMatchObject({ slug: { type: "string" }, files: { type: "array" } });
     expect(row!.inputSchema.properties).not.toHaveProperty("site");

@@ -137,7 +137,12 @@ Every view shares one bar (`viewers/chrome.ts`: kind, path, size, type; view
 tabs; Download; Files) built from plain links, so it works with JavaScript off.
 View pages get `VIEWER_CSP` (no scripts). The code view adds one static inline
 script (Copy, `#L10-L20` ranges) allowed by its SHA-256 hash, which stays valid
-across 304 responses, unlike a nonce. User markup (Markdown, notebook HTML)
+across 304 responses, unlike a nonce. Line ranges are selected without typing a
+fragment: shift-click extends from the first line of the current `#L…` selection,
+and the toolbar's First/Last line inputs (bounded to the rendered lines, at most
+5000 at a time) do the same from the keyboard. Selection only rewrites the
+fragment — no request, storage or extra history beyond the new hash — and the
+address remains a live address, not a pinned one. User markup (Markdown, notebook HTML)
 goes through `viewers/sanitize.ts`, an allowlist sanitizer on `HTMLRewriter`.
 Expensive output (highlighting, Markdown, JSON trees, CSV tables) is cached by
 content in `viewers/cache.ts` (`render/<viewer>@<version>/<variant>/<sha256>`:
@@ -147,12 +152,39 @@ Syntax highlighting is highlight.js core plus about 80 languages registered in
 `viewers/hljs.js` (about 106 KB gzipped). That file is plain JavaScript with
 its own `hljs.d.ts` because highlight.js's types pull in the DOM lib.
 
+ZIP navigations, frames and `?view=1` list central-directory metadata only: paths,
+uncompressed sizes and compression methods in central-directory order, with totals
+for every entry and at most the first 1,000 rows. Archives over 2 MiB, invalid ZIPs,
+ZIP64/split ZIPs and non-ZIP archives get the binary info page with an explanation.
+No entry is inflated, extracted or linked, and entry contents are not verified.
+The ZIP fragment uses `archive@<version>/<sha256>`; bump the viewer version when
+its parser or output changes to invalidate both fragments and HTTP validators.
+A fallback caused by a transient short storage read is stored nowhere: no
+fragment is cached and the page itself is `no-store` without the listing ETag,
+so a reload recovers once storage does.
+Raw/download and sub-resource requests still serve the original complete bytes.
+
 **To add a viewer:** create `packages/server/src/viewers/<name>.ts` exporting a
 `Viewer` (`id`, `version`, `maxBytes`, `matches(file, live, mode)`, `render(vc)`),
 match on `file.kind` (from `detectFileKind` in `@dropway/core`) and the mode,
 wrap the body with `viewerPage()` from `viewers/chrome.ts`, and add it to
 `VIEWERS` in `viewers/index.ts` before the code/binary fallbacks. Embedding apps
 pass extra viewers in `createDropway({ viewers })`; they run first.
+
+Exact caps, read budgets, rendered-output limits and fallbacks for the JSON,
+CSV and notebook viewers (and the Source/Raw/Download byte contract) are in
+[`docs/VIEWERS.md`](VIEWERS.md); that page is canonical where a summary here
+or in `docs/SPEC.md` is shorter.
+
+CSV delimiter detection (`viewers/csv.ts`) counts comma/tab/semicolon/pipe only
+outside quoted fields across complete logical records (LF, CRLF and bare-CR
+boundaries; `""` stays inside its field), bounded to the first 64 Ki characters
+and five complete nonempty records. A trailing record cut by the budget or left
+unterminated casts no vote; empty input, one column, unknown separators and
+ties fall back to comma in candidate order; `.tsv` always selects tab. Render
+changes bump the viewer version, which retires both cached fragments and
+conditional ETags; raw/download bytes, the no-script viewer CSP and the 4 MiB /
+2,000-row / 1,000-character caps stay unchanged.
 
 ### App-origin UI (`packages/server/src/ui`)
 
@@ -187,7 +219,14 @@ server reports missing (4 at a time, retried on 429/5xx), then finalizes. A
 single `.zip` goes to `POST /api/v1/publish` instead. `.git/`, `node_modules/`,
 `.env*` and OS clutter are skipped and listed. Before publishing, the browser
 shows a review of every included path with its byte size and every excluded
-path with its ignore reason. Unreadable paths covered by those same ignore rules
+path with its ignore reason. The review has a literal case-insensitive path
+search, an All/Included/Excluded visibility switch and Path/Size ordering;
+these only change the display, and every included file is still uploaded.
+Path order is ascending code-unit order; Size orders included bytes descending
+with Path order breaking ties; exclusions always stay Path-ordered after the
+included group, and an unreadable exclusion keeps its "unreadable" note
+instead of a guessed size. Clear restores the full review in Path order.
+Unreadable paths covered by those same ignore rules
 remain excluded (an unreadable folder's contents are not listed); other read
 failures block publishing until the selection is reselected. The displayed
 selection stays bound to the in-flight publish.

@@ -233,6 +233,9 @@ dialog.dw-dialog .dw-row{justify-content:flex-end;margin-top:1rem}
 .dw-review-h{font-weight:600}
 .dw-review-list{list-style:none;margin:0 0 .55rem;padding:0 .8rem;max-height:12rem;overflow:auto}
 .dw-review-row{padding:.2rem 0;border-top:1px dotted var(--line);font-size:.85rem;overflow-wrap:anywhere}
+.dw-review-nav{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;padding:.55rem .8rem 0}
+.dw-review-nav .dw-input{width:12rem;max-width:100%}
+.dw-review-nav .dw-select{width:auto;max-width:100%}
 .dw-progress{height:.45rem;border-radius:99px;background:var(--code);overflow:hidden;margin:.6rem 0}
 .dw-progress>span{display:block;height:100%;width:0;background:var(--accent);transition:width .15s}
 .dw-url{display:inline-flex;align-items:center;gap:.35rem;max-width:100%;min-width:0}
