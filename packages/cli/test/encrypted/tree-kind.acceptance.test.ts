@@ -364,7 +364,8 @@ describe("loaded-manifest file-kind filtering", () => {
       const requests = view.requests.length;
       const manifestLoads = view.manifestLoads();
       let frameNavigations = 0;
-      view.page.on("framenavigated", () => frameNavigations++);
+      // Canonical URL replaceState is main-frame same-document navigation, not an iframe reload.
+      view.page.on("framenavigated", (frame: any) => { if (frame !== view.page.mainFrame()) frameNavigations++; });
       await view.kind.selectOption("pdf");
       await view.query.fill("REPORT");
       await expect.poll(() => visiblePaths(view)).toEqual(["docs/REPORT.pdf"]);
@@ -513,7 +514,7 @@ async function restored(view: View, expected: { path: string; mode: string; filt
   await expect.poll(() => view.kind.inputValue()).toBe(expected.kind || await allValue(view));
   await expect.poll(() => visiblePaths(view)).toEqual(expected.paths);
   await count(view, expected.paths.length, 5);
-  await canonical(view, { mode: expected.mode, ...(expected.filter ? { filter: expected.filter } : {}), ...(expected.kind ? { kind: expected.kind } : {}) });
+  await canonical(view, { ...(expected.mode === "view" ? {} : { mode: expected.mode }), ...(expected.filter ? { filter: expected.filter } : {}), ...(expected.kind ? { kind: expected.kind } : {}) });
   const frame = new URL((await snapshot(view)).frame!, api);
   expect(frame.origin).toBe(sites);
   expect(decodeURIComponent(frame.pathname)).toContain(expected.path);
@@ -599,7 +600,7 @@ describe("shareable file-browser state lifecycle", () => {
       const calls = view.requests.length;
       const loads = view.manifestLoads();
       let frames = 0;
-      view.page.on("framenavigated", () => frames++);
+      view.page.on("framenavigated", (frame: any) => { if (frame !== view.page.mainFrame()) frames++; });
       await view.query.focus();
       for (const [letter, value] of [["P", "P"], ["h", "Ph"], ["O", "PhO"], ["t", "PhOt"], ["O", "PhOtO"]]) {
         await view.query.pressSequentially(letter!);
@@ -637,23 +638,25 @@ describe("shareable file-browser state lifecycle", () => {
       await link.click();
       await expect.poll(() => new URL(view.page.url()).pathname).toBe(`/v/${slug}/src/nested/report.TXT`);
       expect((await snapshot(view)).historyLength, "file selection pushes one entry").toBe(start.historyLength + 1);
-      await canonical(view, { mode: "source", filter: "src/", kind: "code" });
+      // File-tree navigation keeps the existing Rendered default; only filters persist.
+      await canonical(view, { filter: "src/", kind: "code" });
+      expect(await modeControl(view, "Rendered").getAttribute("aria-selected")).toBe("true");
       await view.query.fill("REPORT");
-      const second = { path: "src/nested/report.TXT", mode: "source", filter: "REPORT", kind: "code", paths: ["src/nested/report.TXT"] };
+      const second = { path: "src/nested/report.TXT", mode: "view", filter: "REPORT", kind: "code", paths: ["src/nested/report.TXT"] };
       await restored(view, second);
-      const source = (await snapshot(view)).frame;
+      const rendered = (await snapshot(view)).frame;
       await modeControl(view, "Raw").click();
       await expect.poll(() => new URL(view.page.url()).searchParams.get("mode")).toBe("raw");
       expect((await snapshot(view)).historyLength, "mode selection pushes one entry").toBe(start.historyLength + 2);
       await canonical(view, { mode: "raw", filter: "REPORT", kind: "code" });
       const raw = (await snapshot(view)).frame;
-      expect(raw).not.toBe(source);
+      expect(raw).not.toBe(rendered);
       await expect.poll(() => frameText(view)).toBe("const example = true;");
       await view.query.fill("no-such-path"); await view.kind.selectOption("image");
       const third = { path: "src/nested/report.TXT", mode: "raw", filter: "no-such-path", kind: "image", paths: [] };
       await restored(view, third);
       await view.page.goBack(); await restored(view, second);
-      expect((await snapshot(view)).frame).toBe(source);
+      expect((await snapshot(view)).frame).toBe(rendered);
       await view.page.goBack(); await restored(view, first);
       expect(await frameText(view)).toContain("Selected fixture frame");
       await view.page.goForward(); await restored(view, second);

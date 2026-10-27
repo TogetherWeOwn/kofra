@@ -150,7 +150,8 @@ for (const separate of [false, true]) describe(`manual View mode tabs (${separat
       expect(await search.evaluate(el => (el as any).selectionStart)).toBe(1);
       await search.press("End"); expect(await search.evaluate(el => (el as any).selectionStart)).toBe(5);
       await search.press("Space"); expect(await search.inputValue()).toBe("photo ");
-      expect(await snapshot(view)).toEqual(before); expect(view.calls).toEqual(calls);
+      // Typing replaces only the canonical filter URL, not the mode, frame or history entry.
+      expect(await snapshot(view)).toEqual({ ...before, url: `${before.url}?filter=photo+` }); expect(view.calls).toEqual(calls);
     } finally { await view.context.close(); }
   });
 
