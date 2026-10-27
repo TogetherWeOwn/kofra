@@ -25,6 +25,7 @@ Zero runtime dependencies. Node.js 20 or newer.
 | `list` | Your sites (`--all` for every page) |
 | `site <name>` | One site: URL, live version, settings |
 | `rename <source> <new-slug> --yes` | Rename an explicit site; offline `--dry-run`; saved local project mappings remain unchanged |
+| `claim <site> --token <claimToken>` | Keep an anonymous site in your account; the site stops expiring (offline `--dry-run`) |
 | `files <name>` | Files of the live version (or `--version <ref>` with `live`, `v3`, `3` or a version id, read directly) with their URLs |
 | `read-file <site> <path>` | One file's content, one bounded page (`--version`, `--offset`, `--length`, `--encoding`) |
 | `versions <name>` | Newest 500 versions, newest first, live marked — or `versions <name> <ref>` to inspect one directly |
@@ -131,6 +132,21 @@ Disposable local integration check (no deploy):
 npm run test:cli -- test/duplicate.acceptance.test.ts test/duplicate-worker.acceptance.test.ts
 ```
 
+
+## Claiming an anonymous site
+
+```sh
+kofra claim bright-otter-x7k2 --token dwc_... --json   # needs your API key
+kofra claim bright-otter-x7k2 --dry-run                # offline plan, no key or token
+```
+
+The site and `--token` (the `dwc_` claim token from the anonymous publish) are both required;
+claim never prompts for the token and never prints it. It calls `claim_site` once: the site moves
+into your account, stops expiring, and the claim token stops working. `--json` prints
+`{ "ok": true, "claimed": true, "alreadyOwned": false, "site": {...}, "url": "..." }`. An unknown
+site and a wrong token both fail with the server's `site_not_found` (exit 4). If you already own
+the site, a server read reports it as unchanged (`alreadyOwned: true`, exit 0) without using the token.
+Prefer a shell history that does not record secrets: the token is an argument.
 
 ## Renaming a site
 

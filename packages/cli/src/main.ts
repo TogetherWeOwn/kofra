@@ -620,6 +620,74 @@ Examples:
   },
 };
 
+const claimCmd: Command = {
+  summary: "Keep an anonymous site: claim <site> --token <claimToken>",
+  usage: "kofra claim <site> --token <claimToken> [--dry-run] [--json]",
+  maxPositionals: 1,
+  flags: { token: { kind: "string" }, "dry-run": { kind: "boolean" } },
+  details: `Moves an anonymous site (published without a key, so it expires) into the
+account of your API key. The site stops expiring and the claim token stops
+working. The site is always explicit; saved project mappings are never used.
+  --token     The dwc_ claim token from the anonymous publish. Required; this
+              command never prompts for it, and never prints it.
+  --dry-run   Offline plan (site and operation only); no key, token or request
+
+Calls claim_site once through POST /api/v1/sites/{site}/claim. An unknown site
+and a wrong token both answer 404 site_not_found (the server does not reveal
+which). A site you already own is reported as unchanged (exit 0) after reading
+it from the server; the claim token is then not used.
+
+Examples:
+  kofra claim bright-otter-x7k2 --token dwc_... --json
+  kofra claim bright-otter-x7k2 --dry-run`,
+  async run(p, io, out) {
+    const site = positional(p, 0, "site", this.usage);
+    if (!site.trim() || site === "." || site === "..") throw new UsageError("Use an explicit site slug.");
+    const dryRun = bool(p, "dry-run") === true;
+    const token = str(p, "token");
+    if (dryRun) {
+      const plan = { dryRun: true, site, operation: "claim_site" };
+      out.result(plan, `Dry run: would claim anonymous site ${site} (claim_site). No request made.`);
+      return EXIT.ok;
+    }
+    if (token === undefined || token === "") {
+      throw new CliError({
+        code: "claim_token_required",
+        message: "Claiming needs the claim token from the anonymous publish.",
+        hint: `Pass --token dwc_... (it is never prompted for). Usage: ${this.usage}`,
+        exitCode: EXIT.usage,
+      });
+    }
+    if (!token.startsWith("dwc_")) {
+      throw new CliError({ code: "claim_token_invalid", message: "The claim token must start with dwc_.", hint: "Use the claimToken returned when the site was published anonymously.", exitCode: EXIT.usage });
+    }
+    const inst = await resolveInstance(p, io);
+    const client = makeClient(io, inst.api, requireKey(inst, "Claiming", "Run `kofra login`, set KOFRA_API_KEY, or pass --key. The claim token goes in --token."));
+    const dashboard = (slug: string) => `${inst.api}/dashboard/sites/${enc(slug)}`;
+    // Only a server read can say the caller already owns the site: the claim
+    // endpoint answers a repeat claim exactly like a first one. A failed read
+    // is not an answer; the claim below reports the real error.
+    const existing = await client.getSite({ slug: site }).then(
+      (r) => (r as { site?: Record<string, any> }).site,
+      () => undefined,
+    );
+    if (existing && existing.anonymous === false) {
+      const slug = String(existing.slug ?? site);
+      out.result({ claimed: false, alreadyOwned: true, site: existing, url: existing.url }, () =>
+        [`${slug} is already yours (unchanged); the claim token was not used.`, `URL:       ${existing.url}`, `Dashboard: ${dashboard(slug)}`].join("\n"),
+      );
+      return EXIT.ok;
+    }
+    const result = (await client.claimSite({ slug: site, claimToken: token })) as { claimed?: boolean; site: Record<string, any> };
+    const kept = result.site;
+    const slug = String(kept.slug ?? site);
+    out.result({ claimed: result.claimed ?? true, alreadyOwned: false, site: kept, url: kept.url }, () =>
+      [`Claimed ${slug}; it no longer expires.`, `URL:       ${kept.url}`, `Dashboard: ${dashboard(slug)}`].join("\n"),
+    );
+    return EXIT.ok;
+  },
+};
+
 const filesCmd: Command = {
   summary: "List the files of a site's live (or given) version",
   usage: "kofra files <name> [--version <v>]",
@@ -1370,6 +1438,7 @@ const COMMANDS: Record<string, Command> = {
   list: listCmd,
   site: siteCmd,
   rename: renameCmd,
+  claim: claimCmd,
   files: filesCmd,
   "read-file": readFileCmd,
   versions: versionsCmd,
