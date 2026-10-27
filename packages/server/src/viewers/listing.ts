@@ -30,7 +30,7 @@ const GALLERY_MAX = 60;
 const SORTS = [["name", "Name"], ["size", "Largest first"], ["type", "Type"]] as const;
 
 // Keep English name collation; distinct Unicode spellings must not depend on manifest order.
-function compareNames(a: string, b: string): number {
+export function compareNames(a: string, b: string): number {
   return a.localeCompare(b, "en", { sensitivity: "variant" }) || (a < b ? -1 : a > b ? 1 : 0);
 }
 

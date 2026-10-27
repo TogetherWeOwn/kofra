@@ -6,7 +6,7 @@
  * the builder makes them pass without editing this file.
  *
  * Viewer contract (builder: implement exactly this):
- * - id "archive", version 2 (shared-link metadata invalidation). Matches file.kind === "archive" for every view
+ * - id "archive", version 2 (shared-bar sibling navigation). Matches file.kind === "archive" for every view
  *   mode except "source" (document, frame, view). ?view=source on an archive
  *   keeps returning the raw bytes because no viewer matches it.
  * - Over-cap, corrupt and non-ZIP archives render THROUGH the archive viewer
@@ -23,8 +23,8 @@
  * - Caps: MAX_ARCHIVE_BYTES = 2 MiB parsed, MAX_ENTRIES = 1000 rows shown.
  *   Past the entry cap: "Showing the first 1,000 of N entries".
  * - Cache like every viewer: cachedRender keyed with id + version
- *   ("archive@<version>/..."), X-Kofra-Render-Cache header; ETag W/"archive@<version>-<sha>"
- *   (plus -e for &embed=1) so a version bump invalidates old renders.
+ *   ("archive@2/..."), X-Kofra-Render-Cache header; ETag W/"archive@2-<sha>-<manifest>"
+ *   (or W/"archive@2-<sha>-e" for &embed=1) so a version bump invalidates old renders.
  * - Escape entry names as text; make no external requests (relative links
  *   plus the absolute app-origin Files link only).
  * - Review pins: the counts line totals the complete directory past the
@@ -512,8 +512,9 @@ describe("archive viewer pages", () => {
     expect(second.headers.get("x-kofra-render-cache")).toBe("memory");
 
     const etag = second.headers.get("etag")!;
-    expect(etag).toBe(`W/"archive@2-${sha}"`);
+    expect(etag).toMatch(new RegExp(`^W/"archive@2-${sha}-[A-Za-z0-9_-]+"$`));
     expect((await get("archives/cache-probe.zip", { ...NAV, "If-None-Match": etag })).status).toBe(304);
+    expect((await get("archives/cache-probe.zip", { ...NAV, "If-None-Match": `W/"archive@1-${sha}"` })).status).toBe(200);
     // This checks viewer identity, not a version bump (covered separately below).
     expect((await get("archives/cache-probe.zip", { ...NAV, "If-None-Match": `W/"binary@2-${sha}"` })).status).toBe(200);
   });
@@ -522,8 +523,6 @@ describe("archive viewer pages", () => {
     const archive = VIEWERS.find((viewer) => viewer.id === "archive");
     expect(archive).toBeDefined();
     const version = archive!.version!;
-    expect(version).toBeDefined();
-    const bumpedVersion = version + 1;
     const render = archive!.render;
     let byteReads = 0;
     // Keep the real renderer and real R2 bytes; observe whether a new fragment is produced.
@@ -539,7 +538,7 @@ describe("archive viewer pages", () => {
       const sha = await shaOf(files["archives/version-probe.zip"]!);
       const first = await get("archives/version-probe.zip");
       expect(first.status).toBe(200);
-      expect(first.headers.get("etag")).toBe(`W/"archive@${version}-${sha}"`);
+      expect(first.headers.get("etag")).toMatch(new RegExp(`^W/"archive@2-${sha}-[A-Za-z0-9_-]+"$`));
       expect(first.headers.get("x-kofra-render-cache")).toBe("miss");
       expect(await first.text()).toContain("version-probe.txt");
       const warm = await get("archives/version-probe.zip");
@@ -547,11 +546,11 @@ describe("archive viewer pages", () => {
       const oldEtag = warm.headers.get("etag")!;
       expect((await get("archives/version-probe.zip", { ...NAV, "If-None-Match": oldEtag })).status).toBe(304);
 
-      archive!.version = bumpedVersion; // Same viewer id, URL and content hash; only its version changes.
+      archive!.version = version + 1; // Same viewer id, URL and content hash; only its version changes.
       byteReads = 0;
       const bumped = await get("archives/version-probe.zip", { ...NAV, "If-None-Match": oldEtag });
       expect(bumped.status).toBe(200);
-      expect(bumped.headers.get("etag")).toBe(`W/"archive@${bumpedVersion}-${sha}"`);
+      expect(bumped.headers.get("etag")).toMatch(new RegExp(`^W/"archive@${version + 1}-${sha}-[A-Za-z0-9_-]+"$`));
       expect(bumped.headers.get("x-kofra-render-cache")).toBe("miss");
       expect(await bumped.text()).toContain("version-probe.txt");
       expect(byteReads).toBeGreaterThan(0); // Not just a new header on the old fragment.
@@ -560,13 +559,13 @@ describe("archive viewer pages", () => {
       expect((await get("archives/version-probe.zip", { ...NAV, "If-None-Match": bumpedWarm.headers.get("etag")! })).status).toBe(304);
       const embed = await get("archives/version-probe.zip?view=1&embed=1", { ...NAV, "If-None-Match": `W/"archive@${version}-${sha}-e"` });
       expect(embed.status).toBe(200);
-      expect(embed.headers.get("etag")).toBe(`W/"archive@${bumpedVersion}-${sha}-e"`);
+      expect(embed.headers.get("etag")).toBe(`W/"archive@${version + 1}-${sha}-e"`);
 
       // Drop only isolate memory: the bumped version must also have its own edge-cache fragment.
       clearRenderMemoryCache();
       const edge = await get("archives/version-probe.zip");
       expect(edge.headers.get("x-kofra-render-cache")).toBe("edge");
-      expect(edge.headers.get("etag")).toBe(`W/"archive@${bumpedVersion}-${sha}"`);
+      expect(edge.headers.get("etag")).toBe(bumped.headers.get("etag"));
       expect(await edge.text()).toContain("version-probe.txt");
     } finally {
       archive!.version = version;
