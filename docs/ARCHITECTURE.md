@@ -135,6 +135,12 @@ and has its own toolbar).
 
 Every view shares one bar (`viewers/chrome.ts`: kind, path, size, type; view
 tabs; Download; Files) built from plain links, so it works with JavaScript off.
+Except for image/SVG viewers and embeds, the bar also links to the previous
+and next direct files in the same folder, in listing name order, without
+wrapping. These default-view links use the loaded live manifest, never the
+request query. Their HTTP validators include the live version id so republishing
+siblings cannot revalidate stale navigation; content-only render fragments stay
+independent of the manifest. Image/SVG viewers retain their own stage navigation.
 View pages get `VIEWER_CSP` (no scripts). The code view adds one static inline
 script (Copy, `#L10-L20` ranges) allowed by its SHA-256 hash, which stays valid
 across 304 responses, unlike a nonce. Line ranges are selected without typing a
@@ -232,6 +238,19 @@ Unreadable paths covered by those same ignore rules
 remain excluded (an unreadable folder's contents are not listed); other read
 failures block publishing until the selection is reselected. The displayed
 selection stays bound to the in-flight publish.
+
+The update picker lists only the first page of sites, so an explicit update
+destination (the `?site=` target, or a slug entered in the update panel's
+lookup field) is verified with the single-site `GET /api/v1/sites/:slug`
+instead of paging through every site: the reference is encoded as one path
+segment (dot-only references are rejected locally before URL normalization),
+the returned slug is added to the picker and selected, and
+publishing stays disabled until that verification succeeds — a failed or
+superseded lookup never falls back to another listed site or a new site.
+Typing in the lookup field makes no request; Enter or the lookup button
+submits it. A sequence fence makes the newest explicit choice win over
+late list or lookup responses, and a verified destination stays selected
+through the list refresh after a successful publish.
 
 ## Data model (D1, `packages/core/migrations`)
 

@@ -2,6 +2,7 @@ import { encodePath, KIND_LABELS } from "@dropway/core";
 import { escapeHtml, formatBytes, htmlPage } from "../html";
 import type { ViewerContext } from "./index";
 import { viewerPhone } from "./phone";
+import { compareNames } from "./listing";
 import { REPORT_PRINT_CSS } from "./print";
 
 /**
@@ -77,8 +78,27 @@ function crumbs(vc: ViewerContext): string {
   return out.join('<span class="dw-sep">/</span>');
 }
 
+/** Direct files in listing name order; image/SVG viewers keep their own stage navigation. */
+function siblingLinks(vc: ViewerContext): string {
+  if (vc.mode !== "source" && (vc.file.kind === "image" || vc.file.kind === "svg")) return "";
+  const slash = vc.file.path.lastIndexOf("/");
+  const dir = vc.file.path.slice(0, slash + 1);
+  const names = Object.keys(vc.live.files)
+    // .dropway/* is stored but never served, so listings (and these links) do not name it.
+    .filter((path) => path !== ".dropway" && !path.startsWith(".dropway/"))
+    .filter((path) => path.startsWith(dir) && !path.slice(dir.length).includes("/"))
+    .map((path) => path.slice(dir.length))
+    .sort(compareNames);
+  const i = names.indexOf(vc.file.path.slice(dir.length));
+  if (i < 0 || names.length < 2) return "";
+  const link = (name: string | undefined, rel: string, label: string) => name === undefined ? "" :
+    `<a href="${escapeHtml(vc.siteBase + encodePath(dir + name))}" rel="${rel}" title="${escapeHtml(name)}" aria-label="${escapeHtml(`${label}: ${name}`)}">${label}</a>`;
+  return link(names[i - 1], "prev", "Previous") + link(names[i + 1], "next", "Next");
+}
+
 export function viewerBar(vc: ViewerContext, tabs: ViewerTab[], extra = ""): string {
   if (vc.embed) return "";
+  const siblings = siblingLinks(vc);
   const kind = KIND_LABELS[vc.file.kind] ?? "File";
   const type = vc.file.contentType.split(";")[0]!;
   return `<header class="dw-vbar" role="banner">
@@ -86,7 +106,7 @@ export function viewerBar(vc: ViewerContext, tabs: ViewerTab[], extra = ""): str
 <nav class="dw-vtabs" aria-label="View">${tabs
     .map((t) => `<a href="${escapeHtml(t.href)}"${t.current ? ' aria-current="page"' : ""} rel="nofollow">${escapeHtml(t.label)}</a>`)
     .join("")}</nav>
-<nav class="dw-vact" aria-label="File">${extra}${viewerPhone(vc)}<a href="${escapeHtml(vc.downloadUrl)}" rel="nofollow" download>Download</a><a href="${escapeHtml(vc.appViewerUrl)}" rel="nofollow" title="Browse every file of this site">Files</a></nav>
+<nav class="dw-vact" aria-label="File"${siblings ? ' style="flex-wrap:wrap;flex-shrink:1;max-width:100%"' : ""}>${siblings}${extra}${viewerPhone(vc)}<a href="${escapeHtml(vc.downloadUrl)}" rel="nofollow" download>Download</a><a href="${escapeHtml(vc.appViewerUrl)}" rel="nofollow" title="Browse every file of this site">Files</a></nav>
 </header>`;
 }
 
