@@ -152,6 +152,7 @@ input,button{font:inherit}
 #dw-zoom:checked~.dw-stage{align-items:flex-start;justify-content:flex-start}
 #dw-zoom:checked~.dw-stage img{max-width:none;max-height:none;cursor:zoom-out}
 #dw-zoom:checked~.dw-mediabar label{border-color:var(--accent);color:var(--accent)}
+#dw-zoom:focus-visible~.dw-mediabar label{outline:2px solid var(--accent);outline-offset:2px}
 .dw-mediabar{display:flex;gap:.6rem;align-items:center;justify-content:center;flex-wrap:wrap}
 .dw-fnav{display:flex;gap:.6rem;align-items:center;justify-content:center;flex-wrap:wrap}
 .dw-fnav .dw-fname{display:inline-block;max-width:14rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
@@ -219,6 +220,7 @@ input,button{font:inherit}
 #dw-zoom:checked~.dw-stage{align-items:flex-start;justify-content:flex-start}
 #dw-zoom:checked~.dw-stage img{max-width:none;max-height:none;cursor:zoom-out}
 #dw-zoom:checked~.dw-mediabar label{border-color:var(--accent);color:var(--accent)}
+#dw-zoom:focus-visible~.dw-mediabar label{outline:2px solid var(--accent);outline-offset:2px}
 .dw-mediabar{display:flex;gap:.6rem;align-items:center;justify-content:center;flex-wrap:wrap}
 .dw-fnav{display:flex;gap:.6rem;align-items:center;justify-content:center;flex-wrap:wrap}
 .dw-fnav .dw-fname{display:inline-block;max-width:14rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
