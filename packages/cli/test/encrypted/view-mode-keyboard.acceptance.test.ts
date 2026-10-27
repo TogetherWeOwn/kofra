@@ -88,6 +88,36 @@ async function activate(view: View, fixture: Fixture, path: string, name: "rende
   expect(view.calls.slice(count).every(call => call.startsWith("GET "))).toBe(true);
 }
 
+// Opens the viewer with the file-list request held, so a tab can take focus
+// before the manifest load rebuilds the toolbar.
+async function gatedVisit(fixture: Fixture, path: string, urlMode: string) {
+  const context = await fixture.browser.newContext({ viewport: { width: 1100, height: 900 } });
+  const calls: string[] = []; const errors: string[] = [];
+  await context.addInitScript(key => {
+    const w = globalThis as any;
+    if (w.top === w) w.sessionStorage.setItem("dropway.key", key);
+  }, fixture.ownerKey);
+  await context.route("**/*", async route => {
+    const url = new URL(route.request().url());
+    if (![fixture.origin, fixture.sites].includes(url.origin)) return route.abort("blockedbyclient");
+    calls.push(`${route.request().method()} ${url.href}`);
+    await route.continue();
+  });
+  let release!: () => void; let held!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const reached = new Promise<void>(resolve => { held = resolve; });
+  await context.route(url => url.origin === fixture.origin && url.pathname.endsWith(`/sites/${slug}/files`), async route => {
+    held(); await gate; await route.fallback();
+  });
+  const page = await context.newPage(); page.setDefaultTimeout(2500);
+  page.on("pageerror", error => errors.push(error.message));
+  const response = await page.goto(`${fixture.origin}${viewerPath(path)}${urlMode ? `?mode=${urlMode}` : ""}`, { waitUntil: "commit" });
+  expect(response?.status(), "real app-origin viewer shell").toBe(200);
+  await reached;
+  await group(page).getByRole("tab").first().waitFor();
+  return { context, page, calls, errors, shellCsp: response!.headers()["content-security-policy"] ?? "", release };
+}
+
 for (const separate of [false, true]) describe(`manual View mode tabs (${separate ? "separate sites origin" : "same-origin sandbox"})`, () => {
   let fixture: Fixture;
   beforeAll(async () => { fixture = await startFixture(separate); }, 120_000);
@@ -216,6 +246,40 @@ for (const separate of [false, true]) describe(`manual View mode tabs (${separat
         expect(await mode(view.page, "source").getAttribute("aria-selected")).toBe("false");
       }
       expect(await group(view.page).evaluate(el => el.contains(el.ownerDocument.activeElement)), "fallback on load must not grab focus").toBe(false);
+      expect(view.errors).toEqual([]);
+    } finally { await view.context.close(); }
+  });
+
+  it.each([
+    { path: "photo.png", urlMode: "", focus: "source", lands: "rendered", state: "view" },
+    { path: "photo.png", urlMode: "source", focus: "source", lands: "rendered", state: "view" },
+    { path: "bytes.bin", urlMode: "", focus: "source", lands: "rendered", state: "view" },
+    { path: "note.txt", urlMode: "source", focus: "source", lands: "source", state: "source" },
+    { path: "note.txt", urlMode: "raw", focus: "raw", lands: "raw", state: "raw" },
+    { path: "photo.png", urlMode: "raw", focus: "raw", lands: "raw", state: "raw" },
+  ] as const)("a $focus tab focused during a delayed file-list load keeps focus on $lands ($path?mode=$urlMode)", async ({ path, urlMode, focus, lands, state }) => {
+    const view = await gatedVisit(fixture, path, urlMode);
+    try {
+      // Before the file list arrives the kind is unknown, so Source is still offered.
+      await mode(view.page, focus).focus();
+      expect(await focused(mode(view.page, focus)), "focus starts inside the tablist").toBe(true);
+      const length = await view.page.evaluate(() => (globalThis as any).history.length);
+      view.release();
+      await view.page.locator(`a[data-path="${path}"]`).waitFor();
+      await view.page.waitForLoadState("networkidle"); await settle(view.page);
+      const landed = await view.page.evaluate(() => {
+        const el = (globalThis as any).document.activeElement;
+        return { tag: el?.tagName, id: el?.id, role: el?.getAttribute("role") };
+      });
+      expect(landed.tag, "the file-list rebuild must not drop focus onto body").toBe("BUTTON");
+      expect(landed.role).toBe("tab");
+      expect(await focused(mode(view.page, lands)), `focus lands on ${lands}`).toBe(true);
+      await selected(view.page, lands); await roving(view.page, lands); await wiring(view.page, lands);
+      if (lands !== focus) expect(await mode(view.page, focus).count(), "the held tab was removed").toBe(0);
+      await frame(view, fixture, path, lands);
+      const after = await snapshot(view);
+      expect(after.length, "the file-list load adds no history entry").toBe(length);
+      expect(JSON.parse(after.state)).toEqual({ p: path, mode: state });
       expect(view.errors).toEqual([]);
     } finally { await view.context.close(); }
   });
