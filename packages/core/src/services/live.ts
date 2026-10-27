@@ -50,6 +50,46 @@ function remember(slug: string, live: LiveSite | null) {
   memory.set(slug, { at: Date.now(), live });
 }
 
+/**
+ * Cache API pointer memo (R-14): a 10 s copy of the live manifest shared by every isolate in the
+ * data center, in front of KV. It is keyed by slug alone, so a publish, settings
+ * change or delete in this data center rewrites or drops it (the next read refills it from KV); other data centers see a change within
+ * the TTL (plus KV's own cacheTtl on a miss).
+ */
+const POINTER_TTL_SECONDS = 10;
+
+function pointerRequest(slug: string): Request {
+  // A fixed synthetic host, not the request's: the API host that publishes and the site host that
+  // serves differ in subdomain and second-Worker setups, and both must reach the same entry.
+  return new Request(`https://dropway.invalid/__dropway/ptr/${encodeURIComponent(slug)}`);
+}
+
+async function readPointer(dc: DropwayContext, slug: string): Promise<LiveSite | null> {
+  if (typeof caches === "undefined") return null;
+  try {
+    const hit = await caches.default.match(pointerRequest(slug));
+    return hit ? await hit.json<LiveSite>() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writePointer(dc: DropwayContext, live: LiveSite): Promise<void> {
+  if (typeof caches === "undefined") return;
+  try {
+    await caches.default.put(
+      pointerRequest(live.slug),
+      new Response(JSON.stringify(live), { headers: { "Content-Type": "application/json", "Cache-Control": `public, max-age=${POINTER_TTL_SECONDS}` } }),
+    );
+  } catch {
+    // the memo is an optimisation; KV stays the source
+  }
+}
+
+async function dropPointer(dc: DropwayContext, slug: string): Promise<void> {
+  if (typeof caches !== "undefined") await caches.default.delete(pointerRequest(slug)).catch(() => {});
+}
+
 /** For tests. */
 export function clearLiveMemoryCache() {
   memory.clear();
@@ -58,8 +98,15 @@ export function clearLiveMemoryCache() {
 export async function getLiveSite(dc: DropwayContext, slug: string): Promise<LiveSite | null> {
   const hit = memory.get(slug);
   if (hit && Date.now() - hit.at < MEMORY_TTL_MS) return hit.live;
+  const memo = await readPointer(dc, slug);
+  if (memo && memo.v === LIVE_VERSION && memo.files && typeof memo.files === "object") {
+    memo.files = ownFiles(memo.files);
+    remember(slug, memo);
+    return memo;
+  }
   const cached = await dc.env.CACHE.get<LiveSite>(liveKey(slug), { type: "json", cacheTtl: dc.config.liveCacheTtlSeconds }).catch(() => null);
   if (cached && cached.v === LIVE_VERSION && cached.files && typeof cached.files === "object") {
+    dc.waitUntil(writePointer(dc, cached));
     cached.files = ownFiles(cached.files);
     remember(slug, cached);
     return cached;
@@ -130,6 +177,7 @@ export async function refreshLive(dc: DropwayContext, siteId: string): Promise<L
   if (live) {
     remember(live.slug, live);
     await putLive(dc, live);
+    await dropPointer(dc, live.slug);
   }
   return live;
 }
@@ -137,4 +185,5 @@ export async function refreshLive(dc: DropwayContext, siteId: string): Promise<L
 export async function dropLive(dc: DropwayContext, slug: string): Promise<void> {
   memory.delete(slug);
   await dc.env.CACHE.delete(liveKey(slug));
+  await dropPointer(dc, slug);
 }
