@@ -7,15 +7,22 @@ import type { Viewer, ViewerContext } from "./index";
 
 /**
  * Code and text: highlighted (highlight.js, server-side), line numbers that are
- * links (#L12; #L10-L20 with JavaScript), a wrap toggle that works without
- * JavaScript, and a Copy button (a hashed inline script; hidden when scripts are off).
+ * links (#L12), and — with JavaScript — line-range selection that only rewrites the
+ * fragment (#L10-L20): shift-click another line number from an established line, or
+ * use the toolbar's First/Last line inputs. A wrap toggle that works without
+ * JavaScript, and a Copy button (a hashed inline script; hidden when scripts are
+ * off, like the range controls). The address stays a live address: the fragment
+ * names lines of whatever version is served, nothing more.
  * Also the "Source" view of every text file (?view=source), HTML included.
  */
 
 /** At most this much text is shown; the rest is one click away (Raw, Download). */
 export const SHOW_MAX_BYTES = 1024 * 1024;
 
-const CODE_VERSION = 1;
+// 3 rotates the merged line-range selection and report print treatment:
+// both changed codePage output after branching from 1, so neither parent's 2
+// identifies the merged bytes.
+const CODE_VERSION = 3;
 
 /** The highlighting language for a file of this kind, or null for plain text. */
 export function codeLanguage(path: string, kind: FileKind): string | null {
@@ -43,8 +50,25 @@ export const CODE_CSS = `
 #dw-wrap:focus-visible~.dw-codehead label{outline:2px solid var(--accent);outline-offset:2px}
 `;
 
-/** Copy + line-range highlighting. Static text, allowed by its CSP hash. */
-export const CODE_SCRIPT = `(function(){var d=document,b=d.getElementById("dw-copy");if(b&&navigator.clipboard){b.hidden=false;b.addEventListener("click",function(){var t=Array.prototype.map.call(d.querySelectorAll(".dw-src .c"),function(e){return e.textContent}).join("\\n");navigator.clipboard.writeText(t).then(function(){b.textContent="Copied";setTimeout(function(){b.textContent="Copy"},1500)},function(){b.textContent="Copy failed"})})}function hl(){var m=/^#L(\\d+)(?:-L?(\\d+))?$/.exec(location.hash);Array.prototype.forEach.call(d.querySelectorAll(".dw-hl"),function(e){e.classList.remove("dw-hl")});if(!m||!m[2])return;var a=+m[1],z=+m[2];if(z<a){var t=a;a=z;z=t}for(var i=a;i<=z&&i<a+5000;i++){var e=d.getElementById("L"+i);if(e)e.classList.add("dw-hl")}var f=d.getElementById("L"+a);if(f)f.scrollIntoView({block:"center"})}addEventListener("hashchange",hl);hl()})();`;
+/** Range-selection toolbar styles. Kept out of CODE_CSS so pages that only reuse the line styles (JSON) are byte-unchanged. */
+const RANGE_CSS = `
+.dw-codehead{flex-wrap:wrap}
+.dw-range{display:inline-flex;gap:.35rem;align-items:center;flex-wrap:wrap}
+.dw-range input{width:4.5em;padding:.28rem .4rem;border:1px solid var(--line);border-radius:7px;background:var(--card);color:var(--fg);font:inherit}
+.dw-range input[aria-invalid="true"]{border-color:var(--accent)}
+.dw-range input:focus-visible,.dw-range button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.dw-rangehint,.dw-rangemsg{flex:1 1 100%;text-align:right}
+`;
+
+/**
+ * Copy + line-range selection and highlighting. Static text, allowed by its CSP hash.
+ * Selections only assign `location.hash` (at most one history entry, no network or storage):
+ * the shift-click anchor is the first line of the current valid `#L…` selection, so
+ * hand-typed hashes and Back/Forward behave exactly like clicked selections, and a
+ * plain click keeps the anchor's own default `#Ln` navigation. Highlighting a range
+ * stops after 5000 lines; the keyboard route refuses a wider range and says so.
+ */
+export const CODE_SCRIPT = `(function(){var d=document,b=d.getElementById("dw-copy");if(b&&navigator.clipboard){b.hidden=false;b.addEventListener("click",function(){var t=Array.prototype.map.call(d.querySelectorAll(".dw-src .c"),function(e){return e.textContent}).join("\\n");navigator.clipboard.writeText(t).then(function(){b.textContent="Copied";setTimeout(function(){b.textContent="Copy"},1500)},function(){b.textContent="Copy failed"})})}function parse(h){var m=/^#L(\\d+)(?:-L?(\\d+))?$/.exec(h);if(!m)return null;var a=+m[1],z=m[2]?+m[2]:a;if(z<a){var t=a;a=z;z=t}return[a,z,m[2]?1:0]}function hl(){Array.prototype.forEach.call(d.querySelectorAll(".dw-hl"),function(e){e.classList.remove("dw-hl")});var p=parse(location.hash);if(!p||!p[2])return;var a=p[0],z=p[1],box=d.querySelector(".dw-lines"),rs=box?box.children:[],f=null;for(var i=a;i<=z&&i<a+5000;i++){var e=rs[i-1];if(e&&e.id==="L"+i){e.classList.add("dw-hl");if(i===a)f=e}}if(f)f.scrollIntoView({block:"center"})}function select(a,z){if(z<a){var t=a;a=z;z=t}location.hash=a===z?"#L"+a:"#L"+a+"-L"+z;hl()}function anchor(){var p=parse(location.hash);return p&&d.getElementById("L"+p[0])?p[0]:0}d.addEventListener("click",function(ev){if(!ev.shiftKey||ev.ctrlKey||ev.metaKey||ev.altKey||ev.button)return;var t=ev.target;while(t&&t.tagName!=="A")t=t.parentNode;if(!t)return;var m=/^#L(\\d+)$/.exec(t.getAttribute("href")||"");if(!m)return;var a=anchor(),n=+m[1];ev.preventDefault();if(typeof getSelection==="function"){var s=getSelection();if(s)s.removeAllRanges()}select(a||n,n)});var r=d.getElementById("dw-range"),hint=d.getElementById("dw-range-hint"),first=d.getElementById("dw-line-first"),last=d.getElementById("dw-line-last"),go=d.getElementById("dw-line-select"),msg=d.getElementById("dw-line-msg");if(r)r.hidden=false;if(hint)hint.hidden=false;function read(inp){var v=(inp.value||"").replace(/^\\s+|\\s+$/g,"");return /^\\d+$/.test(v)?+v:0}function fail(text,inp){if(first)first.removeAttribute("aria-invalid");if(last)last.removeAttribute("aria-invalid");if(msg)msg.textContent=text;if(inp){inp.setAttribute("aria-invalid","true");inp.focus()}}function choose(){var max=+(last.getAttribute("max")||0),a=read(first),z=read(last);if(!a||a>max){fail("Enter a first line number between 1 and "+max+". Only shown lines can be selected.",first);return}if(!z||z>max){fail("Enter a last line number between 1 and "+max+". Only shown lines can be selected.",last);return}var lo=a<z?a:z,hi=a<z?z:a;if(hi-lo+1>5000){fail("Select at most 5000 lines at a time: lines "+lo+" to "+hi+" is over the limit.",last);return}if(first)first.removeAttribute("aria-invalid");if(last)last.removeAttribute("aria-invalid");if(msg)msg.textContent="";select(lo,hi)}if(go&&first&&last){go.addEventListener("click",choose);var enter=function(ev){if(ev.key==="Enter"){ev.preventDefault();choose()}};first.addEventListener("keydown",enter);last.addEventListener("keydown",enter)}addEventListener("hashchange",hl);hl()})();`;
 
 /** Render text as numbered, optionally highlighted lines (cached by content). */
 export async function renderCodeLines(vc: ViewerContext, text: string, lang: string | null, variant: string): Promise<{ html: string; lines: number; cache: string }> {
@@ -75,12 +99,13 @@ export async function codePage(vc: ViewerContext, opts: { text: string; truncate
   const plainNote = opts.text.length > HIGHLIGHT_MAX_BYTES && name ? `<p class="dw-note">This file is too large to highlight; it is shown as plain text.</p>` : "";
   const body = `${opts.note ?? ""}${opts.truncated ? truncatedNote(vc, opts.shown) : ""}${plainNote}<main class="dw-codewrap">
 <input type="checkbox" id="dw-wrap" class="dw-toggle">
-<div class="dw-codehead"><span class="dw-lang">${escapeHtml(name ?? "plain text")} · ${lines.toLocaleString("en-US")} line${lines === 1 ? "" : "s"}</span><label for="dw-wrap" class="dw-btn">Wrap</label><button type="button" id="dw-copy" class="dw-btn" hidden>Copy</button></div>
+<div class="dw-codehead"><span class="dw-lang">${escapeHtml(name ?? "plain text")} · ${lines.toLocaleString("en-US")} line${lines === 1 ? "" : "s"}</span><span class="dw-range" id="dw-range" hidden><label for="dw-line-first">First line</label><input id="dw-line-first" type="number" min="1" max="${lines}" inputmode="numeric" aria-describedby="dw-line-msg"><label for="dw-line-last">Last line</label><input id="dw-line-last" type="number" min="1" max="${lines}" inputmode="numeric" aria-describedby="dw-line-msg"><button type="button" id="dw-line-select" class="dw-btn">Select lines</button></span><label for="dw-wrap" class="dw-btn">Wrap</label><button type="button" id="dw-copy" class="dw-btn" hidden>Copy</button><span class="dw-rangehint" id="dw-range-hint" hidden>Shift-click another line number to select a range of lines. The address in your browser updates, so you can copy it to link to those lines.</span><span class="dw-rangemsg" id="dw-line-msg" role="status"></span></div>
 <div class="dw-src">${html}</div></main>`;
   return viewerPage(vc, {
     tabs: opts.tabs,
     body,
-    css: CODE_CSS + HIGHLIGHT_CSS,
+    print: true,
+    css: CODE_CSS + RANGE_CSS + HIGHLIGHT_CSS,
     script: CODE_SCRIPT,
     csp: viewerCsp({ scriptHashes: [await scriptHash(CODE_SCRIPT)] }),
     headers: { "X-Kofra-Render-Cache": cache },

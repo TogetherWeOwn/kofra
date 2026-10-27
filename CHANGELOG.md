@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+### Sites
+
+- Every site serves an embeddable live-version badge at `<site URL>badge.svg` (path and
+  subdomain mode): a flat SVG with the live version and a coarse age for public sites, and one
+  identical generic image for passworded, expired, deleted, transfer, missing and renamed-away
+  sites. The dashboard site page shows the Markdown snippet for public sites. It reads the cached
+  live manifest (now version 4, which also carries the live version number and time; cached v3
+  entries rebuild from D1 on first read) and is not recorded as a site request. `badge.svg` at a
+  site root is reserved. See `docs/SITE_BADGE.md`.
+
+### Dashboard
+
+- The selected-version file table now announces matching-vs-loaded file counts
+  and the matching byte total as you filter by path. A version with files but
+  no matches shows a distinct no-match message with a Clear filter action
+  (instead of a blank table), while a genuinely empty manifest stays labelled
+  as empty. Clearing resets only the query, keeps the selected version and
+  sort, and returns focus to the filter.
+
+### Path-mode hardening and publish warnings (R-12)
+
+- Publish and finalize return warnings with `fix` text (and `path`/`line` where known),
+  computed from the stored bytes over a bounded scan: `root_absolute_paths` (path mode),
+  `spa_without_base`, `uses_browser_storage` (when the site will be sandboxed),
+  `wasm_without_coi` (renamed from `wasm_without_cross_origin_isolation`),
+  `possible_secret` (file and line; matched values are never included) and
+  `invalid_config` (a `.dropway/*.json` file that is not valid JSON). `no_index` now
+  carries fix text too. Replayed finalizes and unchanged republishes (including
+  file-source REST/MCP publishes and updates) return the same warnings instead of an
+  empty list. Advisory database-read failures return no warnings without failing a
+  successful publication; bounded blob reads run concurrently in deterministic order.
+- A page navigation with a same-origin `Referer` inside an SPA site to a path the site
+  lacks now 307-redirects to that path inside the site (SRV-02), where the SPA fallback
+  serves it; app routes, paths with a file extension and sub-resource requests are
+  untouched. On a separate sites origin, existing destination sites (even empty or
+  expired), renamed-away slugs (their 308 redirect) and version addresses keep their
+  own routing instead of being captured by the referring SPA.
+- Publishing a path under `__dropway/` is refused with the new `reserved_path` error on
+  every publish path (the manifest, one-shot and file-source flows share the check).
+- `.dropway` and `.dropway/*` files are stored with the version (owner read-back works)
+  but are never served from the sites origin, including through the single-file root
+  shortcut, and no longer appear in folder listings. A directory holding only private
+  entries answers 404 instead of an empty listing or a redirect.
+
 ### Versions naming
 
 - Version creation and finalize move under `/versions`
