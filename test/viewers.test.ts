@@ -251,8 +251,8 @@ describe("viewer pages", () => {
     expect(again.headers.get("x-kofra-render-cache")).toBe("memory");
     const etag = again.headers.get("etag")!;
     // Nonembedded pages include the live manifest identity as well as the file hash.
-    expect(etag).toMatch(/^W\/"code@2-[a-f0-9]{64}-[A-Za-z0-9_-]+"$/);
-    const hash = etag.match(/^W\/"code@2-([a-f0-9]{64})-/)![1];
+    expect(etag).toMatch(/^W\/"code@3-[a-f0-9]{64}-[A-Za-z0-9_-]+"$/);
+    const hash = etag.match(/^W\/"code@3-([a-f0-9]{64})-/)![1];
     expect((await get("src/app.ts", { ...NAV, "If-None-Match": `W/"code@1-${hash}"` })).status).toBe(200);
     expect((await get("src/app.ts", { ...NAV, "If-None-Match": etag })).status).toBe(304);
     // Sub-resource requests still get the bytes.

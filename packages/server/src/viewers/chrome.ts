@@ -1,6 +1,7 @@
 import { encodePath, KIND_LABELS } from "@dropway/core";
 import { escapeHtml, formatBytes, htmlPage } from "../html";
 import type { ViewerContext } from "./index";
+import { REPORT_PRINT_CSS } from "./print";
 
 /**
  * The shared frame of every viewer page: one slim bar (kind, path, size, type;
@@ -81,6 +82,8 @@ function siblingLinks(vc: ViewerContext): string {
   const slash = vc.file.path.lastIndexOf("/");
   const dir = vc.file.path.slice(0, slash + 1);
   const names = Object.keys(vc.live.files)
+    // .dropway/* is stored but never served, so listings (and these links) do not name it.
+    .filter((path) => path !== ".dropway" && !path.startsWith(".dropway/"))
     .filter((path) => path.startsWith(dir) && !path.slice(dir.length).includes("/"))
     .map((path) => path.slice(dir.length))
     .sort((a, b) => a.localeCompare(b));
@@ -134,13 +137,14 @@ export const VIEWER_CSS = `
 /** A complete viewer page response. `body` is trusted HTML (escape user content before passing it). */
 export function viewerPage(
   vc: ViewerContext,
-  opts: { title?: string; body: string; css?: string; tabs: ViewerTab[]; barExtra?: string; csp?: string; script?: string; headers?: Record<string, string> },
+  opts: { title?: string; body: string; css?: string; print?: boolean; tabs: ViewerTab[]; barExtra?: string; csp?: string; script?: string; headers?: Record<string, string> },
 ): Response {
   const page = htmlPage({
     title: opts.title ?? `${vc.file.path.split("/").pop()} · ${vc.live.slug}`,
-    css: VIEWER_CSS + (opts.css ?? ""),
+    css: VIEWER_CSS + (opts.css ?? "") + (opts.print ? REPORT_PRINT_CSS : ""),
     head: '<meta name="robots" content="noindex">',
-    body: viewerBar(vc, opts.tabs, opts.barExtra) + opts.body + (opts.script ? `<script>${opts.script}</script>` : ""),
+    // File path only: never copy request/capability URLs into printed context, even when embedded.
+    body: viewerBar(vc, opts.tabs, opts.barExtra) + (opts.print ? `<p class="dw-print-title">${escapeHtml(vc.file.path)}</p>` : "") + opts.body + (opts.script ? `<script>${opts.script}</script>` : ""),
   });
   const headers: Record<string, string> = { "Content-Type": "text/html; charset=utf-8", ...opts.headers };
   if (opts.csp) headers["Content-Security-Policy"] = opts.csp;

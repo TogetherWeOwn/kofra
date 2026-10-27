@@ -103,6 +103,7 @@ export const jsonViewer: Viewer = {
       const { html, cache } = await renderCodeLines(vc, text, "json", "full");
       return viewerPage(vc, {
         tabs,
+        print: true,
         css: CODE_CSS + HIGHLIGHT_CSS + JSON_CSS,
         body: `<p class="dw-jerr" role="alert">This file is not valid JSON: ${escapeHtml(error)}</p><main class="dw-codewrap"><div class="dw-src">${html}</div></main>`,
         headers: { "X-Kofra-Render-Cache": cache },
@@ -117,6 +118,6 @@ export const jsonViewer: Viewer = {
 <div class="dw-jpane dw-jtree">${tree.html}</div>
 ${pretty ? `<div class="dw-jpane dw-jpretty"><div class="dw-src">${pretty}</div></div>` : ""}
 </main>`;
-    return viewerPage(vc, { tabs, css: CODE_CSS + HIGHLIGHT_CSS + JSON_CSS, body, headers: { "X-Kofra-Render-Cache": tree.cache } });
+    return viewerPage(vc, { tabs, print: true, css: CODE_CSS + HIGHLIGHT_CSS + JSON_CSS, body, headers: { "X-Kofra-Render-Cache": tree.cache } });
   },
 };

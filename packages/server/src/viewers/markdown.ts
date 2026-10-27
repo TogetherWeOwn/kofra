@@ -112,6 +112,7 @@ export const markdownViewer: Viewer = {
     if (m) title = m[1]!.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
     return viewerPage(vc, {
       title,
+      print: true,
       tabs: standardTabs(vc, { source: true }),
       css: MD_CSS + HIGHLIGHT_CSS,
       body: `<article class="dw-md">${m ? r.html.slice(m[0].length) : r.html}</article>`,
