@@ -42,6 +42,8 @@ export interface ServeMode {
   sandbox: boolean;
   /** Path mode: prefix root-relative URLs in HTML and CSS (null = serve bytes untouched). */
   rewrite: PathRewrite | null;
+  /** Keep runtime URLs in path scope when a preview suppresses the Referer. */
+  pathShim?: boolean;
 }
 
 export const INDEX_NAMES = ["index.html", "index.htm", "index.md", "README.md", "readme.md"];
@@ -307,7 +309,6 @@ export async function serveSite(
   mode: ServeMode,
   viewers: readonly Viewer[] = VIEWERS,
 ): Promise<Response> {
-  const started = Date.now();
   const url = new URL(req.url);
   const method = req.method.toUpperCase();
   // Transfer gates never depend on an eventually consistent live manifest.
@@ -351,6 +352,23 @@ export async function serveSite(
     }
     return systemResponse(dw, req, mode, null, 404, "404", "Nothing is published here", "There is no site at this address. It may have been deleted. See {app}.");
   }
+  return serveSiteContent(req, dw, live, pathname, mode, viewers);
+}
+
+/** Serve an already resolved manifest. Preview callers authorize and load their version in D1 first. */
+export async function serveSiteContent(
+  req: Request,
+  dw: DropwayContext,
+  live: LiveSite,
+  pathname: string,
+  mode: ServeMode,
+  viewers: readonly Viewer[] = VIEWERS,
+): Promise<Response> {
+  const started = Date.now();
+  const url = new URL(req.url);
+  const method = req.method.toUpperCase();
+  const filePath = requestPathToFilePath(pathname);
+  if (filePath === null) return systemResponse(dw, req, mode, live, 400, "400", "Bad request", "That address could not be decoded.");
   // Anonymous sites are untrusted: sandbox them even where other sites are not.
   if (!mode.sandbox && live.tenantId === null && dw.config.sitesSandboxAnonymous) mode = { ...mode, sandbox: true };
   if (live.expiresAt && live.expiresAt < Date.now()) {
@@ -488,8 +506,8 @@ async function serveFile(
   // Path mode: HTML and CSS get root-relative URLs prefixed with the site base.
   const rewriteKind = mode.rewrite && !raw && !download && !precompressed(path) ? (isHtml(contentType) ? "html" : baseType(contentType) === "text/css" && size <= MAX_CSS_REWRITE_BYTES ? "css" : null) : null;
   if (rewriteKind || report) {
-    // Sandboxed pages send no Referer, so their HTML also carries the run-time shim (./path-shim).
-    const shim = rewriteKind === "html" && mode.sandbox;
+    // Sandboxed pages and private previews send no Referer, so they need runtime URL repair.
+    const shim = rewriteKind === "html" && (mode.sandbox || mode.pathShim === true);
     const etag = `W/"${rewriteKind ? "pm-" : ""}${sha256}${shim ? `-js${PATH_SHIM_VERSION}` : ""}${reportVariant}"`;
     const h = new Headers({ "Content-Type": contentType, ETag: etag, "Cache-Control": cacheControlFor(path, live) });
     if (rewriteKind) h.set("X-Kofra-Rewritten", "path-prefix");

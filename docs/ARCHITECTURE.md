@@ -116,6 +116,42 @@ Path mode is interim. Root-relative URLs (`/assets/app.js`) would escape the
    import specifiers, CSS set from JS, `location.href = "/x"` and
    `history.pushState("/x")`. Use relative URLs there, or subdomain mode.
 
+### Version previews
+
+`<slug>--v<N>` uses the same path/subdomain topology as the live site, but resolves
+its ready version and current site settings directly from D1 (`services/previews.ts`).
+It never reads or repairs the live KV pointer, so newly published bytes are available
+even during live-cache propagation. Pending versions and transfer sites are not previewable.
+
+Access requires a credential that can read the site or a signed `dw_preview` capability
+bound to the site id, version id and an absolute 24-hour expiry. Publish and finalize
+results return that signed `versionUrl`. Redeeming it sets a Secure, HttpOnly, host-only
+cookie scoped to the preview root and redirects to the same address without the token;
+the cookie cannot extend the signed expiry. Share the returned link carefully: it is a
+bearer credential. Unchanged publishes keep the same version address, but issue a fresh
+expiring capability. Idempotency replay retains the original result and its original expiry.
+The `version_previews` capability is built in; a policy refusal omits `versionUrl` without
+blocking ordinary publication, and live refusals deny existing links and owner previews.
+Signed links require an HTTPS preview origin; HTTP is allowed only for loopback development
+(`localhost`, `127.0.0.0/8` and `[::1]`). Other HTTP origins omit the link without failing publication.
+A pending result's link becomes readable only after finalization.
+
+`server/previews.ts` authorizes before reusing the normal file/viewer/password machinery.
+Preview responses are private/no-store, `noindex` and `no-referrer`, including conditional,
+range, HEAD and error responses. Path rewriting retains the version address for assets.
+Path-mode preview HTML also gets the existing runtime URL shim, even without a sandbox:
+root-relative JavaScript requests cannot rely on Referer recovery under `no-referrer`.
+The shim carries only the versioned path prefix, never the signed capability; its normal
+path-mode limitations still apply. Live unsandboxed pages keep their Referer fallback.
+Site passwords still apply; a preview capability is not a password unlock.
+
+As with password sites, path-scoped cookies are routing scope, **not origin isolation**.
+Path-mode sites share an origin; hostile content there can cause ambient-cookie requests
+(including classic-script inclusions from opaque sandbox origins). Use subdomain mode
+for sensitive previews or mutually untrusted sites. Its host-only `__Host-` cookie and
+same-site/cross-site subresource refusal isolate sibling sites. Removing CORS permission
+in path mode does not make different paths different origins.
+
 ### Viewing files
 
 `serveFile` asks `findViewer(file, live, viewers, mode)` (`packages/server/src/viewers`)
