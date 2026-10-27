@@ -8,9 +8,11 @@ provenance recorded at the end. Practice a restore drill on scratch state
 before you need one for real.
 
 Conventions: `dropway` is the D1 `database_name`, `dropway-files` the R2
-`bucket_name`, `CACHE` the KV binding. Every `wrangler` command below also
-has a `--local` variant that runs against `wrangler dev` state instead of
-your account; the drill in [Provenance](#6-provenance) used them.
+`bucket_name`, `CACHE` the KV binding. The `d1 export`/`execute`,
+`r2 object` and `kv key`/`kv bulk` commands also take `--local` to run
+against `wrangler dev` state instead of your account, and the drill in
+[Provenance](#6-provenance) used them. `d1 time-travel`, `wrangler deploy`
+and `wrangler secret` have no local variant: they always act on your account.
 
 ## 1. What lives where
 
@@ -18,7 +20,7 @@ your account; the drill in [Provenance](#6-provenance) used them.
 |---|---|---|---|
 | `DB` (D1) | database `dropway` | Everything metadata: tenants, members, API-key hashes and scopes, sites, versions, `version_files` (the manifest: path → SHA-256, size, content type), `blobs` + `blob_scopes`, `usage_counters`, idempotency keys, slug tombstones and redirects, transfers | **Yes** |
 | `FILES` (R2) | bucket `dropway-files` | `blobs/<sha256>`: immutable, content-addressed file bytes. R2 verifies the hash on write. Names are meaningless without the D1 manifest | No (bytes only) |
-| `CACHE` (KV) | namespace (auto-provisioned) | `live:<slug>` only: the hot "what is live" serving cache | No: any miss is rebuilt from D1 and rewritten (`live.ts`) |
+| `CACHE` (KV) | namespace (auto-provisioned) | `live:<slug>` only: the hot "what is live" serving cache | No: any miss is rebuilt from D1 and rewritten (`live.ts`). A hit is served without reading D1, so entries go stale when D1 changes outside the app (a restore) |
 | `ANALYTICS` (AE) | dataset `dropway_hits` | One data point per served request: site id; slug, path, status, country, referrer, page-or-asset, version, tenant; count, latency ms, bytes | No, and nothing in D1 derives from it |
 | edge Cache API | — | Blob bytes and viewer fragments on custom domains; a no-op on `*.workers.dev` | No: ephemeral, rebuilds |
 
@@ -107,15 +109,22 @@ do not treat a zero count right after a copy as data loss.
 
 ### 2.3 KV: no backup (rebuild path)
 
-`live:<slug>` entries are a pure cache. Deleting one changes nothing a
-visitor can see: the next read rebuilds it from D1 and rewrites KV
-(executed: delete → site still `200` → key repopulated). There is no manual
-rebuild step and none is needed. After a restore, warm the cache by reading
-each site homepage once, then confirm:
+`live:<slug>` entries are a pure cache, so there is nothing to back up and
+nothing to lose. Deleting one changes nothing a visitor can see: the next
+read rebuilds it from D1 and rewrites KV (executed: delete → site still
+`200` → key repopulated). Inspect the cache with:
 
 ```sh
-npx wrangler kv key list --binding CACHE --remote
+npx wrangler kv key list --binding CACHE --remote --prefix live:
 ```
+
+The cache cannot be lost, but it can be **stale**. A hit is served as-is,
+without reading D1, and entries for ordinary sites never expire
+(`packages/core/src/services/live.ts`: only anonymous sites get a TTL). The
+app rewrites or deletes an entry on every change it makes itself (publish,
+restore a version, settings, claim, delete); it cannot see a D1 restore. So
+every D1 restore into a database this Worker already served from must be
+followed by the KV invalidation in [restore step 2](#3-restore-in-order).
 
 ### 2.4 Analytics Engine: no backup path (loss window)
 
@@ -144,15 +153,67 @@ about yourself; that is outside this runbook.
    # previous bookmark, which undoes this restore
    ```
 
-   Past the window, or on a new account: point `wrangler.jsonc` at a fresh
-   database and import the export (no migrations needed; the file carries them):
+   Past the window: point the `DB` entry of `wrangler.jsonc` at a fresh, empty
+   database and import the export (no migrations needed; the file carries
+   them). Import into an empty database only: one that `npm run deploy`
+   already migrated fails on the first `CREATE TABLE`.
 
    ```sh
-   npx wrangler d1 execute dropway --remote --file=./dropway-2026-10-27.sql
-   npx wrangler d1 execute dropway --remote --command "SELECT count(*) AS sites FROM sites;"
+   npx wrangler d1 create dropway-restored
+   # set the DB entry's database_name to dropway-restored and database_id to the printed id
+   npx wrangler d1 execute DB --remote --file=./dropway-2026-10-27.sql
+   npx wrangler d1 execute DB --remote --command "SELECT count(*) AS sites FROM sites;"
    ```
 
-2. **R2.** Copy the bytes back, then verify against the restored manifest:
+   On a **new account** nothing exists yet. Do not run `npm run deploy` before
+   the import (it would create and migrate an empty `dropway`). Instead, in a
+   clone of the repo:
+
+   1. `npx wrangler login` with the new account. If your copy of
+      `wrangler.jsonc` carries the old account's resource IDs (the `DB`
+      `database_id`, the `CACHE` `id`), remove them.
+   2. `npx wrangler d1 create dropway`, set the printed `database_id` on the
+      `DB` entry, then run the two `d1 execute DB` commands above.
+   3. `npx wrangler r2 bucket create dropway-files`, then copy the bytes back
+      as in step 3.
+   4. Set both secrets again; they are not in any backup:
+
+      ```sh
+      npx wrangler secret put ADMIN_BOOTSTRAP_KEY
+      npx wrangler secret put SIGNING_SECRET   # only if the old instance set one
+      ```
+
+      API keys survive (D1 stores plain SHA-256 hashes, no secret involved).
+      Reuse the old `SIGNING_SECRET` value if you kept it; a new one only
+      invalidates short-lived grants: password-site cookies (visitors enter
+      the password again), upload capabilities and delivery unlocks, and the
+      hashed-IP rate-limit buckets restart.
+   5. Redeploy (step 5). Its first deploy auto-provisions a new, empty KV
+      namespace, so step 2 has nothing to delete there.
+
+2. **KV: invalidate every live entry.** Required after any restore into a
+   database the Worker had already served from (in-place Time Travel, or an
+   import while the same KV namespace stays bound). Until you do this, every
+   site keeps serving the version, files, password and settings it had before
+   the restore, a site that exists only after the restore point keeps
+   serving, and a status-code-only check returns `200` on the wrong bytes.
+   Delete all `live:` keys in one call:
+
+   ```sh
+   npx wrangler kv key list --binding CACHE --remote --prefix live: > live-keys.json
+   npx wrangler kv bulk delete live-keys.json --binding CACHE --remote --force
+   npx wrangler kv key list --binding CACHE --remote --prefix live:   # -> []
+   ```
+
+   The list output is the JSON array `kv bulk delete` reads; Wrangler pages
+   through the list and deletes in batches of 1,000, so one file covers every
+   site. Kofra reads KV with a 30-second edge cache (`cacheTtl`), so a data
+   center may serve the old entry for up to 30 seconds after the delete:
+   wait a minute before step 6. Each site's next read then rebuilds its entry
+   from the restored D1. Blob bytes and viewer fragments in the edge Cache
+   API are keyed by SHA-256, so they cannot go stale and need nothing.
+
+3. **R2.** Copy the bytes back, then verify against the restored manifest:
 
    ```sh
    rclone copy ./bk-r2-2026-10-27/ r2:dropway-files
@@ -163,23 +224,36 @@ about yourself; that is outside this runbook.
    Extra objects are harmless; missing ones make file reads fail with `502`
    "File unavailable" until copied (observed in the drill: D1-only restore
    served `502`s, full restore served `200`s).
-3. **KV.** Nothing to restore. Read each site once; `kv key list` shows the
-   `live:<slug>` keys repopulating.
-4. **Redeploy.** `npm run deploy` re-applies migrations and redeploys the
+4. **KV check.** Nothing to restore. Read each site once;
+   `kv key list --prefix live:` shows the `live:<slug>` keys repopulating
+   from the restored D1.
+5. **Redeploy.** `npm run deploy` re-applies migrations and redeploys the
    Worker; it is safe to re-run for upgrades. With a second sites Worker
    ([Self-hosting, option B](SELF_HOST.md#b-a-second-deployment-for-sites)),
    redeploy it too: `npx wrangler deploy --name <worker>-sites`.
-5. **Verify.** All three, in this order:
+6. **Verify.** All three, in this order. `<site-url>` is the site's URL for
+   your serving mode ([Where sites are served](SELF_HOST.md#where-sites-are-served)):
+   `https://<worker>/s/<site>/` in path mode, `https://<worker>-sites.<you>.workers.dev/<site>/`
+   with a second sites Worker, `https://<site>.<your-sites-domain>/` in subdomain mode.
+   Pick a site without a password and a file whose content changed between
+   the restore point and now, so a stale read cannot pass. `<path>` is the
+   path as stored in `version_files`, without a leading slash (`assets/app.js`).
 
    ```sh
    npx kofra whoami --api https://<worker>          # instance reachable, key accepted
-   curl -s https://<worker>/s/<site>/ -o /dev/null -w '%{http_code}\n'  # 200 + bytes
-   npx wrangler d1 execute dropway --remote --command "SELECT key,value FROM usage_counters;"
+   curl -sL '<site-url><path>?raw=1' -o ./verify.bin -w '%{http_code}\n'   # 200
+   sha256sum ./verify.bin
+   npx wrangler d1 execute DB --remote --command \
+     "SELECT f.sha256 FROM version_files f JOIN sites s ON f.version_id = s.current_version_id WHERE s.slug = '<site>' AND f.path = '<path>';"
+   npx wrangler d1 execute DB --remote --command "SELECT key,value FROM usage_counters;"
    ```
 
-   `whoami` must show the owner and full scopes; the site read must return
-   real bytes, not the `502` page; counters must match the restored data
-   (the midnight cron recomputes them anyway).
+   `whoami` must show the owner and full scopes. The site read must return
+   `200`, and `sha256sum` must equal the `sha256` the restored D1 holds for
+   that path (a mismatch means stale KV: redo step 2). `?raw=1` returns the
+   stored bytes for every file type, with no viewer page, link rewriting or
+   precompressed variant. Counters must match the restored data (the
+   midnight cron recomputes them anyway).
 
 ## 4. NOT recoverable
 
@@ -199,8 +273,10 @@ about yourself; that is outside this runbook.
   A version whose blobs are missing reads `502` until R2 catches up.
 
 Deliberately absent: KV-only state. KV holds no unique data — `live:<slug>`
-is rebuilt from D1 on every miss — so there is nothing to lose. The edge
-Cache API is the same.
+is rebuilt from D1 on every miss — so there is nothing to lose. It can hold
+**stale** data after a restore, which restore step 2 clears; that is a step to
+run, not a loss. The edge Cache API holds only content-addressed bytes and
+fragments: nothing to lose and nothing to invalidate.
 
 ## 5. Cadence and retention math
 
@@ -235,6 +311,7 @@ shown truncated):
 | `r2 object put/get/delete`, `bucket create/info/delete --remote` | disposable remote bucket `dw-runbook-tmp-*` | byte-identical round-trip; bucket removed |
 | `r2 object get/put --local` | disposable `wrangler dev` | blob backup + restore; D1-only state served `502`, full state `200` |
 | `kv key delete/list` + site read | disposable `wrangler dev` | delete → `[]`; site read `200`; key repopulated |
+| `kv key list --prefix live: > file` + `kv bulk delete file --force` (wrangler 4.153.0) | disposable local KV (`--local --persist-to`, keys `live:a`, `live:b`, `other`, plus `live:anon` with TTL and an `expiration` field in the file) | only `live:*` deleted; `other` kept; `Success!` |
 | `kofra whoami` + site read | disposable `wrangler dev`, before and after restore | owner + full scopes; `hello backup` bytes back |
 | `SELECT key,value FROM usage_counters` | restored local D1 | `sites=1, storage_bytes=69` intact |
 
@@ -244,4 +321,7 @@ production database or bucket was ever referenced. Not executed (no standing
 scratch bucket; stock vendor syntax from the linked official docs): the
 `rclone copy` bulk transfer, the Time Travel REST API
 (`GET/POST .../time_travel/bookmark|restore`), and Analytics Engine SQL
-queries. The redeploy step is the repo's own `npm run deploy`.
+queries. Added 2026-10-27, not executed remotely: the `--remote` forms of the
+KV invalidation (the same commands as the local row above), and the
+new-account sequence (`d1 create`, `secret put`; stock Wrangler commands). The
+redeploy step is the repo's own `npm run deploy`.
