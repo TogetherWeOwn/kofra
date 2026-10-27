@@ -569,6 +569,7 @@ function renamedFromUrl(url: string, slug: string, oldSlug: string): string | nu
 const renameCmd: Command = {
   summary: "Rename an explicit site; leave local project mappings unchanged",
   usage: "kofra rename <source> <new-slug> --yes [--dry-run] [--json]",
+  maxPositionals: 2,
   flags: { yes: { kind: "boolean", short: "y" }, "dry-run": { kind: "boolean" } },
   details: `The source must be an explicit site slug, id or URL; saved targets are never used.
   --yes       Required to rename, even in a terminal; this command never prompts
@@ -585,7 +586,6 @@ Examples:
   kofra rename old-report new-report --dry-run --json
   kofra rename old-report new-report --yes --json`,
   async run(p, io, out) {
-    if (p.positionals.length > 2) throw new UsageError(`Too many arguments. Usage: ${this.usage}`);
     const source = positional(p, 0, "source", this.usage);
     const slug = positional(p, 1, "new-slug", this.usage).trim().toLowerCase();
     if (!source.trim() || source === "." || source === "..") throw new UsageError("Use an explicit site slug, id or URL as the source.");
