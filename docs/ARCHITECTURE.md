@@ -249,6 +249,17 @@ API key the person signed in with (sessionStorage, or localStorage when they tic
 embedding app to configure. Keep that function self-contained and build DOM with
 its `h()` helper, never `innerHTML`.
 
+The `/v/:slug/*path` strip has labelled **Live site breadcrumbs**: the site root
+and ancestor directories are ordinary same-site links, while the current file or
+directory is a noninteractive `aria-current="page"` label. Directory links retain
+their trailing slash; segments are encoded separately and names are rendered as
+text. Unmodified activation uses the existing viewer navigation in default View
+mode; modified clicks keep native link behavior. Back/Forward restores both path
+and mode, including a direct Source/Raw entry. Breadcrumbs use only the current
+URL and already loaded manifest, retain size/type metadata, wrap on narrow screens,
+and neither grant access nor pin a version: this browser navigates the live site.
+Signed-out/refused manifests still expose no filenames beyond the requested path.
+
 App pages use `appScriptCsp()`: scripts from `'self'` only, frames, images and
 `connect-src` limited to this origin and the sites origin, `frame-ancestors 'none'`.
 The dashboard never renders user content on the app origin: files open in an

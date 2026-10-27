@@ -259,7 +259,11 @@ body.dw-wide{height:100vh;min-height:0;overflow:hidden}
 .dw-treebox a[aria-current]{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);font-weight:600}
 .dw-viewer{flex:1;min-width:0;display:flex;flex-direction:column}
 .dw-vtools{display:flex;flex-wrap:wrap;gap:.5rem .75rem;align-items:center;justify-content:space-between;padding:.5rem .9rem;border-bottom:1px solid var(--line);background:var(--bg);font-size:.85rem}
-.dw-vtools #dw-fileinfo{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dw-vtools #dw-fileinfo{min-width:0;max-width:100%;overflow-wrap:anywhere}
+.dw-breadcrumbs ol{display:flex;flex-wrap:wrap;gap:.2rem .4rem;list-style:none;margin:0;padding:0}
+.dw-breadcrumbs li{display:flex;gap:.4rem;min-width:0;max-width:100%}
+.dw-breadcrumbs a,.dw-breadcrumbs [aria-current]{min-width:0;overflow-wrap:anywhere}
+.dw-breadcrumbs a:focus-visible{outline-offset:2px}
 .dw-vtools #dw-tools{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
 .dw-vtabs{display:flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
 .dw-vtabs button,.dw-vtabs a{border:0;border-left:1px solid var(--line);background:var(--card);padding:.28rem .7rem;font:inherit;font-size:.82rem;color:var(--muted);cursor:pointer;text-decoration:none}

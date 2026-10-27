@@ -4864,9 +4864,30 @@ export function dropwayClient() {
           h("a", { class: "dw-btn small", href: url, target: "_blank", rel: "noopener", text: "Open" }),
         ),
       );
+      var parts = p.split("/").filter(Boolean);
+      var crumbs = h("ol", {});
+      function crumb(label, directory, last) {
+        crumbs.appendChild(h("li", {}, crumbs.childNodes.length ? h("span", { "aria-hidden": "true", class: "dw-muted", text: "/" }) : null, last
+          ? h("span", { "aria-current": "page", text: label })
+          : h("a", {
+              href: "/v/" + encodeURIComponent(slug) + "/" + encodePath(directory),
+              text: label,
+              onclick: function (ev) {
+                if (ev.defaultPrevented || ev.button || ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+                ev.preventDefault();
+                go(directory, "view", true);
+              },
+            })));
+      }
+      crumb(slug, "", parts.length === 0);
+      var directory = "";
+      parts.forEach(function (part, i) {
+        directory += part + "/";
+        crumb(part, directory, i === parts.length - 1);
+      });
       add(
         info,
-        h("span", { class: "dw-mono", text: p || "/" }),
+        h("nav", { class: "dw-breadcrumbs dw-mono", "aria-label": "Live site breadcrumbs" }, crumbs),
         f ? h("span", { class: "dw-muted", text: " · " + bytes(f.size) + " · " + f.contentType.split(";")[0] }) : null,
       );
     }
@@ -4951,10 +4972,13 @@ export function dropwayClient() {
 
     window.addEventListener("popstate", function (e) {
       var st = e.state || {};
-      go(st.p !== undefined ? st.p : P.path || "", st.mode || "view", false);
+      go(st.p !== undefined ? st.p : P.path || "", st.mode || mode, false);
     });
 
     var mode = validMode(current, new URLSearchParams(location.search).get("mode"));
+    currentMode = mode;
+    // Seed the entry before a manifest wait or refusal, including signed-out navigation.
+    history.replaceState({ p: current, mode: currentMode }, "");
     renderTools(current, mode);
     if (!authed()) {
       clear(tree);
