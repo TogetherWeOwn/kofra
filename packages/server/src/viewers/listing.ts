@@ -1,4 +1,4 @@
-import { detectFileKind, encodePath, KIND_LABELS, type LiveSite } from "@dropway/core";
+import { detectFileKind, encodePath, KIND_LABELS, type FileKind, type LiveSite } from "@dropway/core";
 import { escapeHtml, formatBytes, htmlPage } from "../html";
 import type { ServeMode } from "../serve";
 
@@ -9,10 +9,10 @@ const LISTING_CSS = `
 .dw-ls h1 a{color:var(--muted);text-decoration:none}.dw-ls h1 a:hover{color:var(--accent)}
 .dw-ls .sum{color:var(--muted);font-size:.85rem}
 .dw-ls .sum a{margin-left:.6rem}
-.dw-ls .sort{display:flex;flex-wrap:wrap;gap:.4rem .75rem;align-items:baseline;width:100%;font-size:.85rem;color:var(--muted)}
-.dw-ls .sort a{padding:.25rem .4rem;border-radius:4px}
-.dw-ls .sort a[aria-current]{background:var(--card);color:var(--fg);font-weight:600}
-.dw-ls .sort a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.dw-ls .sort,.dw-ls .filter{display:flex;flex-wrap:wrap;gap:.4rem .75rem;align-items:baseline;width:100%;font-size:.85rem;color:var(--muted)}
+.dw-ls .sort a,.dw-ls .filter a{padding:.25rem .4rem;border-radius:4px}
+.dw-ls .sort a[aria-current],.dw-ls .filter a[aria-current]{background:var(--card);color:var(--fg);font-weight:600}
+.dw-ls a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .dw-ls ul{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .dw-ls li{display:grid;grid-template-columns:1fr auto auto;gap:1rem;align-items:baseline;padding:.5rem .9rem;border-top:1px solid var(--line);background:var(--card)}
 .dw-ls li:first-child{border-top:0}.dw-ls li a{text-decoration:none;word-break:break-all}.dw-ls li a:hover{text-decoration:underline}
@@ -27,6 +27,7 @@ const LISTING_CSS = `
 
 const GALLERY_MAX = 60;
 const SORTS = [["name", "Name"], ["size", "Largest first"], ["type", "Type"]] as const;
+const KINDS = Object.entries(KIND_LABELS) as Array<[FileKind, string]>;
 
 // Keep English name collation; distinct Unicode spellings must not depend on manifest order.
 export function compareNames(a: string, b: string): number {
@@ -38,9 +39,18 @@ export function compareNames(a: string, b: string): number {
  * folders first, then files with their kind and size, then a gallery of the
  * folder's images. `appViewerUrl` links to the app-origin file browser.
  */
-export function renderListing(live: LiveSite, dir: string, mode: ServeMode, appViewerUrl?: string, sort?: string | null): Response {
-  const order = sort === "size" || sort === "type" ? sort : "name";
-  const sortLinks = `<nav class="sort" aria-label="Sort files"><span>Sort:</span>${SORTS.map(([value, label]) => `<a href="?sort=${value}"${order === value ? ' aria-current="true"' : ""}>${label}</a>`).join("")}</nav>`;
+export function renderListing(live: LiveSite, dir: string, mode: ServeMode, appViewerUrl?: string, sort?: string | null, kind?: string | null): Response {
+  const order = SORTS.find(([value]) => value === sort)?.[0] ?? "name";
+  const selectedKind = KINDS.find(([value]) => value === kind)?.[0] ?? null;
+  const base = mode.base + encodePath(dir);
+  // Only recognized display state belongs on controls, never on content/navigation links.
+  const controlUrl = (sortValue: typeof order, kindValue: FileKind | null): string => {
+    const params = new URLSearchParams({ sort: sortValue });
+    if (kindValue) params.set("kind", kindValue);
+    return escapeHtml(`${base}?${params}`);
+  };
+  const sortLinks = `<nav class="sort" aria-label="Sort files"><span>Sort:</span>${SORTS.map(([value, label]) => `<a href="${controlUrl(value, selectedKind)}"${order === value ? ' aria-current="true"' : ""}>${label}</a>`).join("")}</nav>`;
+  const kindLinks = `<nav class="filter" aria-label="File kinds in this folder"><span>Files in this folder:</span><a href="${controlUrl(order, null)}"${selectedKind === null ? ' aria-current="true"' : ""}>All</a>${KINDS.map(([value, label]) => `<a href="${controlUrl(order, value)}"${selectedKind === value ? ' aria-current="true"' : ""}>${escapeHtml(label)}</a>`).join("")}</nav>`;
   const dirs = new Map<string, number>();
   const files: Array<{ name: string; size: number; kind: ReturnType<typeof detectFileKind> }> = [];
   let total = 0;
@@ -58,8 +68,8 @@ export function renderListing(live: LiveSite, dir: string, mode: ServeMode, appV
       dirs.set(d, (dirs.get(d) ?? 0) + 1);
     }
   }
-  const base = mode.base + encodePath(dir);
-  files.sort((a, b) => {
+  const matchingFiles = selectedKind ? files.filter((f) => f.kind === selectedKind) : files;
+  matchingFiles.sort((a, b) => {
     const primary = order === "size" ? b.size - a.size
       : order === "type" ? compareNames(KIND_LABELS[a.kind], KIND_LABELS[b.kind]) : 0;
     return primary || compareNames(a.name, b.name);
@@ -69,12 +79,12 @@ export function renderListing(live: LiveSite, dir: string, mode: ServeMode, appV
     ...[...dirs.entries()]
       .sort(([a], [b]) => compareNames(a, b))
       .map(([d, n]) => `<li class="dir"><a href="${escapeHtml(base + encodeURIComponent(d))}/">${escapeHtml(d)}/</a><span class="k">Folder</span><span>${n} file${n === 1 ? "" : "s"}</span></li>`),
-    ...files.map(
+    ...matchingFiles.map(
       (f) =>
         `<li><a href="${escapeHtml(base + encodeURIComponent(f.name))}">${escapeHtml(f.name)}</a><span class="k">${escapeHtml(KIND_LABELS[f.kind])}</span><span>${formatBytes(f.size)}</span></li>`,
     ),
   ];
-  const images = files.filter((f) => f.kind === "image" || f.kind === "svg").slice(0, GALLERY_MAX);
+  const images = matchingFiles.filter((f) => f.kind === "image" || f.kind === "svg").slice(0, GALLERY_MAX);
   const gallery = images.length
     ? `<div class="dw-gal" aria-label="Images in this folder">${images
         .map((f) => `<a href="${escapeHtml(base + encodeURIComponent(f.name))}"><img src="${escapeHtml(base + encodeURIComponent(f.name))}" alt="" loading="lazy" decoding="async"><span>${escapeHtml(f.name)}</span></a>`)
@@ -86,12 +96,14 @@ export function renderListing(live: LiveSite, dir: string, mode: ServeMode, appV
     acc += `${s}/`;
     return `<a href="${escapeHtml(mode.base + encodePath(acc))}">${escapeHtml(s)}</a>`;
   })].join(" / ");
-  const summary = `${dirs.size ? `${dirs.size} folder${dirs.size === 1 ? "" : "s"}, ` : ""}${files.length} file${files.length === 1 ? "" : "s"} · ${formatBytes(total)}`;
+  const fileCount = selectedKind && files.length ? `${matchingFiles.length} of ${files.length} files` : `${files.length} file${files.length === 1 ? "" : "s"}`;
+  const summary = `${dirs.size ? `${dirs.size} folder${dirs.size === 1 ? "" : "s"}, ` : ""}${fileCount} · ${formatBytes(total)}`;
+  const noMatch = selectedKind && files.length && !matchingFiles.length ? `<p>No files of this kind. <a href="${controlUrl(order, null)}">Clear filter</a></p>` : "";
   const page = htmlPage({
     title: `${live.slug}/${dir}`,
     css: LISTING_CSS,
     head: '<meta name="robots" content="noindex">',
-    body: `<main class="dw-ls"><header><h1>${crumb} /</h1><span class="sum">${summary}${appViewerUrl ? `<a href="${escapeHtml(appViewerUrl)}" rel="nofollow">Browse files</a>` : ""}</span>${sortLinks}</header><ul>${items.join("")}</ul>${gallery}</main>`,
+    body: `<main class="dw-ls"><header><h1>${crumb} /</h1><span class="sum">${summary}${appViewerUrl ? `<a href="${escapeHtml(appViewerUrl)}" rel="nofollow">Browse files</a>` : ""}</span>${sortLinks}${kindLinks}</header>${noMatch}<ul>${items.join("")}</ul>${gallery}</main>`,
   });
   return new Response(page, {
     status: 200,
