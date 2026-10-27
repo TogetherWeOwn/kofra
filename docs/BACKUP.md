@@ -110,9 +110,11 @@ do not treat a zero count right after a copy as data loss.
 ### 2.3 KV: no backup (rebuild path)
 
 `live:<slug>` entries are a pure cache, so there is nothing to back up and
-nothing to lose. Deleting one changes nothing a visitor can see: the next
-read rebuilds it from D1 and rewrites KV (executed: delete → site still
-`200` → key repopulated). Inspect the cache with:
+nothing to lose. Deleting one changes nothing a visitor can see: once the
+5-second per-isolate memory cache and the 30-second KV edge cache
+(`cacheTtl`) have expired, the next read rebuilds it from D1 and rewrites KV
+(executed: delete → site still `200` → key repopulated). Inspect the cache
+with:
 
 ```sh
 npx wrangler kv key list --binding CACHE --remote --prefix live:
@@ -207,9 +209,10 @@ about yourself; that is outside this runbook.
 
    The list output is the JSON array `kv bulk delete` reads; Wrangler pages
    through the list and deletes in batches of 1,000, so one file covers every
-   site. Kofra reads KV with a 30-second edge cache (`cacheTtl`), so a data
-   center may serve the old entry for up to 30 seconds after the delete:
-   wait a minute before step 6. Each site's next read then rebuilds its entry
+   site. Kofra reads KV with a 30-second edge cache (`cacheTtl`) and each
+   Worker isolate keeps a site in memory for 5 seconds, so the old entry can
+   still be served for up to about 35 seconds after the delete: wait a minute
+   before step 6. Each site's next read then rebuilds its entry
    from the restored D1. Blob bytes and viewer fragments in the edge Cache
    API are keyed by SHA-256, so they cannot go stale and need nothing.
 
@@ -298,7 +301,9 @@ fragments: nothing to lose and nothing to invalidate.
 
 ## 6. Provenance
 
-Executed 2026-10-27 with wrangler 4.152.0 (repo-pinned). Redacted outputs
+Executed 2026-10-27 with wrangler 4.152.0 (repo-pinned) unless a row names
+another version; commands listed as not executed below the table were not
+run. Redacted outputs
 (keys, secret material and account identifiers omitted; bookmark prefixes
 shown truncated):
 
