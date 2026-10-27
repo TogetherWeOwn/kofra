@@ -387,8 +387,9 @@ describe("stdin publish: piped bytes become a live single file", () => {
       created: true,
       unchanged: false,
       files: 1,
-      uploaded: 1,
-      reused: 0,
+      // The path publish already uploaded these identical bytes for this owner.
+      uploaded: 0,
+      reused: 1,
       api,
     });
     expect(typeof stdinJson.url).toBe("string");
