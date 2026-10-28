@@ -159,9 +159,10 @@ trusted client IP across ordinary sites and thirty per site, in fifteen-minute w
 Successful submissions count too; valid unlock cookies bypass these budgets. Refused
 attempts return uncached 429 responses with the remaining `Retry-After`; unavailable
 counter storage fails closed with 503. Late writes cannot move a counter window backward.
-A saturated counter is not written again until its window renews, so refused traffic does
-not grow D1 rows or attempts. Scheduled cleanup deletes at most 500 stale counter rows per
-invocation, so a large backlog drains over successive runs.
+A counter at its allowance is not written again until its window renews. A request refused
+by the site allowance has already spent its visitor reservation, which stands. Scheduled
+cleanup deletes at most 500 stale counter rows per invocation, so a large backlog drains over
+successive runs.
 
 Cross-zone Worker subrequests all arrive from `2a06:98c0:3600::103`; with that address the
 edge-added `CF-Worker` header names the upstream zone, and each zone gets its own visitor
