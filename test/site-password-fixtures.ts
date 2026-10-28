@@ -36,6 +36,8 @@ export interface PasswordForm {
   status: number;
   csp: string;
   cookies: string;
+  responseHeaders: Headers;
+  html: string;
 }
 
 /** Read the actual action, inputs and cookies for this visitor; proof stays opaque. */
@@ -59,7 +61,7 @@ export async function passwordForm(dw: Instance, url: string, ip: string | undef
   expect(action, "locked page must return a password form").not.toBeNull();
   expect(fields.has("password"), "use the password field returned by the page").toBe(true);
   const cookies = page.headers.getSetCookie().map((value) => value.split(";")[0]!).join("; ");
-  return { action: attributeUrl(action!, url), fields, status: page.status, csp: page.headers.get("content-security-policy") ?? "", cookies };
+  return { action: attributeUrl(action!, url), fields, status: page.status, csp: page.headers.get("content-security-policy") ?? "", cookies, responseHeaders: page.headers, html };
 }
 
 export function formSubmission(form: PasswordForm, password: string, ip: string, headers: HeadersInit = {}) {
