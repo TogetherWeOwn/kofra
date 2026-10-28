@@ -60,6 +60,11 @@ export function clearLiveMemoryCache() {
   reading.clear();
 }
 
+/** For tests: distinct slugs with outstanding read fences. */
+export function getLiveReadFenceCountForTests(): number {
+  return reading.size;
+}
+
 export async function getLiveSite(dc: DropwayContext, slug: string): Promise<LiveSite | null> {
   const hit = memory.get(slug);
   if (hit && Date.now() - hit.at < MEMORY_TTL_MS) return hit.live;
@@ -73,18 +78,20 @@ export async function getLiveSite(dc: DropwayContext, slug: string): Promise<Liv
       if (reading.get(slug) === fence) remember(slug, cached);
       return cached;
     }
-    const live = await loadLiveSiteFromD1(dc, { slug });
+    const live = await loadLiveSiteFromD1(dc, { slug }, true);
     if (reading.get(slug) === fence) remember(slug, live);
-    // Never fill KV from a miss: this D1 snapshot may have been superseded by a
-    // mutation on another isolate. Only mutations write manifests; miss results
-    // stay in the short-lived memory cache without overwriting newer KV state.
+    // Never fill the mutable live pointer from a miss: this D1 snapshot may
+    // have been superseded on another isolate. Only immutable version files
+    // may be filled from reads; serving settings stay in the short-lived cache.
     return live;
   } finally {
     if (--fence.active === 0 && reading.get(slug) === fence) reading.delete(slug);
   }
 }
 
-export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string; siteId?: string }): Promise<LiveSite | null> {
+// Mutations use the default authoritative file read; serving misses may reuse
+// immutable version files, but always select the current settings/version in D1.
+export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string; siteId?: string }, cacheVersionFiles = false): Promise<LiveSite | null> {
   const site = await dc.env.DB.prepare(
     `SELECT s.id, s.slug, s.tenant_id, s.current_version_id, s.spa, s.render_markdown, s.cross_origin_isolation, s.password_hash, s.expires_at,
             v.number AS version_number, COALESCE(v.finalized_at, v.created_at) AS version_at
@@ -105,13 +112,9 @@ export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string
       expires_at: number | null;
     }>();
   if (!site) return null;
-  const files: LiveSite["files"] = Object.create(null);
-  if (site.current_version_id) {
-    const { results } = await dc.env.DB.prepare("SELECT path, sha256, size, content_type FROM version_files WHERE version_id = ?")
-      .bind(site.current_version_id)
-      .all<{ path: string; sha256: string; size: number; content_type: string }>();
-    for (const f of results) files[f.path] = [f.sha256, f.size, f.content_type];
-  }
+  const files = site.current_version_id
+    ? await loadVersionFiles(dc, site.id, site.current_version_id, cacheVersionFiles)
+    : Object.create(null) as LiveSite["files"];
   return {
     v: LIVE_VERSION,
     siteId: site.id,
@@ -127,6 +130,25 @@ export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string
     expiresAt: site.expires_at,
     files,
   };
+}
+
+async function loadVersionFiles(dc: DropwayContext, siteId: string, versionId: string, cacheFiles: boolean): Promise<LiveSite["files"]> {
+  const key = `live-files:v1:${siteId}:${versionId}`;
+  if (cacheFiles) {
+    const cached = await dc.env.CACHE.get<LiveSite["files"]>(key, { type: "json", cacheTtl: dc.config.liveCacheTtlSeconds }).catch(() => null);
+    if (cached && typeof cached === "object" && !Array.isArray(cached)) return ownFiles(cached);
+  }
+  const files: LiveSite["files"] = Object.create(null);
+  const { results } = await dc.env.DB.prepare("SELECT path, sha256, size, content_type FROM version_files WHERE version_id = ?")
+    .bind(versionId)
+    .all<{ path: string; sha256: string; size: number; content_type: string }>();
+  for (const f of results) files[f.path] = [f.sha256, f.size, f.content_type];
+  if (cacheFiles) {
+    // Finalized versions never change. A delayed fill can only cache those
+    // exact files, not revive a slug, change its password or replace its pointer.
+    dc.waitUntil(dc.env.CACHE.put(key, JSON.stringify(files), { expirationTtl: 86_400 }).catch(() => {}));
+  }
+  return files;
 }
 
 async function putLive(dc: DropwayContext, live: LiveSite): Promise<void> {

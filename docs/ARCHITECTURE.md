@@ -65,7 +65,7 @@ throws `ApiError` with a stable `code` and a `hint` for the caller.
 | `idempotency.ts` | Atomic D1 idempotency claims (24 h): replay the first result, 422 on a reused key with another body, retryable 409 for concurrent/unknown outcomes |
 | `upload-tokens.ts` | HMAC upload-only capabilities for the blobs of one pending version, expiring one hour after creation |
 | `blobs.ts` | R2 storage at `blobs/<sha256>` (R2 verifies the hash on write), edge cache |
-| `live.ts` | `live:<slug>` manifest in KV (D1 fallback, per-isolate 5 s cache); only mutations write KV, so delayed miss snapshots cannot overwrite later changes; v5 rejects older, potentially poisoned entries; filename maps remain prototype-less |
+| `live.ts` | `live:<slug>` manifest in KV (D1 fallback, per-isolate 5 s cache); only mutations write mutable live pointers, so delayed miss snapshots cannot overwrite later changes; v5 rejects older, potentially poisoned entries. Fallback reads select current settings/version in D1, then reuse immutable `live-files:v1:<siteId>:<versionId>` file maps in KV (1-day TTL), avoiding repeated full-manifest scans after upgrade. Read fills contain no serving settings or live pointer; filename maps remain prototype-less |
 | `cleanup.ts` | Hourly cron: expire anonymous sites, purge deleted sites, drop stale uploads, delete orphan blobs |
 | `events.ts` | Runs hooks and metering after the response (never throws) |
 | `transfers.ts` | Sender-owned deliveries: create/read/update/revoke, revision fencing and permanent slug reservations |
