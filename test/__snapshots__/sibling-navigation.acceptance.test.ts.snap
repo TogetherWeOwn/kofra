@@ -141,6 +141,29 @@ input,button{font:inherit}
 .dw-meta{color:var(--muted);font-size:.85rem;text-align:center;margin:.75rem 0}
 @media (max-width:640px){.dw-vmeta{display:none}.dw-vbar{padding:.4rem .6rem}}
 
+body{height:100vh;height:100dvh;display:flex;flex-direction:column}
+/* Keep chrome in flow so native focus scrolling cannot hide controls below it. */
+.dw-vbar{position:static;flex-shrink:0}
+.dw-media{flex:1;min-height:0}
+/* If controls exhaust the viewport, keep a usable stage in document overflow. */
+.dw-media:not(:has(#dw-zoom:checked))>.dw-stage{flex:1;min-height:8rem;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+.dw-media:not(:has(#dw-zoom:checked))>.dw-stage img{max-height:100%}
+.dw-media:has(#dw-zoom:checked){flex:none}
+.dw-media:has(#dw-zoom:checked)>.dw-stage{grid-template-columns:minmax(max-content,1fr);grid-template-rows:minmax(max-content,1fr)}
+/* A separate paint layer preserves inspection colors, not control colors. */
+.dw-media>.dw-stage{display:grid;isolation:isolate;background:none}
+.dw-stage::before{content:"";grid-area:1/1;align-self:stretch;justify-self:stretch;forced-color-adjust:none;z-index:-1;background-color:var(--card);background-image:linear-gradient(45deg,var(--code) 25%,transparent 25%),linear-gradient(-45deg,var(--code) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,var(--code) 75%),linear-gradient(-45deg,transparent 75%,var(--code) 75%);background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0}
+.dw-stage img{grid-area:1/1;align-self:center;justify-self:center}
+#dw-zoom:checked~.dw-stage img{align-self:start;justify-self:start}
+.dw-backgrounds{display:flex;gap:.4rem;align-items:center;justify-content:center;flex-wrap:wrap}
+.dw-backgrounds label{display:inline-flex;align-items:center;gap:.35rem}
+.dw-backgrounds input{margin:0;accent-color:var(--accent)}
+.dw-backgrounds input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.dw-backgrounds label:has(input:checked){border-color:var(--accent);font-weight:600}
+.dw-media:has(#dw-bg-light:checked)>.dw-stage::before{background:#fff}
+.dw-media:has(#dw-bg-dark:checked)>.dw-stage::before{background:#000}
+#dw-zoom:checked~.dw-stage img{flex-shrink:0}
+
 .dw-media{display:flex;flex-direction:column;align-items:center;padding:1rem .9rem 2rem;gap:.6rem}
 .dw-stage{display:flex;align-items:center;justify-content:center;width:100%;min-height:calc(100vh - 9rem);border:1px solid var(--line);border-radius:10px;overflow:auto}
 .dw-stage img{display:block;max-width:100%;max-height:calc(100vh - 10rem);object-fit:contain;cursor:zoom-in}
@@ -161,6 +184,12 @@ input,button{font:inherit}
 <nav class="dw-vact" aria-label="File"><a href="/s/sibling-navigation-fixture/media/01%20image.png?download=1" rel="nofollow" download>Download</a><a href="https://dropway.test/v/sibling-navigation-fixture/media/01%20image.png" rel="nofollow" title="Browse every file of this site">Files</a></nav>
 </header><main class="dw-media"><input type="checkbox" id="dw-zoom" class="dw-toggle">
 <div class="dw-mediabar"><nav class="dw-fnav" aria-label="Other images in this folder"><span class="dw-meta" style="margin:0">1 of 2 in this folder</span><a class="dw-btn" rel="next" href="/s/sibling-navigation-fixture/media/02%20vector.svg">Next: <span class="dw-fname">02 vector.svg</span> <span aria-hidden="true">→</span></a></nav><span class="dw-meta" style="margin:0">1 × 1 px · 32 B · image/png</span><label for="dw-zoom" class="dw-btn">Actual size</label></div>
+<div class="dw-backgrounds" role="radiogroup" aria-label="Image background">
+<span class="dw-meta" style="margin:0" aria-hidden="true">Background</span>
+<label class="dw-btn"><input type="radio" name="dw-background" id="dw-bg-checker" value="checker" checked>Checker</label>
+<label class="dw-btn"><input type="radio" name="dw-background" id="dw-bg-light" value="light">Light</label>
+<label class="dw-btn"><input type="radio" name="dw-background" id="dw-bg-dark" value="dark">Dark</label>
+</div>
 <label for="dw-zoom" class="dw-stage dw-checker"><img src="/s/sibling-navigation-fixture/media/01%20image.png" alt="01 image.png" width="1" height="1"></label></main></body></html>"
 `;
 
@@ -204,6 +233,29 @@ input,button{font:inherit}
 .dw-meta{color:var(--muted);font-size:.85rem;text-align:center;margin:.75rem 0}
 @media (max-width:640px){.dw-vmeta{display:none}.dw-vbar{padding:.4rem .6rem}}
 .dw-stage img{min-width:min(16rem,100%)}
+body{height:100vh;height:100dvh;display:flex;flex-direction:column}
+/* Keep chrome in flow so native focus scrolling cannot hide controls below it. */
+.dw-vbar{position:static;flex-shrink:0}
+.dw-media{flex:1;min-height:0}
+/* If controls exhaust the viewport, keep a usable stage in document overflow. */
+.dw-media:not(:has(#dw-zoom:checked))>.dw-stage{flex:1;min-height:8rem;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+.dw-media:not(:has(#dw-zoom:checked))>.dw-stage img{max-height:100%}
+.dw-media:has(#dw-zoom:checked){flex:none}
+.dw-media:has(#dw-zoom:checked)>.dw-stage{grid-template-columns:minmax(max-content,1fr);grid-template-rows:minmax(max-content,1fr)}
+/* A separate paint layer preserves inspection colors, not control colors. */
+.dw-media>.dw-stage{display:grid;isolation:isolate;background:none}
+.dw-stage::before{content:"";grid-area:1/1;align-self:stretch;justify-self:stretch;forced-color-adjust:none;z-index:-1;background-color:var(--card);background-image:linear-gradient(45deg,var(--code) 25%,transparent 25%),linear-gradient(-45deg,var(--code) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,var(--code) 75%),linear-gradient(-45deg,transparent 75%,var(--code) 75%);background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0}
+.dw-stage img{grid-area:1/1;align-self:center;justify-self:center}
+#dw-zoom:checked~.dw-stage img{align-self:start;justify-self:start}
+.dw-backgrounds{display:flex;gap:.4rem;align-items:center;justify-content:center;flex-wrap:wrap}
+.dw-backgrounds label{display:inline-flex;align-items:center;gap:.35rem}
+.dw-backgrounds input{margin:0;accent-color:var(--accent)}
+.dw-backgrounds input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.dw-backgrounds label:has(input:checked){border-color:var(--accent);font-weight:600}
+.dw-media:has(#dw-bg-light:checked)>.dw-stage::before{background:#fff}
+.dw-media:has(#dw-bg-dark:checked)>.dw-stage::before{background:#000}
+#dw-zoom:checked~.dw-stage img{flex-shrink:0}
+
 .dw-media{display:flex;flex-direction:column;align-items:center;padding:1rem .9rem 2rem;gap:.6rem}
 .dw-stage{display:flex;align-items:center;justify-content:center;width:100%;min-height:calc(100vh - 9rem);border:1px solid var(--line);border-radius:10px;overflow:auto}
 .dw-stage img{display:block;max-width:100%;max-height:calc(100vh - 10rem);object-fit:contain;cursor:zoom-in}
@@ -224,6 +276,12 @@ input,button{font:inherit}
 <nav class="dw-vact" aria-label="File"><a href="/s/sibling-navigation-fixture/media/02%20vector.svg?download=1" rel="nofollow" download>Download</a><a href="https://dropway.test/v/sibling-navigation-fixture/media/02%20vector.svg" rel="nofollow" title="Browse every file of this site">Files</a></nav>
 </header><main class="dw-media"><input type="checkbox" id="dw-zoom" class="dw-toggle">
 <div class="dw-mediabar"><nav class="dw-fnav" aria-label="Other images in this folder"><a class="dw-btn" rel="prev" href="/s/sibling-navigation-fixture/media/01%20image.png"><span aria-hidden="true">←</span> Previous: <span class="dw-fname">01 image.png</span></a><span class="dw-meta" style="margin:0">2 of 2 in this folder</span></nav><span class="dw-meta" style="margin:0">67 B · SVG (scripts inside it do not run here)</span><label for="dw-zoom" class="dw-btn">Actual size</label></div>
+<div class="dw-backgrounds" role="radiogroup" aria-label="Image background">
+<span class="dw-meta" style="margin:0" aria-hidden="true">Background</span>
+<label class="dw-btn"><input type="radio" name="dw-background" id="dw-bg-checker" value="checker" checked>Checker</label>
+<label class="dw-btn"><input type="radio" name="dw-background" id="dw-bg-light" value="light">Light</label>
+<label class="dw-btn"><input type="radio" name="dw-background" id="dw-bg-dark" value="dark">Dark</label>
+</div>
 <label for="dw-zoom" class="dw-stage dw-checker"><img src="/s/sibling-navigation-fixture/media/02%20vector.svg" alt="02 vector.svg"></label></main></body></html>"
 `;
 

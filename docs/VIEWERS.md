@@ -122,6 +122,51 @@ only while the shown text is at most `HIGHLIGHT_MAX_BYTES = 512 * 1024`
 [`packages/server/src/viewers/highlight.ts`](../packages/server/src/viewers/highlight.ts));
 above that the same text is shown escaped as plain text with a note.
 
+## Image and SVG backgrounds
+
+The raster-image and SVG viewers offer **Checker** (default), **Light** (white)
+and **Dark** (black) backgrounds for visually inspecting artwork. The selection
+changes only the image stage, not the page theme or the file. It does not detect
+transparency or certify contrast or accessibility; opaque pixels keep their own
+colors.
+
+The labelled native radio group works without JavaScript. Tab to the selected
+background, then use the arrow keys to change it; the checked circle and bold
+label identify the selection, and a visible outline identifies keyboard focus.
+**Actual size** remains a separate checkbox: Space toggles between fitting the
+image and its natural size without resetting the background. Clicking the image
+also toggles sizing. Large Actual-size images remain scrollable, and the controls
+wrap above the stage on narrow screens. Fit uses the space remaining after the
+actual wrapped controls and header, rather than a fixed header-height allowance.
+If controls exhaust a very short window, the stage retains a usable minimum
+height and the document can scroll instead of collapsing the image to zero.
+Image-viewer chrome stays in normal document flow so it cannot cover a control
+when native keyboard focus scrolls it into view. The inspection paint layer keeps
+its checker/white/black colors in forced-colors mode; the controls and their focus
+indicators still use the system's forced-color adaptation.
+
+The same controls are available with `?view=1&embed=1`. A bare iframe or image
+sub-resource still receives the original file. SVGs remain isolated through
+`<img>`; their scripts do not run. The raster viewer still reads only the first
+65,536 bytes (or the whole file if smaller) for dimensions, and the SVG viewer
+reads no file bytes to build its page.
+
+Selection is local to the current document: it is not saved or encoded in the
+URL. No script, canvas, external asset, extra storage read or background-query
+cache variant is added. Raw/Download/sub-resource bytes, headers and ranges are
+unchanged. The image and SVG viewer versions invalidate the former rendered-page
+validators when these controls change.
+
+Verification contracts:
+[`test/image-backgrounds.acceptance.test.ts`](../test/image-backgrounds.acceptance.test.ts)
+and
+[`packages/cli/test/encrypted/image-backgrounds.browser.acceptance.test.ts`](../packages/cli/test/encrypted/image-backgrounds.browser.acceptance.test.ts).
+The browser suite serves a disposable local Worker and uses transparent light/dark
+PNG/SVG fixtures plus an opaque PNG across light/dark themes at 360 and 1100 px.
+It checks all three backgrounds with both sizing states using the keyboard with
+scripts disabled, including stage pixels, focus, scrolling and unchanged requests.
+These contracts are not evidence of a particular deployed version.
+
 ## Printing reports
 
 Markdown, code/text (including Source), JSON, CSV/TSV and notebook documents
