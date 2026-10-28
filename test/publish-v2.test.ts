@@ -119,15 +119,31 @@ describe("R-04 flat FileInput and PublishResult", () => {
     expectResult(result.body, "live", { total: 1, stored: 1, reused: 0, fetched: 0, pending: 0 });
   });
 
-  it("identical republish is unchanged and keeps the exact version and versionUrl", async () => {
+  it("identical republish is unchanged and keeps the exact version address with redeemable signed links", async () => {
     const input = { site: "unchanged-result", files: [{ path: "a.txt", content: "same" }] };
     const first = await publish(input);
+    expect(first.status).toBe(201);
     const again = await publish(input);
     expect(again.status).toBeGreaterThanOrEqual(200);
     expect(again.status).toBeLessThan(300);
     expectResult(again.body, "unchanged", { total: 1, stored: 0, reused: 1, fetched: 0, pending: 0 });
     expect(again.body.version.id).toBe(first.body.version.id);
-    expect(again.body.versionUrl).toBe(first.body.versionUrl);
+    expect(again.body.version.number).toBe(first.body.version.number);
+    const original = new URL(first.body.versionUrl);
+    expect(`${original.origin}${original.pathname}`).toBe(`${ORIGIN}/s/unchanged-result--v1/`);
+    for (const result of [first, again]) {
+      const link = new URL(result.body.versionUrl);
+      expect(link.origin).toBe(original.origin);
+      expect(link.pathname).toBe(original.pathname);
+      expect(link.searchParams.get("dw_preview")).toBeTruthy();
+      const redeem = await dw.call(link.href);
+      expect([302, 303, 307]).toContain(redeem.status);
+      const cookie = redeem.headers.get("set-cookie")?.split(";")[0];
+      expect(cookie).toBeTruthy();
+      const page = await dw.call(new URL("a.txt?raw=1", link).href, { headers: { Cookie: cookie! } });
+      expect(page.status).toBe(200);
+      expect(await page.text()).toBe("same");
+    }
   });
 
   it("sha256 plus size reuses bytes already held by this owner", async () => {

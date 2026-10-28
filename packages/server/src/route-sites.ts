@@ -11,6 +11,7 @@ import {
   type DropwayContext,
 } from "@dropway/core";
 import { isNavigation, resolvePath, type ServeMode } from "./serve";
+import { previewResponse } from "./previews";
 
 /**
  * Decide whether a request is for a published site or for the app.
@@ -31,7 +32,8 @@ import { isNavigation, resolvePath, type ServeMode } from "./serve";
  */
 export type SiteRoute =
   | { kind: "site"; slug: string; path: string; mode: ServeMode }
-  | { kind: "redirect"; location: string; status: 301 | 307 | 308; byReferer: boolean }
+  | { kind: "preview"; slug: string; number: number; path: string; mode: ServeMode }
+  | { kind: "redirect"; location: string; status: 301 | 307 | 308; byReferer: boolean; preview?: boolean }
   | { kind: "sites_home" }
   | { kind: "sites_not_found" }
   | { kind: "gone"; mode: ServeMode }
@@ -53,18 +55,19 @@ function parseVersionAddress(segment: string | undefined): { base: string; num: 
 /**
  * R-59: route a version address. Deleted versions are gone (410, never another
  * site's bytes); a renamed-away base 308s to the same address under the current
- * name. Live previews (R-13) and unknown names return null: today's behavior.
+ * name. Ready previews are authorized and loaded separately from the live pointer.
  */
 async function versionAddressRoute(
   dw: DropwayContext,
   parsed: { base: string; num: number },
   locationFor: (current: string) => string,
   mode: ServeMode,
+  path: string,
 ): Promise<SiteRoute | null> {
   const resolved = await resolveVersionAddress(dw, parsed.base, parsed.num);
-  if (resolved.kind === "redirect") return { kind: "redirect", location: locationFor(resolved.slug), status: 308, byReferer: false };
+  if (resolved.kind === "redirect") return { kind: "redirect", location: locationFor(resolved.slug), status: 308, byReferer: false, preview: true };
   if (resolved.kind === "gone") return { kind: "gone", mode };
-  return null;
+  return { kind: "preview", slug: parsed.base, number: parsed.num, path, mode };
 }
 
 /** The site a same-origin Referer points into, given the path prefix sites live under ("" = origin root). */
@@ -154,6 +157,7 @@ export async function routeSiteRequest(dw: DropwayContext, req: Request): Promis
             return target.toString();
           },
           { kind: "subdomain", base: "/", sandbox: c.sitesSandbox, rewrite: null },
+          url.pathname,
         );
         if (routed) return routed;
       }
@@ -170,7 +174,7 @@ export async function routeSiteRequest(dw: DropwayContext, req: Request): Promis
       const slug = rest.split("/")[0];
       if (isSiteSlug(slug)) return { kind: "redirect", location: siteUrl(dw, slug) + rest.slice(slug.length + 1) + url.search, status: 301, byReferer: false };
       if (parseVersionAddress(slug)) {
-        return { kind: "redirect", location: `https://${slug}.${c.sitesDomain}/${rest.slice(slug!.length + 1)}${url.search}`, status: 301, byReferer: false };
+        return { kind: "redirect", location: `https://${slug}.${c.sitesDomain}/${rest.slice(slug!.length + 1)}${url.search}`, status: 301, byReferer: false, preview: true };
       }
     }
     return { kind: "app" };
@@ -203,6 +207,7 @@ export async function routeSiteRequest(dw: DropwayContext, req: Request): Promis
         versionedSitesOrigin,
         (current) => `${c.sitesOrigin}/${current}--v${versionedSitesOrigin.num}${url.pathname.slice(first!.length + 1)}${url.search}`,
         { kind: "path", base: `/${first}/`, sandbox: c.sitesSandbox, rewrite: { base: `/${first}/`, keep: [] } },
+        url.pathname.slice(first!.length + 1) || "/",
       );
       if (routed) return routed;
     }
@@ -216,7 +221,7 @@ export async function routeSiteRequest(dw: DropwayContext, req: Request): Promis
     const slug = rest.split("/")[0];
     const versionedPrefix = parseVersionAddress(slug);
     if (versionedPrefix && c.sitesOrigin) {
-      return { kind: "redirect", location: `${c.sitesOrigin}/${rest}${url.search}`, status: 301, byReferer: false };
+      return { kind: "redirect", location: `${c.sitesOrigin}/${rest}${url.search}`, status: 301, byReferer: false, preview: true };
     }
     if (versionedPrefix) {
       const base = `${prefix}/${slug}/`;
@@ -225,6 +230,7 @@ export async function routeSiteRequest(dw: DropwayContext, req: Request): Promis
         versionedPrefix,
         (current) => `${appOrigin(dw)}${prefix}/${current}--v${versionedPrefix.num}${rest.slice(slug!.length)}${url.search}`,
         { kind: "path", base, sandbox: true, rewrite: { base, keep: [`${prefix}/`] } },
+        rest.slice(slug!.length) || "/",
       );
       if (routed) return routed;
     }
@@ -259,5 +265,6 @@ export function redirectResponse(route: Extract<SiteRoute, { kind: "redirect" }>
   }
   // 308 = a legacy origin moved: not cached, so moving back works at once.
   if (route.status === 308) h.set("Cache-Control", "no-store");
-  return new Response(null, { status: route.status, headers: h });
+  const response = new Response(null, { status: route.status, headers: h });
+  return route.preview ? previewResponse(response) : response;
 }

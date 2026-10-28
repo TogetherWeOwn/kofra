@@ -42,6 +42,8 @@ export interface ServeMode {
   sandbox: boolean;
   /** Path mode: prefix root-relative URLs in HTML and CSS (null = serve bytes untouched). */
   rewrite: PathRewrite | null;
+  /** Keep runtime URLs in path scope when a preview suppresses the Referer. */
+  pathShim?: boolean;
 }
 
 export const INDEX_NAMES = ["index.html", "index.htm", "index.md", "README.md", "readme.md"];
@@ -283,6 +285,18 @@ function etagMatches(req: Request, etag: string): boolean {
   });
 }
 
+// Viewer ids and etagExtra output may be any string — including lone
+// (unpaired) UTF-16 surrogates, on which encodeURIComponent throws URIError.
+// Normalize those to U+FFFD first (same approach as content-disposition.ts);
+// valid surrogate pairs pass through untouched.
+function etagSegment(value: string): string {
+  return encodeURIComponent(
+    value.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, (m) =>
+      m.length === 2 ? m : "\uFFFD",
+    ),
+  );
+}
+
 const flag = (sp: URLSearchParams, name: string) => sp.has(name) && sp.get(name) !== "0" && sp.get(name) !== "false";
 
 /** Which view a request asks for: ?view=source, ?view=1, or a browser navigation (top level or iframe). null = raw bytes. */
@@ -307,7 +321,6 @@ export async function serveSite(
   mode: ServeMode,
   viewers: readonly Viewer[] = VIEWERS,
 ): Promise<Response> {
-  const started = Date.now();
   const url = new URL(req.url);
   const method = req.method.toUpperCase();
   // Transfer gates never depend on an eventually consistent live manifest.
@@ -351,6 +364,23 @@ export async function serveSite(
     }
     return systemResponse(dw, req, mode, null, 404, "404", "Nothing is published here", "There is no site at this address. It may have been deleted. See {app}.");
   }
+  return serveSiteContent(req, dw, live, pathname, mode, viewers);
+}
+
+/** Serve an already resolved manifest. Preview callers authorize and load their version in D1 first. */
+export async function serveSiteContent(
+  req: Request,
+  dw: DropwayContext,
+  live: LiveSite,
+  pathname: string,
+  mode: ServeMode,
+  viewers: readonly Viewer[] = VIEWERS,
+): Promise<Response> {
+  const started = Date.now();
+  const url = new URL(req.url);
+  const method = req.method.toUpperCase();
+  const filePath = requestPathToFilePath(pathname);
+  if (filePath === null) return systemResponse(dw, req, mode, live, 400, "400", "Bad request", "That address could not be decoded.");
   // Anonymous sites are untrusted: sandbox them even where other sites are not.
   if (!mode.sandbox && live.tenantId === null && dw.config.sitesSandboxAnonymous) mode = { ...mode, sandbox: true };
   if (live.expiresAt && live.expiresAt < Date.now()) {
@@ -431,7 +461,7 @@ async function serveFile(
     // The shared bar links live siblings even when this file's bytes are unchanged.
     // Images/SVG have their own validator; embeds do not render the shared bar.
     const folderVariant = !embed && viewer.id !== "image" && viewer.id !== "svg" ? `-folder${live.versionId}` : "";
-    const etag = `W/"${viewer.id}@${viewer.version ?? 1}-${sha256}${viewer.etagExtra?.(file, live) ?? ""}${folderVariant}${embed ? "-e" : ""}${reportVariant}"`;
+    const etag = `W/"${etagSegment(viewer.id)}@${viewer.version ?? 1}-${sha256}${etagSegment(viewer.etagExtra?.(file, live) ?? "")}${folderVariant}${embed ? "-e" : ""}${reportVariant}"`;
     const h = new Headers();
     if (etagMatches(req, etag)) {
       h.set("ETag", etag);
@@ -477,7 +507,12 @@ async function serveFile(
     else out.set("ETag", etag);
     out.set("Cache-Control", live.passwordHash ? "private, no-store" : viewerCacheControl ?? "public, max-age=0, must-revalidate");
     out.set("Vary", "Accept, Sec-Fetch-Dest");
-    out.set("X-Kofra-Viewer", viewer.id);
+    // Headers.set throws on CR, LF and NUL: a viewer id containing them would
+    // 500 an otherwise healthy render. Omit this diagnostic header for such
+    // ids; the ETag above already carries the encoded identity.
+    if (!viewer.id.includes("\r") && !viewer.id.includes("\n") && !viewer.id.includes("\0")) {
+      out.set("X-Kofra-Viewer", viewer.id);
+    }
     out.delete("Content-Length");
     securityHeaders(out, live, mode);
     let page = new Response(head ? null : rendered.body, { status, headers: out });
@@ -488,8 +523,8 @@ async function serveFile(
   // Path mode: HTML and CSS get root-relative URLs prefixed with the site base.
   const rewriteKind = mode.rewrite && !raw && !download && !precompressed(path) ? (isHtml(contentType) ? "html" : baseType(contentType) === "text/css" && size <= MAX_CSS_REWRITE_BYTES ? "css" : null) : null;
   if (rewriteKind || report) {
-    // Sandboxed pages send no Referer, so their HTML also carries the run-time shim (./path-shim).
-    const shim = rewriteKind === "html" && mode.sandbox;
+    // Sandboxed pages and private previews send no Referer, so they need runtime URL repair.
+    const shim = rewriteKind === "html" && (mode.sandbox || mode.pathShim === true);
     const etag = `W/"${rewriteKind ? "pm-" : ""}${sha256}${shim ? `-js${PATH_SHIM_VERSION}` : ""}${reportVariant}"`;
     const h = new Headers({ "Content-Type": contentType, ETag: etag, "Cache-Control": cacheControlFor(path, live) });
     if (rewriteKind) h.set("X-Kofra-Rewritten", "path-prefix");
