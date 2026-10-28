@@ -57,6 +57,10 @@ export const SITE_SANDBOX =
 
 const PASSWORD_PATH = "__dropway/password";
 const PASSWORD_FORM_TTL = 15 * 60_000;
+/** Edges' clocks differ slightly: a form issued by one may look this far ahead to another. */
+const PASSWORD_FORM_CLOCK_SKEW = 60_000;
+/** Cloudflare's shared source address for cross-zone Worker subrequests; the edge-added CF-Worker header names the zone. */
+const CROSS_ZONE_WORKER_IP = "2a06:98c0:3600::103";
 /** Reserved at a site root: the provider-served live-version badge (a published file of this name is not served). */
 const BADGE_PATH = "badge.svg";
 
@@ -216,10 +220,17 @@ function readCookie(req: Request, name: string): string | null {
   return null;
 }
 
+/** The trusted edge's view of the visitor. Forwarding headers are never identity; only the synthetic address is split by zone. */
+function passwordVisitor(req: Request): string {
+  const ip = req.headers.get("CF-Connecting-IP") ?? "unknown";
+  const zone = req.headers.get("CF-Worker");
+  return zone && ip.toLowerCase() === CROSS_ZONE_WORKER_IP ? `${ip}|worker:${zone}` : ip;
+}
+
 async function passwordFormSignature(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, until: number): Promise<string> {
   return hmacHex(dw.config.signingSecret, JSON.stringify([
     "site-password-form", new URL(req.url).origin, mode.base, live.siteId, live.passwordHash,
-    req.headers.get("CF-Connecting-IP") ?? "unknown", until,
+    passwordVisitor(req), until,
   ]));
 }
 
@@ -235,7 +246,7 @@ async function passwordSubmissionAllowed(dw: DropwayContext, req: Request, live:
   if (!match) return false;
   const until = Number(match[1]);
   const now = Date.now();
-  if (!Number.isSafeInteger(until) || until <= now || until > now + PASSWORD_FORM_TTL) return false;
+  if (!Number.isSafeInteger(until) || until <= now || until > now + PASSWORD_FORM_TTL + PASSWORD_FORM_CLOCK_SKEW) return false;
   return timingSafeEqualStr(match[2]!, await passwordFormSignature(dw, req, live, mode, until));
 }
 
@@ -249,7 +260,7 @@ async function handlePassword(dw: DropwayContext, req: Request, live: LiveSite, 
       return systemResponse(dw, req, mode, live, 403, "403", "Password form refused", "Reload this site's password form and try again.");
     }
     try {
-      await spendSitePasswordAttempt(dw, live.siteId, req.headers.get("CF-Connecting-IP") ?? "unknown");
+      await spendSitePasswordAttempt(dw, live.siteId, passwordVisitor(req));
     } catch (error) {
       const limited = isApiError(error) && error.status === 429;
       const response = systemResponse(dw, req, mode, live, limited ? 429 : 503, limited ? "429" : "503",
