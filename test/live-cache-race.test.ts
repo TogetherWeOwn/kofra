@@ -56,66 +56,125 @@ describe("live cache miss races", () => {
     });
   }
 
-  it("does not repopulate KV when a D1 snapshot finishes after deletion", async () => {
+  for (const [mutation, status] of [["publish", 200], ["delete", 404], ["password", 401]] as const) {
+    it(`does not restore stale memory or KV when a D1 snapshot finishes after ${mutation}`, async () => {
+      const dw = await freshInstance();
+      const slug = `cache-d1-${mutation}`;
+      const published = await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, body: form({ "index.html": "old" }, { slug }) });
+      expect(published.status).toBe(201);
+      await env.CACHE.delete(liveKey(slug));
+      clearLiveMemoryCache();
+
+      let release!: () => void;
+      let captured!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const snapshotRead = new Promise<void>((resolve) => { captured = resolve; });
+      // Delay the real file-query result, not KV: the stale put would be invoked
+      // only after deletion has completed, without relying on KV write reordering.
+      const db = new Proxy(env.DB, {
+        get(target, prop) {
+          if (prop === "prepare") return (query: string) => {
+            const statement = target.prepare(query);
+            if (!query.startsWith("SELECT path, sha256, size, content_type FROM version_files")) return statement;
+            return new Proxy(statement, {
+              get(target, prop) {
+                if (prop === "bind") return (...args: unknown[]) => {
+                  const bound = target.bind(...args);
+                  return new Proxy(bound, {
+                    get(target, prop) {
+                      if (prop === "all") return async () => {
+                        const result = await target.all();
+                        captured();
+                        await gate;
+                        return result;
+                      };
+                      const value = Reflect.get(target, prop, target);
+                      return typeof value === "function" ? value.bind(target) : value;
+                    },
+                  });
+                };
+                const value = Reflect.get(target, prop, target);
+                return typeof value === "function" ? value.bind(target) : value;
+              },
+            });
+          };
+          const value = Reflect.get(target, prop, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const pending: Promise<unknown>[] = [];
+      const base = dw.dropway.context(env as unknown as ServerBindings, createExecutionContext());
+      const dc = { ...base, env: { ...base.env, DB: db }, waitUntil: (p: Promise<unknown>) => { pending.push(p); } };
+      const read = getLiveSite(dc, slug);
+      try {
+        await snapshotRead;
+        if (mutation === "publish") {
+          const updated = await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, body: form({ "index.html": "new" }, { slug }) });
+          expect(updated.status).toBe(200);
+        } else if (mutation === "delete") {
+          const deleted = await dw.json(`/api/v1/sites/${slug}`, { method: "DELETE", key: dw.ownerKey });
+          expect(deleted.status).toBe(200);
+        } else {
+          const locked = await dw.json(`/api/v1/sites/${slug}`, {
+            method: "PATCH", key: dw.ownerKey, headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ password: "now-protected" }),
+          });
+          expect(locked.status).toBe(200);
+        }
+      } finally {
+        release();
+      }
+      await read;
+      await Promise.all(pending);
+      // Do not clear memory first: an old D1 read must not replace the memory
+      // state established by the completed mutation, even for the normal TTL.
+      const page = await dw.call(`/s/${slug}/?raw=1`);
+      expect(page.status).toBe(status);
+      if (mutation === "publish") expect(await page.text()).toBe("new");
+      clearLiveMemoryCache();
+      const uncached = await dw.call(`/s/${slug}/?raw=1`);
+      expect(uncached.status).toBe(status);
+      if (mutation === "publish") expect(await uncached.text()).toBe("new");
+    });
+  }
+
+  it("does not restore unprotected memory from a delayed KV hit after a password change", async () => {
     const dw = await freshInstance();
-    const slug = "cache-d1-race";
-    const published = await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, body: form({ "index.html": "old" }, { slug }) });
+    const slug = "cache-kv-read-race";
+    const published = await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, body: form({ "index.html": "private" }, { slug }) });
     expect(published.status).toBe(201);
-    await env.CACHE.delete(liveKey(slug));
     clearLiveMemoryCache();
 
     let release!: () => void;
     let captured!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const snapshotRead = new Promise<void>((resolve) => { captured = resolve; });
-    // Delay the real file-query result, not KV: the stale put would be invoked
-    // only after deletion has completed, without relying on KV write reordering.
-    const db = new Proxy(env.DB, {
+    const cache = new Proxy(env.CACHE, {
       get(target, prop) {
-        if (prop === "prepare") return (query: string) => {
-          const statement = target.prepare(query);
-          if (!query.startsWith("SELECT path, sha256, size, content_type FROM version_files")) return statement;
-          return new Proxy(statement, {
-            get(target, prop) {
-              if (prop === "bind") return (...args: unknown[]) => {
-                const bound = target.bind(...args);
-                return new Proxy(bound, {
-                  get(target, prop) {
-                    if (prop === "all") return async () => {
-                      const result = await target.all();
-                      captured();
-                      await gate;
-                      return result;
-                    };
-                    const value = Reflect.get(target, prop, target);
-                    return typeof value === "function" ? value.bind(target) : value;
-                  },
-                });
-              };
-              const value = Reflect.get(target, prop, target);
-              return typeof value === "function" ? value.bind(target) : value;
-            },
-          });
+        if (prop === "get") return async (...args: Parameters<KVNamespace["get"]>) => {
+          const value = await target.get(...args);
+          captured();
+          await gate;
+          return value;
         };
         const value = Reflect.get(target, prop, target);
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
-    const pending: Promise<unknown>[] = [];
     const base = dw.dropway.context(env as unknown as ServerBindings, createExecutionContext());
-    const dc = { ...base, env: { ...base.env, DB: db }, waitUntil: (p: Promise<unknown>) => { pending.push(p); } };
-    const read = getLiveSite(dc, slug);
+    const read = getLiveSite({ ...base, env: { ...base.env, CACHE: cache } }, slug);
     try {
       await snapshotRead;
-      const deleted = await dw.json(`/api/v1/sites/${slug}`, { method: "DELETE", key: dw.ownerKey });
-      expect(deleted.status).toBe(200);
+      const locked = await dw.json(`/api/v1/sites/${slug}`, {
+        method: "PATCH", key: dw.ownerKey, headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: "now-protected" }),
+      });
+      expect(locked.status).toBe(200);
     } finally {
       release();
     }
     await read;
-    await Promise.all(pending);
-    clearLiveMemoryCache();
-    expect((await dw.call(`/s/${slug}/?raw=1`)).status).toBe(404);
+    expect((await dw.call(`/s/${slug}/?raw=1`)).status).toBe(401);
   });
 
   it("ignores an old-format manifest that may have been poisoned before upgrade", async () => {

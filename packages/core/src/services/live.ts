@@ -45,6 +45,9 @@ function ownFiles(files: LiveSite["files"]): LiveSite["files"] {
 const MEMORY_TTL_MS = 5_000;
 const MEMORY_MAX = 500;
 const memory = new Map<string, { at: number; live: LiveSite | null }>();
+// Shared only by outstanding reads of a slug, then released. Mutations remove
+// the fence so older reads cannot replace their memory state, including deletes.
+const reading = new Map<string, { active: number }>();
 
 function remember(slug: string, live: LiveSite | null) {
   if (memory.size >= MEMORY_MAX) memory.delete(memory.keys().next().value!);
@@ -54,23 +57,31 @@ function remember(slug: string, live: LiveSite | null) {
 /** For tests. */
 export function clearLiveMemoryCache() {
   memory.clear();
+  reading.clear();
 }
 
 export async function getLiveSite(dc: DropwayContext, slug: string): Promise<LiveSite | null> {
   const hit = memory.get(slug);
   if (hit && Date.now() - hit.at < MEMORY_TTL_MS) return hit.live;
-  const cached = await dc.env.CACHE.get<LiveSite>(liveKey(slug), { type: "json", cacheTtl: dc.config.liveCacheTtlSeconds }).catch(() => null);
-  if (cached && cached.v === LIVE_VERSION && cached.files && typeof cached.files === "object") {
-    cached.files = ownFiles(cached.files);
-    remember(slug, cached);
-    return cached;
+  const fence = reading.get(slug) ?? { active: 0 };
+  reading.set(slug, fence);
+  fence.active++;
+  try {
+    const cached = await dc.env.CACHE.get<LiveSite>(liveKey(slug), { type: "json", cacheTtl: dc.config.liveCacheTtlSeconds }).catch(() => null);
+    if (cached && cached.v === LIVE_VERSION && cached.files && typeof cached.files === "object") {
+      cached.files = ownFiles(cached.files);
+      if (reading.get(slug) === fence) remember(slug, cached);
+      return cached;
+    }
+    const live = await loadLiveSiteFromD1(dc, { slug });
+    if (reading.get(slug) === fence) remember(slug, live);
+    // Never fill KV from a miss: this D1 snapshot may have been superseded by a
+    // mutation on another isolate. Only mutations write manifests; miss results
+    // stay in the short-lived memory cache without overwriting newer KV state.
+    return live;
+  } finally {
+    if (--fence.active === 0 && reading.get(slug) === fence) reading.delete(slug);
   }
-  const live = await loadLiveSiteFromD1(dc, { slug });
-  remember(slug, live);
-  // Never fill KV from a miss: this D1 snapshot may have been superseded by a
-  // mutation on another isolate. Only mutations write manifests; miss results
-  // stay in the short-lived memory cache without overwriting newer KV state.
-  return live;
 }
 
 export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string; siteId?: string }): Promise<LiveSite | null> {
@@ -131,6 +142,7 @@ async function putLive(dc: DropwayContext, live: LiveSite): Promise<void> {
 export async function refreshLive(dc: DropwayContext, siteId: string): Promise<LiveSite | null> {
   const live = await loadLiveSiteFromD1(dc, { siteId });
   if (live) {
+    reading.delete(live.slug);
     remember(live.slug, live);
     await putLive(dc, live);
   }
@@ -138,6 +150,7 @@ export async function refreshLive(dc: DropwayContext, siteId: string): Promise<L
 }
 
 export async function dropLive(dc: DropwayContext, slug: string): Promise<void> {
+  reading.delete(slug);
   memory.delete(slug);
   await dc.env.CACHE.delete(liveKey(slug));
 }
