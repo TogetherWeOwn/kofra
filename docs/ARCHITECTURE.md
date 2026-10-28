@@ -116,6 +116,42 @@ Path mode is interim. Root-relative URLs (`/assets/app.js`) would escape the
    import specifiers, CSS set from JS, `location.href = "/x"` and
    `history.pushState("/x")`. Use relative URLs there, or subdomain mode.
 
+### Version previews
+
+`<slug>--v<N>` uses the same path/subdomain topology as the live site, but resolves
+its ready version and current site settings directly from D1 (`services/previews.ts`).
+It never reads or repairs the live KV pointer, so newly published bytes are available
+even during live-cache propagation. Pending versions and transfer sites are not previewable.
+
+Access requires a credential that can read the site or a signed `dw_preview` capability
+bound to the site id, version id and an absolute 24-hour expiry. Publish and finalize
+results return that signed `versionUrl`. Redeeming it sets a Secure, HttpOnly, host-only
+cookie scoped to the preview root and redirects to the same address without the token;
+the cookie cannot extend the signed expiry. Share the returned link carefully: it is a
+bearer credential. Unchanged publishes keep the same version address, but issue a fresh
+expiring capability. Idempotency replay retains the original result and its original expiry.
+The `version_previews` capability is built in; a policy refusal omits `versionUrl` without
+blocking ordinary publication, and live refusals deny existing links and owner previews.
+Signed links require an HTTPS preview origin; HTTP is allowed only for loopback development
+(`localhost`, `127.0.0.0/8` and `[::1]`). Other HTTP origins omit the link without failing publication.
+A pending result's link becomes readable only after finalization.
+
+`server/previews.ts` authorizes before reusing the normal file/viewer/password machinery.
+Preview responses are private/no-store, `noindex` and `no-referrer`, including conditional,
+range, HEAD and error responses. Path rewriting retains the version address for assets.
+Path-mode preview HTML also gets the existing runtime URL shim, even without a sandbox:
+root-relative JavaScript requests cannot rely on Referer recovery under `no-referrer`.
+The shim carries only the versioned path prefix, never the signed capability; its normal
+path-mode limitations still apply. Live unsandboxed pages keep their Referer fallback.
+Site passwords still apply; a preview capability is not a password unlock.
+
+As with password sites, path-scoped cookies are routing scope, **not origin isolation**.
+Path-mode sites share an origin; hostile content there can cause ambient-cookie requests
+(including classic-script inclusions from opaque sandbox origins). Use subdomain mode
+for sensitive previews or mutually untrusted sites. Its host-only `__Host-` cookie and
+same-site/cross-site subresource refusal isolate sibling sites. Removing CORS permission
+in path mode does not make different paths different origins.
+
 ### Viewing files
 
 `serveFile` asks `findViewer(file, live, viewers, mode)` (`packages/server/src/viewers`)
@@ -135,9 +171,20 @@ and has its own toolbar).
 
 Every view shares one bar (`viewers/chrome.ts`: kind, path, size, type; view
 tabs; Download; Files) built from plain links, so it works with JavaScript off.
+Except for image/SVG viewers and embeds, the bar also links to the previous
+and next direct files in the same folder, in listing name order, without
+wrapping. These default-view links use the loaded live manifest, never the
+request query. Their HTTP validators include the live version id so republishing
+siblings cannot revalidate stale navigation; content-only render fragments stay
+independent of the manifest. Image/SVG viewers retain their own stage navigation.
 View pages get `VIEWER_CSP` (no scripts). The code view adds one static inline
 script (Copy, `#L10-L20` ranges) allowed by its SHA-256 hash, which stays valid
-across 304 responses, unlike a nonce. User markup (Markdown, notebook HTML)
+across 304 responses, unlike a nonce. Line ranges are selected without typing a
+fragment: shift-click extends from the first line of the current `#L…` selection,
+and the toolbar's First/Last line inputs (bounded to the rendered lines, at most
+5000 at a time) do the same from the keyboard. Selection only rewrites the
+fragment — no request, storage or extra history beyond the new hash — and the
+address remains a live address, not a pinned one. User markup (Markdown, notebook HTML)
 goes through `viewers/sanitize.ts`, an allowlist sanitizer on `HTMLRewriter`.
 Expensive output (highlighting, Markdown, JSON trees, CSV tables) is cached by
 content in `viewers/cache.ts` (`render/<viewer>@<version>/<variant>/<sha256>`:
@@ -147,12 +194,29 @@ Syntax highlighting is highlight.js core plus about 80 languages registered in
 `viewers/hljs.js` (about 106 KB gzipped). That file is plain JavaScript with
 its own `hljs.d.ts` because highlight.js's types pull in the DOM lib.
 
+ZIP navigations, frames and `?view=1` list central-directory metadata only: paths,
+uncompressed sizes and compression methods in central-directory order, with totals
+for every entry and at most the first 1,000 rows. Archives over 2 MiB, invalid ZIPs,
+ZIP64/split ZIPs and non-ZIP archives get the binary info page with an explanation.
+No entry is inflated, extracted or linked, and entry contents are not verified.
+The ZIP fragment uses `archive@<version>/<sha256>`; bump the viewer version when
+its parser or output changes to invalidate both fragments and HTTP validators.
+A fallback caused by a transient short storage read is stored nowhere: no
+fragment is cached and the page itself is `no-store` without the listing ETag,
+so a reload recovers once storage does.
+Raw/download and sub-resource requests still serve the original complete bytes.
+
 **To add a viewer:** create `packages/server/src/viewers/<name>.ts` exporting a
 `Viewer` (`id`, `version`, `maxBytes`, `matches(file, live, mode)`, `render(vc)`),
 match on `file.kind` (from `detectFileKind` in `@dropway/core`) and the mode,
 wrap the body with `viewerPage()` from `viewers/chrome.ts`, and add it to
 `VIEWERS` in `viewers/index.ts` before the code/binary fallbacks. Embedding apps
 pass extra viewers in `createDropway({ viewers })`; they run first.
+
+Exact caps, read budgets, rendered-output limits and fallbacks for the JSON,
+CSV and notebook viewers (and the Source/Raw/Download byte contract) are in
+[`docs/VIEWERS.md`](VIEWERS.md); that page is canonical where a summary here
+or in `docs/SPEC.md` is shorter.
 
 CSV delimiter detection (`viewers/csv.ts`) counts comma/tab/semicolon/pipe only
 outside quoted fields across complete logical records (LF, CRLF and bare-CR
@@ -206,6 +270,15 @@ The dashboard never renders user content on the app origin: files open in an
 iframe on the sites origin (with `allow-same-origin` only when that origin is
 not the app origin), and downloads go through a forced-download blob.
 
+The loaded version's file detail offers **Download ZIP** through the authenticated
+immutable-ID export route. Browser downloads require known metadata of at most
+16 MiB stored bytes and 1,000 files; pending, larger or unknown versions show an
+explanation and the authenticated REST/CLI route instead. The client verifies
+`X-Kofra-Version`, ZIP type and the server attachment filename, reads at most
+32 MiB of actual response bytes, and offers no attachment until the stream is
+complete. The file selection and filter stay intact. These browser limits do not
+change the server export limits.
+
 Drag-and-drop publishing hashes files in the browser (SHA-256), sends the
 manifest to `POST /api/v1/sites/:slug/deploys`, uploads only the blobs the
 server reports missing (4 at a time, retried on 429/5xx), then finalizes. A
@@ -223,6 +296,19 @@ Unreadable paths covered by those same ignore rules
 remain excluded (an unreadable folder's contents are not listed); other read
 failures block publishing until the selection is reselected. The displayed
 selection stays bound to the in-flight publish.
+
+The update picker lists only the first page of sites, so an explicit update
+destination (the `?site=` target, or a slug entered in the update panel's
+lookup field) is verified with the single-site `GET /api/v1/sites/:slug`
+instead of paging through every site: the reference is encoded as one path
+segment (dot-only references are rejected locally before URL normalization),
+the returned slug is added to the picker and selected, and
+publishing stays disabled until that verification succeeds — a failed or
+superseded lookup never falls back to another listed site or a new site.
+Typing in the lookup field makes no request; Enter or the lookup button
+submits it. A sequence fence makes the newest explicit choice win over
+late list or lookup responses, and a verified destination stays selected
+through the list refresh after a successful publish.
 
 ## Data model (D1, `packages/core/migrations`)
 
@@ -257,7 +343,7 @@ tables in their own migrations or their own D1 database.
 
 ## Extension points: `createDropway(options)`
 
-`@dropway/server` exports `EXTENSION_API_VERSION = 4` for this public embedding
+`@dropway/server` exports `EXTENSION_API_VERSION = 5` for this public embedding
 contract. Update it and the Extension API section in `CHANGELOG.md` when changing
 the contract. `test/extension-contract.test.ts` exercises every existing extension
 point with fake adapters and real emulated D1/R2/KV bindings; it runs in public CI.

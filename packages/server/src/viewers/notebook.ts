@@ -101,6 +101,7 @@ export const notebookViewer: Viewer = {
     });
     return viewerPage(vc, {
       tabs: standardTabs(vc, { rendered: "Notebook", source: true }),
+      print: true,
       css: NB_CSS + HIGHLIGHT_CSS,
       body: `<main class="dw-nb">${r.html}</main>`,
       headers: { "X-Kofra-Render-Cache": r.cache },

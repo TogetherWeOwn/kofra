@@ -26,7 +26,7 @@ Extension adapters can add codes and override guidance without changing built-in
 | `bootstrap_key_required` | 403 | false | Send the bootstrap key in Authorization: Bearer for setup or recovery only. |
 | `claim_token_required` | 400 | false | Send the claimToken returned when the anonymous site was created. |
 | `confirm_mismatch` | 400 | false | Set confirm to the exact value in details.expected, then call again. |
-| `deploy_not_found` | 404 | false | Start a deploy with POST /api/v1/sites/:slug/deploys, or use a returned deploy ID. |
+| `deploy_not_found` | 404 | false | Start a version with POST /api/v1/sites/:slug/versions (alias: /deploys), or use a returned version ID. |
 | `duplicate_path` | 400 | false | Give each file a unique normalized path; remove duplicate entries. |
 | `empty_body` | 400 | false | Send files as multipart, JSON, a .zip, or one raw file. |
 | `export_too_large` | 413 | false | Download file by file with list_files and read_file. |
@@ -93,6 +93,7 @@ Extension adapters can add codes and override guidance without changing built-in
 | `rate_limited` | 429 | true | Wait retryAfterSeconds before retrying; update an existing anonymous site using its claim token. |
 | `reason_required` | 400 | false | Provide a non-empty reason for releasing the held name, such as a trademark dispute reference. |
 | `request_too_large` | 413 | false | Split the request or use manifest/upload/finalize instead of embedding file bytes. |
+| `reserved_path` | 400 | false | Rename the __dropway/ folder: paths under __dropway/ belong to the server (password form, report link). |
 | `route_not_found` | 404 | false | See /openapi.json for supported methods and endpoints. |
 | `scope_not_grantable` | 403 | false | Request only scopes held by both the caller and the target member's role. |
 | `site_changed` | 409 | false | Reload the site, reconcile the change, and retry manually. |
