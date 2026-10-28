@@ -104,7 +104,7 @@ describe("versions naming: canonical /versions routes with /deploys aliases", ()
     expect(restored.status).toBe(200);
     expect(restored.body).toMatchObject({ restored: true, version: { number: 1 } });
     expect(await (await dw.call("/s/named/")).text()).toBe("<h1>A</h1>");
-    const deleted = await dw.json("/api/v1/sites/named/versions/v2", { method: "DELETE", key: dw.ownerKey });
+    const deleted = await dw.json("/api/v1/sites/named/versions/v2", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: "named" }), key: dw.ownerKey });
     expect(deleted.status).toBe(200);
     expect(deleted.body.deleted).toBe(true);
     expect((await dw.json("/api/v1/sites/named/versions/v2", { key: dw.ownerKey })).status).toBe(404);

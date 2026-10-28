@@ -10,7 +10,7 @@ describe("operation command table: REST wire input", () => {
     { id: "list_versions", method: "GET", path: "/api/v1/sites/{slug}/versions", required: ["slug"] },
     { id: "get_version", method: "GET", path: "/api/v1/sites/{slug}/versions/{id}", required: ["slug", "id"] },
     { id: "restore_version", method: "POST", path: "/api/v1/sites/{slug}/versions/{id}/restore", required: ["slug", "id"] },
-    { id: "delete_version", method: "DELETE", path: "/api/v1/sites/{slug}/versions/{id}", required: ["slug", "id"] },
+    { id: "delete_version", method: "DELETE", path: "/api/v1/sites/{slug}/versions/{id}", required: ["slug", "id", "confirm"] },
     { id: "finalize_version", method: "POST", path: "/api/v1/sites/{slug}/versions/{id}/finalize", required: ["slug", "id"] },
     { id: "revoke_api_key", method: "DELETE", path: "/api/v1/keys/{id}", required: ["id"] },
   ])("$id requires its REST path fields, not MCP-only arguments", async ({ id, method, path, required }) => {
@@ -22,9 +22,10 @@ describe("operation command table: REST wire input", () => {
     expect(row!.inputSchema.type).toBe("object");
     expect.soft([...(row!.inputSchema.required ?? [])].sort()).toEqual([...required].sort());
     for (const name of required) {
-      expect.soft(row!.inputSchema.properties[name], `${id}: ${name} is a wire path parameter`).toMatchObject({ type: "string" });
+      expect.soft(row!.inputSchema.properties[name], `${id}: ${name} is a wire parameter`).toMatchObject({ type: "string" });
     }
     for (const name of ["site", "version", "versionId", "key", "confirm", "idempotencyKey"]) {
+      if (id === "delete_version" && name === "confirm") continue;
       expect.soft(row!.inputSchema.properties, `${id}: ${name} is MCP-only`).not.toHaveProperty(name);
     }
     if (id === "list_versions") {
