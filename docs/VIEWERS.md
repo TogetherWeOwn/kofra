@@ -138,6 +138,8 @@ image and its natural size without resetting the background. Clicking the image
 also toggles sizing. Large Actual-size images remain scrollable, and the controls
 wrap above the stage on narrow screens. Fit uses the space remaining after the
 actual wrapped controls and header, rather than a fixed header-height allowance.
+If controls exhaust a very short window, the stage retains a usable minimum
+height and the document can scroll instead of collapsing the image to zero.
 Image-viewer chrome stays in normal document flow so it cannot cover a control
 when native keyboard focus scrolls it into view. The inspection paint layer keeps
 its checker/white/black colors in forced-colors mode; the controls and their focus

@@ -33,9 +33,11 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column}
 /* Keep chrome in flow so native focus scrolling cannot hide controls below it. */
 .dw-vbar{position:static;flex-shrink:0}
 .dw-media{flex:1;min-height:0}
-.dw-media:not(:has(#dw-zoom:checked))>.dw-stage{flex:1;min-height:0;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+/* If controls exhaust the viewport, keep a usable stage in document overflow. */
+.dw-media:not(:has(#dw-zoom:checked))>.dw-stage{flex:1;min-height:8rem;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
 .dw-media:not(:has(#dw-zoom:checked))>.dw-stage img{max-height:100%}
 .dw-media:has(#dw-zoom:checked){flex:none}
+.dw-media:has(#dw-zoom:checked)>.dw-stage{grid-template-columns:minmax(max-content,1fr);grid-template-rows:minmax(max-content,1fr)}
 /* A separate paint layer preserves inspection colors, not control colors. */
 .dw-media>.dw-stage{display:grid;isolation:isolate;background:none}
 .dw-stage::before{content:"";grid-area:1/1;align-self:stretch;justify-self:stretch;forced-color-adjust:none;z-index:-1;background-color:var(--card);background-image:linear-gradient(45deg,var(--code) 25%,transparent 25%),linear-gradient(-45deg,var(--code) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,var(--code) 75%),linear-gradient(-45deg,transparent 75%,var(--code) 75%);background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0}
