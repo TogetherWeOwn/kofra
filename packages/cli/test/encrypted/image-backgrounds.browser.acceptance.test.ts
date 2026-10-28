@@ -20,7 +20,7 @@ import { unzlibSync } from "fflate";
 import { unstable_startWorker } from "wrangler";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Browser, BrowserContext, Locator, Page } from "playwright";
-import { imageBackgroundFiles } from "../../../../test/fixtures/image-backgrounds";
+import { imageBackgroundFiles, portraitImageFile } from "../../../../test/fixtures/image-backgrounds";
 
 const root = fileURLToPath(new URL("../../../../", import.meta.url));
 const require = createRequire(import.meta.url);
@@ -67,10 +67,12 @@ beforeAll(async () => {
   });
   expect(setup.status).toBe(201);
   const ownerKey = (await setup.json() as any).apiKey.key;
-  const form = new FormData(); form.set("slug", slug);
-  for (const file of imageBackgroundFiles) form.append(file.path, new File([file.bytes], file.path, { type: file.type }));
-  const published = await fetch(`${origin}/api/v1/publish`, { method: "POST", headers: { Authorization: `Bearer ${ownerKey}` }, body: form });
-  expect(published.status, await published.text()).toBe(201);
+  for (const [site, files] of [[slug, imageBackgroundFiles], [`${slug}-solo`, [imageBackgroundFiles[0]]], [`${slug}-portrait`, [portraitImageFile]]] as const) {
+    const form = new FormData(); form.set("slug", site);
+    for (const file of files) form.append(file.path, new File([file.bytes], file.path, { type: file.type }));
+    const published = await fetch(`${origin}/api/v1/publish`, { method: "POST", headers: { Authorization: `Bearer ${ownerKey}` }, body: form });
+    expect(published.status, await published.text()).toBe(201);
+  }
   const { chromium } = require("playwright");
   browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : {}) });
 }, 120_000);
@@ -81,8 +83,9 @@ afterAll(async () => {
 });
 
 type View = { context: BrowserContext; page: Page; wire: string[]; external: string[] };
-async function visit(path: string, theme: "light" | "dark", width: number, scripts = false, embed = false): Promise<View> {
-  const context = await browser.newContext({ javaScriptEnabled: scripts, colorScheme: theme, viewport: { width, height: 900 }, deviceScaleFactor: 1 });
+type VisitOptions = { height?: number; forcedColors?: "active" | "none"; site?: string; dimensions?: readonly [number, number] };
+async function visit(path: string, theme: "light" | "dark", width: number, scripts = false, embed = false, options: VisitOptions = {}): Promise<View> {
+  const context = await browser.newContext({ javaScriptEnabled: scripts, colorScheme: theme, viewport: { width, height: options.height ?? 900 }, forcedColors: options.forcedColors ?? "none", deviceScaleFactor: 1 });
   const wire: string[] = [], external: string[] = [];
   await context.route("**/*", route => {
     const url = route.request().url(); wire.push(url);
@@ -92,11 +95,12 @@ async function visit(path: string, theme: "light" | "dark", width: number, scrip
   const page = await context.newPage(); page.setDefaultTimeout(2500);
   page.setDefaultNavigationTimeout(5000);
   try {
-    const response = await page.goto(`${origin}/s/${slug}/${path}${embed ? "?view=1&embed=1" : ""}`, { waitUntil: "networkidle" });
+    const site = options.site ?? slug;
+    const response = await page.goto(`${origin}/s/${site}/${path}${embed ? "?view=1&embed=1" : ""}`, { waitUntil: "networkidle" });
     expect(response!.status()).toBe(200);
     const img = page.locator(".dw-stage img");
-    await expect.poll(() => img.evaluate(el => { const image = el as any; return image.complete && image.naturalWidth === 1600 && image.naturalHeight === 1000; })).toBe(true);
-    expect(await img.getAttribute("src")).toBe(`/s/${slug}/${path}`);
+    await expect.poll(() => img.evaluate((el, [width, height]) => { const image = el as any; return image.complete && image.naturalWidth === width && image.naturalHeight === height; }, options.dimensions ?? [1600, 1000])).toBe(true);
+    expect(await img.getAttribute("src")).toBe(`/s/${site}/${path}`);
     expect(await img.getAttribute("alt")).toBe(path);
     return { context, page, wire, external };
   } catch (error) { await context.close(); throw error; }
@@ -147,6 +151,38 @@ async function focusIsVisible(locator: Locator) {
     });
   });
   expect(visible, "keyboard focus needs a visible outline or ring on the native control/label").toBe(true);
+}
+
+/** Focus must survive scrolling/clipping and paint above sticky chrome. */
+async function focusIsExposed(locator: Locator) {
+  await focusIsVisible(locator);
+  const state = await locator.evaluate(el => {
+    const g = globalThis as any, labels = Array.from((el as any).labels ?? []) as any[];
+    const owns = (hit: any) => hit === el || el.contains(hit) || labels.some(label => label === hit || label.contains(hit));
+    const box = el.getBoundingClientRect(), center = g.document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+    const rings = [el, ...labels].flatMap(target => {
+      const style = g.getComputedStyle(target), b = target.getBoundingClientRect();
+      const outline = style.outlineStyle !== "none" && parseFloat(style.outlineWidth) > 0, shadow = style.boxShadow !== "none" && style.boxShadow !== "";
+      if (!outline && !shadow) return [];
+      const extent = outline ? Math.max(0, parseFloat(style.outlineOffset) + parseFloat(style.outlineWidth)) :
+        Math.max(0, ...(style.boxShadow.match(/-?\d+(?:\.\d+)?px/g) ?? []).map((length: string) => Math.abs(parseFloat(length))));
+      let left = 0, top = 0, right = g.innerWidth, bottom = g.innerHeight;
+      for (let parent = target.parentElement; parent; parent = parent.parentElement) {
+        const css = g.getComputedStyle(parent), r = parent.getBoundingClientRect();
+        if (/auto|scroll|hidden|clip/.test(css.overflowX)) { left = Math.max(left, r.left + parent.clientLeft); right = Math.min(right, r.left + parent.clientLeft + parent.clientWidth); }
+        if (/auto|scroll|hidden|clip/.test(css.overflowY)) { top = Math.max(top, r.top + parent.clientTop); bottom = Math.min(bottom, r.top + parent.clientTop + parent.clientHeight); }
+      }
+      const header = g.document.querySelector(".dw-vbar"), h = header?.getBoundingClientRect();
+      if (h && h.bottom > 0 && h.left < b.right + extent && h.right > b.left - extent) top = Math.max(top, h.bottom);
+      const corners = [[b.left + 1, b.top + 1], [b.right - 1, b.top + 1], [b.left + 1, b.bottom - 1], [b.right - 1, b.bottom - 1]];
+      return [{ x: b.x, y: b.y, right: b.right, bottom: b.bottom, extent, clip: { left, top, right, bottom },
+        exposed: b.left - extent >= left && b.right + extent <= right && b.top - extent >= top && b.bottom + extent <= bottom &&
+          corners.every(([x, y]) => owns(g.document.elementFromPoint(x, y))) }];
+    });
+    return { centerExposed: owns(center), hit: center?.outerHTML, rings };
+  });
+  expect(state.centerExposed, `focused control is unobscured: ${JSON.stringify(state)}`).toBe(true);
+  expect(state.rings.some(ring => ring.exposed), `focus ring is within the visible unclipped scrollport: ${JSON.stringify(state)}`).toBe(true);
 }
 
 async function selectionIsVisible(page: Page) {
@@ -219,30 +255,62 @@ function screenshotPixels(png: Uint8Array) {
   } };
 }
 
+/** Geometry of the bitmap, excluding contain-letterboxing and every ancestor clip. */
+async function bitmapGeometry(page: Page) {
+  return page.locator(".dw-stage img").evaluate(el => {
+    const g = globalThis as any, image = el as any, r = image.getBoundingClientRect(), css = g.getComputedStyle(image);
+    const x = r.x + parseFloat(css.borderLeftWidth) + parseFloat(css.paddingLeft), y = r.y + parseFloat(css.borderTopWidth) + parseFloat(css.paddingTop);
+    const width = image.clientWidth - parseFloat(css.paddingLeft) - parseFloat(css.paddingRight), height = image.clientHeight - parseFloat(css.paddingTop) - parseFloat(css.paddingBottom);
+    const scale = css.objectFit === "contain" ? Math.min(width / image.naturalWidth, height / image.naturalHeight) :
+      css.objectFit === "scale-down" ? Math.min(1, width / image.naturalWidth, height / image.naturalHeight) : 1;
+    const w = /contain|scale-down|none/.test(css.objectFit) ? image.naturalWidth * scale : width;
+    const h = /contain|scale-down|none/.test(css.objectFit) ? image.naturalHeight * scale : height;
+    const [positionX, positionY] = css.objectPosition.split(" ");
+    const offset = (position: string, space: number) => position.endsWith("%") ? parseFloat(position) * space / 100 : parseFloat(position);
+    const bitmap = { x: x + offset(positionX, width - w), y: y + offset(positionY, height - h), width: w, height: h };
+    const visible = { left: Math.max(0, bitmap.x), top: Math.max(0, bitmap.y), right: Math.min(g.innerWidth, bitmap.x + w), bottom: Math.min(g.innerHeight, bitmap.y + h) };
+    for (let parent = image.parentElement; parent; parent = parent.parentElement) {
+      const style = g.getComputedStyle(parent), b = parent.getBoundingClientRect();
+      if (/auto|scroll|hidden|clip/.test(style.overflowX)) { visible.left = Math.max(visible.left, b.left + parent.clientLeft); visible.right = Math.min(visible.right, b.left + parent.clientLeft + parent.clientWidth); }
+      if (/auto|scroll|hidden|clip/.test(style.overflowY)) { visible.top = Math.max(visible.top, b.top + parent.clientTop); visible.bottom = Math.min(visible.bottom, b.top + parent.clientTop + parent.clientHeight); }
+    }
+    const header = g.document.querySelector(".dw-vbar")?.getBoundingClientRect();
+    if (header && header.bottom > 0) visible.top = Math.max(visible.top, header.bottom);
+    // The fixture's outer quarter is transparent, its middle half opaque.
+    // Pick an actually visible 24px strip, never a full-page/off-scrollport pixel.
+    let transparent: { x: number; y: number } | null = null, artwork: { x: number; y: number } | null = null;
+    for (let py = Math.ceil(visible.top) + 16; py < visible.bottom - 16 && (!transparent || !artwork); py += 8) {
+      for (let px = Math.ceil(visible.left) + 16; px + 24 < visible.right - 16; px += 8) {
+        if (![0, 12, 23].every(dx => g.document.elementFromPoint(px + dx, py) === image)) continue;
+        artwork ??= { x: px, y: py };
+        if (py < bitmap.y + h / 4 || py >= bitmap.y + h * 3 / 4 || px + 23 < bitmap.x + w / 4 || px >= bitmap.x + w * 3 / 4) { transparent ??= { x: px, y: py }; break; }
+      }
+    }
+    return { bitmap, visible, transparent, artwork, naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight };
+  });
+}
+
 async function capture(view: View, file: typeof imageBackgroundFiles[number], label: string, background: Background, actual: boolean) {
-  const elementBox = (await view.page.locator(".dw-stage img").boundingBox())!;
-  // object-fit:contain can letterbox inside an img whose width/height attrs
-  // are independently capped by CSS. Sample the bitmap, not that letterbox.
-  const scale = Math.min(elementBox.width / 1600, elementBox.height / 1000);
-  const box = { x: elementBox.x + (elementBox.width - 1600 * scale) / 2, y: elementBox.y + (elementBox.height - 1000 * scale) / 2, width: 1600 * scale, height: 1000 * scale };
-  const scroll = await view.page.evaluate(() => ({ x: (globalThis as any).scrollX, y: (globalThis as any).scrollY }));
-  const png = await view.page.screenshot({ fullPage: true, path: join(evidence, `${label}-${background}-${actual ? "actual" : "fit"}.png`) });
-  // Full natural-size images may be inside an inner scrollport. Fit mode has
-  // the complete image onscreen, so screenshot samples are unambiguous there.
-  if (actual) return;
-  const pixels = screenshotPixels(png);
-  const sample = (x: number, y: number) => pixels.at(Math.round(box.x + scroll.x + box.width * x), Math.round(box.y + scroll.y + box.height * y));
-  expect(sample(0.5, 0.5), "center artwork pixel").toEqual([file.shade, file.shade, file.shade]);
-  if (file.path === "opaque.png") expect(sample(0.1, 0.1)).toEqual([96, 96, 96]);
-  else if (background === "Light") expect(sample(0.1, 0.1), "white stage through transparent pixels").toEqual([255, 255, 255]);
-  else if (background === "Dark") expect(sample(0.1, 0.1), "black stage through transparent pixels").toEqual([0, 0, 0]);
-  else {
-    // Sample a 24px strip of transparent border: two visible checker tones,
-    // not a solid background or merely a CSS class named 'checker'.
-    const y = Math.round(box.y + scroll.y + box.height * 0.1), x = Math.round(box.x + scroll.x + box.width * 0.1);
-    const tones = new Set(Array.from({ length: 24 }, (_, n) => pixels.at(x + n, y).join(",")));
-    expect(tones.size, "visible checkerboard through transparent border").toBeGreaterThan(1);
+  const geometry = await bitmapGeometry(view.page), box = geometry.bitmap;
+  const stem = `${label}-${background}-${actual ? "actual" : "fit"}`;
+  const png = await view.page.screenshot({ path: join(evidence, `${stem}.png`) });
+  const pixels = screenshotPixels(png), opaque = file.path === "opaque.png";
+  const point = opaque ? geometry.artwork : geometry.transparent;
+  expect(point, `a visible ${opaque ? "opaque" : "transparent"} fixture strip must exist inside all clips: ${JSON.stringify(geometry)}`).not.toBeNull();
+  const tones = Array.from({ length: 24 }, (_, n) => pixels.at(point!.x + n, point!.y));
+  await writeFile(join(evidence, `${stem}.json`), JSON.stringify({ background, actual, geometry, tones }, null, 2));
+  if (!actual) {
+    const x = Math.round(box.x + box.width / 2), y = Math.round(box.y + box.height / 2);
+    expect(x).toBeGreaterThanOrEqual(geometry.visible.left); expect(x).toBeLessThan(geometry.visible.right);
+    expect(y).toBeGreaterThanOrEqual(geometry.visible.top); expect(y).toBeLessThan(geometry.visible.bottom);
+    expect(pixels.at(x, y), "center artwork pixel").toEqual([file.shade, file.shade, file.shade]);
   }
+  // An opaque Actual-size bitmap can cover the entire scrollport: it proves
+  // opacity, not a background that cannot be seen. Transparent fixtures do both.
+  if (opaque) expect(tones.every(tone => tone.join(",") === "96,96,96"), "opaque control pixels stay opaque in both sizes").toBe(true);
+  else if (background === "Light") expect(tones, "white stage through visible transparent pixels").toEqual(Array.from({ length: 24 }, () => [255, 255, 255]));
+  else if (background === "Dark") expect(tones, "black stage through visible transparent pixels").toEqual(Array.from({ length: 24 }, () => [0, 0, 0]));
+  else expect(new Set(tones.map(tone => tone.join(","))).size, "visible checkerboard through transparent border").toBeGreaterThan(1);
 }
 
 async function pageColors(page: Page) {
@@ -252,6 +320,66 @@ async function pageColors(page: Page) {
       const style = g.getComputedStyle(el); return [style.backgroundColor, style.backgroundImage, style.color];
     });
   });
+}
+
+/** Move only user-scrollable ancestors; hidden/clip remain real constraints. */
+async function reachableEdges(page: Page) {
+  return page.locator(".dw-stage img").evaluate(el => {
+    const g = globalThis as any, image = el as any, doc = g.document.scrollingElement;
+    const parents: any[] = [];
+    for (let parent = image.parentElement; parent; parent = parent.parentElement) parents.push(parent);
+    const saved = parents.map(parent => ({ parent, x: parent.scrollLeft, y: parent.scrollTop }));
+    const allowed = (parent: any, axis: "X" | "Y") => {
+      const overflow = g.getComputedStyle(parent)[`overflow${axis}`];
+      if (parent === doc) return !/hidden|clip/.test(overflow) && !/hidden|clip/.test(g.getComputedStyle(g.document.body)[`overflow${axis}`]);
+      return /auto|scroll/.test(overflow);
+    };
+    const port = (parent: any) => {
+      if (parent === doc) return { left: 0, top: 0, right: g.innerWidth, bottom: g.innerHeight };
+      const b = parent.getBoundingClientRect();
+      return { left: b.left + parent.clientLeft, top: b.top + parent.clientTop, right: b.left + parent.clientLeft + parent.clientWidth, bottom: b.top + parent.clientTop + parent.clientHeight };
+    };
+    const points = [{ name: "left", x: 0, y: 0.5 }, { name: "right", x: 1, y: 0.5 }, { name: "top", x: 0.5, y: 0 }, { name: "bottom", x: 0.5, y: 1 }];
+    try {
+      return points.map(point => {
+        for (const parent of parents) parent.scrollTo({ left: allowed(parent, "X") ? 0 : parent.scrollLeft, top: allowed(parent, "Y") ? 0 : parent.scrollTop, behavior: "instant" });
+        const position = () => { const b = image.getBoundingClientRect(); return { x: b.left + 2 + (b.width - 4) * point.x, y: b.top + 2 + (b.height - 4) * point.y }; };
+        // Inner-to-outer, with a bounded second pass after the document moves.
+        for (let pass = 0; pass < 2; pass++) for (const parent of parents) {
+          const p = position(), clip = port(parent);
+          if (parent === doc) {
+            const h = g.document.querySelector(".dw-vbar")?.getBoundingClientRect();
+            if (h && h.bottom > 0 && h.left <= p.x && h.right >= p.x) clip.top = Math.max(clip.top, h.bottom);
+          }
+          // Keep the probe off a scrollport's rounded corners while still
+          // checking the bitmap's edge (2px inset), not just its middle.
+          parent.scrollTo({
+            left: parent.scrollLeft + (allowed(parent, "X") ? p.x - Math.min(Math.max(p.x, clip.left + 16), clip.right - 16) : 0),
+            top: parent.scrollTop + (allowed(parent, "Y") ? p.y - Math.min(Math.max(p.y, clip.top + 16), clip.bottom - 16) : 0), behavior: "instant",
+          });
+        }
+        const p = position(), clip = { left: 0, top: 0, right: g.innerWidth, bottom: g.innerHeight };
+        for (const parent of parents) {
+          if (parent === doc) continue;
+          const css = g.getComputedStyle(parent), b = port(parent);
+          if (/auto|scroll|hidden|clip/.test(css.overflowX)) { clip.left = Math.max(clip.left, b.left); clip.right = Math.min(clip.right, b.right); }
+          if (/auto|scroll|hidden|clip/.test(css.overflowY)) { clip.top = Math.max(clip.top, b.top); clip.bottom = Math.min(clip.bottom, b.bottom); }
+        }
+        const h = g.document.querySelector(".dw-vbar")?.getBoundingClientRect();
+        if (h && h.bottom > 0 && h.left <= p.x && h.right >= p.x) clip.top = Math.max(clip.top, h.bottom);
+        const hit = g.document.elementFromPoint(p.x, p.y);
+        return { edge: point.name, point: p, clip, hit: hit?.tagName, reached: p.x >= clip.left && p.x < clip.right && p.y >= clip.top && p.y < clip.bottom && hit === image,
+          offsets: parents.filter(parent => parent.scrollLeft || parent.scrollTop).map(parent => ({ tag: parent.tagName, class: parent.className, x: parent.scrollLeft, y: parent.scrollTop })) };
+      });
+    } finally {
+      for (const { parent, x, y } of saved) parent.scrollTo({ left: x, top: y, behavior: "instant" });
+    }
+  });
+}
+
+async function assertReachableEdges(page: Page) {
+  const edges = await reachableEdges(page);
+  expect(edges.filter(edge => !edge.reached), `all Actual-size image edges are reachable through every clip: ${JSON.stringify(edges)}`).toEqual([]);
 }
 
 async function layout(page: Page, width: number, actual: boolean) {
@@ -272,6 +400,7 @@ async function layout(page: Page, width: number, actual: boolean) {
     expect(state.width).toBe(1600); expect(state.height).toBe(1000);
     expect(state.horizontal, "natural-size wide artwork remains horizontally scrollable").toBe(true);
     expect(state.vertical, "natural-size tall artwork remains vertically scrollable").toBe(true);
+    await assertReachableEdges(page);
   } else expect(state.width).toBeLessThanOrEqual(width);
   const boxes = await page.locator(".dw-mediabar label, .dw-mediabar select")
     .or(page.getByRole("radiogroup", { name: /background/i }).locator("label")).evaluateAll(elements => elements.map(el => {
@@ -282,6 +411,74 @@ async function layout(page: Page, width: number, actual: boolean) {
     expect(box.bottom, "wrapped controls precede and do not cover the image stage").toBeLessThanOrEqual(stage.y + 1);
   }
 }
+
+describe("product regressions", () => {
+  for (const theme of ["light", "dark"] as const) for (const file of [imageBackgroundFiles[0], imageBackgroundFiles[2]]) {
+    for (const actual of [false, true]) for (const background of names) {
+      it(`forced colors: ${file.path}, ${theme} system scheme, ${background}, ${actual ? "Actual" : "Fit"} keeps an inspection surface`, async () => {
+        const view = await visit(file.path, theme, 1100, false, false, { forcedColors: "active" });
+        try {
+          expect(await view.page.evaluate(() => (globalThis as any).matchMedia("(forced-colors: active)").matches)).toBe(true);
+          await choose(view.page, background);
+          if (actual) {
+            await tabTo(view.page, view.page.getByLabel("Actual size", { exact: true }));
+            await view.page.keyboard.press("Space");
+          }
+          const adaptation = await view.page.locator("input").evaluateAll(elements => elements.flatMap(el => [el, ...Array.from((el as any).labels ?? [])])
+            .map(el => (globalThis as any).getComputedStyle(el).forcedColorAdjust));
+          expect(adaptation.length).toBeGreaterThan(0);
+          expect(adaptation, "controls and labels retain system forced-color adaptation").not.toContain("none");
+          await capture(view, file, `forced-${file.path}-${theme}`, background, actual);
+        } finally { await view.context.close(); }
+      });
+    }
+  }
+
+  it("scrolled keyboard focus exposes Checker and its ring below the sticky header", async () => {
+    const view = await visit("light.png", "light", 360, false, false, { height: 640, site: `${slug}-solo` });
+    try {
+      const zoom = view.page.getByLabel("Actual size", { exact: true });
+      await tabTo(view.page, zoom); await view.page.keyboard.press("Space");
+      expect(await zoom.isChecked()).toBe(true);
+      // Separate native key events: allow each smooth page scroll to settle.
+      await view.page.keyboard.press("ArrowDown"); await view.page.waitForTimeout(250);
+      await view.page.keyboard.press("ArrowDown"); await view.page.waitForTimeout(250);
+      expect(await view.page.evaluate(() => (globalThis as any).scrollY)).toBeGreaterThan(0);
+      await view.page.keyboard.press("Tab");
+      const checker = view.page.getByRole("radio", { name: "Checker", exact: true });
+      expect(await checker.evaluate(el => (globalThis as any).document.activeElement === el)).toBe(true);
+      await view.page.screenshot({ path: join(evidence, "focus-after-scroll.png") });
+      await focusIsExposed(checker);
+    } finally { await view.context.close(); }
+  });
+
+  for (const { width, height } of [{ width: 340, height: 600 }, { width: 360, height: 480 }, { width: 1100, height: 900 }]) for (const embed of [false, true]) {
+    it(`portrait Fit: ${width}x${height}, ${embed ? "embed" : "ordinary"} fits below real wrapped controls and retains Actual-size edges`, async () => {
+      const view = await visit(portraitImageFile.path, "light", width, false, embed, { height, site: `${slug}-portrait`, dimensions: [600, 1200] });
+      try {
+        expect(await view.page.evaluate(() => (globalThis as any).scrollY), "initial Fit has not been scrolled into view").toBe(0);
+        expect(await view.page.getByRole("link", { name: /Previous|Next/ }).count()).toBe(0);
+        expect(await view.page.locator(".dw-mediabar").innerText()).not.toMatch(/\b\d+ of \d+\b/);
+        const { bitmap } = await bitmapGeometry(view.page);
+        const controlsBottom = await view.page.locator(".dw-vbar, .dw-mediabar")
+          .or(view.page.getByRole("radiogroup", { name: /background/i })).evaluateAll(elements => Math.max(0, ...elements.map(el => el.getBoundingClientRect().bottom)));
+        await view.page.screenshot({ path: join(evidence, `portrait-${width}-${height}-${embed ? "embed" : "ordinary"}-fit.png`) });
+        await writeFile(join(evidence, `portrait-${width}-${height}-${embed ? "embed" : "ordinary"}.json`), JSON.stringify({ bitmap, controlsBottom, width, height }, null, 2));
+        expect.soft(bitmap.y, "Fit bitmap begins below the actual chrome/controls").toBeGreaterThanOrEqual(controlsBottom - 1);
+        expect.soft(bitmap.x).toBeGreaterThanOrEqual(0);
+        expect.soft(bitmap.x + bitmap.width).toBeLessThanOrEqual(width + 1);
+        expect.soft(bitmap.y + bitmap.height, "initial portrait Fit bitmap fits the remaining viewport, not an obsolete fixed header allowance").toBeLessThanOrEqual(height + 1);
+        expect(bitmap.width / bitmap.height).toBeCloseTo(0.5, 2);
+        const zoom = view.page.getByLabel("Actual size", { exact: true });
+        await tabTo(view.page, zoom); await view.page.keyboard.press("Space");
+        expect(await zoom.isChecked()).toBe(true);
+        const actual = (await view.page.locator(".dw-stage img").boundingBox())!;
+        expect(actual.width).toBe(600); expect(actual.height).toBe(1200);
+        await assertReachableEdges(view.page); // Includes vertical-only desktop overflow.
+      } finally { await view.context.close(); }
+    });
+  }
+});
 
 for (const theme of ["light", "dark"] as const) for (const width of [360, 1100]) {
   describe(`${theme} app theme at ${width}px, scripts disabled`, () => {
@@ -363,14 +560,36 @@ it.each([
 });
 
 it.each(["light.png", "light.svg"])("%s: opt-in embed retains no-script background/zoom composition without restoring viewer chrome", async path => {
+  const file = imageBackgroundFiles.find(candidate => candidate.path === path)!;
   const view = await visit(path, "dark", 360, false, true);
   try {
     expect(await view.page.locator(".dw-vbar").count()).toBe(0);
     expect(await selected(view.page)).toBe("Checker");
-    await choose(view.page, "Dark");
     const zoom = view.page.getByLabel("Actual size", { exact: true });
-    await tabTo(view.page, zoom); await view.page.keyboard.press("Space");
-    expect(await zoom.isChecked()).toBe(true); expect(await selected(view.page)).toBe("Dark");
-    await layout(view.page, 360, true);
+    for (const background of names) {
+      if (await zoom.isChecked()) { await tabTo(view.page, zoom); await view.page.keyboard.press("Space"); }
+      await choose(view.page, background);
+      expect(await zoom.isChecked()).toBe(false);
+      await layout(view.page, 360, false); await capture(view, file, `embed-${path}`, background, false);
+      await tabTo(view.page, zoom); await view.page.keyboard.press("Space");
+      expect(await zoom.isChecked()).toBe(true); expect(await selected(view.page)).toBe(background);
+      await layout(view.page, 360, true); await capture(view, file, `embed-${path}`, background, true);
+    }
+    expect(await selected(view.page)).toBe("Dark"); expect(await zoom.isChecked()).toBe(true);
+    // Real user wheel input complements the exhaustive ancestor-scroll probes.
+    const image = view.page.locator(".dw-stage img"), before = (await image.boundingBox())!;
+    const stage = (await view.page.locator(".dw-stage").boundingBox())!;
+    await view.page.mouse.move(180, Math.min(850, stage.y + 100)); await view.page.mouse.wheel(200, 0);
+    await expect.poll(async () => (await image.boundingBox())!.x, { message: "horizontal wheel reaches the inner scrollport" }).toBeLessThan(before.x - 1);
+    await view.page.keyboard.press("PageDown");
+    await expect.poll(async () => (await image.boundingBox())!.y, { message: "keyboard scrolling can use the outer document" }).toBeLessThan(before.y - 1);
+    // Do not take pixel coordinates halfway through the native PageDown animation.
+    let previous = "", stable = 0;
+    await expect.poll(async () => {
+      const position = JSON.stringify(await image.boundingBox());
+      stable = position === previous ? stable + 1 : 0; previous = position; return stable;
+    }, { message: "user scroll settles before coordinate sampling" }).toBeGreaterThanOrEqual(2);
+    await assertReachableEdges(view.page);
+    await capture(view, file, `embed-${path}-scrolled`, "Dark", true);
   } finally { await view.context.close(); }
 });

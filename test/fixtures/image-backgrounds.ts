@@ -5,12 +5,11 @@ import { zlibSync } from "fflate";
  * the border is transparent. The opaque control is solid #606060 everywhere.
  * No downloaded assets, canvas, image decoder or production fixture endpoint.
  */
-function png(shade: number, opaque = false, padding = 0): Uint8Array {
-  const width = 1600, height = 1000;
+function png(shade: number, opaque = false, padding = 0, width = 1600, height = 1000): Uint8Array {
   const scanlines = new Uint8Array(height * (1 + width * 4));
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      if (!opaque && !(x >= 400 && x < 1200 && y >= 250 && y < 750)) continue;
+      if (!opaque && !(x >= width / 4 && x < width * 3 / 4 && y >= height / 4 && y < height * 3 / 4)) continue;
       const offset = y * (1 + width * 4) + 1 + x * 4;
       scanlines.set([shade, shade, shade, 255], offset);
     }
@@ -53,3 +52,6 @@ export const imageBackgroundFiles = [
   { path: "dark.svg", type: "image/svg+xml", viewer: "svg", shade: 0, bytes: svg("black") },
   { path: "opaque.png", type: "image/png", viewer: "image", shade: 96, bytes: png(96, true, 128 * 1024) },
 ] as const;
+
+// Separate singleton site: do not change the original five-file manifest or goldens.
+export const portraitImageFile = { path: "portrait.png", type: "image/png", bytes: png(255, false, 0, 600, 1200) } as const;
