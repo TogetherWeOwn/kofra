@@ -82,6 +82,23 @@ describe("claim argv validation is local", () => {
     expect(String(err.hint ?? "")).toMatch(/--token/);
   });
 
+  it.each([" ", ".", ".."])("rejects invalid site %j locally, including dry-run", async (site) => {
+    for (const extra of [["--token", TOKEN], ["--dry-run"]]) {
+      const r = await cli(["claim", site, ...extra, "--json"]);
+      expect(r.code).toBe(2);
+      expectKnownCommand(r);
+      expect(r.wire).toEqual([]);
+      expect(claimObject(r)).toMatchObject({ ok: false, exitCode: 2, error: { message: "Use an explicit site slug." } });
+    }
+  });
+
+  it("rejects malformed tokens locally", async () => {
+    const r = await cli(["claim", "some-site", "--token", "invalid", "--json"]);
+    expect(r.code).toBe(2);
+    expect(r.wire).toEqual([]);
+    expect(claimObject(r)).toMatchObject({ ok: false, exitCode: 2, error: { code: "claim_token_invalid" } });
+  });
+
   it("missing --token says --token in human output too", async () => {
     const r = await cli(["claim", "some-site"]);
     expect(r.code).toBe(2);

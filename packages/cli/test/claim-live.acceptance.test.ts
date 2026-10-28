@@ -47,6 +47,7 @@ let secrets: SecretSet;
 let api: string;
 let ownerKey: string;
 let readerKey: string;
+let writerKey: string;
 let bundle: string;
 
 function fixtureUrl(path: string, origin: string): URL {
@@ -158,6 +159,10 @@ beforeAll(async () => {
   expect(reader.status).toBe(201);
   readerKey = reader.body.key as string;
   secrets.add(readerKey);
+  const writer = await json("/api/v1/keys", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "claim-writer", scopes: ["sites:write"] }) });
+  expect(writer.status).toBe(201);
+  writerKey = writer.body.key as string;
+  secrets.add(writerKey);
   bundle = join(work, "bundle", "kofra.mjs");
   await build({ entryPoints: [join(root, "packages/cli/src/cli.ts")], bundle: true, platform: "node", format: "esm", target: "node20", outfile: bundle, logLevel: "silent" });
 }, 120_000);
@@ -183,7 +188,7 @@ describe("golden claim from the terminal", () => {
     expect(posts[0]!.bodyKeys, "the token travels as one claimToken body field").toEqual(["claimToken"]);
 
     const out = claimObject(r);
-    expect(out).toMatchObject({ ok: true, site: { slug: site.slug, anonymous: false, expiresAt: null }, url: expect.any(String) });
+    expect(out).toMatchObject({ ok: true, claimed: null, alreadyOwned: null, site: { slug: site.slug, anonymous: false, expiresAt: null }, url: expect.any(String) });
     const owned = await readSite(site.slug, ownerKey);
     expect(owned.status).toBe(200);
     expect(owned.body.site).toMatchObject({ slug: site.slug, anonymous: false, expiresAt: null });
@@ -200,7 +205,7 @@ describe("golden claim from the terminal", () => {
     expect(owned.status).toBe(200);
     expect(r.stdout).toContain(site.slug);
     expect(r.stdout).toContain(owned.body.site.url);
-    expect(r.stdout).toContain("/dashboard");
+    expect(r.stdout).toContain(`${api}/dashboard/sites/${site.slug}`);
   });
 });
 
@@ -231,21 +236,12 @@ describe("claim refusals keep the site untouched", () => {
   });
 
   it("(3b) a malformed token is refused without mutating or leaking", async () => {
-    // Both designs are acceptable: pass the token to the server (400
-    // claim_token_required -> exit 6) or validate the dwc_ shape locally
-    // (exit 2 with a token hint, like `login`). What is pinned: refused,
-    // silent about the value, and the site untouched.
     const site = await publishAnon("malformed-token");
     const r = await cli(["claim", site.slug, "--token", MALFORMED_TOKEN, "--json"]);
     expectKnownCommand(r);
-    expect([2, 6], `malformed token exit, got ${r.code}: ${r.stdout}${r.stderr}`).toContain(r.code);
-    if (r.code === 6) {
-      expect(claimPosts(r, site.slug)).toHaveLength(1);
-      expect(claimObject(r)).toMatchObject({ ok: false, exitCode: 6, error: { code: "claim_token_required", status: 400 } });
-    } else {
-      expect(claimPosts(r, site.slug)).toHaveLength(0);
-      expect(String(claimObject(r).error.hint ?? "")).toMatch(/token/i);
-    }
+    expect(r.code).toBe(2);
+    expect(r.wire).toEqual([]);
+    expect(claimObject(r)).toMatchObject({ ok: false, exitCode: 2, error: { code: "claim_token_invalid" } });
     const still = await readSite(site.slug, site.claimToken);
     expect(still.status).toBe(200);
     expect(still.body.site).toMatchObject({ slug: site.slug, anonymous: true });
@@ -287,6 +283,23 @@ describe("claim dry-run and idempotence", () => {
     expect((await readSite(site.slug, ownerKey)).status, "still invisible to the owner").toBe(404);
   });
 
+  it("reports an unknown change outcome when a write-only key repeats a claim", async () => {
+    const site = await publishAnon("write-only-repeat");
+    const first = await cli(["claim", site.slug, "--token", site.claimToken, "--json"]);
+    expect(first.code).toBe(0);
+    expect((await readSite(site.slug, writerKey)).status).toBe(403);
+    const before = await versionIds(site.slug);
+    const repeat = await cli(["claim", site.slug, "--token", site.claimToken, "--json"], { key: writerKey });
+    expect(repeat.code, repeat.stdout + repeat.stderr).toBe(0);
+    expect(claimPosts(repeat, site.slug)).toHaveLength(1);
+    expect(claimObject(repeat)).toMatchObject({ ok: true, claimed: null, alreadyOwned: null, site: { slug: site.slug, anonymous: false } });
+    expect(await versionIds(site.slug)).toEqual(before);
+    const human = await cli(["claim", site.slug, "--token", site.claimToken], { key: writerKey });
+    expect(human.code).toBe(0);
+    expect(human.stdout).not.toMatch(/claimed|already yours|unchanged/i);
+    expect(human.stdout).toContain(`${api}/dashboard/sites/${site.slug}`);
+  });
+
   it("dry-run needs no --token and still mutates nothing", async () => {
     const site = await publishAnon("dry-run-no-token");
     const before = (await readSite(site.slug, site.claimToken)).body;
@@ -314,7 +327,7 @@ describe("claim dry-run and idempotence", () => {
 
     const third = await cli(["claim", site.slug, "--token", site.claimToken, "--json"]);
     expect(third.code, third.stdout + third.stderr).toBe(0);
-    expect(claimObject(third)).toMatchObject({ ok: true, site: { slug: site.slug, anonymous: false } });
+    expect(claimObject(third)).toMatchObject({ ok: true, claimed: false, alreadyOwned: true, site: { slug: site.slug, anonymous: false } });
     expect(await versionIds(site.slug), "repeat claims create no versions").toEqual(versionsBefore);
     expect((await readSite(site.slug, site.claimToken)).status).toBe(401);
   });

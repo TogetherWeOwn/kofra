@@ -636,7 +636,8 @@ working. The site is always explicit; saved project mappings are never used.
 Calls claim_site once through POST /api/v1/sites/{site}/claim. An unknown site
 and a wrong token both answer 404 site_not_found (the server does not reveal
 which). A site you already own is reported as unchanged (exit 0) after reading
-it from the server; the claim token is then not used.
+it from the server; the claim token is then not used. Otherwise the server
+does not distinguish a new claim from a retry, so the result is neutral.
 
 Examples:
   kofra claim bright-otter-x7k2 --token dwc_... --json
@@ -667,7 +668,8 @@ Examples:
     const dashboard = (slug: string) => `${inst.api}/dashboard/sites/${enc(slug)}`;
     // Only a server read can say the caller already owns the site: the claim
     // endpoint answers a repeat claim exactly like a first one. A failed read
-    // is not an answer; the claim below reports the real error.
+    // is not an answer; the claim below reports the real error. Even a
+    // successful claim response cannot distinguish a mutation from a retry.
     const existing = await client.getSite({ slug: site }).then(
       (r) => (r as { site?: Record<string, any> }).site,
       () => undefined,
@@ -682,8 +684,8 @@ Examples:
     const result = (await client.claimSite({ slug: site, claimToken: token })) as { claimed?: boolean; site: Record<string, any> };
     const kept = result.site;
     const slug = String(kept.slug ?? site);
-    out.result({ claimed: result.claimed ?? true, alreadyOwned: false, site: kept, url: kept.url }, () =>
-      [`Claimed ${slug}; it no longer expires.`, `URL:       ${kept.url}`, `Dashboard: ${dashboard(slug)}`].join("\n"),
+    out.result({ claimed: null, alreadyOwned: null, site: kept, url: kept.url }, () =>
+      [`${slug} is yours and no longer expires (claim change status unknown).`, `URL:       ${kept.url}`, `Dashboard: ${dashboard(slug)}`].join("\n"),
     );
     return EXIT.ok;
   },
