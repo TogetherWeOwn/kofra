@@ -56,6 +56,12 @@ async function spendUnlock(dc: DropwayContext, bucket: string, cap: number) {
   if (!row) throw new ApiError(503, "transfer_unlock_unavailable", "Password unlock is unavailable.", "Retry later.");
   if (row.attempts > cap) throw rateLimited("Too many password attempts.", "Wait before trying again.", Math.max(1, Math.ceil(((window + 1) * windowMs - Date.now()) / 1000)));
 }
+/** Separate namespaces prevent site password attempts from consuming transfer budgets. */
+export async function spendSitePasswordAttempt(dc: DropwayContext, siteId: string, ip: string) {
+  await spendUnlock(dc, `site-ip:${await sha256Hex(`${dc.config.signingSecret}:${ip}`)}`, 10);
+  await spendUnlock(dc, `site:${siteId}`, 30);
+}
+
 export async function unlockTransfer(dc: DropwayContext, t: PublicTransfer, password: unknown, ip: string) {
   checkTransferGate(t);
   await spendUnlock(dc, `ip:${await sha256Hex(`${dc.config.signingSecret}:${ip}`)}`, 10);

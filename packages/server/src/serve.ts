@@ -7,6 +7,8 @@ import {
   hmacHex,
   isHtml,
   isTextual,
+  isApiError,
+  spendSitePasswordAttempt,
   meter,
   emit,
   precompressed,
@@ -218,6 +220,15 @@ async function handlePassword(dw: DropwayContext, req: Request, live: LiveSite, 
   if (readCookie(req, cookieName(live, mode)) === expected || readCookie(req, cookieName(live, mode, true)) === expected) return null;
 
   if (req.method === "POST" && filePath === PASSWORD_PATH) {
+    try {
+      await spendSitePasswordAttempt(dw, live.siteId, req.headers.get("CF-Connecting-IP") ?? "unknown");
+    } catch (error) {
+      const limited = isApiError(error) && error.status === 429;
+      const response = systemResponse(dw, req, mode, live, limited ? 429 : 503, limited ? "429" : "503",
+        limited ? "Too many password attempts" : "Password unlock unavailable", "Please try again later.");
+      response.headers.set("Retry-After", String(limited ? error.retryAfterSeconds : 1));
+      return response;
+    }
     const form = await req.formData().catch(() => null);
     const password = form?.get("password");
     const next = String(form?.get("next") ?? mode.base);
