@@ -732,7 +732,7 @@ run before core viewers. Section 10 lists core viewers.
 
 ### 6.9 Testing kit and contract (R-01 done, R-18 remaining)
 
-- `@dropway/server` exports `EXTENSION_API_VERSION = 5`; extension API changes update that value and
+- `@dropway/server` exports `EXTENSION_API_VERSION = 6`; extension API changes update that value and
   the Extension API section in `CHANGELOG.md`.
 - `test/extension-contract.test.ts` builds `createDropway()` with fake adapters and exercises every
   existing point: identity and scopes, policy limits and refusals, all five metering event kinds,

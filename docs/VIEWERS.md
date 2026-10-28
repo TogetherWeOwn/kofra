@@ -29,11 +29,18 @@ Embeds, folder listings and version-preview addresses omit Phone. Raw, Source
 and Download retain their existing representation and access rules. The shared
 vendored encoder also serves the dashboard, whose QR output is unchanged.
 
-The server limits QR input to 1,273 UTF-8 bytes (version 40, H correction), SVG
-output to 128 KiB and display width to 256 CSS pixels with a four-module quiet
-zone. Above capacity or on an encoder failure, the full link remains without a
-QR. URL-specific chrome is generated outside cached body fragments; built-in
-viewer versions advance so conditional responses refresh the markup.
+The server limits QR input to 1,273 UTF-8 bytes (version 40, H correction) and
+SVG output to 128 KiB, with a four-module quiet zone. Display is at most 256
+CSS pixels at whole pixels per module (never a fractional module scale), and
+shrinks further so the complete code fits the panel in short viewports. Above
+capacity or on an encoder failure, the full link remains without a QR.
+URL-specific chrome is generated outside cached body fragments; built-in
+viewer versions advance so conditional responses refresh the markup, and every
+full-page ETag also carries the shared-chrome revision (`-chrome<N>`), so a
+chrome change retires cached pages of extension viewers using `viewerPage`
+without a version bump of their own. Whether a page is an authorized version
+preview comes from the router's preview state (`ViewerContext.preview`), never
+from matching the address or deployment labels.
 
 ## At a glance
 

@@ -27,7 +27,16 @@ function phoneSvg(url: string): string {
         runs.push(`M${start + 4} ${row + 4}h${col - start + 1}v1H${start + 4}z`);
       }
     }
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="256" height="256" role="img" aria-label="Scan to open this file on your phone" shape-rendering="crispEdges"><rect width="${size}" height="${size}" fill="#fff"/><path d="${runs.join("")}" fill="#000"/></svg>`;
+    // Display at whole CSS pixels per module (never a fractional scale,
+    // which aliases modules to unequal widths at devicePixelRatio 1):
+    // the largest whole multiple of the module grid up to 256px. The
+    // inline width keeps that alignment when the panel or a short
+    // viewport is the tighter bound (the panel scrollport is
+    // 100dvh - 8rem less its 2rem of padding), so some scroll position
+    // can always expose the complete code. Browsers without round()
+    // drop the declaration and use the aligned width attribute.
+    const px = size * Math.max(1, Math.floor(256 / size));
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="${px}" height="${px}" style="width:max(${size}px,round(down,min(${px}px,100%,calc(100dvh - 10rem - 2px)),${size}px));height:auto" role="img" aria-label="Scan to open this file on your phone" shape-rendering="crispEdges"><rect width="${size}" height="${size}" fill="#fff"/><path d="${runs.join("")}" fill="#000"/></svg>`;
     return svg.length <= MAX_SVG_LENGTH ? svg : "";
   } catch {
     // A failed/over-capacity QR must never prevent opening the file or link.
@@ -35,9 +44,9 @@ function phoneSvg(url: string): string {
   }
 }
 
-/** Only public file addresses: never a preview address or a request's grants. */
+/** Only live public file addresses: never a preview address or a request's grants. */
 export function viewerPhone(vc: ViewerContext): string {
-  if (vc.embed || /--v\d+(?:\.|\/|$)/.test(vc.siteBase) || /--v\d+\./.test(vc.url.hostname)) return "";
+  if (vc.embed || vc.preview) return "";
   const url = vc.url.origin + vc.fileUrl;
   const link = escapeHtml(url);
   const svg = phoneSvg(url);

@@ -20,7 +20,7 @@ import {
   type LiveSite,
 } from "@dropway/core";
 import { escapeHtml, systemPage } from "./html";
-import { findViewer, toViewerFile, VIEWER_CSP, VIEWERS, type ViewMode, type Viewer } from "./viewers";
+import { findViewer, toViewerFile, VIEWER_CHROME_VERSION, VIEWER_CSP, VIEWERS, type ViewMode, type Viewer } from "./viewers";
 import { renderListing } from "./viewers/listing";
 import { MAX_CSS_REWRITE_BYTES, rewriteCss, rewriteHtml, type PathRewrite } from "./path-rewrite";
 import { PATH_SHIM_VERSION, pathShimScript } from "./path-shim";
@@ -44,6 +44,8 @@ export interface ServeMode {
   rewrite: PathRewrite | null;
   /** Keep runtime URLs in path scope when a preview suppresses the Referer. */
   pathShim?: boolean;
+  /** Authorized version-preview serving, not the live site (set only by the preview path). */
+  preview?: boolean;
 }
 
 export const INDEX_NAMES = ["index.html", "index.htm", "index.md", "README.md", "readme.md"];
@@ -461,7 +463,10 @@ async function serveFile(
     // The shared bar links live siblings even when this file's bytes are unchanged.
     // Images/SVG have their own validator; embeds do not render the shared bar.
     const folderVariant = !embed && viewer.id !== "image" && viewer.id !== "svg" ? `-folder${live.versionId}` : "";
-    const etag = `W/"${etagSegment(viewer.id)}@${viewer.version ?? 1}-${sha256}${etagSegment(viewer.etagExtra?.(file, live) ?? "")}${folderVariant}${embed ? "-e" : ""}${reportVariant}"`;
+    // The shared chrome revision retires every full-page validator when
+    // viewerPage markup/CSS changes, including extension viewers whose own
+    // version cannot know about an internal chrome change.
+    const etag = `W/"${etagSegment(viewer.id)}@${viewer.version ?? 1}-${sha256}${etagSegment(viewer.etagExtra?.(file, live) ?? "")}${folderVariant}-chrome${VIEWER_CHROME_VERSION}${embed ? "-e" : ""}${reportVariant}"`;
     const h = new Headers();
     if (etagMatches(req, etag)) {
       h.set("ETag", etag);
@@ -483,6 +488,7 @@ async function serveFile(
       file,
       mode: viewMode,
       embed,
+      preview: mode.preview === true,
       fileUrl,
       viewUrl: `${fileUrl}?view=1`,
       sourceUrl: `${fileUrl}?view=source`,

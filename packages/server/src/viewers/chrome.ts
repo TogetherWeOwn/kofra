@@ -11,6 +11,14 @@ import { REPORT_PRINT_CSS } from "./print";
  * The bar is plain links, so it works with JavaScript off.
  */
 
+/**
+ * Revision of this shared frame (bar markup and VIEWER_CSS). It is part of
+ * every full-page viewer ETag, so a chrome change retires cached pages for
+ * extension viewers using viewerPage() too, not just the built-ins whose own
+ * `version` is bumped by hand. Bump it whenever the shared output changes.
+ */
+export const VIEWER_CHROME_VERSION = 1;
+
 /** CSP for viewer pages: no scripts, so user-authored markup inside e.g. Markdown cannot execute. */
 export const VIEWER_CSP =
   "default-src 'none'; img-src * data: blob:; media-src * data: blob:; style-src 'unsafe-inline' https:; font-src * data:; frame-src https:; base-uri 'none'; form-action 'none'";
@@ -128,7 +136,7 @@ export const VIEWER_CSS = `
 .dw-phone summary{list-style:none}.dw-phone summary::-webkit-details-marker{display:none}
 .dw-phone summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .dw-phone-panel{position:absolute;right:.6rem;top:100%;width:min(20rem,calc(100vw - 1.2rem));box-sizing:border-box;padding:1rem;border:1px solid var(--line);border-radius:8px;background:var(--card);box-shadow:0 .5rem 1.5rem #0003;max-height:calc(100dvh - 8rem);overflow:auto}
-.dw-phone-panel p{margin:0 0 .75rem}.dw-phone-panel svg{display:block;width:256px;max-width:100%;height:auto;margin:0 auto .75rem}
+.dw-phone-panel p{margin:0 0 .75rem}.dw-phone-panel svg{display:block;max-width:100%;height:auto;margin:0 auto .75rem}
 .dw-vact .dw-phone-panel a{display:block;overflow-wrap:anywhere;white-space:normal;padding:0;border:0;border-radius:0;background:none;color:var(--accent);text-decoration:underline;user-select:text}
 .dw-vact a,.dw-vact label,.dw-phone summary,.dw-btn{padding:.28rem .65rem;border:1px solid var(--line);border-radius:7px;text-decoration:none;color:var(--fg);background:var(--card);cursor:pointer;font-size:.82rem;line-height:1.3;user-select:none}
 .dw-vact a:hover,.dw-vact label:hover,.dw-btn:hover{border-color:var(--accent);color:var(--accent)}
