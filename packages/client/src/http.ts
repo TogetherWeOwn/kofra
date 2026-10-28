@@ -234,6 +234,15 @@ export class DropwayHttpClient {
     opts: RequestOptions,
   ): Promise<Response> {
     const token = opts.token === undefined ? this.token : opts.token;
+    const target = new URL(url);
+    const loopback = target.hostname === "localhost" || target.hostname === "[::1]"
+      || /^127(?:\.\d{1,3}){3}$/.test(target.hostname);
+    if (target.protocol === "http:" && !loopback && (token || new Headers(headers).has("Authorization"))) {
+      throw new DropwayError({
+        code: "invalid_api_url", message: "Credentials require HTTPS except on loopback development instances.",
+        hint: "Use an https:// instance URL, or http://localhost for local development.", retryable: false,
+      });
+    }
     const retry = opts.retry ?? (method === "GET" || method === "HEAD" ? "safe" : "rate-limit");
     let lastError: DropwayError | null = null;
 

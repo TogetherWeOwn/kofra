@@ -4,6 +4,7 @@
  * - writes progress and prompts to stderr only;
  * - exits with a stable code (see EXIT in client.ts), so agents can branch on it.
  */
+import type { UpdateSiteSettingsInput } from "@dropway/client";
 import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -1380,12 +1381,99 @@ Contract: https://github.com/TogetherWeOwn/kofra/blob/main/docs/CLI_DIAGNOSTICS.
   },
 };
 
+const settingsCmd: Command = {
+  summary: "Inspect or change explicit non-secret site settings",
+  usage: "kofra settings <site> [--title <text>] [--description <text>] [--spa true|false] [--render-markdown true|false] [--cross-origin-isolation true|false] [--dry-run] [--json]",
+  flags: {
+    ...Object.fromEntries(Object.entries(GLOBAL).map(([name, spec]) => [name, { ...spec, once: true }])),
+    title: { kind: "string", once: true },
+    description: { kind: "string", once: true },
+    spa: { kind: "string", once: true },
+    "render-markdown": { kind: "string", once: true },
+    "cross-origin-isolation": { kind: "string", once: true },
+    "dry-run": { kind: "boolean", once: true },
+  },
+  maxPositionals: 1,
+  details: `With no mutation flags, inspect with one authenticated GET. With explicit fields,
+PATCH only those fields (sites:read + sites:write); omitted values stay untouched. Each flag may
+appear only once. Boolean values are the lower-case literals true or false, never
+implicit toggles. --title '' and --description '' clear the field to null.
+
+Always pass one explicit site slug; dropway.json never supplies the target.
+Passwords, access modes, keys, tenant/runtime settings and quotas are unsupported.
+--dry-run requires an explicit patch and prints its normalized target and fields
+entirely offline: no network, credential lookup, prompt or local/config write.
+--json emits one object: {ok:true,site:{id,slug,title,description,currentVersionId,settings}}
+or {ok:true,schemaVersion:1,dryRun:true,site,patch} for an offline plan.
+
+Examples (use a disposable site's slug for writes):
+  kofra settings disposable-report --json
+  kofra settings disposable-report --spa false --title '' --dry-run --json
+  kofra settings disposable-report --spa false --title '' --json`,
+  async run(p, io, out) {
+    const slug = positional(p, 0, "site", settingsCmd.usage);
+    if (p.positionals.length !== 1 || !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(slug) || slug.includes("--")) {
+      throw new UsageError("Pass exactly one explicit site slug: 3-63 lowercase letters, digits and single hyphens, starting and ending with a letter or digit.");
+    }
+    const patch: Pick<UpdateSiteSettingsInput,
+      "title" | "description" | "spa" | "renderMarkdown" | "crossOriginIsolation"> = {};
+    for (const field of ["title", "description"] as const) {
+      const value = str(p, field);
+      if (value !== undefined) patch[field] = value === "" ? null : value;
+    }
+    for (const [flag, field] of [
+      ["spa", "spa"], ["render-markdown", "renderMarkdown"], ["cross-origin-isolation", "crossOriginIsolation"],
+    ] as const) {
+      const value = str(p, flag);
+      if (value === undefined) continue;
+      if (value !== "true" && value !== "false") throw new UsageError(`--${flag} must be true or false.`);
+      patch[field] = value === "true";
+    }
+    const changes = Object.keys(patch).length > 0;
+    if (bool(p, "dry-run")) {
+      if (!changes) throw new UsageError("--dry-run requires at least one explicit settings field.");
+      out.result({ schemaVersion: 1, dryRun: true, site: slug, patch },
+        `Offline settings plan for ${slug}:\n${JSON.stringify(patch, null, 2)}`);
+      return EXIT.ok;
+    }
+    const inst = await resolveInstance(p, io);
+    const client = makeClient(io, inst.api, requireKey(inst, "Inspecting or changing site settings"));
+    const result = changes
+      ? await client.updateSiteSettings({ slug, ...patch })
+      : await client.getSite({ slug });
+    const s = result.site;
+    if (!s || (s.id != null && typeof s.id !== "string") || typeof s.slug !== "string" || !s.settings
+      || typeof s.settings.spa !== "boolean" || typeof s.settings.renderMarkdown !== "boolean"
+      || typeof s.settings.crossOriginIsolation !== "boolean") {
+      throw new CliError({ code: "invalid_response", message: "The instance returned no site identity or settings.",
+        hint: "Check the instance API version, then retry the same explicit settings command.", exitCode: EXIT.error });
+    }
+    // Allowlist both layers: a site response may also contain access or claim secrets.
+    const site = {
+      id: typeof s.id === "string" ? s.id : null, slug: s.slug, title: s.title, description: s.description, currentVersionId: s.currentVersionId,
+      settings: { spa: s.settings.spa, renderMarkdown: s.settings.renderMarkdown, crossOriginIsolation: s.settings.crossOriginIsolation },
+    };
+    const safeText = (value: string) => value.replace(
+      /[\u0000-\u001f\u007f-\u009f]/g,
+      (control) => `\\u${control.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    );
+    out.result({ site }, () => [
+      `Settings for ${safeText(site.slug)}${site.id ? ` (${safeText(site.id)})` : ""}`,
+      `Title: ${safeText(site.title ?? "(none)")}`,
+      `Description: ${safeText(site.description ?? "(none)")}`,
+      `spa=${site.settings.spa} renderMarkdown=${site.settings.renderMarkdown} crossOriginIsolation=${site.settings.crossOriginIsolation}`,
+    ].join("\n"));
+    return EXIT.ok;
+  },
+};
+
 const COMMANDS: Record<string, Command> = {
   publish: publishCmd,
   "explain-config": explainConfigCmd,
   duplicate: duplicateCmd,
   list: listCmd,
   site: siteCmd,
+  settings: settingsCmd,
   rename: renameCmd,
   files: filesCmd,
   "read-file": readFileCmd,
@@ -1412,7 +1500,7 @@ const ALIASES: Record<string, string> = {
 };
 
 function mainHelp(): string {
-  const rows = Object.entries(COMMANDS).map(([name, c]) => [`  ${name}`, c.summary]);
+  const rows = Object.entries(COMMANDS).map(([name, c]) => [`  ${name === "settings" ? "settings <site>" : name}`, c.summary]);
   return `kofra ${VERSION}: publish files, folders and sites to a live URL on a Kofra instance.
 
 Usage: kofra <command> [options]
@@ -1456,7 +1544,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
   }
   const name = ALIASES[first] ?? first;
   const command = COMMANDS[name];
-  const wantsJson = argv.includes("--json");
+  const wantsJson = argv.some((arg) => arg === "--json" || arg === "--json=true" || arg === "--json=1");
   const out = new Output(io, wantsJson, argv.includes("--quiet") || argv.includes("-q"));
   if (!command) {
     out.error(new CliError({ code: "unknown_command", message: `Unknown command "${first}".`, hint: "Run `kofra help` for the list of commands.", exitCode: EXIT.usage }));

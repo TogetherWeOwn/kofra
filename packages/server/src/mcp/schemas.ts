@@ -80,8 +80,8 @@ export const VERSION_OUT: Schema = {
 
 export const SITE_OUT: Schema = {
   type: "object",
-  properties: { slug: { type: "string" }, url: { type: "string" }, currentVersionId: { type: ["string", "null"] } },
-  required: ["slug", "url"],
+  properties: { id: { type: "string" }, slug: { type: "string" }, url: { type: "string" }, currentVersionId: { type: ["string", "null"] } },
+  required: ["id", "slug", "url"],
 };
 
 export const PUBLISH_OUT: Schema = {

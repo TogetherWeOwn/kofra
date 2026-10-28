@@ -265,3 +265,106 @@ describe("config", () => {
     expect(await readFile(join(cwd, "dropway.json"), "utf8")).not.toMatch(/dw_|dwc_/);
   });
 });
+
+describe("settings command hardening", () => {
+  const specs = { api: { kind: "string" as const, once: true }, "dry-run": { kind: "boolean" as const, once: true } };
+  const BASE = ["--api", "https://api.test", "--key", "dw_test_key"];
+
+  async function harness(respond: () => Response = () => { throw new Error("unexpected network request"); }) {
+    let out = "";
+    let err = "";
+    let requests = 0;
+    const io: Io = {
+      stdout: (t) => void (out += t),
+      stderr: (t) => void (err += t),
+      stdinIsTTY: false,
+      stderrIsTTY: false,
+      readStdin: async () => "",
+      prompt: async () => { throw new Error("settings must never prompt"); },
+      env: { KOFRA_CONFIG_DIR: await tmp() },
+      cwd: await tmp(),
+      fetch: async () => { requests++; return respond(); },
+    };
+    return { io, stdout: () => out, stderr: () => err, requests: () => requests };
+  }
+
+  it("rejects option names inherited from Object.prototype as unknown", () => {
+    for (const name of ["constructor", "toString", "__proto__"]) {
+      expect(() => parseArgs([`--${name}`, "boom"], specs)).toThrow(/Unknown option/);
+      expect(() => parseArgs([`--${name}=boom`], specs)).toThrow(/Unknown option/);
+    }
+  });
+
+  it("rejects an inherited flag name on the command before networking", async () => {
+    for (const flag of ["--constructor=boom", "--toString"]) {
+      const h = await harness();
+      expect(await run(["settings", "test-site", "--spa", "false", "--dry-run", "--json", flag], h.io)).toBe(EXIT.usage);
+      expect(JSON.parse(h.stdout()).error.code).toBe("usage");
+      expect(h.requests()).toBe(0);
+    }
+  });
+
+  it("rejects a repeated --api, --key or --dry-run before networking", async () => {
+    for (const repeat of [
+      ["--api", "https://a.test", "--api", "https://b.test"],
+      ["--key", "dw_one", "--key", "dw_two"],
+      ["--dry-run", "--dry-run"],
+    ]) {
+      const h = await harness();
+      expect(await run(["settings", "test-site", "--spa", "false", "--dry-run", ...repeat], h.io)).toBe(EXIT.usage);
+      expect(h.stderr()).toMatch(/only once/);
+      expect(h.stdout()).toBe("");
+      expect(h.requests()).toBe(0);
+    }
+  });
+
+  it("rejects . and .. as the explicit site before networking", async () => {
+    for (const slug of [".", ".."]) {
+      const h = await harness();
+      expect(await run(["settings", slug, "--spa", "false", "--dry-run", "--json"], h.io)).toBe(EXIT.usage);
+      expect(JSON.parse(h.stdout()).error.code).toBe("usage");
+      expect(h.requests()).toBe(0);
+    }
+  });
+
+  it.each([
+    ["spa", "false"],
+    ["renderMarkdown", 1],
+    ["crossOriginIsolation", "true"],
+  ])("rejects a wrong-typed %s independently", async (field, value) => {
+    const settings = { spa: false, renderMarkdown: true, crossOriginIsolation: false, [field]: value };
+    const h = await harness(() => new Response(JSON.stringify({
+      site: { id: "site_1", slug: "test-site", title: null, description: null, currentVersionId: null, settings },
+    }), { status: 200 }));
+    expect(await run(["settings", "test-site", ...BASE, "--json"], h.io)).toBe(EXIT.error);
+    expect(h.requests()).toBe(1);
+    expect(JSON.parse(h.stdout())).toMatchObject({ ok: false, exitCode: EXIT.error, error: { code: "invalid_response" } });
+  });
+
+  it("escapes terminal controls in human settings output without changing JSON", async () => {
+    const response = { site: { id: "site_1", slug: "test-site", title: "title\u001b[2J", description: "first\nsecond", currentVersionId: null,
+      settings: { spa: false, renderMarkdown: true, crossOriginIsolation: false } } };
+    const human = await harness(() => new Response(JSON.stringify(response), { status: 200 }));
+    expect(await run(["settings", "test-site", ...BASE], human.io)).toBe(EXIT.ok);
+    expect(human.stdout()).toContain("title\\u001b[2J");
+    expect(human.stdout()).toContain("first\\u000asecond");
+    expect(human.stdout()).not.toContain("\u001b");
+    const json = await harness(() => new Response(JSON.stringify(response), { status: 200 }));
+    expect(await run(["settings", "test-site", ...BASE, "--json"], json.io)).toBe(EXIT.ok);
+    expect(JSON.parse(json.stdout()).site.title).toBe(response.site.title);
+    expect(JSON.parse(json.stdout()).site.description).toBe(response.site.description);
+  });
+
+  it("fails with invalid_response when the site settings are not booleans", async () => {
+    const wrong = { spa: "false", renderMarkdown: 1, crossOriginIsolation: "true" };
+    const h = await harness(() => new Response(JSON.stringify({
+      site: { id: "site_1", slug: "test-site", title: null, description: null, currentVersionId: null, settings: wrong },
+    }), { status: 200 }));
+    const code = await run(["settings", "test-site", ...BASE, "--json"], h.io);
+    expect(code).toBe(EXIT.error);
+    expect(h.requests()).toBe(1);
+    const body = JSON.parse(h.stdout());
+    expect(body).toMatchObject({ ok: false, exitCode: EXIT.error, error: { code: "invalid_response" } });
+    expect(h.stdout()).not.toContain('"spa"');
+  });
+});

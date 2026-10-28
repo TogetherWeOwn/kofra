@@ -19,6 +19,7 @@ export const HTTP_VERSION: Record<string, any> = {
 export const HTTP_SITE: Record<string, any> = {
   type: "object",
   properties: {
+    id: { type: "string" },
     slug: { type: "string" },
     url: {
       type: "string",
@@ -224,7 +225,7 @@ export const HTTP_AGENT_PUBLISH_RESULT: Record<string, any> = {
     url: { type: "string" },
     slug: { type: "string" },
     versionUrl: { type: "string", description: "24 h signed preview; bearer capability." },
-    site: { ...HTTP_SITE, properties: { ...HTTP_SITE.properties, id: { type: "string" } } },
+    site: HTTP_SITE,
     version: { oneOf: [HTTP_VERSION, { type: "null" }] },
     files: {
       type: "object",
