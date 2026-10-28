@@ -260,7 +260,7 @@ const FONT_FORMATS: Record<string, string> = { woff2: "woff2", woff: "woff", ttf
 
 export const fontViewer: Viewer = {
   id: "font",
-  version: 2,
+  version: 3,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "font" && topLevelOnly(mode),
   async render(vc) {
@@ -276,15 +276,26 @@ export const fontViewer: Viewer = {
 .dw-font .s{font-family:"dw-specimen",ui-monospace,monospace}
 .dw-font .big{font-size:clamp(5rem,16vw,11rem);line-height:1;margin:.5rem 0 1rem}
 .dw-font .set{font-size:1.6rem;line-height:1.5;word-break:break-all;margin:0 0 .6rem}
-.dw-font .try{font-size:2rem;line-height:1.35;border:1px dashed var(--line);border-radius:10px;padding:1rem;margin:1.5rem 0;outline:0}
+.dw-font .try{display:block;box-sizing:border-box;width:100%;min-height:6rem;font-size:32px;line-height:1.35;color:inherit;background:transparent;border:1px dashed var(--line);border-radius:10px;padding:1rem;margin:.6rem 0 1.5rem;resize:vertical;field-sizing:content;white-space:pre-wrap;overflow-wrap:anywhere}
 .dw-font .try:focus{border-color:var(--accent)}
+.dw-font .try:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.dw-font:has(#dw-sz-16:checked) .try{font-size:16px}
+.dw-font:has(#dw-sz-64:checked) .try{font-size:64px}
+.dw-sizes{border:0;padding:0;margin:1.5rem 0 0;min-width:0}
+.dw-sizes legend{padding:0;margin-bottom:.4rem;color:var(--muted);font-size:.85rem}
+.dw-sizes div{display:flex;flex-wrap:wrap;gap:.5rem}
+.dw-sizes label{display:inline-flex;gap:.35rem;align-items:center;border:1px solid var(--line);border-radius:8px;padding:.3rem .6rem;font-size:.85rem;cursor:pointer}
+.dw-sizes label:has(:checked){border-color:var(--accent);font-weight:600}
+.dw-sizes label:has(:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
 .dw-fs{display:flex;gap:1rem;align-items:baseline;border-top:1px solid var(--line);padding:.4rem 0}
 .dw-fs span{flex:none;width:3.5rem;color:var(--muted);font-size:.8rem;font-family:ui-monospace,monospace}
-.dw-fs p{margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:"dw-specimen",ui-monospace,monospace}`,
+.dw-fs p{margin:0;min-width:0;overflow-wrap:anywhere;font-family:"dw-specimen",ui-monospace,monospace}
+@media (max-width:36rem){.dw-fs{flex-direction:column;gap:.1rem}.dw-fs span{width:auto}}`,
       body: `<main class="dw-font"><p class="dw-meta" style="text-align:left">${escapeHtml(`${name} · ${formatBytes(vc.file.size)} · ${vc.file.contentType.split(";")[0]}`)}</p>
 <div class="s big" aria-hidden="true">Aa Gg</div>
 <p class="s set">ABCDEFGHIJKLMNOPQRSTUVWXYZ<br>abcdefghijklmnopqrstuvwxyz<br>0123456789 !?&amp;@#%()[]{}.,;:'"-+=*/\\</p>
-<div class="s try" contenteditable="true" spellcheck="false" aria-label="Type to try the font">Type here to try this font.</div>
+<fieldset class="dw-sizes"><legend>Sample size</legend><div>${[16, 32, 64].map((px) => `<label><input type="radio" name="dw-sz" id="dw-sz-${px}" value="${px}"${px === 32 ? " checked" : ""}>${px}px${px === 32 ? " (default)" : ""}</label>`).join("")}</div></fieldset>
+<textarea class="s try" rows="3" spellcheck="false" aria-label="Type to try the font">Type here to try this font.</textarea>
 ${sizes}</main>`,
     });
   },
