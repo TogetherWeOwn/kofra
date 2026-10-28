@@ -153,11 +153,13 @@ about yourself; that is outside this runbook.
    npx wrangler d1 execute dropway --remote --command "SELECT count(*) AS sites FROM sites;"
    ```
 
-2. **R2.** Copy the bytes back, then verify against the restored manifest:
+2. **R2.** Copy the bytes back, then use the query in [section 2.2](#22-r2-bulk-copy-over-the-s3-api)
+   against the restored D1 database to obtain each referenced `storage_key` and
+   its expected `sha256`. Verify the copied object using that physical key:
 
    ```sh
    rclone copy ./bk-r2-2026-10-27/ r2:dropway-files
-   npx wrangler r2 object get dropway-files/blobs/<sha256-from-version_files> \
+   npx wrangler r2 object get dropway-files/<storage_key-from-query> \
      --remote --file ./spot.bin && sha256sum ./spot.bin
    ```
 
@@ -210,7 +212,7 @@ Cache API is the same.
 - **Weekly**: `d1 export`. Cheap: a two-file demo database exports to 14 KB;
   size tracks the D1 size in the dashboard (megabytes for most instances).
 - **Monthly**: full `rclone copy` of R2. Immutable blobs make each run copy
-  only new hashes; keep the last two copies.
+  only new physical keys; keep the last two copies.
 - **Retention math, honestly**: D1 recovery point is the better of (last
   export, Time Travel window at minute granularity) — inside the window you
   lose minutes, outside it you lose everything since the export. R2 recovery
