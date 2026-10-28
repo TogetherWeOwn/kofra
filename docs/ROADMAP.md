@@ -549,6 +549,10 @@ Delivers: new (add the SPEC rows in the build PR). Depends: R-02.
   now still downloads; one millisecond later it is 410.
 - Counts: per file and per recipient link, visible to the owner in `get_transfer`. A download counts when
   a GET without `Range`, or with a range starting at byte 0, is served; resumed ranges do not count again.
+  At the limit, only a valid sites-host continuation cookie from a counted GET permits a satisfiable
+  nonzero GET range of that same file/recipient link. The fixed 15-minute proof never renews and never
+  bypasses deletion, purge, takedown, revocation, expiry or password checks; all other requests still
+  receive the reached-limit refusal above. See SPEC section 4.15 for scope and retry semantics.
 - A transfer the caller may not see answers 404, never 403, so "no such transfer" and "not yours" look
   the same.
 - Updates (message, expiry, recipients, download limit) are allowed only while the transfer is live and

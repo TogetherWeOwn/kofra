@@ -18,13 +18,59 @@ export async function publicTransferFile(dc: DropwayContext, t: TransferRow, pat
   if (!file || t.purged_at !== null) throw transferMissing();
   return file;
 }
-/** Called only after resolving slug, deletion and (when applicable) the exact file. */
-export function checkTransferGate(t: TransferRow): void {
+const transferGone = () => new ApiError(410, "transfer_gone", "This delivery is no longer available.", "Ask the sender for a new delivery.");
+function checkTransferState(t: TransferRow): void {
   if (t.deleted_at !== null) throw transferMissing();
   if (t.takedown_at !== null) throw new ApiError(451, "transfer_unavailable", "This delivery is unavailable.", "Contact the sender.");
-  if (t.revoked_at !== null || t.expired_at !== null || t.expires_at < Date.now() || (t.download_limit !== null && t.downloads >= t.download_limit)) {
-    throw new ApiError(410, "transfer_gone", "This delivery is no longer available.", "Ask the sender for a new delivery.");
-  }
+  if (t.revoked_at !== null || t.expired_at !== null || t.expires_at < Date.now()) throw transferGone();
+}
+const limitReached = (t: TransferRow) => t.download_limit !== null && t.downloads >= t.download_limit;
+/** Called only after resolving slug, deletion and (when applicable) the exact file. */
+export function checkTransferGate(t: TransferRow): void {
+  checkTransferState(t);
+  if (limitReached(t)) throw transferGone();
+}
+
+function transferRange(range: string | null, size: number) {
+  if (!range) return { offset: 0, length: size };
+  const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+  const start = match?.[1];
+  const end = match?.[2];
+  if (!match || (!start && !end)) throw new ApiError(416, "invalid_transfer_range", "Invalid byte range.", "Request one satisfiable byte range.");
+  const offset = start ? Number(start) : Math.max(0, size - Number(end));
+  const last = start ? (end ? Math.min(Number(end), size - 1) : size - 1) : size - 1;
+  if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(last) || offset < 0 || offset >= size || last < offset) throw new ApiError(416, "invalid_transfer_range", "Invalid byte range.", "Request one satisfiable byte range.");
+  return { offset, length: last - offset + 1 };
+}
+
+const continuationLifetime = 15 * 60_000;
+const continuationCookieName = async (t: TransferRow, file: TransferFile) => `__Host-dw_resume_${await sha256Hex(JSON.stringify([t.id, file.path]))}`;
+function continuationMessage(t: PublicTransfer, file: TransferFile, request: Request, until: string) {
+  return JSON.stringify(["transfer-resume", t.id, t.revision, t.password_hash, file.path, file.sha256,
+    new URL(request.url).searchParams.get("recipient"), until]);
+}
+async function validContinuation(dc: DropwayContext, t: PublicTransfer, file: TransferFile, request: Request): Promise<boolean> {
+  if (request.method !== "GET") return false;
+  try { if (transferRange(request.headers.get("Range"), file.size).offset === 0) return false; }
+  catch { return false; }
+  const name = await continuationCookieName(t, file);
+  const cookie = (request.headers.get("Cookie") ?? "").split(";").map((v) => v.trim()).find((v) => v.startsWith(`${name}=`));
+  const match = /^(\d{13})\.([a-f0-9]{64})$/.exec(cookie?.slice(name.length + 1) ?? "");
+  if (!match) return false;
+  const [, until, signature] = match;
+  const now = Date.now();
+  if (Number(until) < now || Number(until) > Math.min(now + continuationLifetime, t.expires_at)) return false;
+  return timingSafeEqualStr(signature!, await hmacHex(dc.config.signingSecret, continuationMessage(t, file, request, until!)));
+}
+async function checkDownloadGate(dc: DropwayContext, t: PublicTransfer, file: TransferFile, request?: Request) {
+  checkTransferState(t);
+  if (limitReached(t) && (!request || !await validContinuation(dc, t, file, request))) throw transferGone();
+}
+async function makeContinuationCookie(dc: DropwayContext, t: PublicTransfer, file: TransferFile, request: Request) {
+  const now = Date.now();
+  const until = String(Math.min(now + continuationLifetime, t.expires_at));
+  const signature = await hmacHex(dc.config.signingSecret, continuationMessage(t, file, request, until));
+  return `${await continuationCookieName(t, file)}=${until}.${signature}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${Math.floor((Number(until) - now) / 1000)}`;
 }
 export const transferCookieName = (t: TransferRow) => `__Host-dw_transfer_${t.id}`;
 
@@ -66,14 +112,16 @@ export async function unlockTransfer(dc: DropwayContext, t: PublicTransfer, pass
 }
 
 /** Atomic state recheck and accounting, after a real blob/range has been opened. */
-export async function recordTransferDownload(dc: DropwayContext, t: PublicTransfer, file: TransferFile, recipientToken: string | null, count: boolean) {
+export async function recordTransferDownload(dc: DropwayContext, t: PublicTransfer, file: TransferFile, recipientToken: string | null, count: boolean, request?: Request) {
   const recipients = transferRecipients(t);
   const index = recipientToken ? recipients.findIndex((r) => r.token === recipientToken) : -1;
   if (recipientToken && index < 0) throw transferMissing();
   if (!count) {
     const fresh = await publicTransfer(dc, t.slug);
-    await publicTransferFile(dc, fresh, file.path);
-    checkTransferGate(fresh);
+    const freshFile = await publicTransferFile(dc, fresh, file.path);
+    // Revalidate the actual credential against live state after opening R2,
+    // not just the decision made before the asynchronous blob read.
+    await checkDownloadGate(dc, fresh, freshFile, request);
     if (fresh.password_hash !== t.password_hash) throw forbidden("Password required.", "Unlock the delivery again.", "transfer_locked");
     return;
   }
@@ -106,31 +154,25 @@ export async function openTransferDownload(dc: DropwayContext, request: Request,
   if (!isolated || origin !== new URL(siteUrl(dc, slug)).origin || (dc.config.appOrigin && origin === new URL(dc.config.appOrigin).origin)) throw transferMissing();
   const t = await publicTransfer(dc, slug);
   const file = await publicTransferFile(dc, t, path);
-  checkTransferGate(t);
+  await checkDownloadGate(dc, t, file, request);
   if (!await transferUnlocked(dc, t, request)) return { locked: true as const, transfer: t };
   const recipient = new URL(request.url).searchParams.get("recipient");
   if (recipient && !transferRecipients(t).some((r) => r.token === recipient)) throw transferMissing();
-  let offset = 0;
-  let length = file.size;
   const range = request.headers.get("Range");
-  if (range) {
-    const match = /^bytes=(\d*)-(\d*)$/.exec(range);
-    const start = match?.[1];
-    const end = match?.[2];
-    if (!match || (!start && !end)) throw new ApiError(416, "invalid_transfer_range", "Invalid byte range.", "Request one satisfiable byte range.");
-    offset = start ? Number(start) : Math.max(0, file.size - Number(end));
-    const last = start ? (end ? Math.min(Number(end), file.size - 1) : file.size - 1) : file.size - 1;
-    if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(last) || offset < 0 || offset >= file.size || last < offset) throw new ApiError(416, "invalid_transfer_range", "Invalid byte range.", "Request one satisfiable byte range.");
-    length = last - offset + 1;
-  }
+  const { offset, length } = transferRange(range, file.size);
   const body = range ? await readBlobRange(dc, file.sha256, { offset, length }) : (await readBlob(dc, file.sha256, file.size))?.body;
   if (!body) throw transferMissing();
+  let continuationCookie: string | undefined;
   try {
-    await recordTransferDownload(dc, t, file, recipient, request.method === "GET" && (!range || offset === 0));
+    const count = request.method === "GET" && (!range || offset === 0);
+    // Only a successfully counted GET earns proof of an existing download.
+    // Continuations never refresh it, and it cannot authorize a byte-zero GET.
+    if (count && t.download_limit !== null && file.size > 1) continuationCookie = await makeContinuationCookie(dc, t, file, request);
+    await recordTransferDownload(dc, t, file, recipient, count, request);
   } catch (error) {
     await body.cancel();
     throw error;
   }
   if (request.method === "HEAD") await body.cancel();
-  return { locked: false as const, transfer: t, file, body: request.method === "HEAD" ? null : body, offset, length, ranged: !!range };
+  return { locked: false as const, transfer: t, file, body: request.method === "HEAD" ? null : body, offset, length, ranged: !!range, continuationCookie };
 }

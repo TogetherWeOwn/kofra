@@ -137,10 +137,12 @@ export async function createTransfer(dc: DropwayContext, p: Principal, input: Tr
   return describeTransfer(dc, t);
 }
 
-const REVOKABLE = "revoked_at IS NULL AND expired_at IS NULL AND deleted_at IS NULL AND expires_at >= ? AND takedown_at IS NULL AND (download_limit IS NULL OR downloads < download_limit)";
-const LIVE = `${REVOKABLE} AND legal_hold = 0`;
+// Exhaustion forbids new downloads/edits, but the sender must still be able
+// to revoke outstanding continuation credentials, including via allLive.
+const REVOKABLE = "revoked_at IS NULL AND expired_at IS NULL AND deleted_at IS NULL AND expires_at >= ? AND takedown_at IS NULL";
+const LIVE = `${REVOKABLE} AND (download_limit IS NULL OR downloads < download_limit) AND legal_hold = 0`;
 function assertMutable(t: TransferRow, update: boolean) {
-  if (t.revoked_at !== null || t.expired_at !== null || t.deleted_at !== null || t.expires_at < Date.now() || t.takedown_at !== null || (t.download_limit !== null && t.downloads >= t.download_limit) || (update && (t.legal_hold || t.notified_at !== null))) throw transferConflict();
+  if (t.revoked_at !== null || t.expired_at !== null || t.deleted_at !== null || t.expires_at < Date.now() || t.takedown_at !== null || (update && ((t.download_limit !== null && t.downloads >= t.download_limit) || t.legal_hold || t.notified_at !== null))) throw transferConflict();
 }
 export async function updateTransfer(dc: DropwayContext, p: Principal, reference: string, input: TransferInput) {
   const t = await ownedTransfer(dc, p, reference, true);

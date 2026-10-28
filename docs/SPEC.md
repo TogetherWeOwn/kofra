@@ -310,6 +310,22 @@ prevent a recipient from forwarding a link. No email is sent by these operations
 
 A counted download is a served GET without a Range, or a range starting at zero.
 Pages, HEAD, resumed ranges, invalid ranges and denied requests do not count.
+A successfully counted GET on a limited transfer also sets a host-only, Secure,
+HttpOnly, SameSite=Lax continuation cookie on the sites host. For at most 15
+minutes (and never past transfer expiry), it proves that one download of that
+exact file and recipient link was already counted. Only satisfiable nonzero
+GET ranges can use this proof after the limit is reached; new GETs, byte-zero
+ranges, HEAD and other files/links still answer 410. Clients must retain this
+cookie; a bare Range header is not proof of a prior download. Interrupted full
+GETs and repeated tail ranges can be retried within that fixed window, but
+resumes never renew it or create another download allowance. The signed proof
+is bound to the transfer revision, password digest, file path/hash and recipient
+token. Live deletion, purge, takedown, revocation, expiry and password checks
+still apply, and state/proof are rechecked after opening the blob. A continuation
+is a short-lived bearer credential, not recipient authentication; sharing it
+allows retrying that same file's tail, not starting a new counted download.
+The sender can still revoke an exhausted transfer (by ID or `allLive`) to cancel
+outstanding continuations; exhaustion continues to forbid management edits.
 Unlock cookies live only on the app host; the app renders short-lived signed
 sites-host download links after unlock. Their grant is bound to the password
 digest, is checked against live transfer state and never bypasses revocation,
