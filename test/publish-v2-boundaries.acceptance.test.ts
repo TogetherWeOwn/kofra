@@ -155,7 +155,7 @@ describe("issued upload token boundaries", () => {
   it("loses upload authority when its pending version is deleted", async () => {
     const dw = await freshInstance();
     const source = await pending(dw, "deleted-upload", { "data.txt": "deleted bytes" });
-    expect((await dw.json(`/api/v1/sites/deleted-upload/versions/${source.version.id}`, { method: "DELETE", key: dw.ownerKey })).status).toBe(200);
+    expect((await dw.json(`/api/v1/sites/deleted-upload/versions/${source.version.id}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: "deleted-upload" }), key: dw.ownerKey })).status).toBe(200);
     expect(await env.DB.prepare("SELECT id FROM versions WHERE id = ?").bind(source.version.id).first()).toBeNull();
     const refused = await put(dw, source.entries[0]!, source.token);
     expect([403, 410]).toContain(refused.status);

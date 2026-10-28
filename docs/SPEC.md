@@ -154,6 +154,7 @@ Full matrix in section 10.
 | VER-03 | Diff two versions (added, removed, changed; unified text diffs for small text files) | P1 | R-20 |
 | VER-04 | Thumbnail per version | P1 | R-20 |
 | VER-05 | Admin-set retention (keep last N versions or N days per site; default keep all) | P2 | R-42 |
+| VER-06 | Authenticated immutable-version ZIP export; dashboard Download ZIP for known ready versions up to 16 MiB stored bytes and 1,000 files, with a 32 MiB streamed response bound and REST/CLI fallback | P1 | Done |
 
 The dashboard Versions list loads only the newest 100 versions. **Filter loaded
 versions** matches literal, case-insensitive text in the number (`73` or `v73`),
@@ -731,7 +732,7 @@ run before core viewers. Section 10 lists core viewers.
 
 ### 6.9 Testing kit and contract (R-01 done, R-18 remaining)
 
-- `@dropway/server` exports `EXTENSION_API_VERSION = 4`; extension API changes update that value and
+- `@dropway/server` exports `EXTENSION_API_VERSION = 5`; extension API changes update that value and
   the Extension API section in `CHANGELOG.md`.
 - `test/extension-contract.test.ts` builds `createDropway()` with fake adapters and exercises every
   existing point: identity and scopes, policy limits and refusals, all five metering event kinds,
@@ -1200,8 +1201,19 @@ Codes are stable forever.
 | GET | `/api/v1/sites/{site}/versions/{version}` | `get_version` | `sites:read` | P0 | Done (status, counts, missing files; write keys also get fresh upload items) |
 | POST | `/api/v1/sites/{site}/versions/{version}/finalize` (alias `/deploys/{id}/finalize`) | `finalize_version` | `sites:write` | P0 | Done |
 | POST | `/api/v1/sites/{site}/versions/{version}/restore` | `restore_version` | `sites:write` | P0 | Done |
-| DELETE | `/api/v1/sites/{site}/versions/{version}` | `delete_version` | `sites:delete` | P1 | Done |
+| DELETE | `/api/v1/sites/{site}/versions/{version}` | `delete_version` | `sites:delete` | P1 | Done (JSON `confirm` = canonical site slug required) |
 | GET | `/api/v1/sites/{site}/diff?from=&to=` | `diff_versions` | `sites:read` | P1 | R-20 |
+
+Version DELETE requires `Content-Type: application/json` and a body such as
+`{"confirm":"bright-otter-x7k2"}`. This is a breaking change from the bodyless
+DELETE contract. Confirmation is the resolved site's canonical slug, even when
+`{site}` is an ID; missing `confirm` is `400 invalid_request` and a wrong value
+is `400 confirm_mismatch`. MCP uses the same canonical-slug check. The CLI,
+dashboard and generated SDK send confirmation without changing their existing
+prompt behavior. The entire deletion batch refuses if the version is now live,
+missing, on a different site, or the original site is no longer active and
+owned as authorized; manifest rows and usage counters roll back together.
+Pending non-live versions may still be deleted; transfer files may not.
 
 **Access and sharing**
 
