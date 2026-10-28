@@ -8,6 +8,7 @@ import { CliError, DropwayClient, EXIT, exitCodeForStatus, movedTo, normaliseApi
 import { run, type Io } from "../src/main.ts";
 import { configDir, linkKey, readCredentials, readLink, removeCredentials, saveCredentials, writeLink } from "../src/config.ts";
 import { collectFiles } from "../src/files.ts";
+import { publish } from "../src/publish.ts";
 import { IgnoreMatcher } from "../src/ignore.ts";
 import { findSecrets } from "../src/secrets.ts";
 import { VERSION } from "../src/version.ts";
@@ -99,6 +100,50 @@ describe("client helpers", () => {
   it("keeps VERSION in sync with package.json", async () => {
     const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
     expect(VERSION).toBe(pkg.version);
+  });
+
+  it("maps a refused credential-bearing instance URL to the usage exit class", async () => {
+    let calls = 0;
+    const client = new DropwayClient({
+      api: "http://remote.test", token: "dw_secret",
+      fetch: async () => { calls++; return new Response("{}"); },
+    });
+    await expect(client.get("/sites")).rejects.toMatchObject({ code: "invalid_api_url", exitCode: EXIT.usage });
+    expect(calls).toBe(0);
+  });
+
+  it("refuses an anonymous publish over non-loopback HTTP before creating a site it could not claim", async () => {
+    let calls = 0;
+    const client = new DropwayClient({
+      api: "http://remote.test", token: null,
+      fetch: async () => { calls++; return new Response("{}"); },
+    });
+    const file = { path: "index.html", size: 1, sha256: "a".repeat(64), body: async () => new Uint8Array([65]) };
+    await expect(publish(client, [file])).rejects.toMatchObject({ code: "invalid_api_url", exitCode: EXIT.usage });
+    expect(calls).toBe(0);
+  });
+
+  it("keeps an anonymous loopback publish working with the minted claim token", async () => {
+    const seen: Array<[string, string, string | null]> = [];
+    const client = new DropwayClient({
+      api: "http://127.0.0.1:8787", token: null,
+      fetch: async (req) => {
+        const url = new URL(req.url);
+        seen.push([req.method, url.pathname, req.headers.get("authorization")]);
+        if (req.method === "POST" && url.pathname === "/api/v1/sites") {
+          return new Response(JSON.stringify({ site: { slug: "anon-site", url: "http://127.0.0.1:8787/s/anon-site/" }, claimToken: "dwc_claim" }));
+        }
+        if (req.method === "POST" && url.pathname.endsWith("/deploys")) {
+          return new Response(JSON.stringify({ unchanged: true, deploy: { id: "ver_1", number: 1 }, missing: [], uploads: [], finalizeUrl: null }));
+        }
+        return new Response(JSON.stringify({ site: { slug: "anon-site", url: "http://127.0.0.1:8787/s/anon-site/", currentVersion: null } }));
+      },
+    });
+    const file = { path: "index.html", size: 1, sha256: "a".repeat(64), body: async () => new Uint8Array([65]) };
+    const result = await publish(client, [file]);
+    expect(result).toMatchObject({ slug: "anon-site", created: true, unchanged: true, claimToken: "dwc_claim" });
+    expect(seen[0]).toEqual(["POST", "/api/v1/sites", null]);
+    expect(seen[1]![2]).toBe("Bearer dwc_claim");
   });
 });
 

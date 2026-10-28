@@ -93,6 +93,14 @@ export interface ClientOptions {
    * origin (it moved; the old origin still works). A `Deprecation` header is optional.
    */
   onMoved?: (newOrigin: string) => void;
+  /**
+   * Declares that requests from this client carry authentication outside the
+   * token (a session Cookie, a custom identity header added by an injected
+   * fetch, an ambient browser session). Authenticated requests require an
+   * https:// origin, or http:// on a loopback host. A single call can still
+   * declare itself credential-free with `authenticated: false`.
+   */
+  authenticated?: boolean;
 }
 
 /** The successor origin named by a deprecated response, or null. */
@@ -121,6 +129,15 @@ export interface RequestOptions {
   retry?: "safe" | "rate-limit";
   /** Override the bearer token for this call (null = none). */
   token?: string | null;
+  /**
+   * Whether this call carries authentication. Default: yes when a token will
+   * be sent, when the client was constructed with `authenticated: true`, or
+   * when any caller header beyond Content-Type is present (Authorization,
+   * Cookie and custom identity headers are all credentials). Pass `false`
+   * only to declare a genuinely credential-free request whose custom headers
+   * are benign; pass `true` for authentication the transport cannot see.
+   */
+  authenticated?: boolean;
   /** Allowed non-2xx statuses that should be returned instead of thrown. */
   accept?: number[];
   /** Sent as Idempotency-Key (the server replays repeats for idempotent operations). */
@@ -140,11 +157,61 @@ export interface BytesResult {
   headers: Headers;
 }
 
+/**
+ * Whether a URL hostname names this machine: `localhost` (a trailing dot is
+ * the same name), any 127/8 IPv4 address, `::1`, or an IPv4-mapped IPv6 form
+ * of a 127/8 address. URL parsing already canonicalises spellings such as
+ * `127.1`, integer and hex IPv4 to dotted form, and `[::ffff:127.2.3.4]` to
+ * `[::ffff:7f02:304]`. Lookalikes that merely start with a loopback label
+ * (`localhost.evil.test`, `127.evil.test`) are not loopback.
+ */
+export function isLoopbackHostname(hostname: string): boolean {
+  let host = hostname.toLowerCase();
+  if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
+  if (host.endsWith(".")) host = host.slice(0, -1);
+  if (host === "localhost" || host === "::1") return true;
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) {
+    const octets = host.split(".").map(Number);
+    return octets.every((n) => n <= 255) && octets[0] === 127;
+  }
+  const mapped = /^::ffff:(.+)$/.exec(host);
+  if (mapped) {
+    const rest = mapped[1]!;
+    if (rest.includes(".")) return isLoopbackHostname(rest);
+    const parts = rest.split(":");
+    return parts.length === 2 && /^7f[0-9a-f]{2}$/.test(parts[0]!) && /^[0-9a-f]{1,4}$/.test(parts[1]!);
+  }
+  return false;
+}
+
+/** Whether credentials may be sent to this URL: https anywhere, http only on loopback. */
+export function isCredentialSafeUrl(url: string | URL): boolean {
+  try {
+    const target = typeof url === "string" ? new URL(url) : url;
+    return target.protocol === "https:" || (target.protocol === "http:" && isLoopbackHostname(target.hostname));
+  } catch {
+    return false;
+  }
+}
+
+function refuseInsecureCredentials(): never {
+  throw new DropwayError({
+    code: "invalid_api_url", message: "Credentials require HTTPS except on loopback development instances.",
+    hint: "Use an https:// instance URL, or http://localhost for local development.", retryable: false,
+  });
+}
+
 /** Normalise "https://x.dev/", "x.dev", "https://x.dev/api/v1" to "https://x.dev". */
 export function normaliseApi(input: string): string {
   let s = input.trim();
   if (!s) throw new DropwayError({ code: "invalid_api_url", message: "The instance URL is empty.", retryable: false });
-  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) s = `${/^(localhost|127\.|\[::1\])/.test(s) ? "http" : "https"}://${s}`;
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) {
+    const authority = s.split("/")[0]!;
+    const host = authority.startsWith("[")
+      ? authority.slice(0, authority.indexOf("]") + 1)
+      : authority.split(":")[0]!;
+    s = `${isLoopbackHostname(host) ? "http" : "https"}://${s}`;
+  }
   let url: URL;
   try {
     url = new URL(s);
@@ -168,6 +235,8 @@ export interface OperationMeta {
 export interface CallOptions {
   headers?: Record<string, string>;
   token?: string | null;
+  /** See RequestOptions.authenticated. */
+  authenticated?: boolean;
   accept?: number[];
   idempotencyKey?: string;
   retry?: "safe" | "rate-limit";
@@ -187,6 +256,7 @@ export class DropwayHttpClient {
   private readonly attempts: number;
   private readonly backoffMs: number;
   private readonly maxRetryAfter: number;
+  private readonly authenticatedDefault: boolean | undefined;
   private onMoved: ((newOrigin: string) => void) | undefined;
 
   constructor(opts: ClientOptions) {
@@ -197,6 +267,7 @@ export class DropwayHttpClient {
     this.attempts = Math.max(1, opts.attempts ?? 4);
     this.backoffMs = opts.backoffMs ?? 500;
     this.maxRetryAfter = opts.maxRetryAfterSeconds ?? 30;
+    this.authenticatedDefault = opts.authenticated;
     this.onMoved = opts.onMoved;
   }
 
@@ -234,15 +305,17 @@ export class DropwayHttpClient {
     opts: RequestOptions,
   ): Promise<Response> {
     const token = opts.token === undefined ? this.token : opts.token;
-    const target = new URL(url);
-    const loopback = target.hostname === "localhost" || target.hostname === "[::1]"
-      || /^127(?:\.\d{1,3}){3}$/.test(target.hostname);
-    if (target.protocol === "http:" && !loopback && (token || new Headers(headers).has("Authorization"))) {
-      throw new DropwayError({
-        code: "invalid_api_url", message: "Credentials require HTTPS except on loopback development instances.",
-        hint: "Use an https:// instance URL, or http://localhost for local development.", retryable: false,
-      });
-    }
+    // Any caller header beyond the standard non-credential ones may be a
+    // credential: beyond Authorization, identity adapters accept Cookie and
+    // arbitrary custom session headers, so absence of Authorization never
+    // proves anonymity. Benign custom headers declare authenticated: false.
+    const nonCredential = new Set([
+      "accept", "accept-encoding", "accept-language", "cache-control", "content-length", "content-type",
+      "if-match", "if-modified-since", "if-none-match", "if-unmodified-since", "range", "user-agent",
+    ]);
+    const hasCallerHeader = Object.keys(headers).some((name) => !nonCredential.has(name.toLowerCase()));
+    const authenticated = opts.authenticated ?? (Boolean(token) || hasCallerHeader || this.authenticatedDefault === true);
+    if (authenticated && !isCredentialSafeUrl(url)) refuseInsecureCredentials();
     const retry = opts.retry ?? (method === "GET" || method === "HEAD" ? "safe" : "rate-limit");
     let lastError: DropwayError | null = null;
 
@@ -255,8 +328,9 @@ export class DropwayHttpClient {
       if (opts.idempotencyKey) sent.set("Idempotency-Key", opts.idempotencyKey);
       let res: Response;
       try {
-        res = await this.doFetch(new Request(url, { method, headers: sent, body, redirect: "follow" }));
+        res = await this.fetchFollowingRedirects(method, url, body, sent, authenticated);
       } catch (e) {
+        if (e instanceof DropwayError) throw e;
         lastError = new DropwayError({
           code: "network_error",
           message: `Could not reach ${new URL(url).origin}: ${(e as Error)?.message ?? String(e)}`,
@@ -293,6 +367,53 @@ export class DropwayHttpClient {
       throw err;
     }
     throw lastError ?? new DropwayError({ code: "request_failed", message: `${method} ${url} failed.`, retryable: false });
+  }
+
+  /**
+   * Fetch with redirects handled here, never by the platform: native
+   * `redirect: "follow"` would replay bodies and caller headers onto a
+   * downgraded or cross-origin target before any policy could run.
+   * Writes are never replayed at all (a redirect must not retarget a
+   * PATCH/PUT/POST onto another resource); GET/HEAD follow at most five
+   * hops, re-checking credential safety at each one and dropping every
+   * header except Accept and client attribution when the origin changes.
+   */
+  private async fetchFollowingRedirects(
+    method: string,
+    url: string,
+    body: Blob | Uint8Array | ArrayBuffer | string | null,
+    sent: Headers,
+    authenticated: boolean,
+  ): Promise<Response> {
+    let currentUrl = url;
+    let currentHeaders = new Headers(sent);
+    for (let hops = 0; ; hops++) {
+      const res = await this.doFetch(new Request(currentUrl, { method, headers: currentHeaders, body, redirect: "manual" }));
+      if (![301, 302, 303, 307, 308].includes(res.status)) return res;
+      const location = res.headers.get("location");
+      if (!location) return res;
+      try { await res.body?.cancel(); } catch { /* the redirect response body is discarded either way */ }
+      const refused = (message: string) => new DropwayError({
+        code: "redirect_refused", message, status: res.status, retryable: false,
+        hint: "Use the instance's canonical https:// origin (without /api/v1), then retry the same call.",
+      });
+      if (method !== "GET" && method !== "HEAD") {
+        throw refused(`${method} to ${new URL(url).origin} answered with a redirect; writes are never replayed to a redirected target.`);
+      }
+      if (hops >= 5) throw refused(`${method} to ${new URL(url).origin} redirected more than five times.`);
+      let next: URL;
+      try {
+        next = new URL(location, currentUrl);
+      } catch {
+        throw refused(`${method} to ${new URL(url).origin} answered with an invalid redirect target.`);
+      }
+      if (authenticated && !isCredentialSafeUrl(next)) refuseInsecureCredentials();
+      if (next.origin !== new URL(currentUrl).origin) {
+        const keep = new Set(["accept", "x-kofra-client", `${LEGACY_HEADER_PREFIX.toLowerCase()}client`]);
+        for (const name of [...currentHeaders.keys()]) if (!keep.has(name.toLowerCase())) currentHeaders.delete(name);
+      }
+      currentUrl = next.href;
+    }
   }
 
   private backoff(attempt: number): number {

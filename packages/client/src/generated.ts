@@ -72,7 +72,7 @@ export interface PublishSiteOutput {
   /** 24 h signed preview; bearer capability. */
   versionUrl?: string;
   site?: {
-    id: string;
+    id?: string;
     slug: string;
     url: string;
     currentVersionId?: string | null;
@@ -605,7 +605,7 @@ export interface DuplicateSiteOutput {
   slug: string;
   url: string;
   site?: {
-    id: string;
+    id?: string;
     slug: string;
     url: string;
     currentVersionId?: string | null;
