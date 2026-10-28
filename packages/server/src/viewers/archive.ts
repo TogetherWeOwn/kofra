@@ -115,7 +115,7 @@ async function archiveListing(vc: ViewerContext): Promise<string | null> {
 
 export const archiveViewer: Viewer = {
   id: "archive",
-  version: 2,
+  version: 3,
   // Large and unsupported archives still get an info page, but are never parsed.
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "archive" && mode !== "source",
