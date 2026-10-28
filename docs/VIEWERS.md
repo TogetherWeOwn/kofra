@@ -136,7 +136,12 @@ label identify the selection, and a visible outline identifies keyboard focus.
 **Actual size** remains a separate checkbox: Space toggles between fitting the
 image and its natural size without resetting the background. Clicking the image
 also toggles sizing. Large Actual-size images remain scrollable, and the controls
-wrap above the stage on narrow screens.
+wrap above the stage on narrow screens. Fit uses the space remaining after the
+actual wrapped controls and header, rather than a fixed header-height allowance.
+Image-viewer chrome stays in normal document flow so it cannot cover a control
+when native keyboard focus scrolls it into view. The inspection paint layer keeps
+its checker/white/black colors in forced-colors mode; the controls and their focus
+indicators still use the system's forced-color adaptation.
 
 The same controls are available with `?view=1&embed=1`. A bare iframe or image
 sub-resource still receives the original file. SVGs remain isolated through

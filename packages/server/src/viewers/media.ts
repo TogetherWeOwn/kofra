@@ -29,13 +29,25 @@ const MEDIA_CSS = `
 `;
 
 const IMAGE_CSS = `
+body{height:100vh;height:100dvh;display:flex;flex-direction:column}
+/* Keep chrome in flow so native focus scrolling cannot hide controls below it. */
+.dw-vbar{position:static;flex-shrink:0}
+.dw-media{flex:1;min-height:0}
+.dw-media:not(:has(#dw-zoom:checked))>.dw-stage{flex:1;min-height:0;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+.dw-media:not(:has(#dw-zoom:checked))>.dw-stage img{max-height:100%}
+.dw-media:has(#dw-zoom:checked){flex:none}
+/* A separate paint layer preserves inspection colors, not control colors. */
+.dw-media>.dw-stage{display:grid;isolation:isolate;background:none}
+.dw-stage::before{content:"";grid-area:1/1;align-self:stretch;justify-self:stretch;forced-color-adjust:none;z-index:-1;background-color:var(--card);background-image:linear-gradient(45deg,var(--code) 25%,transparent 25%),linear-gradient(-45deg,var(--code) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,var(--code) 75%),linear-gradient(-45deg,transparent 75%,var(--code) 75%);background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0}
+.dw-stage img{grid-area:1/1;align-self:center;justify-self:center}
+#dw-zoom:checked~.dw-stage img{align-self:start;justify-self:start}
 .dw-backgrounds{display:flex;gap:.4rem;align-items:center;justify-content:center;flex-wrap:wrap}
 .dw-backgrounds label{display:inline-flex;align-items:center;gap:.35rem}
 .dw-backgrounds input{margin:0;accent-color:var(--accent)}
 .dw-backgrounds input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .dw-backgrounds label:has(input:checked){border-color:var(--accent);font-weight:600}
-.dw-media:has(#dw-bg-light:checked)>.dw-stage{background:#fff}
-.dw-media:has(#dw-bg-dark:checked)>.dw-stage{background:#000}
+.dw-media:has(#dw-bg-light:checked)>.dw-stage::before{background:#fff}
+.dw-media:has(#dw-bg-dark:checked)>.dw-stage::before{background:#000}
 #dw-zoom:checked~.dw-stage img{flex-shrink:0}
 ` + MEDIA_CSS;
 
