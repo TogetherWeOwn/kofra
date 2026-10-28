@@ -1,8 +1,8 @@
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCleanup, sha256Hex } from "@dropway/core";
-import { freshInstance } from "./helpers";
-import { accepted, complete, context, finalize, foreignKey, pending, putPart, refused, session, start, state, unregistered } from "./resumable-upload.helpers";
+import { freshInstance, jsonBody } from "./helpers";
+import { accepted, complete, context, finalize, foreignKey, MiB, pending, putPart, refused, session, start, state, unregistered } from "./resumable-upload.helpers";
 
 const bytes = new TextEncoder().encode("first writer's exact multipart bytes");
 afterEach(() => vi.restoreAllMocks());
@@ -438,6 +438,39 @@ describe("failed verification retains storage ownership", () => {
   });
 });
 
+// Pause exactly the first R2 multipart assembly inside complete, after the
+// session has been claimed for completion but before hash/promotion.
+function holdFirstComplete() {
+  const entered = signal();
+  const release = signal();
+  const resume = env.FILES.resumeMultipartUpload.bind(env.FILES);
+  let held = false;
+  vi.spyOn(env.FILES, "resumeMultipartUpload").mockImplementation((key, id) => {
+    const handle = resume(key, id);
+    return {
+      key: handle.key, uploadId: handle.uploadId,
+      uploadPart: handle.uploadPart.bind(handle),
+      async complete(parts) {
+        if (!held) {
+          held = true;
+          entered.resolve();
+          await release.promise;
+        }
+        return handle.complete(parts);
+      },
+      abort: handle.abort.bind(handle),
+    };
+  });
+  return {
+    async reached(request: Promise<unknown>) {
+      await bounded(Promise.race([entered.promise, request.then(() => {
+        throw new Error("complete returned before reaching real R2 assembly");
+      })]));
+    },
+    release: release.resolve,
+  };
+}
+
 describe("promotion cleanup retry fencing", () => {
   it("does not report completion or release the cap while promoted staging deletion still fails", async () => {
     const { dw, p, s } = await fixture();
@@ -455,6 +488,146 @@ describe("promotion cleanup retry fencing", () => {
     expect(resumed.body).toMatchObject({ id: s.id, status: "completing" });
     vi.restoreAllMocks();
     accepted(await complete(dw, s, p.token));
+    accepted(await finalize(dw, p));
+    const served = await dw.call(`/s/${p.site}/data.bin?raw=1`);
+    expect(new Uint8Array(await served.arrayBuffer())).toEqual(bytes);
+  });
+});
+
+// Review round: completion snapshots the blob scope before lengthy R2
+// assembly/hashing. If the anonymous site is claimed into a tenant during
+// that window, a success registered only in the obsolete anonymous scope
+// leaves the current tenant's finalize missing the blob forever (replay
+// also reports success). Fencing/reconciling at the metadata commit, or a
+// stable recoverable refusal while ownership changes, are both acceptable.
+describe("multipart completion fences current ownership", () => {
+  it("claiming the anonymous site mid-completion does not strand the verified blob in the anonymous scope", async () => {
+    const dw = await freshInstance({ anonymous: { enabled: true } });
+    const hash = await sha256Hex(bytes);
+    const pub = await dw.json("/api/v1/publish", { ...jsonBody({ files: [{ path: "data.bin", sha256: hash, size: bytes.length }] }) });
+    expect(pub.status, JSON.stringify(pub.body)).toBe(202);
+    expect(pub.body.status).toBe("awaiting_upload");
+    expect(pub.body.claimToken).toMatch(/^dwc_/);
+    const authorization = new Headers(pub.body.upload.items[0].headers).get("Authorization")!;
+    expect(authorization).toMatch(/^Bearer dwu_/);
+    const p = { site: pub.body.site.slug as string, versionId: pub.body.version.id as string, sha256: hash, size: bytes.length, key: dw.ownerKey, token: authorization.slice(7) };
+    const s = await session(dw, p, 10 * MiB, p.token);
+    accepted(await putPart(dw, s, 1, bytes, p.token));
+
+    const barrier = holdFirstComplete();
+    const completing = complete(dw, s, p.token);
+    let result;
+    try {
+      await barrier.reached(completing);
+      const claim = await dw.json(`/api/v1/sites/${p.site}/claim`, { ...jsonBody({ claimToken: pub.body.claimToken }), key: dw.ownerKey });
+      accepted(claim);
+    } finally {
+      barrier.release();
+      result = await bounded(completing);
+    }
+
+    const siteRow = await env.DB.prepare("SELECT tenant_id FROM sites WHERE slug = ?").bind(p.site).first<{ tenant_id: string | null }>();
+    expect(siteRow?.tenant_id, "the claim must have moved the site into a tenant").toEqual(expect.any(String));
+    if (result.status >= 300) {
+      // Safe-refusal shape: stable error, and retrying after ownership has
+      // settled completes without re-uploading any part.
+      expect(result.body.error?.code).toMatch(/^[a-z][a-z0-9_]*$/);
+      expect(result.body.error?.hint).toEqual(expect.any(String));
+      accepted(await complete(dw, s, dw.ownerKey));
+    } else {
+      accepted(result);
+    }
+    // Replay must agree with the fenced outcome, not just repeat success.
+    accepted(await complete(dw, s, dw.ownerKey));
+    const scopes = (await env.DB.prepare("SELECT scope FROM blob_scopes WHERE sha256 = ?").bind(hash).all<{ scope: string }>()).results.map((r) => r.scope);
+    expect(scopes, "the verified blob must be registered for the site's current tenant").toContain(`t:${siteRow!.tenant_id}`);
+    accepted(await finalize(dw, p));
+    const served = await dw.call(`/s/${p.site}/data.bin?raw=1`);
+    expect(served.status).toBe(200);
+    const actual = new Uint8Array(await served.arrayBuffer());
+    expect(actual).toEqual(bytes);
+    expect(await sha256Hex(actual)).toBe(hash);
+  });
+});
+
+// Review round: the storage-failure fence above covers deletion failing.
+// The reverse order wedges differently: staging deletion succeeds, then the
+// failed-state D1 write fails, leaving staged=1 pointing at a missing
+// object; every later complete then 502s and start resumes the same dead
+// session, holding the one-unfinished-session allocation until expiry.
+describe("failed verification D1 transition recovery", () => {
+  it("recovers when staged deletion succeeds but the following failed-state D1 write fails", async () => {
+    const { dw, p, s } = await fixture();
+    const corrupt = bytes.slice(); corrupt[0] = bytes[0]! ^ 255;
+    accepted(await putPart(dw, s, 1, corrupt, p.token));
+    // Fail the failed-state D1 transition exactly once, wherever an
+    // implementation orders it relative to staged-object deletion: the
+    // first D1 batch or upload_sessions UPDATE issued after the staged
+    // object has been read for verification. Deletion itself call-throughs
+    // for real in between, so storage and D1 genuinely diverge on the
+    // pre-fix order (delete first, transition second).
+    const get = env.FILES.get.bind(env.FILES);
+    let stagedRead = false;
+    vi.spyOn(env.FILES, "get").mockImplementation((async (key: string, options?: unknown) => {
+      if (typeof key === "string" && key.startsWith("uploads/")) stagedRead = true;
+      return get(key, options as never);
+    }) as never);
+    let injected = false;
+    const injectOnce = () => {
+      if (!stagedRead || injected) return false;
+      injected = true;
+      return true;
+    };
+    const batch = env.DB.batch.bind(env.DB);
+    vi.spyOn(env.DB, "batch").mockImplementation((async (statements: unknown) => {
+      if (injectOnce()) throw new Error("fixture failed-state D1 outage");
+      return batch(statements as never);
+    }) as never);
+    const prepare = env.DB.prepare.bind(env.DB);
+    vi.spyOn(env.DB, "prepare").mockImplementation(((sql: string) => {
+      const statement = prepare(sql);
+      if (!/UPDATE\s+upload_sessions/i.test(sql)) return statement;
+      const bind = statement.bind.bind(statement);
+      vi.spyOn(statement, "bind").mockImplementation(((...values: unknown[]) => {
+        const bound = bind(...(values as never[]));
+        const run = bound.run.bind(bound);
+        vi.spyOn(bound, "run").mockImplementation((async () => {
+          if (injectOnce()) throw new Error("fixture failed-state D1 outage");
+          return run();
+        }) as never);
+        return bound;
+      }) as never);
+      return statement;
+    }) as never);
+    const failed = await complete(dw, s, p.token);
+    vi.restoreAllMocks();
+    if (injected) {
+      // On the current order the fixture must really land on the transition
+      // (a 400 here would mean the fault seam drifted, not recovery). An
+      // implementation that persists recoverable state through a seam this
+      // injection cannot reach may instead answer the terminal refusal
+      // immediately; the recovery assertions below decide that case.
+      expect(failed.status, JSON.stringify(failed.body)).toBe(500);
+      expect(failed.body.error.retryable).toBe(true);
+    }
+    await unregistered(p.sha256);
+
+    // Retry must reach a durable terminal state (or start must safely
+    // replace the wedged session): never a permanently resumed session
+    // whose staged object is gone.
+    const retry = injected ? await complete(dw, s, p.token) : failed;
+    let next: Awaited<ReturnType<typeof session>>;
+    if (retry.status === 400 && retry.body.error?.code === "hash_mismatch") {
+      next = await session(dw, p);
+    } else {
+      const resumed = await start(dw, p);
+      accepted(resumed);
+      expect(resumed.body.id, `complete retry was ${retry.status} ${retry.body.error?.code}; start must not resume the missing staged object`).not.toBe(s.id);
+      next = resumed.body as Awaited<ReturnType<typeof session>>;
+    }
+    expect(next.id).not.toBe(s.id);
+    accepted(await putPart(dw, next, 1, bytes, p.token));
+    accepted(await complete(dw, next, p.token));
     accepted(await finalize(dw, p));
     const served = await dw.call(`/s/${p.site}/data.bin?raw=1`);
     expect(new Uint8Array(await served.arrayBuffer())).toEqual(bytes);
