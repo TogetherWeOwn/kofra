@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { mcpInstructions } from "@dropway/server";
 import { sha256Hex } from "@dropway/core";
-import { BOOTSTRAP, freshInstance, jsonBody, type Instance } from "./helpers";
+import { BOOTSTRAP, form, freshInstance, jsonBody, type Instance } from "./helpers";
 import { b64, connectLegacyMcp, connectMcp, type McpTestClient } from "./mcp-helpers";
 
 let dw: Instance;
@@ -294,6 +294,61 @@ describe("MCP tools: publish, read back, edit, roll back", () => {
     expect(bin.data.content).toBe(b64(new Uint8Array([0, 1, 2, 255])));
     const missing = await mcp.call("read_file", { site: "paging", path: "nope.txt" });
     expect(missing.data.error.code).toBe("file_not_found");
+  });
+
+  it("read_file preserves UTF-8 characters across byte pages", async () => {
+    const small = "aé中💩\uFEFFz";
+    const boundary = "a".repeat(65_535) + "é" + "z";
+    await mcp.call("publish_site", { site: "utf8-pages", files: [{ path: "small.txt", content: small }, { path: "boundary.txt", content: boundary }] });
+    for (const [path, expected, length] of [
+      ["small.txt", small, 1], ["small.txt", small, 2], ["small.txt", small, 3],
+      ["boundary.txt", boundary, undefined],
+    ] as const) {
+      let offset = 0;
+      let content = "";
+      do {
+        const page = await mcp.call("read_file", { site: "utf8-pages", path, offset, ...(length === undefined ? {} : { length }) });
+        expect(page.isError).toBe(false);
+        expect(page.data.offset).toBe(offset);
+        expect(page.data.length).toBe(new TextEncoder().encode(page.data.content).length);
+        expect(page.data.length).toBeGreaterThan(0);
+        expect(page.data.length).toBeLessThanOrEqual((length ?? 65_536) + 3);
+        content += page.data.content;
+        if (page.data.nextOffset === null) {
+          expect(page.data.truncated).toBe(false);
+          expect(offset + page.data.length).toBe(page.data.size);
+          break;
+        }
+        expect(page.data.truncated).toBe(true);
+        expect(page.data.nextOffset).toBe(offset + page.data.length);
+        offset = page.data.nextOffset;
+      } while (true);
+      expect(content).toBe(expected);
+    }
+  });
+
+  it("read_file keeps text pages within the 1 MiB cap without splitting UTF-8", async () => {
+    const prefix = "a".repeat(1_048_575);
+    // Multipart publishing avoids the separate 1 MiB inline-file limit.
+    const published = await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, body: form({ "big.txt": prefix + "💩z" }, { slug: "utf8-cap" }) });
+    expect(published.status).toBe(201);
+    const first = await mcp.call("read_file", { site: "utf8-cap", path: "big.txt", length: 1_048_576 });
+    expect(first.isError).toBe(false);
+    expect(first.data).toMatchObject({ content: prefix, offset: 0, length: 1_048_575, truncated: true, nextOffset: 1_048_575 });
+    const last = await mcp.call("read_file", { site: "utf8-cap", path: "big.txt", offset: first.data.nextOffset, length: 1_048_576 });
+    expect(last.data).toMatchObject({ content: "💩z", length: 5, truncated: false, nextOffset: null });
+  });
+
+  it("read_file leaves base64 byte ranges exact and does not move an explicit text offset", async () => {
+    await mcp.call("publish_site", { site: "utf8-ranges", files: [{ path: "text.txt", content: "éz" }] });
+    for (const [offset, content] of [[0, "ww=="], [1, "qQ=="], [2, "eg=="]] as const) {
+      const page = await mcp.call("read_file", { site: "utf8-ranges", path: "text.txt", encoding: "base64", offset, length: 1 });
+      expect(page.data).toMatchObject({ content, offset, length: 1, nextOffset: offset < 2 ? offset + 1 : null });
+    }
+    const partial = await mcp.call("read_file", { site: "utf8-ranges", path: "text.txt", encoding: "text", offset: 1 });
+    expect(partial.data).toMatchObject({ content: "�z", offset: 1, length: 2, nextOffset: null });
+    const eof = await mcp.call("read_file", { site: "utf8-ranges", path: "text.txt", offset: 3 });
+    expect(eof.data).toMatchObject({ content: "", length: 0, truncated: false, nextOffset: null });
   });
 
   it("versions: list, get by number, restore by number, delete with confirm", async () => {
