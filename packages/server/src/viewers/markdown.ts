@@ -6,7 +6,8 @@ import { HIGHLIGHT_CSS, highlight, hljsLanguage } from "./highlight";
 import type { Viewer } from "./index";
 import { sanitizeHtml } from "./sanitize";
 
-const MD_VERSION = 3;
+// 4 adds the Phone disclosure to the viewer bar.
+const MD_VERSION = 4;
 
 const MD_CSS = `
 .dw-md{max-width:48rem;margin:0 auto;padding:2.5rem 1.25rem 5rem}

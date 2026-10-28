@@ -228,7 +228,7 @@ ${IMAGE_BACKGROUNDS}
 
 export const pdfViewer: Viewer = {
   id: "pdf",
-  version: 2,
+  version: 3,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "pdf" && topLevelOnly(mode),
   async render(vc) {
@@ -260,7 +260,7 @@ function subtitleTracks(vc: ViewerContext): string {
 
 export const videoViewer: Viewer = {
   id: "video",
-  version: 2,
+  version: 3,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "video" && topLevelOnly(mode),
   async render(vc) {
@@ -275,7 +275,7 @@ export const videoViewer: Viewer = {
 
 export const audioViewer: Viewer = {
   id: "audio",
-  version: 2,
+  version: 3,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "audio" && topLevelOnly(mode),
   async render(vc) {

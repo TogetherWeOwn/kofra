@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Viewer phone handoff
+
+- File viewer bars offer a keyboard-operable Phone disclosure without JavaScript.
+  Its inline SVG QR and full link use the public file address without query or
+  fragment; opening a password-protected file on a phone still requires its password.
+  Embeds, folder listings and version-preview addresses omit the control.
+- Over-capacity URLs retain the full link without a QR. Server rendering and the
+  dashboard share the existing vendored encoder; dashboard QR pixels are unchanged.
+  Built-in viewer versions advance to refresh cached validators. The QR displays
+  at whole CSS pixels per module and shrinks to fit short viewports.
+
 ### Sites
 
 - Every site serves an embeddable live-version badge at `<site URL>badge.svg` (path and
@@ -193,6 +204,11 @@
 
 ### Extension API
 
+- Bump `EXTENSION_API_VERSION` to 6: `ViewerContext` and `ServeMode` gain an
+  optional `preview` flag (set only by version-preview serving), and every
+  full-page viewer ETag gains a `-chrome<N>` shared-chrome revision segment, so
+  a `viewerPage` chrome change also retires extension viewers' cached pages.
+  A viewer's own `version` now only tracks its own output.
 - Bump `EXTENSION_API_VERSION` to 5: `Viewer` gains an optional `etagExtra(file, live)` that adds render
   identity (for example linked neighbours) to the viewer ETag. The server percent-encodes the viewer id
   and this value in the ETag, so any string is safe; built-in viewers' ETags are unchanged.
