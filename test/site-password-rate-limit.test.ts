@@ -1,11 +1,12 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import type { ServerBindings } from "@dropway/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { databaseBoundary } from "./delivery-review-fixtures";
 import { freshInstance, type Instance } from "./helpers";
 import { attempt, delayedCounterWrite, freezePasswordClock, lockedSite, passwordForm, postForm, SITE_PASSWORD, transferAttempt, WINDOW_MS } from "./site-password-fixtures";
 import { create, instance as transferInstance, PASSWORD as TRANSFER_PASSWORD } from "./transfer-fixtures";
 
-async function bodyProbe(dw: Instance, url: string, ip: string, password = SITE_PASSWORD) {
+async function bodyProbe(dw: Instance, url: string, ip: string, password = SITE_PASSWORD, db?: D1Database) {
   let pulls = 0;
   const body = new ReadableStream<Uint8Array>({ pull(controller) {
     pulls++;
@@ -17,7 +18,7 @@ async function bodyProbe(dw: Instance, url: string, ip: string, password = SITE_
   });
   const ctx = createExecutionContext();
   try {
-    const res = await dw.dropway.fetch(req, env as unknown as ServerBindings, ctx);
+    const res = await dw.dropway.fetch(req, { ...env, ...(db ? { DB: db } : {}) } as unknown as ServerBindings, ctx);
     await waitOnExecutionContext(ctx);
     return { res, pulls, bodyUsed: req.bodyUsed };
   } finally {
@@ -279,5 +280,96 @@ describe.each([
     const content = await dw.call(url, { headers: { Cookie: cookie, "CF-Connecting-IP": "192.0.2.2" } });
     expect(content.status).toBe(200);
     expect(await content.text()).toContain("private content");
+  });
+
+  it("fails closed when the second (site) reservation fails after the visitor reservation succeeds", async () => {
+    const dw = await freshInstance(config);
+    const url = await lockedSite(dw, "protected-site");
+    const other = await lockedSite(dw, "other-site");
+    let counterWrites = 0;
+    let injected = false;
+    const db = databaseBoundary(async (statements) => {
+      const matching = statements.filter((sql) => /\btransfer_unlock_buckets\b/i.test(sql) && /\b(?:INSERT|UPDATE)\b/i.test(sql)).length;
+      const first = counterWrites + 1;
+      counterWrites += matching;
+      if (first <= 2 && 2 <= counterWrites) {
+        injected = true;
+        throw new Error("disposable second-reservation storage failure");
+      }
+    });
+    const probe = await bodyProbe(dw, url, "192.0.2.1", SITE_PASSWORD, db);
+    expect(injected, "the fixture must reach the second counter reservation, not the first").toBe(true);
+    expect(counterWrites).toBeGreaterThanOrEqual(2);
+    expect.soft(probe.res.status, "a failed site reservation must not be ignored").toBe(503);
+    expect.soft(probe.pulls, "fail-closed work must not read the request body").toBe(0);
+    expect.soft(probe.bodyUsed).toBe(false);
+    expect.soft(probe.res.headers.get("set-cookie")).toBeNull();
+    expect.soft(probe.res.headers.get("cache-control")).toContain("no-store");
+    expect.soft(Number(probe.res.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(await probe.res.text()).not.toContain("private content");
+
+    // Partial accounting: the failed site reservation debited no site
+    // attempt — all thirty remain for other visitors.
+    for (let n = 0; n < 30; n++) {
+      expect((await attempt(dw, url, "wrong", `198.51.100.${n + 1}`)).status).toBe(401);
+    }
+    expect((await attempt(dw, url, SITE_PASSWORD, "203.0.113.1")).status).toBe(429);
+    // The visitor reservation that did succeed stands (no silent refund):
+    // its owner has exactly nine attempts left, probed on another site.
+    for (let n = 0; n < 9; n++) {
+      expect((await attempt(dw, other, "wrong", "192.0.2.1")).status).toBe(401);
+    }
+    expect((await attempt(dw, other, SITE_PASSWORD, "192.0.2.1")).status).toBe(429);
+    expect((await attempt(dw, other, SITE_PASSWORD, "192.0.2.2")).status).toBe(303);
+  });
+
+  it("keeps distinct cross-zone Worker zones behind the synthetic connecting IP in separate visitor budgets", async () => {
+    // Provider contract: cross-zone Worker subrequests share
+    // CF-Connecting-IP 2a06:98c0:3600::103 while the edge-added CF-Worker
+    // header names the upstream zone. Caller forwarding headers are not
+    // identity and must never split or merge these budgets.
+    const MARKER = "2a06:98c0:3600::103";
+    const zoneA = { "CF-Worker": "zone-a.example" };
+    const zoneB = { "CF-Worker": "zone-b.example" };
+    const dw = await freshInstance(config);
+    const url = await lockedSite(dw, "protected-site");
+    const other = await lockedSite(dw, "other-site");
+    for (let n = 0; n < 10; n++) {
+      const spoofed = { "X-Forwarded-For": `203.0.113.${n + 1}`, "x-real-ip": `198.51.100.${n + 1}` };
+      expect((await attempt(dw, url, "wrong", MARKER, { ...zoneA, ...spoofed })).status).toBe(401);
+    }
+    // The same attributed principal is exhausted everywhere, whatever
+    // forwarding headers accompany it.
+    expect((await attempt(dw, url, SITE_PASSWORD, MARKER, { ...zoneA, "X-Forwarded-For": "203.0.113.99" })).status).toBe(429);
+    expect((await attempt(dw, other, SITE_PASSWORD, MARKER, zoneA)).status).toBe(429);
+    // A different attributed zone behind the same synthetic address is a
+    // different principal with its own allowance, on both sites.
+    expect((await attempt(dw, url, SITE_PASSWORD, MARKER, zoneB)).status).toBe(303);
+    // The unattributed synthetic principal is likewise its own budget, and
+    // it is still a budget: ten attempts on the other site exhaust it.
+    expect((await attempt(dw, other, SITE_PASSWORD, MARKER)).status).toBe(303);
+    for (let n = 0; n < 9; n++) expect((await attempt(dw, other, "wrong", MARKER)).status).toBe(401);
+    expect((await attempt(dw, other, SITE_PASSWORD, MARKER)).status).toBe(429);
+    // Ordinary real-IP visitors are unaffected by any synthetic budget.
+    expect((await attempt(dw, url, SITE_PASSWORD, "192.0.2.1")).status).toBe(303);
+    // Zone B spent one attempt above; nine remain before its own cap.
+    for (let n = 0; n < 9; n++) expect((await attempt(dw, other, "wrong", MARKER, zoneB)).status).toBe(401);
+    expect((await attempt(dw, other, SITE_PASSWORD, MARKER, zoneB)).status).toBe(429);
+  });
+
+  it("does not let a CF-Worker value split an ordinary real-IP visitor budget", async () => {
+    const dw = await freshInstance(config);
+    const url = await lockedSite(dw, "protected-site");
+    const attributions: HeadersInit[] = [
+      { "CF-Worker": "zone-a.example" },
+      { "CF-Worker": "zone-b.example" },
+      {},
+      { "CF-Worker": "zone-c.example", "X-Forwarded-For": "203.0.113.7" },
+    ];
+    for (let n = 0; n < 10; n++) {
+      expect((await attempt(dw, url, "wrong", "192.0.2.50", attributions[n % attributions.length]!)).status).toBe(401);
+    }
+    expect((await attempt(dw, url, SITE_PASSWORD, "192.0.2.50", { "CF-Worker": "zone-d.example" })).status).toBe(429);
+    expect((await attempt(dw, url, SITE_PASSWORD, "192.0.2.51")).status).toBe(303);
   });
 });

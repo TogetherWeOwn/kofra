@@ -24,9 +24,12 @@ export async function lockedSite(dw: Instance, slug: string): Promise<string> {
   return pub.body.url;
 }
 
-export function attempt(dw: Instance, url: string, password: string, ip?: string): Promise<Response> {
+export function attempt(dw: Instance, url: string, password: string, ip?: string, headers: HeadersInit = {}): Promise<Response> {
+  const attemptHeaders = new Headers(headers);
+  if (ip) attemptHeaders.set("CF-Connecting-IP", ip);
+  else attemptHeaders.delete("CF-Connecting-IP");
   return dw.call(new URL("__dropway/password", url).href, {
-    method: "POST", headers: ip ? { "CF-Connecting-IP": ip } : {}, body: new URLSearchParams({ password }),
+    method: "POST", headers: attemptHeaders, body: new URLSearchParams({ password }),
   });
 }
 
@@ -64,17 +67,18 @@ export async function passwordForm(dw: Instance, url: string, ip: string | undef
   return { action: attributeUrl(action!, url), fields, status: page.status, csp: page.headers.get("content-security-policy") ?? "", cookies, responseHeaders: page.headers, html };
 }
 
-export function formSubmission(form: PasswordForm, password: string, ip: string, headers: HeadersInit = {}) {
+export function formSubmission(form: PasswordForm, password: string, ip: string | undefined, headers: HeadersInit = {}) {
   const fields = new URLSearchParams(form.fields);
   fields.set("password", password);
   const postHeaders = new Headers(headers);
-  postHeaders.set("CF-Connecting-IP", ip);
+  if (ip) postHeaders.set("CF-Connecting-IP", ip);
+  else postHeaders.delete("CF-Connecting-IP");
   postHeaders.set("Content-Type", "application/x-www-form-urlencoded");
   if (form.cookies) postHeaders.set("Cookie", [postHeaders.get("Cookie"), form.cookies].filter(Boolean).join("; "));
   return { method: "POST", body: fields, headers: postHeaders };
 }
 
-export function postForm(dw: Instance, form: PasswordForm, password: string, ip: string, headers: HeadersInit = {}, db?: D1Database) {
+export function postForm(dw: Instance, form: PasswordForm, password: string, ip: string | undefined, headers: HeadersInit = {}, db?: D1Database) {
   const init = formSubmission(form, password, ip, headers);
   return db ? request(dw, form.action, init, { DB: db }) : dw.call(form.action, init);
 }

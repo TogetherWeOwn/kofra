@@ -62,6 +62,9 @@ describe.each([
       response = await pending;
       await assertNoRollback(before);
       expect.soft(response.status, "late previous-window work cannot bypass current admission").toBe(429);
+      // The delayed response itself must quote the CURRENT window's
+      // remaining delay (600s at +5m into it), not its sampled old window.
+      expect.soft(response.headers.get("retry-after")).toBe("600");
       expect.soft(response.headers.get("set-cookie")).toBeNull();
       const next = await attempt(dw, url, SITE_PASSWORD, probeIp);
       expect.soft(next.status, "the delayed write must not reopen the exhausted current allowance").toBe(429);
@@ -99,9 +102,13 @@ describe.each([
       const response = await pending;
       await assertNoRollback(before);
       expect.soft(response.status).toBe(429);
+      // Same current-window rule on the shared transfer path: the delayed
+      // response itself carries the 600s remaining in this window.
+      expect.soft(response.headers.get("retry-after")).toBe("600");
       expect.soft(response.headers.get("set-cookie")).toBeNull();
       const next = await transferAttempt(dw, transfer, TRANSFER_PASSWORD, probeIp);
       expect.soft(next.status).toBe(429);
+      expect.soft(next.headers.get("retry-after")).toBe("600");
       expect.soft(next.headers.get("set-cookie")).toBeNull();
     } finally {
       delayed.release();

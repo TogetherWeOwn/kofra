@@ -169,6 +169,140 @@ describe.each([
     await assertUnlock(dw, target, unrelated, await postForm(dw, fresh, SITE_PASSWORD, VISITOR_IP, OPAQUE), VISITOR_IP);
   });
 
+  it("binds opaque form proof to the edge-attributed Worker zone behind the synthetic connecting IP", async () => {
+    // Attribution contract (provider documentation for HTTP headers):
+    // cross-zone Worker subrequests all arrive with CF-Connecting-IP
+    // 2a06:98c0:3600::103, and the edge-added CF-Worker header names the
+    // upstream zone. Only that pair distinguishes those principals; caller
+    // forwarding headers (X-Forwarded-For, x-real-ip) never do.
+    const MARKER = "2a06:98c0:3600::103";
+    const zoneA = { "CF-Worker": "zone-a.example" };
+    const zoneB = { "CF-Worker": "zone-b.example" };
+    const dw = await freshInstance({ ...config, sitesSandbox: true });
+    const url = await lockedSite(dw, "protected-site");
+    const other = await lockedSite(dw, "other-site");
+
+    const form = await passwordForm(dw, url, MARKER, { ...NAV, "Sec-Fetch-Site": "cross-site", ...zoneA, "X-Forwarded-For": "203.0.113.1" });
+    expect(form.csp).toMatch(/\bsandbox\b/);
+    const transplanted = await submittedBody(dw, form.action, formSubmission(form, SITE_PASSWORD, MARKER, { ...OPAQUE, ...zoneB }));
+    expect.soft(transplanted.res.status, "a different edge-attributed zone cannot spend another zone's form proof").toBe(403);
+    expect.soft(transplanted.pulls).toBe(0);
+    expect.soft(transplanted.bodyUsed).toBe(false);
+    expect.soft(transplanted.res.headers.get("set-cookie")).toBeNull();
+    expect(await transplanted.res.text()).not.toContain("private content");
+
+    // The same proof still works for its own zone, and a changed caller
+    // forwarding header does not change that attribution.
+    const unlocked = await postForm(dw, form, SITE_PASSWORD, MARKER, { ...OPAQUE, ...zoneA, "X-Forwarded-For": "203.0.113.2", "x-real-ip": "198.51.100.7" });
+    await assertUnlock(dw, url, other, unlocked, MARKER);
+    // Exactly one zone-A attempt (the success) was charged: nine remain.
+    for (let n = 0; n < 9; n++) {
+      expect((await attempt(dw, other, "wrong", MARKER, zoneA)).status).toBe(401);
+    }
+    expect((await attempt(dw, other, SITE_PASSWORD, MARKER, zoneA)).status).toBe(429);
+
+    // A form minted for the unattributed synthetic principal is neither
+    // spendable by a named zone nor broken for its own principal.
+    const bareForm = await passwordForm(dw, other, MARKER, { ...NAV, "Sec-Fetch-Site": "cross-site" });
+    const claimed = await postForm(dw, bareForm, SITE_PASSWORD, MARKER, { ...OPAQUE, ...zoneB });
+    expect(claimed.status).toBe(403);
+    expect(claimed.headers.get("set-cookie")).toBeNull();
+    const ownPrincipal = await postForm(dw, bareForm, SITE_PASSWORD, MARKER, OPAQUE);
+    expect(ownPrincipal.status).toBe(303);
+  });
+
+  it.each([
+    { label: "1 second", skewMs: 1_000 },
+    { label: "30 seconds", skewMs: 30_000 },
+  ])("accepts a freshly issued opaque form when the validating clock is $label behind issuance", async ({ skewMs }) => {
+    const dw = await freshInstance({ ...config, sitesSandbox: true });
+    const url = await lockedSite(dw, "protected-site");
+    const other = await lockedSite(dw, "other-site");
+    const issuedAt = Date.now();
+    const form = await passwordForm(dw, url, VISITOR_IP, { ...NAV, "Sec-Fetch-Site": "cross-site" });
+    expect(form.csp).toMatch(/\bsandbox\b/);
+    vi.setSystemTime(issuedAt - skewMs);
+    const res = await postForm(dw, form, SITE_PASSWORD, VISITOR_IP, OPAQUE);
+    await assertUnlock(dw, url, other, res, VISITOR_IP);
+  });
+
+  it("refuses a form issued more than 60 seconds in the future without charging the visitor", async () => {
+    const dw = await freshInstance({ ...config, sitesSandbox: true });
+    const url = await lockedSite(dw, "protected-site");
+    const other = await lockedSite(dw, "other-site");
+    const issuedAt = Date.now();
+    const form = await passwordForm(dw, url, VISITOR_IP, { ...NAV, "Sec-Fetch-Site": "cross-site" });
+    vi.setSystemTime(issuedAt - 61_000);
+    const probe = await submittedBody(dw, form.action, formSubmission(form, SITE_PASSWORD, VISITOR_IP, OPAQUE));
+    expect.soft(probe.res.status, "bounded skew tolerance is not permission for arbitrary-future proofs").toBe(403);
+    expect.soft(probe.pulls).toBe(0);
+    expect.soft(probe.bodyUsed).toBe(false);
+    expect.soft(probe.res.headers.get("set-cookie")).toBeNull();
+    expect(await probe.res.text()).not.toContain("private content");
+    // Back at issuance time the same form works, and that success is the
+    // visitor's only charge: exactly nine attempts remain afterwards.
+    vi.setSystemTime(issuedAt);
+    await assertUnlock(dw, url, other, await postForm(dw, form, SITE_PASSWORD, VISITOR_IP, OPAQUE), VISITOR_IP);
+    for (let n = 0; n < 9; n++) expect((await attempt(dw, other, "wrong", VISITOR_IP)).status).toBe(401);
+    expect((await attempt(dw, other, SITE_PASSWORD, VISITOR_IP)).status).toBe(429);
+  });
+
+  it.each([
+    { label: "just before the fifteen-minute boundary", offsetMs: WINDOW_MS - 1_000, admitted: true },
+    { label: "exactly at the fifteen-minute boundary", offsetMs: WINDOW_MS, admitted: false },
+    { label: "after the fifteen-minute boundary", offsetMs: WINDOW_MS + 60_000, admitted: false },
+  ])("pins form-proof expiry $label with returned form state", async ({ offsetMs, admitted }) => {
+    const dw = await freshInstance({ ...config, sitesSandbox: true });
+    const url = await lockedSite(dw, "protected-site");
+    const other = await lockedSite(dw, "other-site");
+    const issuedAt = Date.now();
+    const form = await passwordForm(dw, url, VISITOR_IP, { ...NAV, "Sec-Fetch-Site": "cross-site" });
+    expect(form.csp).toMatch(/\bsandbox\b/);
+    vi.setSystemTime(issuedAt + offsetMs);
+    if (admitted) {
+      await assertUnlock(dw, url, other, await postForm(dw, form, SITE_PASSWORD, VISITOR_IP, OPAQUE), VISITOR_IP);
+      return;
+    }
+    const probe = await submittedBody(dw, form.action, formSubmission(form, SITE_PASSWORD, VISITOR_IP, OPAQUE));
+    expect.soft(probe.res.status, "an expired proof is refused at and after fifteen minutes").toBe(403);
+    expect.soft(probe.pulls, "expiry refusal happens before the body is read").toBe(0);
+    expect.soft(probe.bodyUsed).toBe(false);
+    expect.soft(probe.res.headers.get("set-cookie")).toBeNull();
+    expect(await probe.res.text()).not.toContain("private content");
+    // Reloading the form at the same instant works, and that success is the
+    // visitor's only charge in this window: exactly nine attempts remain.
+    const fresh = await passwordForm(dw, url, VISITOR_IP, { ...NAV, "Sec-Fetch-Site": "cross-site" });
+    await assertUnlock(dw, url, other, await postForm(dw, fresh, SITE_PASSWORD, VISITOR_IP, OPAQUE), VISITOR_IP);
+    for (let n = 0; n < 9; n++) expect((await attempt(dw, other, "wrong", VISITOR_IP)).status).toBe(401);
+    expect((await attempt(dw, other, SITE_PASSWORD, VISITOR_IP)).status).toBe(429);
+  });
+
+  it.each(["document", "iframe"])("preserves an opaque %s form when the trusted IP header is absent on both requests", async (dest) => {
+    // Documented fallback (docs/ARCHITECTURE.md): without a trusted
+    // CF-Connecting-IP both requests share the unknown-identity binding.
+    // The unidentified-GET/identified-POST denial above stays separate.
+    const dw = await freshInstance({ ...config, sitesSandbox: true });
+    const url = await lockedSite(dw, "protected-site");
+    const other = await lockedSite(dw, "other-site");
+    const form = await passwordForm(dw, url, undefined, { "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": dest, "Sec-Fetch-Site": "cross-site" });
+    expect(form.csp).toMatch(/\bsandbox\b/);
+    expect(form.csp).not.toContain("allow-same-origin");
+    const res = await postForm(dw, form, SITE_PASSWORD, undefined, {
+      Origin: "null", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": dest, "Sec-Fetch-Site": "cross-site",
+    });
+    expect(res.status).toBe(303);
+    const setCookie = res.headers.get("set-cookie");
+    expect(setCookie).toContain("HttpOnly");
+    expect(setCookie).toContain("Secure");
+    const cookie = setCookie!.split(";")[0]!;
+    const content = await dw.call(url, { headers: { Cookie: cookie, ...NAV, "Sec-Fetch-Site": "same-origin" } });
+    expect(content.status).toBe(200);
+    expect(await content.text()).toContain("private content");
+    const isolated = await dw.call(other, { headers: { Cookie: cookie, ...NAV, "Sec-Fetch-Site": "same-origin" } });
+    expect(isolated.status).toBe(401);
+    expect(await isolated.text()).not.toContain("private content");
+  });
+
   it("preserves legitimate same-origin forms using the returned action and fields", async () => {
     const dw = await freshInstance(name === "path"
       ? { appOrigin: ORIGIN, sitesOrigin: "https://isolated-sites.test", sitesSandbox: false }

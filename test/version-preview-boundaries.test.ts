@@ -381,11 +381,21 @@ for (const topology of topologies) {
       previewForm(wrongForm, topology.root, sandboxed, capability);
       const wrong = await postForm(dw, wrongForm, "wrong-password", PREVIEW_IP, { ...nullOrigin, Cookie: session.cookie });
       expect(wrong.status, "preview authority and form provenance do not replace the password").toBe(401);
-      expect(wrong.headers.getSetCookie().filter((cookie) => /^(?:__Host-)?dw_pw_/.test(cookie))).toHaveLength(0);
+      // Neither unlock-cookie family may be issued for a wrong password:
+      // the normal dw_pw_ nor the embedded dw_pwe_, with or without __Host-.
+      const wrongCookies = wrong.headers.getSetCookie();
+      expect(wrongCookies.filter((cookie) => /^(?:__Host-)?dw_pwe?_/.test(cookie))).toHaveLength(0);
       previewPrivacy(wrong.headers);
       const wrongHtml = await wrong.text();
       expect(wrongHtml).not.toContain(CONTENT);
       expect(wrongHtml).not.toContain(capability);
+      // Replaying every cookie the wrong attempt did return, together with
+      // the legitimate preview session, must leave the preview locked.
+      const replayed = [session.cookie, ...wrongCookies.map((header) => header.split(";")[0]!)].join("; ");
+      const replay = await dw.call(session.clean.href, { headers: { ...NAV, "CF-Connecting-IP": PREVIEW_IP, Cookie: replayed } });
+      expect(replay.status).toBe(401);
+      previewPrivacy(replay.headers);
+      expect(await replay.text()).not.toContain(CONTENT);
 
       const correctForm = await passwordForm(dw, session.clean.href, PREVIEW_IP, getHeaders);
       previewForm(correctForm, topology.root, sandboxed, capability);
@@ -459,6 +469,57 @@ for (const topology of topologies) {
       expect((await attempt(dw, other, "1234", PREVIEW_IP)).status).toBe(429);
       for (let n = 0; n < 30; n++) expect((await attempt(dw, liveUrl, "wrong-preview-password", `198.51.100.${n + 1}`)).status).toBe(401);
       expect((await attempt(dw, liveUrl, PREVIEW_PASSWORD, "203.0.113.1")).status).toBe(429);
+    });
+
+    // Admitted preview submissions are ordinary site-password attempts:
+    // they must spend the same visitor and site budgets the live address
+    // enforces, or a preview link would bypass throttling entirely.
+    it("admitted preview password attempts spend both shared visitor and site budgets", async () => {
+      freezePasswordClock();
+      const { session, liveUrl } = await protectedHistoricalPreview(dw, topology.root);
+      const other = await lockedSite(dw, "unrelated-preview-budget");
+      const sandboxed = topology.name === "path on app origin";
+      const getHeaders = { ...NAV, Cookie: session.cookie, "Sec-Fetch-Site": "same-origin" };
+      const nullOrigin = { ...NAV, Origin: "null", "Sec-Fetch-Site": sandboxed ? "cross-site" : "same-origin" };
+      const previewAttempt = async (password: string) => {
+        const form = await passwordForm(dw, session.clean.href, PREVIEW_IP, getHeaders);
+        return postForm(dw, form, password, PREVIEW_IP, { ...nullOrigin, Cookie: session.cookie });
+      };
+
+      const unlocked = await previewAttempt(PREVIEW_PASSWORD);
+      expect(unlocked.status).toBe(303);
+      const passwordHeaders = unlocked.headers.getSetCookie().filter((cookie) => /^(?:__Host-)?dw_pw_/.test(cookie));
+      expect(passwordHeaders.length).toBeGreaterThan(0);
+      const passwordCookies = passwordHeaders.map((header) => header.split(";")[0]!).join("; ");
+      for (let n = 0; n < 9; n++) {
+        const wrong = await previewAttempt("wrong-preview-password");
+        expect(wrong.status).toBe(401);
+        expect(wrong.headers.getSetCookie().filter((cookie) => /^(?:__Host-)?dw_pwe?_/.test(cookie))).toHaveLength(0);
+      }
+      // Visitor budget: the ten admitted preview attempts (one success,
+      // nine failures) exhaust this visitor on an unrelated ordinary site
+      // and on further preview submissions alike.
+      const ipLimited = await attempt(dw, other, "1234", PREVIEW_IP);
+      expect(ipLimited.status, "preview attempts must debit the shared visitor budget").toBe(429);
+      expect(ipLimited.headers.get("retry-after")).toBe("600");
+      expect(ipLimited.headers.get("set-cookie")).toBeNull();
+      expect((await previewAttempt(PREVIEW_PASSWORD)).status).toBe(429);
+      // Site budget: those ten also count against this site, so twenty
+      // further live attempts from fresh visitors — not thirty — fill it.
+      for (let n = 0; n < 20; n++) {
+        expect((await attempt(dw, liveUrl, "wrong-preview-password", `198.51.100.${n + 1}`)).status).toBe(401);
+      }
+      const siteLimited = await attempt(dw, liveUrl, PREVIEW_PASSWORD, "203.0.113.1");
+      expect(siteLimited.status, "preview attempts must debit the shared site budget").toBe(429);
+      expect(siteLimited.headers.get("retry-after")).toBe("600");
+      expect(siteLimited.headers.get("set-cookie")).toBeNull();
+      // Valid cookies still bypass admission entirely on the preview.
+      const cookies = [session.cookie, passwordCookies].join("; ");
+      const content = await dw.call(topology.root, { headers: { ...NAV, "CF-Connecting-IP": PREVIEW_IP, Cookie: cookies } });
+      expect(content.status).toBe(200);
+      const html = await content.text();
+      expect(html).toContain(CONTENT);
+      expect(html).not.toContain("new live version");
     });
 
     // Catches routing preview password POSTs back through a GET-only preview gate or live address.
