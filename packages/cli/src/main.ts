@@ -127,8 +127,8 @@ interface Instance {
   link: ProjectLink | null;
 }
 
-async function resolveInstance(p: Parsed, io: Io): Promise<Instance> {
-  const link = await readLink(io.cwd);
+async function resolveInstance(p: Parsed, io: Io, opts: { projectLink?: boolean } = {}): Promise<Instance> {
+  const link = opts.projectLink === false ? null : await readLink(io.cwd);
   const creds = await readCredentials(io.env);
   const raw = str(p, "api") ?? (io.env.KOFRA_API || io.env.KOFRA_URL || undefined) ?? link?.api ?? creds.default ?? undefined;
   if (!raw) {
@@ -415,7 +415,7 @@ A piped .zip is stored as one file named <filename>, not unpacked.
     if (encrypt && isZip) throw new CliError({ code: "encrypted_zip_unsupported", message: "Encrypted publishing does not support ZIP archives.", hint: "Extract the archive locally, then publish its folder with --encrypt.", exitCode: EXIT.usage });
     if (encrypt && bool(p, "spa")) throw new CliError({ code: "encrypted_spa_unsupported", message: "Encrypted publishing does not support SPA routing.", hint: "Publish a static entry document without --spa.", exitCode: EXIT.usage });
 
-    const inst = dryRun ? null : await resolveInstance(p, io);
+    const inst = dryRun ? null : await resolveInstance(p, io, { projectLink: stdinPath === undefined });
     const token = anonymous ? null : inst ? requireKey(inst, "Publishing") : null;
     const isClaim = token?.startsWith("dwc_") ?? false;
     if (isClaim && !str(p, "site")) throw new UsageError("A claim token publishes only to its own anonymous site: add --site <name>.");
