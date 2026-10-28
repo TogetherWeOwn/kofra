@@ -1402,7 +1402,7 @@ const compareCmd: Command = {
     const maxBytes = bound("max-bytes", 10737418240, 2147483648);
     const controller = new AbortController();
     const cancel = () => controller.abort(compareCancelled());
-    process.on("SIGINT", cancel);
+    process.once("SIGINT", cancel);
     try {
       const inst = await resolveInstance(p, io);
       const key = requireKey(inst, "Comparing a directory");
