@@ -167,6 +167,11 @@ about yourself; that is outside this runbook.
    npx wrangler d1 execute DB --remote --command "SELECT count(*) AS sites FROM sites;"
    ```
 
+   Editing `wrangler.jsonc` changes only what your local commands talk to;
+   the deployed Worker stays bound to the old database until the step-5
+   redeploy. On this fresh-database path, run steps 3 then 5 next, and only
+   then the KV invalidation (step 2) and reads (step 4).
+
    On a **new account** nothing exists yet. Do not run `npm run deploy` before
    the import (it would create and migrate an empty `dropway`). Instead, in a
    clone of the repo:
@@ -199,6 +204,13 @@ about yourself; that is outside this runbook.
    site keeps serving the version, files, password and settings it had before
    the restore, a site that exists only after the restore point keeps
    serving, and a status-code-only check returns `200` on the wrong bytes.
+
+   On the fresh-database path (step 1 imported into a new database), skip
+   this step for now and come back after steps 3 and 5: the deployed Worker
+   is still bound to the old database until the step-5 redeploy, so a delete
+   now is undone by the next read — visitor traffic or step 4's own reads —
+   which rebuilds each entry from the old D1 and writes it back.
+
    Delete all `live:` keys in one call:
 
    ```sh
@@ -213,7 +225,8 @@ about yourself; that is outside this runbook.
    Worker isolate keeps a site in memory for 5 seconds, so the old entry can
    still be served for up to about 35 seconds after the delete: wait a minute
    before step 6. Each site's next read then rebuilds its entry
-   from the restored D1. Blob bytes and viewer fragments in the edge Cache
+   from the D1 the Worker is bound to — the restored one, once the ordering
+   above is followed. Blob bytes and viewer fragments in the edge Cache
    API are keyed by SHA-256, so they cannot go stale and need nothing.
 
 3. **R2.** Copy the bytes back, then verify against the restored manifest:
@@ -229,11 +242,15 @@ about yourself; that is outside this runbook.
    served `502`s, full restore served `200`s).
 4. **KV check.** Nothing to restore. Read each site once;
    `kv key list --prefix live:` shows the `live:<slug>` keys repopulating
-   from the restored D1.
+   from the restored D1. On the fresh-database path this means after the
+   step-5 redeploy and the deferred step-2 deletion; reads before the
+   redeploy rebuild from the old database.
 5. **Redeploy.** `npm run deploy` re-applies migrations and redeploys the
    Worker; it is safe to re-run for upgrades. With a second sites Worker
    ([Self-hosting, option B](SELF_HOST.md#b-a-second-deployment-for-sites)),
-   redeploy it too: `npx wrangler deploy --name <worker>-sites`.
+   redeploy it too: `npx wrangler deploy --name <worker>-sites`. On the
+   fresh-database path this redeploy is what binds the restored database;
+   run step 2 and step 4 after it.
 6. **Verify.** All three, in this order. `<site-url>` is the site's URL for
    your serving mode ([Where sites are served](SELF_HOST.md#where-sites-are-served)):
    `https://<worker>/s/<site>/` in path mode, `https://<worker>-sites.<you>.workers.dev/<site>/`
