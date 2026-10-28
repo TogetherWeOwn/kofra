@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import {
-  ApiError, clearLiveMemoryCache, defaultIdentity, dropLive, getSiteFor, refreshLive, restoreVersion,
+  ApiError, clearLiveMemoryCache, defaultIdentity, deleteVersion, dropLive, getSiteFor, refreshLive, restoreVersion,
   type PublishEvent, type SiteRow, type UsageEvent, type VersionRow,
 } from "@dropway/core";
 import type { ServerBindings } from "@dropway/server";
@@ -106,10 +106,12 @@ function afterRead(
   matches: (values: unknown[]) => boolean,
   expectedRow: Record<string, unknown>,
   compete: () => Promise<void>,
+  mutations?: string[],
 ) {
   const prepare = env.DB.prepare.bind(env.DB);
   let pauses = 0;
   vi.spyOn(env.DB, "prepare").mockImplementation((sql) => {
+    if (/^\s*(UPDATE|INSERT|DELETE|REPLACE)\b/i.test(sql)) mutations?.push(sql);
     const statement = prepare(sql);
     if (!new RegExp(`^\\s*SELECT\\b[\\s\\S]*\\bFROM\\s+${table}\\b`, "i").test(sql)) return statement;
     const bind = statement.bind.bind(statement);
@@ -238,6 +240,36 @@ describe("restore review regressions: symbolic versus explicit intent", () => {
     effects.expectNoEffects();
   });
 
+  it.each(["REST", "MCP"] as const)("%s symbolic live succeeds write-free after the stale live version is deleted", async (surface) => {
+    const h = await fixture();
+    const invoke = await restoreThrough(h, surface, "live");
+    const effects = observe(h);
+    const mutations: string[] = [];
+    const batch = vi.spyOn(env.DB, "batch");
+    let expected: Awaited<ReturnType<typeof snapshot>> | undefined;
+    const interleaved = afterRead("sites", (values) => values.includes(SLUG),
+      { id: h.site.id, current_version_id: h.live.id }, async () => {
+        await moveLive(h, h.winner.id);
+        expect(await deleteVersion(h.dc, h.principal, h.site, h.live.id)).toEqual({ deleted: true, id: h.live.id });
+        await h.flush();
+        expected = await snapshot(h.site.id);
+        expect(expected.site).toMatchObject({ current_version_id: h.winner.id, updated_at: WINNER_TIME });
+        expect(expected.versions).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: h.live.id })]));
+        expect(expected.files).not.toEqual(expect.arrayContaining([expect.objectContaining({ version_id: h.live.id })]));
+        effects.clear();
+        mutations.length = 0;
+        batch.mockClear();
+      }, mutations);
+    const result = await invoke();
+    await h.flush();
+    interleaved();
+    expect.soft(result).toMatchObject({ restored: false, alreadyLive: true, version: { id: h.winner.id, live: true } });
+    expect.soft(await snapshot(h.site.id), "restore must preserve the winner and the completed non-live deletion").toEqual(expected);
+    expect.soft(mutations, "symbolic live must not prepare any mutation after the competitor completes").toEqual([]);
+    expect.soft(batch, "symbolic live must not attempt a restore batch").not.toHaveBeenCalled();
+    effects.expectNoEffects();
+  });
+
   it.each(["REST", "MCP"] as const)("%s explicit ID retains restore intent even when the caller snapshot says it is live", async (surface) => {
     const h = await fixture();
     const invoke = await restoreThrough(h, surface, h.live.id);
@@ -291,6 +323,41 @@ describe("restore review regressions: diagnostics", () => {
     expect.soft(await snapshot(h.site.id, "restore-retired")).toEqual(originalAfter);
     expect.soft(await snapshot(replacement.id), "restore must never write the replacement site").toEqual(replacementAfter);
     expect.soft(await env.CACHE.get(`live:${otherSlug}`)).toBeNull();
+    effects.expectNoEffects();
+  });
+
+  it("reports the addressed slug as absent when the original site is renamed but not deleted", async () => {
+    const h = await fixture();
+    const renamedSlug = "restore-renamed";
+    const effects = observe(h);
+    let expected: Awaited<ReturnType<typeof snapshot>> | undefined;
+    const interleaved = afterTargetRead(h, async () => {
+      // Keep the identity, tenant and ready target; only the name and live anchor move.
+      await env.DB.prepare("UPDATE sites SET slug = ?, current_version_id = ?, updated_at = ? WHERE id = ?")
+        .bind(renamedSlug, h.winner.id, WINNER_TIME, h.site.id).run();
+      await dropLive(h.dc, SLUG);
+      await refreshLive(h.dc, h.site.id);
+      await h.flush();
+      expected = await snapshot(h.site.id, renamedSlug);
+      expect(expected.site).toMatchObject({ id: h.site.id, slug: renamedSlug, tenant_id: h.site.tenant_id,
+        deleted_at: null, current_version_id: h.winner.id, updated_at: WINNER_TIME });
+      expect(expected.versions).toContainEqual(expect.objectContaining({ id: h.target.id, site_id: h.site.id, status: "ready" }));
+      expect(await env.CACHE.get(`live:${SLUG}`)).toBeNull();
+      effects.clear();
+    });
+    const batch = vi.spyOn(env.DB, "batch");
+    const result = await outcome(restoreVersion(h.dc, h.principal, h.site, h.target.id));
+    await h.flush();
+    interleaved();
+    expectError(result, 404, "site_not_found");
+    if (!result.ok && result.error instanceof ApiError) {
+      expect.soft(result.error.message).toBe(`No site "${SLUG}" that this key can access.`);
+      expect.soft(result.error.details).toEqual({ slug: SLUG });
+    }
+    expect(batch, "the moved live anchor must make the single restore attempt lose its fence").toHaveBeenCalledTimes(1);
+    expect(await batch.mock.results[0]!.value).toMatchObject([{ meta: { changes: 0 } }]);
+    expect.soft(await snapshot(h.site.id, renamedSlug)).toEqual(expected);
+    expect.soft(await env.CACHE.get(`live:${SLUG}`)).toBeNull();
     effects.expectNoEffects();
   });
 
