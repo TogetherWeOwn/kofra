@@ -50,11 +50,11 @@ async function spendUnlock(dc: DropwayContext, bucket: string, cap: number) {
   const windowMs = 15 * 60_000;
   const window = Math.floor(Date.now() / windowMs);
   const row = await dc.env.DB.prepare(`INSERT INTO transfer_unlock_buckets (bucket, window, attempts) VALUES (?, ?, 1)
-    ON CONFLICT(bucket) DO UPDATE SET window = excluded.window,
-      attempts = CASE WHEN window = excluded.window THEN attempts + 1 ELSE 1 END RETURNING attempts`)
-    .bind(bucket, window).first<{ attempts: number }>();
+    ON CONFLICT(bucket) DO UPDATE SET window = MAX(window, excluded.window),
+      attempts = CASE WHEN window >= excluded.window THEN attempts + 1 ELSE 1 END RETURNING window, attempts`)
+    .bind(bucket, window).first<{ window: number; attempts: number }>();
   if (!row) throw new ApiError(503, "transfer_unlock_unavailable", "Password unlock is unavailable.", "Retry later.");
-  if (row.attempts > cap) throw rateLimited("Too many password attempts.", "Wait before trying again.", Math.max(1, Math.ceil(((window + 1) * windowMs - Date.now()) / 1000)));
+  if (row.attempts > cap) throw rateLimited("Too many password attempts.", "Wait before trying again.", Math.max(1, Math.ceil(((row.window + 1) * windowMs - Date.now()) / 1000)));
 }
 /** Separate namespaces prevent site password attempts from consuming transfer budgets. */
 export async function spendSitePasswordAttempt(dc: DropwayContext, siteId: string, ip: string) {
