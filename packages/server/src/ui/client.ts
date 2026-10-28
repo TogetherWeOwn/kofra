@@ -434,7 +434,9 @@ export function dropwayClient() {
   }
 
   function safeNext(n) {
-    return n && n.charAt(0) === "/" && n.charAt(1) !== "/" && n.charAt(1) !== "\\" ? n : "/dashboard";
+    // Browsers discard tabs and newlines when parsing URLs, so /\t/host is
+    // a network-path redirect even though its second character is not '/'.
+    return n && n.charAt(0) === "/" && n.charAt(1) !== "/" && n.charAt(1) !== "\\" && !/[\x00-\x1f\x7f]/.test(n) ? n : "/dashboard";
   }
 
   // ------------------------------------------------------------------ account
