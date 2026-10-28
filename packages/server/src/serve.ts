@@ -17,6 +17,7 @@ import {
   requestPathToFilePath,
   resolveSlugRedirect,
   siteUrl,
+  timingSafeEqualStr,
   verifyPassword,
   type DropwayContext,
   type LiveSite,
@@ -55,6 +56,7 @@ export const SITE_SANDBOX =
   "sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation allow-orientation-lock";
 
 const PASSWORD_PATH = "__dropway/password";
+const PASSWORD_FORM_TTL = 15 * 60_000;
 /** Reserved at a site root: the provider-served live-version badge (a published file of this name is not served). */
 const BADGE_PATH = "badge.svg";
 
@@ -214,12 +216,38 @@ function readCookie(req: Request, name: string): string | null {
   return null;
 }
 
+async function passwordFormSignature(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, until: number): Promise<string> {
+  return hmacHex(dw.config.signingSecret, JSON.stringify([
+    "site-password-form", new URL(req.url).origin, mode.base, live.siteId, live.passwordHash,
+    req.headers.get("CF-Connecting-IP") ?? "unknown", until,
+  ]));
+}
+
+async function passwordSubmissionAllowed(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode): Promise<boolean> {
+  const origin = req.headers.get("Origin");
+  const site = req.headers.get("Sec-Fetch-Site");
+  if (origin && origin !== "null") return origin === new URL(req.url).origin && site !== "cross-site" && site !== "same-site";
+  if (origin !== "null") return site !== "cross-site" && site !== "same-site";
+  // Sandboxes and no-referrer pages can both send Origin: null. Require the
+  // visitor's short-lived form proof without reading or charging its body.
+  const token = new URL(req.url).searchParams.get("dw_form") ?? "";
+  const match = /^(\d{1,16})\.([a-f0-9]{64})$/.exec(token);
+  if (!match) return false;
+  const until = Number(match[1]);
+  const now = Date.now();
+  if (!Number.isSafeInteger(until) || until <= now || until > now + PASSWORD_FORM_TTL) return false;
+  return timingSafeEqualStr(match[2]!, await passwordFormSignature(dw, req, live, mode, until));
+}
+
 async function handlePassword(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, filePath: string): Promise<Response | null> {
   if (!live.passwordHash) return null;
   const expected = await passwordCookieValue(dw, live);
   if (readCookie(req, cookieName(live, mode)) === expected || readCookie(req, cookieName(live, mode, true)) === expected) return null;
 
   if (req.method === "POST" && filePath === PASSWORD_PATH) {
+    if (!await passwordSubmissionAllowed(dw, req, live, mode)) {
+      return systemResponse(dw, req, mode, live, 403, "403", "Password form refused", "Reload this site's password form and try again.");
+    }
     try {
       await spendSitePasswordAttempt(dw, live.siteId, req.headers.get("CF-Connecting-IP") ?? "unknown");
     } catch (error) {
@@ -255,8 +283,10 @@ async function handlePassword(dw: DropwayContext, req: Request, live: LiveSite, 
   return passwordForm(dw, req, live, mode, u.pathname + u.search, false);
 }
 
-function passwordForm(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, next: string, failed: boolean): Response {
-  const extra = `<form method="post" action="${escapeHtml(mode.base + PASSWORD_PATH)}" style="display:flex;gap:.5rem">
+async function passwordForm(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, next: string, failed: boolean): Promise<Response> {
+  const until = Date.now() + PASSWORD_FORM_TTL;
+  const action = `${mode.base}${PASSWORD_PATH}?dw_form=${until}.${await passwordFormSignature(dw, req, live, mode, until)}`;
+  const extra = `<form method="post" action="${escapeHtml(action)}" style="display:flex;gap:.5rem">
 <input type="hidden" name="next" value="${escapeHtml(next)}">
 <input type="password" name="password" placeholder="Password" required autofocus style="flex:1;padding:.6rem .8rem;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--fg)">
 <button style="padding:.6rem 1rem;border:0;border-radius:8px;background:var(--accent);color:#fff;cursor:pointer">Open</button></form>

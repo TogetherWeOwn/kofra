@@ -152,6 +152,23 @@ for sensitive previews or mutually untrusted sites. Its host-only `__Host-` cook
 same-site/cross-site subresource refusal isolate sibling sites. Removing CORS permission
 in path mode does not make different paths different origins.
 
+### Public site password attempts
+
+Unauthenticated site-password submissions spend separate atomic D1 budgets: ten per
+trusted client IP across ordinary sites and thirty per site, in fifteen-minute windows.
+Successful submissions count too; valid unlock cookies bypass these budgets. Refused
+attempts return uncached 429 responses with the remaining `Retry-After`; unavailable
+counter storage fails closed with 503. Late writes cannot move a counter window backward.
+
+Submission provenance is checked before body parsing or counter charges. Foreign Origins
+and foreign Fetch Metadata are refused. Forms carry a signed action proof so sandboxed
+or no-referrer pages can safely submit with `Origin: null`. The fifteen-minute proof is
+bound to the target origin/root, site, current password
+hash and trusted client IP. Reload the form after expiry or an IP change. The proof does
+not unlock content or replace the password. Headerless programmatic clients still work.
+Self-hosters must preserve a trusted edge's `CF-Connecting-IP`; without that header,
+requests share the existing `unknown` IP bucket and form-proof binding.
+
 ### Viewing files
 
 `serveFile` asks `findViewer(file, live, viewers, mode)` (`packages/server/src/viewers`)
