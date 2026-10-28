@@ -34,6 +34,7 @@ Zero runtime dependencies. Node.js 20 or newer.
 | `access <site> --mode <mode> --yes` | Set who can open a site: `public` or `password` (password from piped stdin or one no-echo prompt; `--dry-run` plans offline). Changing a password signs everyone out |
 | `whoami` | The instance, your identity and your key's scopes |
 | `keys ls [--all]` | Your API keys as safe metadata (never the secrets); `--all` adds other members' keys when your key has `members:write` |
+| `explain-config [path]` | [Diagnose local configuration offline](../../docs/CLI_DIAGNOSTICS.md): winning sources, file states, redacted. `--anonymous` callers may treat exit 3 as OK; never auto-login on exit 3 |
 | `login` / `logout` | Save or forget an API key for an instance |
 | `setup --email <you>` | First run of a new instance: create the owner and save their key |
 | `api [METHOD] <path>` | Call any REST endpoint, e.g. `kofra api PATCH /sites/my-site --data '{"spa":true}'` |
