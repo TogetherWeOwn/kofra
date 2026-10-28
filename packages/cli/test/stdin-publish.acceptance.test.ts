@@ -37,8 +37,9 @@
  */
 
 import { execFile, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, webcrypto } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -336,6 +337,92 @@ describe("stdin publish: piped bytes become a live single file", () => {
     expect(live.version).toBe(json.version.id as string);
   });
 
+  // Break caught: --encrypt bypasses stdin collection, encrypts different bytes,
+  // or returns an unusable loader/key. Use the existing encrypted acceptance
+  // oracle: observe the shipped browser decrypt, then authenticate it in Node.
+  it("publishes encrypted piped HTML whose stored bytes decrypt byte-identical", async () => {
+    const body = '<!doctype html>\r\n<html><head><meta charset="utf-8"></head><body><p>café 日本語 🎉</p>\r\n'
+      + '<script>fetch("./index.html").then(r => r.arrayBuffer()).then(bytes => { globalThis.__stdinRestoredBytes = Array.from(new Uint8Array(bytes)); });</script></body></html>\n';
+    const r = await spawnPipe(["publish", "--stdin", "index.html", "--site", "stdin-encrypt-acceptance", "--encrypt", "--json", "--no-save"], body);
+    expect(r.code, r.stdout + r.stderr).toBe(EXIT.ok);
+    const json = expectSingleJson(r.stdout);
+    expect(json).toMatchObject({ ok: true, slug: "stdin-encrypt-acceptance" });
+    expect(r.stdout + r.stderr).not.toContain(apiKey);
+
+    const fragment = decodeURIComponent(new URL(json.url as string).hash.slice(1));
+    const token = [fragment, ...fragment.split(/[=&:!~.]/)]
+      .find(candidate => /^[0-9a-f]{64}$/i.test(candidate) || /^[A-Za-z0-9_+/-]{43}=?$/.test(candidate)) ?? "";
+    const keyBytes = Buffer.from(token, /^[0-9a-f]{64}$/i.test(token) ? "hex" : "base64url");
+    expect(keyBytes.length, "the share fragment carries a 256-bit key").toBe(32);
+    const key = await webcrypto.subtle.importKey("raw", keyBytes, { name: "AES-GCM" }, false, ["decrypt"]);
+    const listing = await apiJson(`/api/v1/sites/${json.slug as string}/files`);
+    expect(listing.status).toBe(200);
+    const stored = await Promise.all(listing.body.files.map(async (file: { path: string }): Promise<Buffer> => {
+      const path = file.path.split("/").map(encodeURIComponent).join("/");
+      const response = await fetch(`${api}/api/v1/sites/${json.slug as string}/files/${path}`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      expect(response.status).toBe(200);
+      return Buffer.from(await response.arrayBuffer());
+    }));
+
+    type Decrypt = {
+      algorithm: string; iv: number[]; aad: number[] | null; tagLength: number;
+      ciphertext: number[]; plaintext: number[];
+    };
+    const { chromium } = createRequire(new URL("./encrypted/package.json", import.meta.url))("playwright");
+    const browser = await chromium.launch({
+      headless: true,
+      ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : {}),
+    });
+    try {
+      const context = await browser.newContext();
+      await context.addInitScript(() => {
+        const state: Decrypt[] = [];
+        (globalThis as any).__stdinDecrypts = state;
+        const prototype = Object.getPrototypeOf((globalThis as any).crypto.subtle);
+        const decrypt = prototype.decrypt;
+        const bytes = (value: any): number[] => Array.from(new Uint8Array(
+          value instanceof ArrayBuffer ? value : value.buffer,
+          value instanceof ArrayBuffer ? 0 : value.byteOffset, value.byteLength,
+        ));
+        prototype.decrypt = async function (algorithm: any, cryptoKey: any, data: any) {
+          const a = typeof algorithm === "string" ? { name: algorithm } : algorithm;
+          const ciphertext = bytes(data);
+          const plaintext = await decrypt.call(this, algorithm, cryptoKey, data);
+          state.push({ algorithm: a.name, iv: bytes(a.iv), aad: a.additionalData ? bytes(a.additionalData) : null,
+            tagLength: a.tagLength ?? 128, ciphertext, plaintext: bytes(plaintext) });
+          return plaintext;
+        };
+      });
+      await context.route("**/*", (route: any) => new URL(route.request().url()).origin === api
+        ? route.continue() : route.abort("blockedbyclient"));
+      const page = await context.newPage();
+      await page.goto(json.url, { waitUntil: "networkidle" });
+      await expect.poll(async () => Promise.all(page.frames().map((frame: any) => frame.evaluate(
+        () => (globalThis as any).__stdinRestoredBytes ?? null,
+      ))), { timeout: 5000 }).toContainEqual([...Buffer.from(body)]);
+      const records: Decrypt[] = (await Promise.all(page.frames().map((frame: any) => frame.evaluate(
+        () => (globalThis as any).__stdinDecrypts ?? [],
+      )))).flat();
+      expect(records.length, "the shipped loader must actually decrypt stored ciphertext").toBeGreaterThan(0);
+      for (const record of records) {
+        expect(record.algorithm).toBe("AES-GCM");
+        expect(record.tagLength).toBe(128);
+        const ciphertext = Buffer.from(record.ciphertext);
+        const encodings = [ciphertext, ...["base64", "base64url", "hex"].map(encoding => Buffer.from(ciphertext.toString(encoding as BufferEncoding)))];
+        expect(stored.some(bytes => encodings.some(encoded => bytes.includes(encoded))), "ciphertext must come from Worker storage").toBe(true);
+        const plaintext = await webcrypto.subtle.decrypt({
+          name: "AES-GCM", iv: Buffer.from(record.iv), tagLength: record.tagLength,
+          ...(record.aad ? { additionalData: Buffer.from(record.aad) } : {}),
+        }, key, ciphertext);
+        expect(Buffer.from(plaintext).equals(Buffer.from(record.plaintext)), "Node independently authenticates the browser's exact plaintext").toBe(true);
+      }
+    } finally {
+      await browser.close();
+    }
+  }, 60_000);
+
   it("publishes piped Markdown byte-identical", async () => {
     const md = "# Piped report\n\nAll good.\n\n- one\n- two\n";
     const r = await cli(["publish", "--stdin", "notes.md", "--site", "stdin-md-acceptance", "--json", "--no-save"], { stdin: md });
@@ -454,6 +541,7 @@ describe("stdin publish: refusals before side effects", () => {
     expect(r.code, `TTY stdin must refuse, got: ${r.stdout}${r.stderr}`).toBe(EXIT.usage);
     const json = expectSingleJson(r.stdout);
     expect(json).toMatchObject({ ok: false, exitCode: EXIT.usage });
+    expect(json.error.code).toBe("stdin_is_terminal");
     // Must name the missing pipe (not merely "Unknown option --stdin").
     expect(json.error.message).not.toMatch(/Unknown option/);
     expect(`${json.error.message} ${json.error.hint}`).toMatch(/piped|nothing piped|pipe.*stdin|stdin.*tty|tty|terminal/i);
@@ -538,6 +626,30 @@ describe("stdin publish: secrets, dry-run and single-read", () => {
     const live = await liveText(`${json.url as string}?raw=1`);
     expect(live.status).toBe(200);
     expect(live.text).toBe(leakyHtml);
+  });
+
+  // Break caught: stdin scanning lacks the path reader's 4 MiB guard and
+  // incorrectly refuses a large textual file that path publishing accepts.
+  it("publishes NUL-free stdin above 4 MiB without secret scanning, matching path publish", async () => {
+    const token = "npm_" + "A".repeat(36);
+    const body = `${token}\n`.padEnd(4 * 1024 * 1024 + 1, "x");
+    const dir = await project("stdin-scan-boundary-path", { "large.txt": body });
+    const viaPath = await cli(["publish", join(dir, "large.txt"), "--site", "stdin-scan-boundary-path", "--json", "--no-save"]);
+    expect(viaPath.code, `path control must publish unscanned, got: ${viaPath.stdout}${viaPath.stderr}`).toBe(EXIT.ok);
+    expect(expectSingleJson(viaPath.stdout)).toMatchObject({ ok: true, files: 1 });
+    expectNoLeak(viaPath);
+
+    const r = await cli(["publish", "--stdin", "large.txt", "--site", "stdin-scan-boundary-pipe", "--json", "--no-save"], { stdin: body });
+    expect(r.code, `stdin above 4 MiB must publish unscanned, got: ${r.stdout}${r.stderr}`).toBe(EXIT.ok);
+    const json = expectSingleJson(r.stdout);
+    expect(json).toMatchObject({ ok: true, slug: "stdin-scan-boundary-pipe", files: 1 });
+    expect(r.stdinReads).toBe(1);
+    expect(r.stdout + r.stderr).not.toContain(token);
+    expectNoLeak(r);
+    const live = await liveBytes(`${json.url as string}?raw=1`);
+    expect(live.status).toBe(200);
+    expect(Buffer.from(live.bytes).toString("utf8")).toBe(body);
+    expect(live.version).toBe(json.version.id as string);
   });
 
   it("--dry-run inventories piped bytes offline and changes nothing", async () => {

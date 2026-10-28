@@ -30,13 +30,17 @@ process.stdin[Symbol.asyncIterator] = function (...args) {
 };
 
 const version = { id: "ver_stdin_fixture", number: 1 };
+let nextFetchId = 0;
 globalThis.fetch = async (input, init) => {
   const request = new Request(input, init);
   const url = new URL(request.url);
+  const id = nextFetchId++;
+  record({ kind: "fetch", id, method: request.method, url: request.url,
+    authorization: request.headers.get("Authorization"), body: null });
   const text = await request.text();
   const body = text ? JSON.parse(text) : null;
-  record({ kind: "fetch", method: request.method, url: request.url,
-    authorization: request.headers.get("Authorization"), body });
+  // Enrich separately: a failed decode must not erase the request audit row.
+  record({ kind: "fetch_body", id, body });
   const site = slug => ({ id: "site_stdin_fixture", slug, url: `${url.origin}/s/${slug}/`, currentVersion: version });
   if (request.method === "POST" && url.pathname === "/api/v1/sites") {
     return Response.json({ site: site(body?.slug ?? "stdin-created-fixture") }, { status: 201 });

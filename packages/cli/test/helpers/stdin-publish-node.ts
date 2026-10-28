@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstat, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,7 +29,8 @@ export interface StdinWire {
 
 interface FileRead { kind: "fs"; operation: string; path: string }
 interface StdinRead { kind: "stdin" }
-type Audit = StdinWire | FileRead | StdinRead;
+interface FetchBody { kind: "fetch_body"; id: number; body: unknown }
+type Audit = (StdinWire & { id: number }) | FetchBody | FileRead | StdinRead;
 
 /** Read-only snapshot: catches new files, rewrites and mode changes, not access times. */
 async function snapshot(root: string, prefix = ""): Promise<unknown[]> {
@@ -47,7 +48,7 @@ async function snapshot(root: string, prefix = ""): Promise<unknown[]> {
 
 /** Real executable, real pipe and filesystem; only the external fetch boundary is replaced. */
 export async function stdinNodeHarness() {
-  const work = await mkdtemp(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "stdin-node-"));
+  const work = await realpath(await mkdtemp(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "stdin-node-")));
   const home = join(work, "home");
   const cwd = join(home, "project");
   const config = join(home, "config");
@@ -108,8 +109,11 @@ export async function stdinNodeHarness() {
       for (const key of [defaultKey, linkedKey, explicitKey, envKey]) {
         expect(result.stdout + result.stderr, "synthetic credential must not appear in output").not.toContain(key);
       }
+      const bodies = new Map<number, unknown>();
+      for (const entry of audit) if (entry.kind === "fetch_body") bodies.set(entry.id, entry.body);
       return { ...result, elapsedMs,
-        wire: audit.filter((entry): entry is StdinWire => entry.kind === "fetch"),
+        wire: audit.filter((entry): entry is StdinWire & { id: number } => entry.kind === "fetch")
+          .map(({ id, ...entry }) => ({ ...entry, body: bodies.get(id) ?? null })),
         reads: audit.filter((entry): entry is FileRead => entry.kind === "fs"),
         stdinReads: audit.filter(entry => entry.kind === "stdin").length,
         linkPath: resolve(cwd, "dropway.json"),
