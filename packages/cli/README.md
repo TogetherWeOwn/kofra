@@ -21,6 +21,7 @@ Zero runtime dependencies. Node.js 20 or newer.
 | Command | What it does |
 |---|---|
 | `publish <path>` | Publish a folder, a single file or a `.zip`. Creates a site, or updates one with `--site <name>` |
+| `compare <path> --site <name>` | Compare directory hashes to a pinned remote version, without publishing or downloading content; [v1 flags and output](../../docs/CLI_COMPARE.md) |
 | `duplicate <source> <new-slug>` | Copy an explicit live site into a new slug (`--message`, `--idempotency-key`, offline `--dry-run`) |
 | `list` | Your sites (`--all` for every page) |
 | `site <name>` | One site: URL, live version, settings |
