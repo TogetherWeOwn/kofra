@@ -41,6 +41,18 @@ describe.each([
     expect(await content.text()).toContain("private content");
   });
 
+  it("shares the IP budget across ordinary sites", async () => {
+    const dw = await freshInstance(config);
+    const url = await lockedSite(dw, "protected-site");
+    const other = await lockedSite(dw, "other-site");
+    for (let n = 0; n < 10; n++) {
+      expect((await attempt(dw, n % 2 ? url : other, `bad${n}`, "192.0.2.1")).status).toBe(401);
+    }
+    expect((await attempt(dw, url, "1234", "192.0.2.1")).status).toBe(429);
+    expect((await attempt(dw, other, "1234", "192.0.2.1")).status).toBe(429);
+    expect((await attempt(dw, other, "1234", "192.0.2.2")).status).toBe(303);
+  });
+
   it("limits distributed guesses for a site without blocking another site", async () => {
     const dw = await freshInstance(config);
     const url = await lockedSite(dw, "protected-site");
