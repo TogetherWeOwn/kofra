@@ -628,28 +628,24 @@ describe("stdin publish: secrets, dry-run and single-read", () => {
     expect(live.text).toBe(leakyHtml);
   });
 
-  // Break caught: stdin scanning lacks the path reader's 4 MiB guard and
-  // incorrectly refuses a large textual file that path publishing accepts.
-  it("publishes NUL-free stdin above 4 MiB without secret scanning, matching path publish", async () => {
+  // Break caught: skipping secret scanning above 4 MiB publishes credential-
+  // looking stdin instead of conservatively refusing before any side effects.
+  it("refuses secret-bearing NUL-free stdin above 4 MiB without --allow-secrets", async () => {
     const token = "npm_" + "A".repeat(36);
     const body = `${token}\n`.padEnd(4 * 1024 * 1024 + 1, "x");
-    const dir = await project("stdin-scan-boundary-path", { "large.txt": body });
-    const viaPath = await cli(["publish", join(dir, "large.txt"), "--site", "stdin-scan-boundary-path", "--json", "--no-save"]);
-    expect(viaPath.code, `path control must publish unscanned, got: ${viaPath.stdout}${viaPath.stderr}`).toBe(EXIT.ok);
-    expect(expectSingleJson(viaPath.stdout)).toMatchObject({ ok: true, files: 1 });
-    expectNoLeak(viaPath);
-
-    const r = await cli(["publish", "--stdin", "large.txt", "--site", "stdin-scan-boundary-pipe", "--json", "--no-save"], { stdin: body });
-    expect(r.code, `stdin above 4 MiB must publish unscanned, got: ${r.stdout}${r.stderr}`).toBe(EXIT.ok);
+    const slug = "stdin-scan-boundary-pipe";
+    const r = await cli(["publish", "--stdin", "large.txt", "--site", slug, "--json", "--no-save"], { stdin: body });
+    expect(r.code, `secret-bearing stdin above 4 MiB must refuse, got: ${r.stdout}${r.stderr}`).toBe(EXIT.usage);
     const json = expectSingleJson(r.stdout);
-    expect(json).toMatchObject({ ok: true, slug: "stdin-scan-boundary-pipe", files: 1 });
-    expect(r.stdinReads).toBe(1);
-    expect(r.stdout + r.stderr).not.toContain(token);
+    expect(json).toMatchObject({ ok: false, exitCode: EXIT.usage });
+    expect(json.error.code).toBe("possible_secrets");
+    expect(json.error.details.findings).toEqual([{ path: "large.txt", line: 1, kind: "npm_token" }]);
+    expect(r.stdout + r.stderr, "matched secret values are never printed").not.toContain(token);
     expectNoLeak(r);
-    const live = await liveBytes(`${json.url as string}?raw=1`);
-    expect(live.status).toBe(200);
-    expect(Buffer.from(live.bytes).toString("utf8")).toBe(body);
-    expect(live.version).toBe(json.version.id as string);
+    expect(r.wire, "secret refusal precedes any network call").toHaveLength(0);
+    expect(r.stdinReads, "piped bytes are consumed exactly once").toBe(1);
+    const site = await apiJson(`/api/v1/sites/${slug}`);
+    expect(site.status, "secret refusal leaves no site behind").toBe(404);
   });
 
   it("--dry-run inventories piped bytes offline and changes nothing", async () => {
