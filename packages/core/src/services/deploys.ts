@@ -719,6 +719,7 @@ export async function listVersions(dc: DropwayContext, site: SiteRow, opts: { li
 
 /** Make an older finalized version live again (a pointer flip; no files are copied). */
 export async function restoreVersion(dc: DropwayContext, p: Principal, site: SiteRow, versionId: string) {
+  site = await getSiteFor(dc, p, site.slug, "sites:write");
   if (site.mode === "transfer") throw conflict("transfer_immutable", "Transfer files cannot be restored.", "Create a new transfer instead.");
   const version = await getVersion(dc, site.id, versionId);
   if (!version || version.status !== "ready") {
@@ -726,7 +727,21 @@ export async function restoreVersion(dc: DropwayContext, p: Principal, site: Sit
   }
   if (version.id === site.current_version_id) return { restored: false, alreadyLive: true, version: serializeVersion(version, version.id) };
   const now = Date.now();
-  await dc.env.DB.prepare("UPDATE sites SET current_version_id = ?, updated_at = ? WHERE id = ?").bind(version.id, now, site.id).run();
+  const [upd] = await dc.env.DB.batch([
+    dc.env.DB.prepare(
+      `UPDATE sites SET current_version_id = ?, updated_at = ?
+        WHERE id = ? AND tenant_id IS ? AND deleted_at IS NULL AND current_version_id IS ?
+          AND EXISTS (SELECT 1 FROM versions WHERE id = ? AND site_id = ? AND status = 'ready')`,
+    ).bind(version.id, now, site.id, site.tenant_id, site.current_version_id, version.id, site.id),
+  ]);
+  if (!upd?.meta.changes) {
+    const fresh = await getSiteFor(dc, p, site.slug, "sites:write");
+    const latest = await getVersion(dc, site.id, version.id);
+    if (!latest || latest.status !== "ready") {
+      throw notFound("version_not_found", `No finalized version ${versionId} on site ${site.slug}.`, "List versions with GET /api/v1/sites/:slug/versions.");
+    }
+    throw await versionConflict(dc, fresh);
+  }
   await refreshLive(dc, site.id);
   emit(dc, "onPublish", {
     kind: "restore",
