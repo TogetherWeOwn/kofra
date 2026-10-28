@@ -88,6 +88,35 @@ export async function transferAttempt(dw: Instance, transfer: Transfer, password
   return postForm(dw, form, password, ip, { Origin: new URL(transfer.url).origin });
 }
 
+/**
+ * Delay the counter read that follows the given real counter write.
+ * The write itself executes first; only the following read is paused.
+ */
+export function delayedCounterRead(afterWrites: number) {
+  let arrive!: () => void;
+  let release!: () => void;
+  const arrived = new Promise<void>((resolve) => { arrive = resolve; });
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  let writes = 0;
+  let reads = 0;
+  let paused = false;
+  const db = databaseBoundary(async (statements) => {
+    for (const sql of statements) {
+      if (!/\btransfer_unlock_buckets\b/i.test(sql)) continue;
+      if (/\b(?:INSERT|UPDATE)\b/i.test(sql)) writes++;
+      if (/\bSELECT\b/i.test(sql)) {
+        reads++;
+        if (!paused && writes >= afterWrites) {
+          paused = true;
+          arrive();
+          await released;
+        }
+      }
+    }
+  });
+  return { db, arrived, release, counts: () => ({ writes, reads }) };
+}
+
 /** Delay one real counter write, not its result, with all other D1 work intact. */
 export function delayedCounterWrite(ordinal: number) {
   let arrive!: () => void;

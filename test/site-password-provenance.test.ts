@@ -214,6 +214,9 @@ describe.each([
   it.each([
     { label: "1 second", skewMs: 1_000 },
     { label: "30 seconds", skewMs: 30_000 },
+    // The exact documented bound: a tolerance shortened below sixty
+    // seconds must fail here, while the 61-second refusal below stays.
+    { label: "exactly 60 seconds", skewMs: 60_000 },
   ])("accepts a freshly issued opaque form when the validating clock is $label behind issuance", async ({ skewMs }) => {
     const dw = await freshInstance({ ...config, sitesSandbox: true });
     const url = await lockedSite(dw, "protected-site");

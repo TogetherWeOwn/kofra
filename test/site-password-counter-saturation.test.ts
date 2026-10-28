@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { request } from "./delivery-review-fixtures";
 import { freshInstance, type Instance } from "./helpers";
 import {
-  attempt, delayedCounterWrite, freezePasswordClock, lockedSite, passwordForm, postForm,
+  attempt, delayedCounterRead, delayedCounterWrite, freezePasswordClock, lockedSite, passwordForm, postForm,
   SITE_PASSWORD, transferAttempt, WINDOW_MS,
 } from "./site-password-fixtures";
 import { create, instance as transferInstance, PASSWORD as TRANSFER_PASSWORD, type Transfer } from "./transfer-fixtures";
@@ -171,6 +171,106 @@ describe.each([
       expect(after.filter((row) => before.some((prior) => prior.bucket === row.bucket)),
         "late work must not mutate a saturated/current row").toEqual(before);
       expect(await auditWrites(), "late work must not persist a counter write").toBe(writesBefore);
+    } finally {
+      delayed.release();
+      await pending;
+    }
+  });
+
+  it.each([
+    { bucket: "visitor", ordinal: 1, allowance: 10 },
+    { bucket: "site", ordinal: 2, allowance: 30 },
+  ])("admits a valid $bucket submission when its saturated counter renews between refusal and read", async ({ bucket, ordinal, allowance }) => {
+    const dw = await freshInstance(config);
+    const url = await lockedSite(dw, "protected-site");
+    const other = await lockedSite(dw, "other-site");
+    await installWriteAudit();
+
+    // Exhaust exactly the target allowance in the current frozen window.
+    // The visitor case is this visitor on this site; the site case is
+    // distributed across thirty other visitors.
+    for (let n = 0; n < allowance; n++) {
+      expect((await attempt(dw, url, "wrong", bucket === "visitor" ? "192.0.2.200" : `192.0.2.${n + 1}`)).status).toBe(401);
+    }
+    const beforeRows = await bucketRows();
+    const beforeWrites = await auditWrites();
+    const saturated = bucket === "site" ? saturatedRow(beforeRows, allowance) : undefined;
+    if (bucket === "visitor") {
+      expect(beforeRows.map((row) => row.attempts).sort()).toEqual([10, 10]);
+      expect(beforeWrites, "positive control: every admitted write was audited").toBe(20);
+    } else {
+      expect(beforeWrites, "positive control: every admitted write was audited").toBe(60);
+    }
+
+    const targetIp = bucket === "visitor" ? "192.0.2.200" : "198.51.100.200";
+    const form = await passwordForm(dw, url, targetIp);
+    const delayed = delayedCounterRead(ordinal);
+    const pending = postForm(dw, form, SITE_PASSWORD, targetIp, {}, delayed.db);
+    let targetVisitorBucket: Bucket | undefined;
+    try {
+      // The conditional reservation for the target bucket has already run
+      // (and, against the snapshot above, could only have matched no row).
+      // Its following counter read is the statement now paused.
+      await Promise.race([delayed.arrived, pending.then(() => { throw new Error("request completed without pausing before the counter read"); })]);
+      expect(delayed.counts()).toEqual({ writes: ordinal, reads: 1 });
+      const pausedRows = await bucketRows();
+      if (bucket === "visitor") {
+        expect(pausedRows, "the refused conditional reservation wrote nothing").toEqual(beforeRows);
+        expect(await auditWrites()).toBe(beforeWrites);
+      } else {
+        // Partial accounting at the pause: this request's visitor
+        // reservation (the only new row) already stands in the old window,
+        // while the saturated site row is still byte-identical.
+        const newRows = pausedRows.filter((row) => !beforeRows.some((prior) => prior.bucket === row.bucket));
+        expect(newRows).toHaveLength(1);
+        targetVisitorBucket = newRows[0]!;
+        expect(targetVisitorBucket.attempts).toBe(1);
+        expect(targetVisitorBucket.window).toBe(saturated!.window);
+        expect(pausedRows.filter((row) => beforeRows.some((prior) => prior.bucket === row.bucket))).toEqual(beforeRows);
+        expect(await auditWrites()).toBe(beforeWrites + 1);
+      }
+
+      // Renew the saturated bucket through a real handler in the next
+      // window while the first request is still before its counter read.
+      // That renewal spends the first attempt of the renewed allowance.
+      vi.setSystemTime(windowStart + WINDOW_MS + 5 * 60_000);
+      const renewalIp = bucket === "visitor" ? targetIp : "203.0.113.200";
+      expect((await attempt(dw, url, "wrong", renewalIp)).status).toBe(401);
+      if (bucket === "site") {
+        expect((await bucketRows()).find((row) => row.bucket === saturated!.bucket))
+          .toEqual({ ...saturated!, window: saturated!.window + 1, attempts: 1 });
+      }
+
+      delayed.release();
+      const response = await pending;
+      expect(response.status, "the retry must admit into the renewed allowance, not keep the old 429").toBe(303);
+      const setCookie = response.headers.get("set-cookie");
+      expect(setCookie).toContain("HttpOnly");
+      const cookie = setCookie!.split(";")[0]!;
+      const content = await dw.call(url, { headers: { Cookie: cookie, "CF-Connecting-IP": targetIp } });
+      expect(content.status).toBe(200);
+      expect(await content.text()).toContain("private content");
+
+      if (bucket === "visitor") {
+        // Renewal attempt plus this admitted retry are exactly the first
+        // two attempts of both renewed buckets — no more, no fewer.
+        expect(await bucketRows()).toEqual(beforeRows.map((row) => ({ ...row, window: row.window + 1, attempts: 2 })));
+        expect(await auditWrites()).toBe(beforeWrites + 4);
+        // Behaviourally, eight visitor attempts remain on another site...
+        for (let n = 0; n < 8; n++) expect((await attempt(dw, other, "wrong", targetIp)).status).toBe(401);
+        expect((await attempt(dw, other, SITE_PASSWORD, targetIp)).status).toBe(429);
+        // ...and 28 site attempts remain on this site.
+        for (let n = 0; n < 28; n++) expect((await attempt(dw, url, "wrong", `198.51.100.${n + 1}`)).status).toBe(401);
+        expect((await attempt(dw, url, SITE_PASSWORD, "203.0.113.201")).status).toBe(429);
+      } else {
+        expect((await bucketRows()).find((row) => row.bucket === saturated!.bucket))
+          .toEqual({ ...saturated!, window: saturated!.window + 1, attempts: 2 });
+        // The already-spent visitor reservation was not refunded or moved.
+        expect((await bucketRows()).find((row) => row.bucket === targetVisitorBucket!.bucket)).toEqual(targetVisitorBucket);
+        expect(await auditWrites(), "visitor spend, renewal spend and one retry spend only").toBe(beforeWrites + 4);
+        for (let n = 0; n < 28; n++) expect((await attempt(dw, url, "wrong", `198.51.100.${n + 1}`)).status).toBe(401);
+        expect((await attempt(dw, url, SITE_PASSWORD, "203.0.113.201")).status).toBe(429);
+      }
     } finally {
       delayed.release();
       await pending;
