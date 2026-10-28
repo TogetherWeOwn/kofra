@@ -1,10 +1,10 @@
 # CLI configuration diagnostics
 
-**Status: Proposed.** Design sign-off is pending. Do not implement this
-spec until the design is approved, and do not start an implementation card
-until the security-review questions below have a recorded disposition.
-This document is the single source of truth for the proposed contract;
-the command help and the CLI guide will point here rather than restate it.
+**Status: Implemented.** Design approved; security review approved with the
+bounds recorded below (custom paths hidden, presence-only userinfo signals,
+scoped credential handling and literal remediation templates).
+This document is the single source of truth for the contract;
+the command help and the CLI guide point here rather than restate it.
 
 ## Problem
 
@@ -272,7 +272,9 @@ Field rules:
 - `removed` appears only on the `api.value_trimmed` check. It is an
   array of distinct strings drawn from `userinfo`, `path`, `query`
   and `fragment`, in that order, listing each part normalization
-  dropped. All other checks omit the field.
+  dropped. `userinfo` is presence-only: never values, lengths or counts.
+  The hint advises rotation and cleanup of shell history and env when
+  userinfo held credentials. All other checks omit the field.
 - `projectLink.apiMatchesEffective` is raw string equality between
   `link.api` and the effective origin, mirroring `publish`
   (`main.ts:300`), not normalized equality. A link whose `api`
@@ -344,7 +346,8 @@ Severity notes:
   strictness fail on any `error` check in JSON.
 - `key.absent` is how anonymous-capable flows see the world too: key
   absence is configuration data, and callers that publish with
-  `--anonymous` ignore exit 3 deliberately.
+  `--anonymous` may treat exit 3 as OK deliberately. Consumers must
+  never auto-login on exit 3.
 
 ## Redaction (normative)
 
@@ -371,17 +374,24 @@ never echoed. In particular:
   future test also asserts that no pattern matches any output byte,
   but a passing sweep alone never proves the absence of an
   `other`-shaped leak.
-- Paths are emitted with the home directory collapsed to `~` (user
-  profile on Windows), and only when the resolved path is under that
-  home directory. When the config dir points outside the home
-  directory, `configDir.path` is `null` in JSON and the human output
-  names the selector only: outside-home paths can carry team, project
-  or machine names that must not leak into shared diagnostics.
-  Precedent commands print raw paths; this command is held to the
-  safer form because its output is meant to be shared.
+- `configDir.path` is emitted only for selector `default`, when the
+  resolved path equals the platform default: `~/.config/dropway` (home
+  collapsed to `~`, including the user profile on Windows). Every custom
+  selector (`KOFRA_CONFIG_DIR`, its legacy twin, `XDG_CONFIG_HOME` or
+  `APPDATA`) produces `path: null`, even if it names an in-home directory
+  or the default location. Human output names that selector only.
+  Custom paths can carry team, project or machine names and must not
+  leak into shareable diagnostics.
 - Stored mapping keys are never enumerated: only the count and, with
   `[path]`, the single caller-provided lookup. Mapping keys can name
   private folders; the caller already knows the path they asked about.
+- Credential parsing is scoped to resolution: raw file/key references do
+  not escape into the report or formatter. Only truthiness, counts,
+  booleans and prefix-derived key kind survive that scope.
+- Hints and remediation templates never interpolate caller values:
+  `<effective-origin>`, `<host>`, `<path>` and `<your-instance>` remain
+  literal. Runtime origin/path/key canaries pin their absence outside
+  allowlisted result fields, including human remediation lines.
 - No headers, no copied environment values, no proposed secrets. Only
   the closed variable-name set above is named, never its values.
 - Human text obeys the same rules: it must contain no value the JSON
@@ -531,10 +541,16 @@ config dir via `KOFRA_CONFIG_DIR`, synthetic cwd, controlled env):
 | 35 | credentials with a valid string default, a matching entry containing a synthetic key, and an unrelated `null` instance entry | file is `malformed` / `invalid_shape` with all three summary fields `null`, yet effective default and saved key still win, exit 0 `ready`; diagnostic classification must not tighten the resolver |
 | 36 | `[path]` lookup across link states: absent link; valid link matching the effective origin with and without an entry; valid link with a different `api`; valid link with no `api` | absent: `apiMatchesEffective: false`, `sitesEntryCount: 0`, `{key, slug: null}`; matching with entry: `slug` set, `mapping_found`; matching without entry: `slug: null`, `mapping_missing`; different or missing `api`: `apiMatchesEffective: false`, `slug: null` even when an entry exists, `mapping_missing`; no effective origin: `apiMatchesEffective: false` |
 
-## Security-review questions
+## Security-review disposition
 
-Explicit questions for the security disposition that must precede any
-implementation:
+Approved with bounds: Q1 hides every custom config path, Q2 permits only
+userinfo presence plus rotation/cleanup advice, Q4 requires scoped
+credential handling and fixed exit-1 bytes, and Q7 requires literal
+remediation templates with runtime canaries. Q3 permits prefix-only key
+kind, Q5 preserves symlink following, and Q6 keeps exit 3 as diagnosed
+configuration data, never an auto-login trigger.
+
+The questions considered in that review were:
 
 1. Is `~`-collapsed path emission acceptable in a shareable diagnostic,
    or must paths be omitted entirely (selector only)? Out-of-home

@@ -12,6 +12,7 @@ import { CliError, DropwayClient, EXIT, normaliseApi, type FetchLike } from "./c
 import { linkKey, linkPath, readCredentials, readLink, removeCredentials, saveCredentials, writeLink, type ProjectLink } from "./config.ts";
 import { collectFiles } from "./files.ts";
 import { encryptFiles } from "./encrypt.ts";
+import { explainConfig, explainConfigHuman } from "./explain-config.ts";
 import { withLegacyEnv } from "./legacy-brand.ts";
 import { formatBytes, plural, shellQuote, shortTime, table } from "./output.ts";
 import { publish, publishZip, waitForVersion, type ProgressEvent, type PublishResult, type VersionInfo } from "./publish.ts";
@@ -1364,8 +1365,24 @@ const apiCmd: Command = {
   },
 };
 
+const explainConfigCmd: Command = {
+  summary: "Show which configuration wins, without contacting anything",
+  usage: "kofra explain-config [path] [--api <url>] [--key <key>] [--json] [-q]",
+  maxPositionals: 1,
+  flags: {},
+  details: `Offline, read-only diagnostics. Exit 0 means presence, not authorization.
+Callers using --anonymous may treat exit 3 as OK; never auto-login on exit 3.
+Contract: https://github.com/TogetherWeOwn/kofra/blob/main/docs/CLI_DIAGNOSTICS.md`,
+  async run(p, io, out) {
+    const report = await explainConfig({ api: str(p, "api"), key: str(p, "key"), path: p.positionals[0], env: io.env, cwd: io.cwd });
+    out.result({ ...report }, () => explainConfigHuman(report));
+    return report.exitCode;
+  },
+};
+
 const COMMANDS: Record<string, Command> = {
   publish: publishCmd,
+  "explain-config": explainConfigCmd,
   duplicate: duplicateCmd,
   list: listCmd,
   site: siteCmd,
@@ -1423,7 +1440,8 @@ ${HELP_FOOTER}`;
 
 /** Run the CLI. Returns the exit code (never calls process.exit). */
 export async function run(argv: string[], io: Io): Promise<number> {
-  io = { ...io, env: withLegacyEnv(io.env) };
+  // Diagnostics needs literal provenance; all existing commands keep legacy folding.
+  io = { ...io, env: argv[0] === "explain-config" ? io.env : withLegacyEnv(io.env) };
   const first = argv[0];
   if (!first || first === "help" || first === "--help" || first === "-h") {
     const topic = first === "help" ? argv[1] : undefined;
@@ -1457,7 +1475,9 @@ export async function run(argv: string[], io: Io): Promise<number> {
     return await command.run(p, io, new Output(io, bool(p, "json") === true, bool(p, "quiet") === true));
   } catch (e) {
     const err =
-      e instanceof CliError
+      name === "explain-config" && !(e instanceof UsageError)
+        ? new CliError({ code: "unexpected_error", message: "Unexpected internal failure.", exitCode: EXIT.error })
+        : e instanceof CliError
         ? e
         : e instanceof UsageError
           ? new CliError({ code: "usage", message: e.message, hint: `Run \`kofra ${name} --help\`.`, exitCode: EXIT.usage })
