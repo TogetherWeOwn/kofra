@@ -224,7 +224,8 @@ about yourself; that is outside this runbook.
    site. Kofra reads KV with a 30-second edge cache (`cacheTtl`) and each
    Worker isolate keeps a site in memory for 5 seconds, so the old entry can
    still be served for up to about 35 seconds after the delete: wait a minute
-   before step 6. Each site's next read then rebuilds its entry
+   before step 4's reads (step 6 inherits the wait). Each site's next read
+   then rebuilds its entry
    from the D1 the Worker is bound to — the restored one, once the ordering
    above is followed. Blob bytes and viewer fragments in the edge Cache
    API are keyed by SHA-256, so they cannot go stale and need nothing.
@@ -240,11 +241,13 @@ about yourself; that is outside this runbook.
    Extra objects are harmless; missing ones make file reads fail with `502`
    "File unavailable" until copied (observed in the drill: D1-only restore
    served `502`s, full restore served `200`s).
-4. **KV check.** Nothing to restore. Read each site once;
-   `kv key list --prefix live:` shows the `live:<slug>` keys repopulating
-   from the restored D1. On the fresh-database path this means after the
-   step-5 redeploy and the deferred step-2 deletion; reads before the
-   redeploy rebuild from the old database.
+4. **KV check.** Nothing to restore. Wait a minute after the step-2 deletion
+   first: until the 5-second memory and 30-second edge caches expire, reads
+   are served from cache and do not rebuild the deleted keys. Then read each
+   site once; `kv key list --prefix live:` shows the `live:<slug>` keys
+   repopulating from the restored D1. On the fresh-database path this means
+   after the step-5 redeploy and the deferred step-2 deletion; reads before
+   the redeploy rebuild from the old database.
 5. **Redeploy.** `npm run deploy` re-applies migrations and redeploys the
    Worker; it is safe to re-run for upgrades. With a second sites Worker
    ([Self-hosting, option B](SELF_HOST.md#b-a-second-deployment-for-sites)),
