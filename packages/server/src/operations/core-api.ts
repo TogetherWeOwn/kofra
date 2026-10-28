@@ -846,8 +846,9 @@ export const CORE_API_OPERATIONS = [
     annotations: WRITE,
     async handler(a, { dw, principal }) {
       const site = await getSiteByRef(dw, principal, a.site, "sites:write");
-      const version = await resolveVersionRef(dw, site, a.version);
-      const out = await restoreVersion(dw, principal, site, version.id, { symbolicLive: isLiveVersionRef(a.version) });
+      const symbolicLive = isLiveVersionRef(a.version);
+      const versionId = symbolicLive ? "live" : (await resolveVersionRef(dw, site, a.version)).id;
+      const out = await restoreVersion(dw, principal, site, versionId, { symbolicLive });
       return { ...out, slug: site.slug, url: siteUrl(dw, site.slug) };
     },
     http: {
@@ -860,8 +861,9 @@ export const CORE_API_OPERATIONS = [
       handler: async (c) => {
         const dw = D(c);
         const site = await getSiteByRef(dw, P(c), c.req.param("slug")!, "sites:write");
-        const version = await resolveVersionRef(dw, site, c.req.param("id")!);
-        const out = await restoreVersion(dw, P(c), site, version.id, { symbolicLive: isLiveVersionRef(c.req.param("id")) });
+        const symbolicLive = isLiveVersionRef(c.req.param("id"));
+        const versionId = symbolicLive ? "live" : (await resolveVersionRef(dw, site, c.req.param("id")!)).id;
+        const out = await restoreVersion(dw, P(c), site, versionId, { symbolicLive });
         return c.json({ ...out, url: siteUrl(dw, site.slug) });
       },
     },

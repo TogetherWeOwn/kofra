@@ -778,11 +778,41 @@ export async function deleteVersion(dc: DropwayContext, p: Principal, site: Site
   const version = await getVersion(dc, site.id, versionId);
   if (!version) throw notFound("version_not_found", `No version ${versionId} on site ${site.slug}.`);
   if (version.id === site.current_version_id) throw conflict("version_is_live", "You cannot delete the live version.", "Restore or publish another version first.");
-  await dc.env.DB.batch([
-    dc.env.DB.prepare("DELETE FROM version_files WHERE version_id = ?").bind(version.id),
-    dc.env.DB.prepare("DELETE FROM versions WHERE id = ?").bind(version.id),
-    ...usageStatements(dc, site.tenant_id),
-  ]);
+  try {
+    await dc.env.DB.batch([
+      // A SQL failure, not a zero-row DELETE, refuses the whole batch before any
+      // manifest or usage write. CASE keeps the diagnostic bound to this site.
+      dc.env.DB.prepare(`SELECT CASE
+        WHEN s.id IS NULL THEN json_extract('{}', 'kofra_delete_version_site_changed')
+        WHEN s.mode = 'transfer' THEN json_extract('{}', 'kofra_delete_version_transfer')
+        WHEN v.id IS NULL THEN json_extract('{}', 'kofra_delete_version_missing')
+        WHEN s.current_version_id = v.id THEN json_extract('{}', 'kofra_delete_version_live')
+        ELSE 1 END
+        FROM (SELECT 1) AS anchor
+        LEFT JOIN sites AS s ON s.id = ? AND s.slug = ? AND s.tenant_id IS ? AND s.deleted_at IS NULL
+        LEFT JOIN versions AS v ON v.id = ? AND v.site_id = s.id`)
+        .bind(site.id, site.slug, site.tenant_id, version.id),
+      dc.env.DB.prepare("DELETE FROM version_files WHERE version_id = ?").bind(version.id),
+      dc.env.DB.prepare("DELETE FROM versions WHERE id = ?").bind(version.id),
+      ...usageStatements(dc, site.tenant_id),
+    ]);
+  } catch (error) {
+    const message = String(error);
+    if (!message.includes("JSON path")) throw error;
+    if (message.includes("kofra_delete_version_site_changed")) {
+      throw notFound("site_not_found", `No site "${site.slug}" that this key can access.`, "List your sites with GET /api/v1/sites.", { slug: site.slug });
+    }
+    if (message.includes("kofra_delete_version_transfer")) {
+      throw conflict("transfer_immutable", "Transfer files cannot be deleted separately.", "Revoke the transfer; retained bytes are purged by cleanup when not held.");
+    }
+    if (message.includes("kofra_delete_version_missing")) {
+      throw notFound("version_not_found", `No version ${versionId} on site ${site.slug}.`);
+    }
+    if (message.includes("kofra_delete_version_live")) {
+      throw conflict("version_is_live", "You cannot delete the live version.", "Restore or publish another version first.");
+    }
+    throw error;
+  }
   return { deleted: true, id: version.id };
 }
 
