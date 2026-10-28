@@ -104,9 +104,9 @@ describe.each([
   it("atomically caps 30 distinct-IP site attempts and renews the exhausted site allowance", async () => {
     const dw = await freshInstance(config);
     const url = await lockedSite(dw, "protected-site");
-    const form = await passwordForm(dw, url);
+    const forms = await Promise.all(Array.from({ length: 35 }, (_, n) => passwordForm(dw, url, `192.0.2.${n + 1}`)));
     const writes = Array.from({ length: 35 }, () => delayedCounterWrite(2));
-    const pending = writes.map((write, n) => postForm(dw, form, `bad${n}`, `192.0.2.${n + 1}`, {}, write.db));
+    const pending = writes.map((write, n) => postForm(dw, forms[n]!, `bad${n}`, `192.0.2.${n + 1}`, {}, write.db));
     let responses: Response[];
     try {
       // All distinct-IP requests reach the site write before any of those writes execute.

@@ -35,11 +35,16 @@ export interface PasswordForm {
   fields: URLSearchParams;
   status: number;
   csp: string;
+  cookies: string;
 }
 
-/** Read the actual action and all named inputs; do not invent a form capability. */
-export async function passwordForm(dw: Instance, url: string, headers: HeadersInit = {}): Promise<PasswordForm> {
-  const page = await dw.call(url, { headers: { ...Object.fromEntries(new Headers(headers)), Accept: "text/html" } });
+/** Read the actual action, inputs and cookies for this visitor; proof stays opaque. */
+export async function passwordForm(dw: Instance, url: string, ip: string | undefined, headers: HeadersInit = {}): Promise<PasswordForm> {
+  const getHeaders = new Headers(headers);
+  getHeaders.set("Accept", "text/html");
+  if (ip) getHeaders.set("CF-Connecting-IP", ip);
+  else getHeaders.delete("CF-Connecting-IP");
+  const page = await dw.call(url, { headers: getHeaders });
   expect(page.headers.get("content-type")).toContain("text/html");
   let action: string | null = null;
   const fields = new URLSearchParams();
@@ -53,21 +58,27 @@ export async function passwordForm(dw: Instance, url: string, headers: HeadersIn
   expect(html).not.toContain("private content");
   expect(action, "locked page must return a password form").not.toBeNull();
   expect(fields.has("password"), "use the password field returned by the page").toBe(true);
-  return { action: attributeUrl(action!, url), fields, status: page.status, csp: page.headers.get("content-security-policy") ?? "" };
+  const cookies = page.headers.getSetCookie().map((value) => value.split(";")[0]!).join("; ");
+  return { action: attributeUrl(action!, url), fields, status: page.status, csp: page.headers.get("content-security-policy") ?? "", cookies };
+}
+
+export function formSubmission(form: PasswordForm, password: string, ip: string, headers: HeadersInit = {}) {
+  const fields = new URLSearchParams(form.fields);
+  fields.set("password", password);
+  const postHeaders = new Headers(headers);
+  postHeaders.set("CF-Connecting-IP", ip);
+  postHeaders.set("Content-Type", "application/x-www-form-urlencoded");
+  if (form.cookies) postHeaders.set("Cookie", [postHeaders.get("Cookie"), form.cookies].filter(Boolean).join("; "));
+  return { method: "POST", body: fields, headers: postHeaders };
 }
 
 export function postForm(dw: Instance, form: PasswordForm, password: string, ip: string, headers: HeadersInit = {}, db?: D1Database) {
-  const fields = new URLSearchParams(form.fields);
-  fields.set("password", password);
-  const init = {
-    method: "POST", body: fields,
-    headers: { "CF-Connecting-IP": ip, ...Object.fromEntries(new Headers(headers)) },
-  };
+  const init = formSubmission(form, password, ip, headers);
   return db ? request(dw, form.action, init, { DB: db }) : dw.call(form.action, init);
 }
 
 export async function transferAttempt(dw: Instance, transfer: Transfer, password: string, ip: string): Promise<Response> {
-  const form = await passwordForm(dw, transfer.url);
+  const form = await passwordForm(dw, transfer.url, ip);
   return postForm(dw, form, password, ip, { Origin: new URL(transfer.url).origin });
 }
 

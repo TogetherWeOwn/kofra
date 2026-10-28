@@ -42,8 +42,8 @@ describe.each([
   ])("a delayed previous-window $bucket reservation cannot erase the current exhausted allowance", async ({ bucket, ordinal, allowance }) => {
     const dw = await freshInstance(config);
     const url = await lockedSite(dw, "protected-site");
-    const form = await passwordForm(dw, url);
     vi.setSystemTime(windowStart + WINDOW_MS - 1);
+    const form = await passwordForm(dw, url, "192.0.2.200");
     const delayed = delayedCounterWrite(ordinal);
     const pending = postForm(dw, form, SITE_PASSWORD, "192.0.2.200", {}, delayed.db);
     let response: Response;
@@ -82,8 +82,8 @@ describe.each([
     const transfer = await create(dw, { slug: "delayed-parcel", password: TRANSFER_PASSWORD });
     const allowance = await transferAllowance(dw, control, distributed);
     expect(allowance).toBeGreaterThan(0);
-    const form = await passwordForm(dw, transfer.url);
     vi.setSystemTime(windowStart + WINDOW_MS - 1);
+    const form = await passwordForm(dw, transfer.url, "192.0.2.200");
     const delayed = delayedCounterWrite(ordinal);
     const pending = postForm(dw, form, TRANSFER_PASSWORD, "192.0.2.200", { Origin: new URL(transfer.url).origin }, delayed.db);
     try {
