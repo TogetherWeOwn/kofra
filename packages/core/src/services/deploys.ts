@@ -452,6 +452,9 @@ export async function finalizeDeploy(dc: DropwayContext, p: Principal, site: Sit
   const version = await getVersion(dc, site.id, versionId);
   if (!version) throw notFound("deploy_not_found", `No version ${versionId} on site ${site.slug}.`, "Start one with POST /api/v1/sites/:slug/versions (alias: /deploys).");
   if (version.status === "ready") {
+    // A previous finalize may have committed D1 but failed to update KV.
+    // Rebuild from the current site, not the replayed version, which may be old.
+    await refreshLive(dc, site.id);
     return { version, replayed: true, live: version.id === site.current_version_id, warnings: await deployWarnings(dc, site, version.id) };
   }
   const scope = blobScope(siteOwner(site));
@@ -495,7 +498,10 @@ export async function finalizeDeploy(dc: DropwayContext, p: Principal, site: Sit
   if (!upd?.meta.changes) {
     const fresh = await getSiteFor(dc, p, site.slug, "sites:write");
     const latest = await getVersion(dc, site.id, version.id);
-    if (latest?.status === "ready") return { version: latest, replayed: true, live: latest.id === fresh.current_version_id, warnings: await deployWarnings(dc, site, version.id) };
+    if (latest?.status === "ready") {
+      await refreshLive(dc, site.id);
+      return { version: latest, replayed: true, live: latest.id === fresh.current_version_id, warnings: await deployWarnings(dc, site, version.id) };
+    }
     if (version.base_version_id && fresh.current_version_id !== version.base_version_id) throw await versionConflict(dc, fresh);
     if (storageQuota !== null) throw quotaExceeded("storage_bytes", storageQuota);
     throw await versionConflict(dc, fresh);
