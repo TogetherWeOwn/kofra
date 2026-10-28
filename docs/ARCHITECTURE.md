@@ -152,6 +152,32 @@ for sensitive previews or mutually untrusted sites. Its host-only `__Host-` cook
 same-site/cross-site subresource refusal isolate sibling sites. Removing CORS permission
 in path mode does not make different paths different origins.
 
+### Public site password attempts
+
+Unauthenticated site-password submissions spend separate atomic D1 budgets: ten per
+trusted client IP across ordinary sites and thirty per site, in fifteen-minute windows.
+Successful submissions count too; valid unlock cookies bypass these budgets. Refused
+attempts return uncached 429 responses with the remaining `Retry-After`; unavailable
+counter storage fails closed with 503. Late writes cannot move a counter window backward.
+A counter at its allowance is not written again until its window renews. A request refused
+by the site allowance has already spent its visitor reservation, which stands. Scheduled
+cleanup deletes at most 500 stale counter rows per invocation, so a large backlog drains over
+successive runs.
+
+Cross-zone Worker subrequests all arrive from `2a06:98c0:3600::103`; with that address the
+edge-added `CF-Worker` header names the upstream zone, and each zone gets its own visitor
+budget and form proof. `X-Forwarded-For` and `x-real-ip` are never identity.
+
+Submission provenance is checked before body parsing or counter charges. Foreign Origins
+and foreign Fetch Metadata are refused. Forms carry a signed action proof so sandboxed
+or no-referrer pages can safely submit with `Origin: null`. The fifteen-minute proof is
+bound to the target origin/root, site, current password hash and trusted visitor identity,
+and tolerates up to sixty seconds of clock skew between edges. Reload the form after expiry
+or an IP change. The proof does not unlock content or replace the password. Headerless
+programmatic clients still work.
+Self-hosters must preserve a trusted edge's `CF-Connecting-IP`; without that header,
+requests share the existing `unknown` IP bucket and form-proof binding.
+
 ### Viewing files
 
 `serveFile` asks `findViewer(file, live, viewers, mode)` (`packages/server/src/viewers`)
