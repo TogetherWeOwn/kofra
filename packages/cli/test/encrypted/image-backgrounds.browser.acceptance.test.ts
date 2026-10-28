@@ -6,7 +6,9 @@
  * IMAGE_BACKGROUND_EVIDENCE_DIR keeps screenshots outside disposable state.
  * Breaks caught: script-dependent/non-native choices; selection/zoom resetting
  * each other; wrong stage pixels; invisible focus/state; clipped mobile controls;
- * unscrollable actual-size artwork; persistence/network side effects; SVG script.
+ * unscrollable actual-size artwork; background paint missing at the far scroll
+ * corner; a zero-height stage when wrapped chrome exhausts a short window;
+ * persistence/network side effects; SVG script.
  */
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
@@ -67,7 +69,11 @@ beforeAll(async () => {
   });
   expect(setup.status).toBe(201);
   const ownerKey = (await setup.json() as any).apiKey.key;
-  for (const [site, files] of [[slug, imageBackgroundFiles], [`${slug}-solo`, [imageBackgroundFiles[0]]], [`${slug}-portrait`, [portraitImageFile]]] as const) {
+  for (const [site, files] of [[slug, imageBackgroundFiles], [`${slug}-solo`, [imageBackgroundFiles[0]]], [`${slug}-portrait`, [portraitImageFile]],
+    // Same portrait bytes under long sibling names: their Previous/Next links
+    // are the wrapping chrome that can exhaust a short window's height.
+    [`${slug}-short`, [{ path: "a-long-previous-artwork-name.png", type: "image/png", bytes: portraitImageFile.bytes }, portraitImageFile,
+      { path: "z-long-next-artwork-name.png", type: "image/png", bytes: portraitImageFile.bytes }]]] as const) {
     const form = new FormData(); form.set("slug", site);
     for (const file of files) form.append(file.path, new File([file.bytes], file.path, { type: file.type }));
     const published = await fetch(`${origin}/api/v1/publish`, { method: "POST", headers: { Authorization: `Bearer ${ownerKey}` }, body: form });
@@ -382,6 +388,30 @@ async function assertReachableEdges(page: Page) {
   expect(edges.filter(edge => !edge.reached), `all Actual-size image edges are reachable through every clip: ${JSON.stringify(edges)}`).toEqual([]);
 }
 
+/** Scroll only user-scrollable ancestors to their far right/bottom extremes. */
+async function scrollToFarCorner(page: Page) {
+  const state = await page.locator(".dw-stage img").evaluate(el => {
+    const g = globalThis as any, image = el as any, doc = g.document.scrollingElement;
+    const offsets: { tag: string; class: string; x: number; y: number }[] = [];
+    for (let parent = image.parentElement; parent; parent = parent.parentElement) {
+      const style = g.getComputedStyle(parent);
+      const scrollsX = parent === doc ? !/hidden|clip/.test(style.overflowX) : /auto|scroll/.test(style.overflowX);
+      const scrollsY = parent === doc ? !/hidden|clip/.test(style.overflowY) : /auto|scroll/.test(style.overflowY);
+      if (!scrollsX && !scrollsY) continue;
+      parent.scrollTo({ left: scrollsX ? parent.scrollWidth : parent.scrollLeft, top: scrollsY ? parent.scrollHeight : parent.scrollTop, behavior: "instant" });
+      offsets.push({ tag: parent.tagName, class: parent.className, x: parent.scrollLeft, y: parent.scrollTop });
+    }
+    const box = image.getBoundingClientRect();
+    return { offsets, right: box.right, bottom: box.bottom, viewport: [g.innerWidth, g.innerHeight] };
+  });
+  // A 1600x1000 Actual-size bitmap in a 360px viewport exposes its far
+  // corner only after well over a thousand pixels of horizontal travel;
+  // the small post-wheel samples elsewhere never reach it.
+  expect(Math.max(...state.offsets.map(offset => offset.x)), `far horizontal scroll extreme reached: ${JSON.stringify(state)}`).toBeGreaterThan(1000);
+  expect(Math.max(...state.offsets.map(offset => offset.y)), `far vertical scroll extreme reached: ${JSON.stringify(state)}`).toBeGreaterThan(300);
+  return state;
+}
+
 async function layout(page: Page, width: number, actual: boolean) {
   const stage = (await page.locator(".dw-stage").boundingBox())!;
   const state = await page.locator(".dw-stage img").evaluate(el => {
@@ -475,6 +505,60 @@ describe("product regressions", () => {
         const actual = (await view.page.locator(".dw-stage img").boundingBox())!;
         expect(actual.width).toBe(600); expect(actual.height).toBe(1200);
         await assertReachableEdges(view.page); // Includes vertical-only desktop overflow.
+      } finally { await view.context.close(); }
+    });
+  }
+
+  for (const embed of [false, true]) for (const forced of [false, true]) {
+    it(`far-scroll SVG surface: ${embed ? "embed" : "ordinary"}, ${forced ? "forced" : "normal"} colors, Light at Actual size paints the bottom-right corner`, async () => {
+      const file = imageBackgroundFiles.find(candidate => candidate.path === "light.svg")!;
+      const view = await visit(file.path, "dark", 360, false, embed, { height: 480, ...(forced ? { forcedColors: "active" as const } : {}) });
+      try {
+        if (forced) expect(await view.page.evaluate(() => (globalThis as any).matchMedia("(forced-colors: active)").matches)).toBe(true);
+        await choose(view.page, "Light");
+        const zoom = view.page.getByLabel("Actual size", { exact: true });
+        await tabTo(view.page, zoom); await view.page.keyboard.press("Space");
+        expect(await zoom.isChecked()).toBe(true); expect(await selected(view.page)).toBe("Light");
+        await assertReachableEdges(view.page);
+        const scrolled = await scrollToFarCorner(view.page);
+        const { bitmap, visible } = await bitmapGeometry(view.page);
+        expect.soft(bitmap.x + bitmap.width, `right bitmap edge is inside the far-corner scrollport: ${JSON.stringify({ scrolled, bitmap, visible })}`).toBeLessThanOrEqual(visible.right + 1);
+        expect.soft(bitmap.y + bitmap.height, `bottom bitmap edge is inside the far-corner scrollport: ${JSON.stringify({ scrolled, bitmap, visible })}`).toBeLessThanOrEqual(visible.bottom + 1);
+        await writeFile(join(evidence, `far-scroll-${embed ? "embed" : "ordinary"}-${forced ? "forced" : "normal"}.json`), JSON.stringify({ scrolled, bitmap, visible }, null, 2));
+        // capture() samples a transparent strip that is actually visible and
+        // hit-tests as the image in this scrolled position, so white tones
+        // prove the Light surface extends under the whole bitmap, not just
+        // under its first viewport-width column.
+        await capture(view, file, `far-scroll-light-svg-${embed ? "embed" : "ordinary"}-${forced ? "forced" : "normal"}`, "Light", true);
+      } finally { await view.context.close(); }
+    });
+  }
+
+  for (const { width, height } of [{ width: 360, height: 300 }, { width: 640, height: 240 }]) {
+    it(`short-window Fit fallback: portrait with long-named siblings at ${width}x${height} keeps a nonzero scroll-reachable image`, async () => {
+      const view = await visit(portraitImageFile.path, "light", width, false, false, { height, site: `${slug}-short`, dimensions: [600, 1200] });
+      try {
+        // The wrapping Previous/Next chrome is the scenario, not decoration:
+        // without these siblings this case could pass vacuously.
+        expect(await view.page.getByRole("link", { name: /Previous: a-long-previous-artwork-name\.png/ }).count()).toBe(1);
+        expect(await view.page.getByRole("link", { name: /Next: z-long-next-artwork-name\.png/ }).count()).toBe(1);
+        expect(await view.page.locator(".dw-mediabar").innerText()).toMatch(/\b2 of 3\b/);
+        const geometry = await bitmapGeometry(view.page);
+        const documentState = await view.page.evaluate(() => {
+          const g = globalThis as any;
+          return { scrollHeight: g.document.scrollingElement.scrollHeight, stageClientHeight: g.document.querySelector(".dw-stage").clientHeight };
+        });
+        await view.page.screenshot({ path: join(evidence, `short-window-${width}-${height}.png`) });
+        await writeFile(join(evidence, `short-window-${width}-${height}.json`), JSON.stringify({ geometry, documentState, width, height }, null, 2));
+        // Intentional overflow fallback: the bitmap need not fit the short
+        // window (the six portrait cases above pin that where space allows),
+        // but it must not collapse to zero with no way to scroll to it.
+        expect.soft(documentState.stageClientHeight, "stage retains a nonzero height when chrome exhausts the window").toBeGreaterThan(0);
+        expect.soft(geometry.bitmap.width, "Fit bitmap retains a nonzero width").toBeGreaterThan(0);
+        expect.soft(geometry.bitmap.height, "Fit bitmap retains a nonzero height").toBeGreaterThan(0);
+        expect(geometry.bitmap.width / geometry.bitmap.height).toBeCloseTo(0.5, 2);
+        expect(documentState.scrollHeight, "the fallback stage overflows the document so the user can scroll to it").toBeGreaterThan(height);
+        await assertReachableEdges(view.page);
       } finally { await view.context.close(); }
     });
   }
