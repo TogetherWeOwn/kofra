@@ -285,6 +285,217 @@ describe("restore review regressions: symbolic versus explicit intent", () => {
   });
 });
 
+/** Complete state, including unjoined children and usage, after the competitor finishes. */
+async function bindingSnapshot() {
+  const sites = (await env.DB.prepare("SELECT * FROM sites ORDER BY id").all<SiteRow>()).results;
+  const versions = (await env.DB.prepare("SELECT * FROM versions ORDER BY id").all()).results;
+  const files = (await env.DB.prepare("SELECT * FROM version_files ORDER BY version_id, path").all()).results;
+  const usage = (await env.DB.prepare("SELECT * FROM usage_counters ORDER BY tenant_id, key").all()).results;
+  const blobs = (await env.DB.prepare("SELECT * FROM blobs ORDER BY sha256").all()).results;
+  const scopes = (await env.DB.prepare("SELECT * FROM blob_scopes ORDER BY scope, sha256").all()).results;
+  const slugs = [...new Set([...sites.map(site => site.slug), SLUG, "binding-replacement"])].sort();
+  const cache = await Promise.all(slugs.map(async slug => [slug, await env.CACHE.get(`live:${slug}`)]));
+  return { sites, versions, files, usage, blobs, scopes, cache };
+}
+
+async function symbolicLiveBySiteId(h: Harness, surface: "REST" | "MCP") {
+  if (surface === "REST") {
+    return async () => {
+      const r = await h.dw.json(`/api/v1/sites/${h.site.id}/versions/live/restore`, {
+        method: "POST", key: h.dw.ownerKey,
+      });
+      return { status: r.status, isError: r.status >= 400, body: r.body, wire: JSON.stringify(r.body) };
+    };
+  }
+  const mcp = await connectMcp(h.dw, h.dw.ownerKey);
+  return async () => {
+    try {
+      const r = await mcp.call("restore_version", { site: h.site.id, version: "live" });
+      return { status: undefined, isError: r.isError, body: r.data, wire: r.text + JSON.stringify(r.data) };
+    } finally {
+      await mcp.client.close();
+    }
+  };
+}
+
+describe("restore review regressions: original immutable site identity", () => {
+  it.each(["REST", "MCP"] as const)("%s explicit site ID refuses symbolic live on a replacement before target lookup", async (surface) => {
+    const h = await fixture();
+    await publish(h.dw, "binding-replacement", "<h1>Replacement live metadata</h1>");
+    const replacement = await getSiteFor(h.dc, h.principal, "binding-replacement", "sites:write");
+    expect(replacement.id).not.toBe(h.site.id);
+    expect(replacement.tenant_id).toBe(h.principal.tenantId);
+    expect(replacement.current_version_id).toBeTruthy();
+    const invoke = await symbolicLiveBySiteId(h, surface);
+    const effects = observe(h);
+    const batch = vi.spyOn(env.DB, "batch");
+    let expected: Awaited<ReturnType<typeof bindingSnapshot>> | undefined;
+    const interleaved = afterRead("sites", values => values.includes(SLUG),
+      { id: h.site.id, current_version_id: h.live.id }, async () => {
+        // The adapter already resolved the supplied immutable ID and read site A.
+        // Move only identity/lifecycle fields in disposable D1, preserving B's ready live version.
+        await env.DB.batch([
+          env.DB.prepare("UPDATE sites SET slug = ?, deleted_at = ?, updated_at = ? WHERE id = ?")
+            .bind("binding-retired", WINNER_TIME, WINNER_TIME, h.site.id),
+          env.DB.prepare("UPDATE sites SET slug = ?, updated_at = ? WHERE id = ?")
+            .bind(SLUG, WINNER_TIME, replacement.id),
+        ]);
+        await dropLive(h.dc, SLUG);
+        await dropLive(h.dc, "binding-replacement");
+        await refreshLive(h.dc, replacement.id);
+        await h.flush();
+        expect(await h.load(), "B remains accessible through normal principal authorization")
+          .toMatchObject({ id: replacement.id, current_version_id: replacement.current_version_id });
+        const live = JSON.parse((await env.CACHE.get(`live:${SLUG}`))!);
+        expect(live).toMatchObject({ siteId: replacement.id, versionId: replacement.current_version_id });
+        expect(live.files).toHaveProperty("index.html");
+        expected = await bindingSnapshot();
+        effects.clear();
+        batch.mockClear();
+        vi.mocked(env.DB.prepare).mockClear();
+      });
+    const result = await invoke();
+    await h.flush();
+    interleaved();
+    const statements = vi.mocked(env.DB.prepare).mock.calls.map(([sql]) => sql);
+    if (surface === "REST") expect.soft(result.status, result.wire).toBe(404);
+    expect.soft(result.isError, result.wire).toBe(true);
+    expect.soft(result.body).toMatchObject({ error: {
+      code: "site_not_found", message: `No site "${SLUG}" that this key can access.`,
+    } });
+    expect.soft(result.body).not.toHaveProperty("alreadyLive");
+    expect.soft(result.body).not.toHaveProperty("version");
+    expect.soft(result.wire, "neither structured nor textual errors disclose replacement identity")
+      .not.toContain(replacement.id);
+    expect.soft(result.wire, "no replacement version details or no-op summary").not.toContain(replacement.current_version_id!);
+    expect.soft(result.body.error?.details ?? {}).not.toHaveProperty("liveVersionId");
+    expect.soft(statements.filter(sql => /^\s*SELECT\b[\s\S]*\bFROM\s+versions\b/i.test(sql)),
+      "identity mismatch must refuse before any target lookup").toEqual([]);
+    expect.soft(statements.filter(sql => /^\s*(UPDATE|INSERT|DELETE|REPLACE)\b/i.test(sql))).toEqual([]);
+    expect.soft(batch).not.toHaveBeenCalled();
+    expect.soft(await bindingSnapshot(), "preserve complete competitor state and B's live cache/metadata").toEqual(expected);
+    effects.expectNoEffects();
+  });
+
+  it.each(["REST", "MCP"] as const)("%s explicit site ID rechecks authorization before symbolic live after ownership changes", async (surface) => {
+    const h = await fixture();
+    const invoke = await symbolicLiveBySiteId(h, surface);
+    const effects = observe(h);
+    const batch = vi.spyOn(env.DB, "batch");
+    let expected: Awaited<ReturnType<typeof bindingSnapshot>> | undefined;
+    const interleaved = afterRead("sites", values => values.includes(SLUG),
+      { id: h.site.id, tenant_id: h.principal.tenantId }, async () => {
+        // Same immutable identity and live version, but no longer owned by this principal.
+        await env.DB.prepare("UPDATE sites SET tenant_id = NULL WHERE id = ?").bind(h.site.id).run();
+        await refreshLive(h.dc, h.site.id);
+        await h.flush();
+        expected = await bindingSnapshot();
+        effects.clear();
+        batch.mockClear();
+        vi.mocked(env.DB.prepare).mockClear();
+      });
+    const result = await invoke();
+    await h.flush();
+    interleaved();
+    const statements = vi.mocked(env.DB.prepare).mock.calls.map(([sql]) => sql);
+    if (surface === "REST") expect(result.status, result.wire).toBe(404);
+    expect(result.isError, result.wire).toBe(true);
+    expect(result.body).toMatchObject({ error: { code: "site_not_found" } });
+    expect(result.body).not.toHaveProperty("alreadyLive");
+    expect(result.body).not.toHaveProperty("version");
+    expect(result.wire).not.toContain(h.live.id);
+    expect(statements.filter(sql => /^\s*SELECT\b[\s\S]*\bFROM\s+versions\b/i.test(sql))).toEqual([]);
+    expect(batch).not.toHaveBeenCalled();
+    expect(await bindingSnapshot()).toEqual(expected);
+    effects.expectNoEffects();
+  });
+
+  it.each(["REST", "MCP"] as const)("%s unchanged explicit site ID keeps symbolic live write-free", async (surface) => {
+    const h = await fixture();
+    const invoke = await symbolicLiveBySiteId(h, surface);
+    const before = await bindingSnapshot();
+    const effects = observe(h);
+    const batch = vi.spyOn(env.DB, "batch");
+    const mutations: string[] = [];
+    const read = afterRead("sites", values => values.includes(SLUG),
+      { id: h.site.id, current_version_id: h.live.id }, async () => {}, mutations);
+    const result = await invoke();
+    await h.flush();
+    read();
+    if (surface === "REST") expect(result.status, result.wire).toBe(200);
+    expect(result.isError, result.wire).toBe(false);
+    expect(result.body).toMatchObject({ restored: false, alreadyLive: true,
+      version: { id: h.live.id, number: h.live.number, status: "ready", live: true } });
+    expect(await bindingSnapshot()).toEqual(before);
+    expect(mutations).toEqual([]);
+    expect(batch).not.toHaveBeenCalled();
+    effects.expectNoEffects();
+  });
+});
+
+describe("restore review regressions: value-CAS ABA boundary", () => {
+  it("permits A -> B -> A before the fence, then restores C once through the real service", async () => {
+    const h = await fixture();
+    const before = await bindingSnapshot();
+    const effects = observe(h);
+    const put = vi.mocked(env.CACHE.put);
+    const remove = vi.mocked(env.CACHE.delete);
+    const batch = vi.spyOn(env.DB, "batch");
+    const interleaved = afterTargetRead(h, async () => {
+      expect(await h.load()).toMatchObject({ current_version_id: h.live.id });
+      expect(await restoreVersion(h.dc, h.principal, await h.load(), h.winner.id))
+        .toMatchObject({ restored: true, alreadyLive: false, version: { id: h.winner.id } });
+      await h.flush();
+      expect(await h.load()).toMatchObject({ current_version_id: h.winner.id });
+      expect(await restoreVersion(h.dc, h.principal, await h.load(), h.live.id))
+        .toMatchObject({ restored: true, alreadyLive: false, version: { id: h.live.id } });
+      await h.flush();
+      const restoredAnchor = await h.load();
+      expect(restoredAnchor).toMatchObject({ id: h.site.id, tenant_id: h.site.tenant_id,
+        current_version_id: h.live.id, deleted_at: null });
+      expect(restoredAnchor.updated_at).toBeGreaterThan(ANCHOR_TIME);
+      expect(h.published.map(event => event.version.id)).toEqual([h.winner.id, h.live.id]);
+      expect(batch).toHaveBeenCalledTimes(2);
+      expect(put).toHaveBeenCalledTimes(2);
+      // Remove both real competitors' effects; remaining effects belong to the main C restore.
+      effects.clear();
+      batch.mockClear();
+    });
+    const result = await restoreVersion(h.dc, h.principal, h.site, h.target.id);
+    await h.flush();
+    interleaved();
+    expect(result).toMatchObject({ restored: true, alreadyLive: false,
+      version: { id: h.target.id, number: h.target.number, status: "ready", live: true } });
+    expect(batch, "one value-CAS attempt, no history-generation retry").toHaveBeenCalledTimes(1);
+    expect(await batch.mock.results[0]!.value).toMatchObject([{ meta: { changes: 1 } }]);
+    const after = await bindingSnapshot();
+    expect(after.sites).toEqual(before.sites.map(site => site.id === h.site.id
+      ? { ...site, current_version_id: h.target.id, updated_at: after.sites.find(row => row.id === site.id)!.updated_at }
+      : site));
+    expect(after.sites.find(site => site.id === h.site.id)!.updated_at).toBeGreaterThan(ANCHOR_TIME);
+    expect(after.cache.filter(([slug]) => slug !== SLUG)).toEqual(before.cache.filter(([slug]) => slug !== SLUG));
+    expect(after.versions).toEqual(before.versions);
+    expect(after.files).toEqual(before.files);
+    expect(after.usage).toEqual(before.usage);
+    expect(after.blobs).toEqual(before.blobs);
+    expect(after.scopes).toEqual(before.scopes);
+    const expectedCache = JSON.parse((before.cache.find(([slug]) => slug === SLUG)![1])!);
+    expect(JSON.parse((await env.CACHE.get(`live:${SLUG}`))!)).toEqual({ ...expectedCache,
+      versionId: h.target.id, versionNumber: h.target.number, versionAt: h.target.finalized_at ?? h.target.created_at,
+      files: Object.fromEntries(before.files.filter(file => file.version_id === h.target.id)
+        .map(file => [file.path, [file.sha256, file.size, file.content_type]])),
+    });
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(remove).not.toHaveBeenCalled();
+    expect(vi.mocked(env.FILES.put)).not.toHaveBeenCalled();
+    expect(vi.mocked(env.FILES.delete)).not.toHaveBeenCalled();
+    expect(h.metered).toEqual([]);
+    expect(h.published).toHaveLength(1);
+    expect(h.published[0]).toMatchObject({ kind: "restore", site: { id: h.site.id, slug: SLUG },
+      version: { id: h.target.id, number: h.target.number }, principal: h.principal });
+  });
+});
+
 describe("restore review regressions: diagnostics", () => {
   it("reports original-site absence after a failed fence, not replacement-site conflict metadata", async () => {
     const h = await fixture();
