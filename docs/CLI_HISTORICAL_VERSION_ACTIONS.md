@@ -318,11 +318,20 @@ must merge before a historical-action implementation card starts:
 - **P1 — atomic restore.** Existence, site ownership and expected-live
   compare-and-swap in one batch, reusing the `finalizeDeploy` conditional-update
   and conflict pattern (`packages/core/src/services/deploys.ts`). The expected-live
-  anchor is the service-loaded site row's live pointer, not a CLI-supplied token.
-  A live pointer that moved returns 409 (CLI exit 5, no retry), including a move
-  to the requested target: the achieved state is not this request's replay
-  receipt, so the caller makes a fresh intentional invocation instead. A target
-  deleted between check and flip must fail, never leave a dangling pointer.
+  anchor is the freshly service-loaded site row's live pointer, not a CLI-supplied
+  token. Compare its **value at the atomic fence**, including exact NULL: a value
+  different from the anchor returns 409 (CLI exit 5, no retry), even if it equals
+  the requested target. The achieved state is not this request's replay receipt;
+  the caller makes a fresh intentional invocation instead. **A→B→A may succeed**
+  when the value is back at the anchor and all other predicates hold. This is not
+  mutation-generation/history-sensitive fencing or proof that no writer ran;
+  timestamps are not a generation substitute. Entry already-live stays write-free.
+  Preserve the incoming service site ID through normal authorized reload, refusing
+  a replacement identity with a non-disclosing 404 before target lookup or no-op
+  metadata. This guard binds one service invocation, not separate CLI requests or
+  raw-ID resolution end to end; it does not add slug CAS or rename/event receipt
+  guarantees. A target deleted between check and flip must fail, never leave a
+  dangling pointer.
 - **P2 — atomic delete and confirm parity.** Fence the entire deleting batch
   on the target still being non-live and belonging to the authorized original
   active site. Refusal leaves manifest rows, version rows and usage unchanged,

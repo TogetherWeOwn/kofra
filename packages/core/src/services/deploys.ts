@@ -723,7 +723,11 @@ const RESTORE_CONFLICT_HINT =
 
 /** Make an older finalized version live again (a pointer flip; no files are copied). */
 export async function restoreVersion(dc: DropwayContext, p: Principal, site: SiteRow, versionId: string, opts?: { symbolicLive?: boolean }) {
+  const originalSiteId = site.id;
   site = await getSiteFor(dc, p, site.slug, "sites:write");
+  if (site.id !== originalSiteId) {
+    throw notFound("site_not_found", `No site "${site.slug}" that this key can access.`, "List your sites with GET /api/v1/sites.");
+  }
   if (site.mode === "transfer") throw conflict("transfer_immutable", "Transfer files cannot be restored.", "Create a new transfer instead.");
   // A symbolic "live" ref must resolve against this fresh anchor, never against the id a
   // caller resolved from an older snapshot: that stale id would flip a moved pointer back.
