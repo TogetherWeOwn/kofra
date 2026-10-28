@@ -25,6 +25,9 @@ const slug = "viewer-phone-public";
 const gatedSlug = "viewer-phone-locked";
 const hostilePath = 'folder/雪 & <phone> "quote" #?.md';
 const longPath = `${"雪".repeat(190)}.md`;
+// With the local origin and site prefix this is 157 canonical ASCII bytes:
+// large enough to expose subpixel module sizing in the displayed QR.
+const screenDecodePath = `${"screen-".repeat(15)}scan.md`;
 let work: string;
 let origin: string;
 let ownerKey: string;
@@ -75,6 +78,7 @@ beforeAll(async () => {
       { path: "notes.md", content: "# Open this file on a phone\n\nDisposable fixture.\n" },
       { path: hostilePath, content: "# Hostile but inert filename\n" },
       { path: longPath, content: "# Long public URL\n" },
+      { path: screenDecodePath, content: "# Decode the on-screen public URL\n" },
     ] });
   }
   await api(`/api/v1/sites/${gatedSlug}/access`, { mode: "password", password }, "PUT");
@@ -90,8 +94,8 @@ afterAll(async () => {
 
 const fileUrl = (name = slug, path = "notes.md") => `${origin}/s/${name}/${path.split("/").map(encodeURIComponent).join("/")}`;
 
-async function visit(url: string, options: { js?: boolean; width?: number; cookie?: string; expectedStatus?: number } = {}) {
-  const context = await browser.newContext({ javaScriptEnabled: options.js ?? false, viewport: { width: options.width ?? 360, height: 800 } });
+async function visit(url: string, options: { js?: boolean; width?: number; height?: number; cookie?: string; expectedStatus?: number } = {}) {
+  const context = await browser.newContext({ javaScriptEnabled: options.js ?? false, deviceScaleFactor: 1, viewport: { width: options.width ?? 360, height: options.height ?? 800 } });
   if (options.cookie) await context.addCookies([{ name: options.cookie.split("=")[0]!, value: options.cookie.slice(options.cookie.indexOf("=") + 1), url: origin }]);
   const wire: string[] = [];
   const errors: string[] = [];
@@ -164,6 +168,28 @@ async function decodeSvg(svg: string): Promise<string> {
       return Array.from(ctx.getImageData(0, 0, 768, 768).data as Iterable<number>);
     }, svg);
     return decodePixels(pixels, 768, 768).payload;
+  } finally { await decoder.close(); }
+}
+
+// Decode the element screenshot at its displayed dimensions, not a larger SVG
+// redraw. Only PNG unpacking happens on the blank page; no resize or smoothing
+// can repair the actual DPR-1 pixels that the person sees in the viewer.
+async function decodeOnScreen(svg: Locator) {
+  const png = await svg.screenshot({ type: "png" });
+  const decoder = await browser.newPage();
+  try {
+    const pixels = await decoder.evaluate(async source => {
+      const g = globalThis as any;
+      const image = new g.Image();
+      image.src = "data:image/png;base64," + source;
+      await image.decode();
+      const canvas = g.document.createElement("canvas");
+      canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(image, 0, 0);
+      return { width: canvas.width, height: canvas.height, data: Array.from(ctx.getImageData(0, 0, canvas.width, canvas.height).data as Iterable<number>) };
+    }, png.toString("base64"));
+    return { ...decodePixels(pixels.data, pixels.width, pixels.height), width: pixels.width, height: pixels.height };
   } finally { await decoder.close(); }
 }
 
@@ -276,6 +302,67 @@ it("keyboard disclosure and its URL remain inside a 320px viewport with JavaScri
     if (tag === "summary") { await control.focus(); await view.page.keyboard.press("Enter"); }
     else { const id = await control.getAttribute("for"); await view.page.locator(`input[id="${id}"]`).focus(); await view.page.keyboard.press("Space"); }
     expect(await svg.isVisible()).toBe(false);
+  } finally { await view.context.close(); }
+});
+
+it("decodes a 150–160-byte canonical URL from the actual displayed QR at DPR 1", async () => {
+  const clean = fileUrl(slug, screenDecodePath);
+  expect(Buffer.byteLength(clean, "utf8")).toBeGreaterThanOrEqual(150);
+  expect(Buffer.byteLength(clean, "utf8")).toBeLessThanOrEqual(160);
+  const view = await visit(`${clean}?view=1&token=not-public`, { js: false, width: 360 });
+  try {
+    const svg = await openPhone(view.page);
+    expect(await view.page.evaluate(() => (globalThis as any).devicePixelRatio)).toBe(1);
+    const modules = await svg.evaluate(el => (el as unknown as { viewBox: { baseVal: { width: number } } }).viewBox.baseVal.width);
+    expect(modules).toBeGreaterThanOrEqual(70);
+    const box = (await svg.boundingBox())!;
+    const screenshot = await decodeOnScreen(svg);
+    expect(screenshot.payload).toBe(clean);
+    // Screenshot clips round fractional element coordinates outwards, which
+    // can add one edge pixel without changing the displayed scale.
+    expect(screenshot.width).toBeGreaterThanOrEqual(box.width);
+    expect(screenshot.width).toBeLessThanOrEqual(Math.ceil(box.width) + 1);
+    expect(screenshot.height).toBeGreaterThanOrEqual(box.height);
+    expect(screenshot.height).toBeLessThanOrEqual(Math.ceil(box.height) + 1);
+    expect(box.width / modules, "displayed QR modules must occupy whole CSS pixels").toBe(Math.floor(box.width / modules));
+    await assertPlainLink(view.page, clean);
+    expect(view.errors).toEqual([]);
+  } finally { await view.context.close(); }
+});
+
+it.each([[568, 320], [480, 240]])("exposes the whole no-script QR inside a %i×%i panel scrollport", async (width, height) => {
+  const clean = fileUrl(slug, screenDecodePath);
+  const view = await visit(`${clean}?view=1`, { js: false, width, height });
+  try {
+    const svg = await openPhone(view.page);
+    const geometry = await svg.evaluate(el => {
+      const image = el as unknown as { viewBox: { baseVal: { width: number } }; getBoundingClientRect(): { width: number; height: number }; closest(selector: string): any };
+      const panel = image.closest(".dw-phone-panel");
+      const box = image.getBoundingClientRect();
+      return { width: box.width, height: box.height, modules: image.viewBox.baseVal.width, clientHeight: panel.clientHeight };
+    });
+    expect(geometry.clientHeight).toBeGreaterThan(0);
+    expect(geometry.height, "a QR taller than the scrollport can never be exposed in full").toBeLessThanOrEqual(geometry.clientHeight);
+    const pixelsPerModule = geometry.width / geometry.modules;
+    expect(pixelsPerModule).toBeGreaterThanOrEqual(1);
+    expect(pixelsPerModule, "viewport fitting must not blur modules through fractional sizing").toBe(Math.floor(pixelsPerModule));
+    // Native scrolling must be able to expose the complete code, including
+    // its quiet zone; DOM presence alone cannot prove it fits the clip.
+    await svg.scrollIntoViewIfNeeded();
+    const exposure = await svg.evaluate(el => {
+      const g = globalThis as any;
+      const panel = el.closest(".dw-phone-panel") as any;
+      const image = el.getBoundingClientRect();
+      const box = panel.getBoundingClientRect();
+      return { top: image.top, bottom: image.bottom, panelTop: box.top + panel.clientTop, panelBottom: box.top + panel.clientTop + panel.clientHeight, viewportHeight: g.innerHeight };
+    });
+    // Native scroll offsets and clientHeight round to integer CSS pixels;
+    // fractional panel coordinates can differ by less than one edge pixel.
+    expect(exposure.top).toBeGreaterThanOrEqual(exposure.panelTop - 1);
+    expect(exposure.bottom).toBeLessThanOrEqual(exposure.panelBottom + 1);
+    expect(exposure.bottom).toBeLessThanOrEqual(exposure.viewportHeight);
+    await assertPlainLink(view.page, clean);
+    expect(view.errors).toEqual([]);
   } finally { await view.context.close(); }
 });
 

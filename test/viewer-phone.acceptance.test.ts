@@ -223,16 +223,68 @@ describe("viewer Phone: site-origin topology", () => {
     await expectPhone(await res.text(), clean);
   });
 
-  it("does not advertise a Phone handoff on a preview-shaped address", async () => {
+  it.each([
+    { name: "app-path", config: { appOrigin: ORIGIN } },
+    { name: "separate-sites-path", config: { appOrigin: ORIGIN, sitesOrigin: "https://sites.example" } },
+    { name: "subdomain", config: { appOrigin: ORIGIN, sitesMode: "subdomain" as const, sitesDomain: "sites.test" } },
+  ])("omits Phone from a real capability-authorized Markdown preview in $name mode", async ({ config }) => {
+    const dw = await freshInstance(config);
+    const original = await dw.json("/api/v1/publish", {
+      key: dw.ownerKey, ...jsonBody({ slug: "phone-preview", files: [{ path: "notes.md", content: "# Historical preview sentinel\n" }] }),
+    });
+    expect(original.status).toBe(201);
+    expect(original.body.versionUrl).toEqual(expect.any(String));
+    const capability = new URL(original.body.versionUrl);
+    expect(capability.searchParams.get("dw_preview")).toBeTruthy();
+    const latest = await dw.json("/api/v1/publish", {
+      key: dw.ownerKey, ...jsonBody({ slug: "phone-preview", files: [{ path: "notes.md", content: "# Current live sentinel\n" }] }),
+    });
+    expect(latest.status).toBe(200);
+
+    // Redeem the actual publish-issued grant without an API key, and then
+    // render with only its cookie. Neither an error page nor the current
+    // public version can satisfy the historical viewer assertions below.
+    const redeemed = await dw.call(capability.href, { headers: NAV });
+    expect([302, 303, 307]).toContain(redeemed.status);
+    const cookie = redeemed.headers.get("set-cookie");
+    expect(cookie).toBeTruthy();
+    expect(cookie).toContain("HttpOnly");
+    const location = redeemed.headers.get("location");
+    expect(location).toBeTruthy();
+    const cleanRoot = new URL(location!, capability);
+    expect(cleanRoot.origin).toBe(capability.origin);
+    expect(cleanRoot.searchParams.has("dw_preview")).toBe(false);
+    const previewFile = new URL("notes.md", cleanRoot).href;
+    const unauthorized = await dw.call(previewFile, { headers: NAV });
+    expect(unauthorized.status).toBe(404);
+    const preview = await dw.call(previewFile, { headers: { ...NAV, Cookie: cookie!.split(";")[0]! } });
+    expect(preview.status).toBe(200);
+    expect(preview.headers.get("x-kofra-viewer")).toBe("markdown");
+    expect(preview.headers.get("cache-control")).toContain("no-store");
+    const html = await preview.text();
+    expect(html).toContain("Historical preview sentinel");
+    expect(html).not.toContain("Current live sentinel");
+    expect(qrSvg(html)).toBeUndefined();
+    expect(html).not.toContain('class="dw-phone"');
+    expect((await elementTexts(html, "summary")).some(text => /\bPhone\b/i.test(text))).toBe(false);
+    expect(html).not.toContain(capability.searchParams.get("dw_preview")!);
+
+    const publicFile = new URL("notes.md", latest.body.url).href;
+    const live = await dw.call(publicFile, { headers: NAV });
+    expect(live.status).toBe(200);
+    const liveHtml = await live.text();
+    expect(liveHtml).toContain("Current live sentinel");
+    await expectPhone(liveHtml, publicFile);
+  });
+
+  it("does not advertise a Phone handoff on an unauthorized preview address", async () => {
     const dw = await freshInstance();
     const published = await dw.json("/api/v1/publish", {
       key: dw.ownerKey, ...jsonBody({ slug: "phone-preview", files: [{ path: "notes.md", content: "# Public file\n" }] }),
     });
     expect(published.status).toBe(201);
     const res = await dw.call("/s/phone-preview--v1/notes.md?view=1&dw_preview=not-a-grant", { headers: NAV });
-    // This baseline does not expose version previews. An eventual authenticated
-    // preview must retain the no-preview-QR policy rather than encode its grant.
-    expect([200, 403, 404]).toContain(res.status);
+    expect(res.status).toBe(404);
     const html = await res.text();
     expect(qrSvg(html)).toBeUndefined();
     expect(html).not.toMatch(/<(?:summary|label)\b[^>]*>[^<]*Phone/i);
@@ -256,9 +308,9 @@ describe("viewer Phone: validator versions", () => {
 });
 
 describe("viewer Phone: preview guard (direct)", () => {
-  // The served preview-shaped address above never renders a viewer, so it
-  // cannot catch a deleted `--v` guard. Exercise viewerPhone/viewerBar
-  // directly with preview-shaped inputs instead.
+  // Preview identity comes from the authorized router, not URL spelling.
+  // Real previews load the bare site slug; similarly shaped live origins
+  // and path prefixes must not suppress an ordinary public-file handoff.
   const live = (slug: string): LiveSite => ({
     v: 2, siteId: "site_1", slug, tenantId: "t", versionId: "v", spa: false,
     renderMarkdown: true, crossOriginIsolation: false, passwordHash: null,
@@ -266,14 +318,15 @@ describe("viewer Phone: preview guard (direct)", () => {
   });
   // Only the fields viewerPhone/viewerBar read carry meaning; dw and the
   // file readers are inert stubs that those two functions never call.
-  function phoneContext(siteBase: string, rawUrl: string): ViewerContext {
+  function phoneContext(siteBase: string, rawUrl: string, preview?: boolean): ViewerContext {
     const url = new URL(rawUrl);
     const fileUrl = `${siteBase}notes.md`;
     return {
       dw: null as unknown as ViewerContext["dw"],
       request: new Request(url),
       url,
-      live: live(siteBase.replace(/^\/s\//, "").replace(/\/$/, "") || "foo"),
+      live: live("foo"),
+      ...(preview === undefined ? {} : { preview }),
       file: { path: "notes.md", sha256: "0".repeat(64), size: 12, contentType: "text/markdown", kind: "markdown" },
       mode: "view",
       embed: false,
@@ -289,8 +342,8 @@ describe("viewer Phone: preview guard (direct)", () => {
     };
   }
 
-  it("renders no Phone for a preview-shaped site base", () => {
-    const vc = phoneContext("/s/foo--v1/", "https://app.example.test/s/foo--v1/notes.md?view=1");
+  it("renders no Phone for an authorized path preview with the bare live slug", () => {
+    const vc = phoneContext("/s/foo--v1/", "https://app.example.test/s/foo--v1/notes.md?view=1", true);
     expect(viewerPhone(vc)).toBe("");
     const bar = viewerBar(vc, []);
     expect(bar).toContain("Download");
@@ -298,8 +351,8 @@ describe("viewer Phone: preview guard (direct)", () => {
     expect(bar).not.toMatch(/<(?:summary|label)\b[^>]*>[^<]*Phone/);
   });
 
-  it("renders no Phone for a preview-shaped hostname", () => {
-    const vc = phoneContext("/", "https://foo--v1.files.example.test/notes.md?view=1");
+  it("renders no Phone for an authorized subdomain preview with the bare live slug", () => {
+    const vc = phoneContext("/", "https://foo--v1.files.example.test/notes.md?view=1", true);
     expect(viewerPhone(vc)).toBe("");
     const bar = viewerBar(vc, []);
     expect(bar).toContain("Download");
@@ -307,12 +360,16 @@ describe("viewer Phone: preview guard (direct)", () => {
     expect(bar).not.toMatch(/<(?:summary|label)\b[^>]*>[^<]*Phone/);
   });
 
-  it("renders Phone for a non-preview public address (positive control)", () => {
-    const vc = phoneContext("/s/foo/", "https://app.example.test/s/foo/notes.md?view=1");
-    const phone = viewerPhone(vc);
-    expect(phone).toContain("<summary>Phone</summary>");
-    expect(phone).toContain('href="https://app.example.test/s/foo/notes.md"');
-    expect(viewerBar(vc, [])).toContain("dw-phone");
+  it.each([
+    ["/s/foo/", "https://app.example.test/s/foo/notes.md"],
+    ["/", "https://hello.files--v1.example.test/notes.md"],
+    ["/team--v1/foo/", "https://app.example.test/team--v1/foo/notes.md"],
+  ])("renders Phone on live %s regardless of preview-like spelling", async (siteBase, publicUrl) => {
+    for (const preview of [undefined, false]) {
+      const vc = phoneContext(siteBase, `${publicUrl}?view=1`, preview);
+      await expectPhone(viewerPhone(vc), publicUrl);
+      expect(viewerBar(vc, [])).toContain("dw-phone");
+    }
   });
 });
 

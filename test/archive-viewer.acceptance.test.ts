@@ -578,9 +578,9 @@ describe("archive viewer pages", () => {
       const bumpedWarm = await get("archives/version-probe.zip");
       expect(bumpedWarm.headers.get("x-kofra-render-cache")).toBe("memory");
       expect((await get("archives/version-probe.zip", { ...NAV, "If-None-Match": bumpedWarm.headers.get("etag")! })).status).toBe(304);
-      const embed = await get("archives/version-probe.zip?view=1&embed=1", { ...NAV, "If-None-Match": `W/"archive@${version}-${sha}-e"` });
+      const embed = await get("archives/version-probe.zip?view=1&embed=1", { ...NAV, "If-None-Match": `W/"archive@${version}-${sha}-chrome1-e"` });
       expect(embed.status).toBe(200);
-      expect(embed.headers.get("etag")).toBe(`W/"archive@${version + 1}-${sha}-e"`);
+      expect(embed.headers.get("etag")).toBe(`W/"archive@${version + 1}-${sha}-chrome1-e"`);
 
       // Drop only isolate memory: the bumped version must also have its own edge-cache fragment.
       clearRenderMemoryCache();
