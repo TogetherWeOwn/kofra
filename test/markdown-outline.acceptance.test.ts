@@ -471,13 +471,13 @@ describe("Markdown contents outline in workerd", () => {
     expect(entriesA).toEqual(entriesB);
   });
 
-  it("retires the markdown@2 render identity (viewer version bumped)", () => {
-    expect(markdownViewer.version).toBeGreaterThan(2);
+  it("retires both previous render identities (viewer version bumped)", () => {
+    expect(markdownViewer.version).toBeGreaterThan(3);
   });
 
-  it.each(["memory", "edge"])("cannot reuse a legacy markdown@2 outline-free fragment from %s", async (tier) => {
+  it.each([["memory", 2], ["edge", 2], ["memory", 3], ["edge", 3]] as const)("cannot reuse a legacy fragment from %s at markdown@%i", async (tier, version) => {
     const hash = await sha256Hex(new TextEncoder().encode(fixtures["two.md"]!));
-    const legacyKey = `markdown@2/${hash}`;
+    const legacyKey = `markdown@${version}/${hash}`;
     const url = `${ORIGIN}/s/${slug}/two.md`;
     const oldHtml = '<!--title:First Report--><h1 id="first-report">First Report</h1><p>LEGACY_NO_OUTLINE</p>';
     await caches.default.delete(new Request(`${ORIGIN}/__dropway/render/${legacyKey}`));
@@ -510,7 +510,11 @@ describe("Markdown contents outline in workerd", () => {
     expect(res.status).toBe(200);
     const etag = res.headers.get("etag")!;
     expect(etag).not.toBe(legacy);
-    expect(etag).toMatch(/^W\/"markdown@\d+-[a-f0-9]{64}"$/);
+    expect(etag).toBe(`W/"markdown@${markdownViewer.version}-${hash}-folder${res.headers.get("x-kofra-version")}"`);
+    const baseEtag = etag.replace(`markdown@${markdownViewer.version}-`, "markdown@3-");
+    const staleBase = await get("two.md", { ...NAV, "If-None-Match": baseEtag });
+    expect(staleBase.status).toBe(200);
+    expect(outlineEntries(await staleBase.text()).map((e) => e.href)).toEqual(["#first-report", "#second-section"]);
     expect(outlineEntries(await res.text()).map((e) => e.href)).toEqual(["#first-report", "#second-section"]);
     const fresh = await get("two.md", { ...NAV, "If-None-Match": etag });
     expect(fresh.status).toBe(304);

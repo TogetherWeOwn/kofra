@@ -17,6 +17,14 @@ export interface Instance {
 export async function freshInstance(config: ConfigOverrides = {}, extra: Omit<CreateDropwayOptions, "config"> = {}): Promise<Instance> {
   await reset();
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
+  // Diagnostic for the intermittent setup 409: record whether reset left a
+  // tenant behind. A count above zero here means dirty storage; zero here
+  // with a setup refusal below means a tenant appeared between this check
+  // and setup. Fail with the count either way - never retry or accept it.
+  const tenantsAfterReset = (await env.DB.prepare("SELECT COUNT(*) AS n FROM tenants").first<{ n: number }>())?.n ?? 0;
+  if (tenantsAfterReset !== 0) {
+    throw new Error(`freshInstance: ${tenantsAfterReset} tenant(s) present immediately after reset/migrations, before setup`);
+  }
   clearLiveMemoryCache();
   const dropway = createDropway({ config, ...extra });
 
@@ -43,7 +51,7 @@ export async function freshInstance(config: ConfigOverrides = {}, extra: Omit<Cr
   };
 
   const setup = await json("/api/v1/setup", { method: "POST", key: BOOTSTRAP, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "owner@example.com" }) });
-  if (setup.status !== 201) throw new Error(`setup failed: ${setup.status} ${JSON.stringify(setup.body)}`);
+  if (setup.status !== 201) throw new Error(`setup failed: ${setup.status} ${JSON.stringify(setup.body)} (tenants immediately after reset/migrations: ${tenantsAfterReset})`);
   return { dropway, ownerKey: setup.body.apiKey.key, call, json };
 }
 

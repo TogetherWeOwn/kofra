@@ -8,7 +8,7 @@ import { sanitizeHtml } from "./sanitize";
 
 // Bump whenever the rendered output changes: this retires cached fragments
 // and render ETags keyed `markdown@<version>/...`.
-const MD_VERSION = 3;
+const MD_VERSION = 4;
 
 /** How many headings the contents outline lists at most; the body is never cut. */
 const MAX_OUTLINE_HEADINGS = 200;
@@ -293,6 +293,7 @@ export const markdownViewer: Viewer = {
     if (m) title = m[1]!.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
     return viewerPage(vc, {
       title,
+      print: true,
       tabs: standardTabs(vc, { source: true }),
       css: MD_CSS + HIGHLIGHT_CSS,
       body: `<article class="dw-md">${m ? r.html.slice(m[0].length) : r.html}</article>`,

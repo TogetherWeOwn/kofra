@@ -8,7 +8,8 @@ import { contentTypeFor, normaliseContentType } from "../lib/mime";
 import { normaliseFilePath, stripCommonRoot } from "../lib/paths";
 import type { Principal } from "../principal";
 import { blobScope, putVerifiedBlob } from "./blobs";
-import { createDeploy, finalizeDeploy, parseDeployOptions, precheckManifest } from "./deploys";
+import { createDeploy, deployWarnings, finalizeDeploy, parseDeployOptions, precheckManifest, type Warning } from "./deploys";
+import { versionPreviewUrl } from "./previews";
 import { createSite, discardNewSite, findSite, getSiteFor, parseSettings, serializeSite, updateSite, type SiteRow, type VersionRow } from "./sites";
 
 /** A file held in memory for one-shot publishing. */
@@ -44,7 +45,7 @@ function isZip(bytes: Uint8Array): boolean {
 export async function parsePublishRequest(dc: DropwayContext, req: Request, maxBytes: number): Promise<PublishInput> {
   const url = new URL(req.url);
   const len = Number(req.headers.get("content-length") ?? "0");
-  const hint = "Use the manifest flow for bigger sites: POST /api/v1/sites/:slug/deploys, PUT /api/v1/blobs/:sha256, POST .../finalize.";
+  const hint = "Use the manifest flow for bigger sites: POST /api/v1/sites/:slug/versions, PUT /api/v1/blobs/:sha256, POST .../finalize.";
   if (len > maxBytes) throw tooLarge("request_too_large", `One-shot publish accepts up to ${maxBytes} bytes per request.`, hint, { limit: maxBytes });
   const fields: Record<string, unknown> = {};
   for (const k of META_FIELDS) {
@@ -230,7 +231,8 @@ async function publishToTarget(
   });
 
   let uploaded = 0;
-  let warnings: Array<{ code: string; message: string }> = [];
+  // An unchanged republish still reports the live version's warnings, like finalize does.
+  let warnings: Warning[] = deploy.unchanged ? await deployWarnings(dc, site, deploy.deploy.id) : [];
   let versionId = deploy.deploy.id;
   if (!deploy.unchanged) {
     const missing = new Set(deploy.missing);
@@ -253,6 +255,7 @@ async function publishToTarget(
   const described = serializeSite(dc, site, version);
   return {
     url: siteUrl(dc, site.slug),
+    versionUrl: await versionPreviewUrl(dc, actor, site, version!),
     slug: site.slug,
     created: target.created,
     unchanged: deploy.unchanged,
