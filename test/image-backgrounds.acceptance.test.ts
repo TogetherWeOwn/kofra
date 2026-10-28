@@ -55,20 +55,22 @@ describe("image stage backgrounds: public serving contracts", () => {
     }
   });
 
-  it.each(["light.png", "light.svg"])("%s rejects pre-background version-2 validators, then revalidates the new page", async path => {
-    for (const suffix of ["", "?view=1&embed=1"]) {
-      const first = await get(path + suffix);
-      const etag = first.headers.get("etag")!;
-      expect(etag).toMatch(/^W\/"(?:image|svg)@\d+-/);
-      // Baseline a67a648 uses version 2 for both viewers. Preserve the same
-      // bytes, sibling context, URL and embed suffix; retire only the old view.
-      const former = etag.replace(/@\d+-/, "@2-");
-      const conditional = await get(path + suffix, { ...NAV, "If-None-Match": former });
-      expect(conditional.status, `former validator ${former} must not retain the checker-only page`).toBe(200);
-      expect(conditional.headers.get("etag")).not.toBe(former);
-      expect(await nativeChoiceTexts(await conditional.text())).toEqual(expect.arrayContaining(CHOICES));
-      expect((await get(path + suffix, { ...NAV, "If-None-Match": etag })).status).toBe(304);
-    }
+  it.each(["light.png", "light.svg"].flatMap(path =>
+    ["", "?view=1&embed=1"].flatMap(suffix =>
+      [2, 3].map(version => ({ path, suffix, version })),
+    ),
+  ))("$path (suffix $suffix) rejects pre-background version-$version validators, then revalidates the new page", async ({ path, suffix, version }) => {
+    const first = await get(path + suffix);
+    const etag = first.headers.get("etag")!;
+    expect(etag).toMatch(/^W\/"(?:image|svg)@\d+-/);
+    // Baseline a67a648 used version 2; immediate base 319e1d1 used version 3
+    // for both viewers. Preserve bytes, sibling context, URL and embed suffix.
+    const former = etag.replace(/@\d+-/, `@${version}-`);
+    const conditional = await get(path + suffix, { ...NAV, "If-None-Match": former });
+    expect(conditional.status, `former validator ${former} must not retain the checker-only page`).toBe(200);
+    expect(conditional.headers.get("etag")).not.toBe(former);
+    expect(await nativeChoiceTexts(await conditional.text())).toEqual(expect.arrayContaining(CHOICES));
+    expect((await get(path + suffix, { ...NAV, "If-None-Match": etag })).status).toBe(304);
   });
 
   it.each(imageBackgroundFiles)("$path keeps the existing read budget without decoding or fetching pixels", async file => {
