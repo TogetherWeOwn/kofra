@@ -6,7 +6,7 @@
  * the builder makes them pass without editing this file.
  *
  * Viewer contract (builder: implement exactly this):
- * - id "archive", version 2 (shared-bar sibling navigation). Matches file.kind === "archive" for every view
+ * - id "archive", version 3 (Phone disclosure). Matches file.kind === "archive" for every view
  *   mode except "source" (document, frame, view). ?view=source on an archive
  *   keeps returning the raw bytes because no viewer matches it.
  * - Over-cap, corrupt and non-ZIP archives render THROUGH the archive viewer
@@ -23,8 +23,8 @@
  * - Caps: MAX_ARCHIVE_BYTES = 2 MiB parsed, MAX_ENTRIES = 1000 rows shown.
  *   Past the entry cap: "Showing the first 1,000 of N entries".
  * - Cache like every viewer: cachedRender keyed with id + version
- *   ("archive@2/..."), X-Kofra-Render-Cache header; ETag W/"archive@2-<sha>-<manifest>"
- *   (or W/"archive@2-<sha>-e" for &embed=1) so a version bump invalidates old renders.
+ *   ("archive@3/..."), X-Kofra-Render-Cache header; ETag W/"archive@3-<sha>-<manifest>"
+ *   (or W/"archive@3-<sha>-e" for &embed=1) so a version bump invalidates old renders.
  * - Escape entry names as text; make no external requests (relative links
  *   plus the absolute app-origin Files link only).
  * - Review pins: the counts line totals the complete directory past the
@@ -247,10 +247,10 @@ describe("archive viewer selection", () => {
     expect(pick("a.bin", "document")).toBeNull();
   });
 
-  it("pins id, version 2, and fallback-through matching past the size cap", () => {
+  it("pins id, version 3, and fallback-through matching past the size cap", () => {
     const archive = VIEWERS.find((v) => v.id === "archive");
     expect(archive).toBeDefined();
-    expect(archive!.version).toBe(2);
+    expect(archive!.version).toBe(3);
     // Over-cap files still match: the fallback info page renders through the
     // archive viewer itself (x-kofra-viewer stays "archive").
     const huge = toViewerFile("big.zip", "0".repeat(64), 100 * 1024 * 1024, contentTypeFor("big.zip"));
@@ -533,7 +533,7 @@ describe("archive viewer pages", () => {
     expect(second.headers.get("x-kofra-render-cache")).toBe("memory");
 
     const etag = second.headers.get("etag")!;
-    expect(etag).toMatch(new RegExp(`^W/"archive@2-${sha}-[A-Za-z0-9_-]+"$`));
+    expect(etag).toMatch(new RegExp(`^W/"archive@3-${sha}-[A-Za-z0-9_-]+"$`));
     expect((await get("archives/cache-probe.zip", { ...NAV, "If-None-Match": etag })).status).toBe(304);
     expect((await get("archives/cache-probe.zip", { ...NAV, "If-None-Match": `W/"archive@1-${sha}"` })).status).toBe(200);
     // This checks viewer identity, not a version bump (covered separately below).
@@ -559,7 +559,7 @@ describe("archive viewer pages", () => {
       const sha = await shaOf(files["archives/version-probe.zip"]!);
       const first = await get("archives/version-probe.zip");
       expect(first.status).toBe(200);
-      expect(first.headers.get("etag")).toMatch(new RegExp(`^W/"archive@2-${sha}-[A-Za-z0-9_-]+"$`));
+      expect(first.headers.get("etag")).toMatch(new RegExp(`^W/"archive@3-${sha}-[A-Za-z0-9_-]+"$`));
       expect(first.headers.get("x-kofra-render-cache")).toBe("miss");
       expect(await first.text()).toContain("version-probe.txt");
       const warm = await get("archives/version-probe.zip");

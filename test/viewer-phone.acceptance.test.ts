@@ -27,7 +27,10 @@ const media = {
   "vector/shape.svg": '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1"/></svg>\n',
   "raster/pixel.png": "not really a png; the image viewer renders without dimensions\n",
 };
-const fixtures: Record<string, string> = { ...files, ...media };
+const fixtures: Record<string, string> = { ...files, ...media,
+  "sample.pdf": "%PDF-1.4 fixture", "sample.mp4": "video fixture",
+  "sample.mp3": "audio fixture", "sample.woff2": "font fixture", "sample.zip": "invalid zip fixture",
+};
 
 // Extract an actual image, not an unrelated icon or a text mention of QR.
 function qrSvg(html: string): string | undefined {
@@ -151,7 +154,7 @@ describe("viewer Phone: served public-file contract", () => {
   // without Phone: merged markup differs from both parents, so it needs @4.
   it.each([
     ["notes.md", "markdown", 3, 4], ["data.json", "json", 2, 4], ["data.json", "json", 3, 4],
-    ["table.csv", "csv", 3, 4], ["plain.txt", "code", 3, 4], ["page.html", "html-frame", 1, 2],
+    ["table.csv", "csv", 3, 4], ["plain.txt", "code", 3, 4], ["page.html", "html-frame", 1, 3],
     ["vector/shape.svg", "svg", 3, 4], ["raster/pixel.png", "image", 3, 4],
   ] as const)("invalidates the pre-Phone %s %s@%i validator, then correctly revalidates refreshed markup", async (path, id, oldVersion, newVersion) => {
     const hash = await sha256Hex(new TextEncoder().encode(fixtures[path]));
@@ -165,6 +168,24 @@ describe("viewer Phone: served public-file contract", () => {
     const conditional = await dw.call(`${root}${path}?view=1`, { headers: { ...NAV, "If-None-Match": etag } });
     expect(conditional.status).toBe(304);
     expect(await conditional.text()).toBe("");
+  });
+
+  // Preserve the manifest-dependent suffix from the actual response: old
+  // validators included it, so a suffix-free synthetic tag cannot prove a refresh.
+  it.each([
+    ["page.html", "html-frame"], ["sample.pdf", "pdf"],
+    ["sample.mp4", "video"], ["sample.mp3", "audio"],
+    ["sample.woff2", "font"], ["sample.zip", "archive"],
+  ] as const)("refreshes the actual pre-Phone %s %s@2 validator", async (path, id) => {
+    const first = await dw.call(`${root}${path}?view=1`, { headers: NAV });
+    expect(first.status).toBe(200);
+    const current = first.headers.get("etag")!;
+    expect(current).toMatch(new RegExp(`^W/"${id}@3-`));
+    const legacy = current.replace(`${id}@3-`, `${id}@2-`);
+    const refreshed = await dw.call(`${root}${path}?view=1`, { headers: { ...NAV, "If-None-Match": legacy } });
+    expect(refreshed.status).toBe(200);
+    await expectPhone(await refreshed.text(), `${ORIGIN}${root}${path}`);
+    expect((await dw.call(`${root}${path}?view=1`, { headers: { ...NAV, "If-None-Match": current } })).status).toBe(304);
   });
 
   it("keeps the existing viewer CSP script, style and network restrictions", async () => {
@@ -225,8 +246,8 @@ describe("viewer Phone: validator versions", () => {
   // (which would strand cached pre-Phone pages on a 304) fails here.
   it("pins every built-in viewer at its exact post-Phone version", () => {
     const expected: Record<string, number> = {
-      source: 4, "html-frame": 2, markdown: 4, notebook: 3, json: 4, csv: 4,
-      svg: 4, image: 4, pdf: 2, video: 2, audio: 2, font: 2, archive: 2,
+      source: 4, "html-frame": 3, markdown: 4, notebook: 3, json: 4, csv: 4,
+      svg: 4, image: 4, pdf: 3, video: 3, audio: 3, font: 3, archive: 3,
       code: 4, binary: 4,
     };
     expect(VIEWERS.map((v) => v.id).sort()).toEqual(Object.keys(expected).sort());
