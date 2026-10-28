@@ -213,6 +213,7 @@ export function containOutputMarkup(html: string): string {
   const open = new Open();
   const close = new Ahead(html, "-->");
   const bang = new Ahead(html, "--!>");
+  const cdataClose = new Ahead(html, "]]>");
   // Dropped elements we are inside, outermost first; `depth` counts nested tags of the same name.
   const regions: Array<{ name: string; depth: number }> = [];
   let i = 0;
@@ -245,6 +246,19 @@ export function containOutputMarkup(html: string): string {
     const c1 = html[i + 1];
     const closing = c1 === "/";
     if (c1 === "!" || c1 === "?" || (closing && !isAlpha(html[i + 2]))) {
+      // A CDATA opener must never reach the sanitizer: in foreign content its
+      // tokenizer reads to "]]>", so an unfinished section would swallow the
+      // generated closers and everything after them, and exactly where foreign
+      // content starts follows the element stack in ways this fragment scan
+      // cannot mirror. Spell the whole section out as text; an unfinished one
+      // discards the rest of the fragment, like an unfinished comment.
+      if (html.startsWith("<![CDATA[", i)) {
+        const cd = cdataClose.find(i + 9);
+        if (cd < 0) break;
+        out.push(html.slice(i, cd + 3).split("<").join(esc));
+        i = cd + 3;
+        continue;
+      }
       const end = commentEnd(html, i, close, bang);
       // The sanitizer removes comments. Discard an unfinished one here so it
       // cannot consume the generated wrappers and subsequent outputs.
