@@ -3,16 +3,17 @@ import type { DropwayContext } from "../context";
 /**
  * The "live manifest": everything the edge needs to serve a site, cached in KV
  * under live:<slug>. D1 is the source of truth; KV is rewritten on every change
- * (finalize, restore, settings, claim, delete) and rebuilt from D1 on a miss.
+ * (finalize, restore, settings, claim, delete); misses are read from D1.
  * Files are stored compactly as path -> [sha256, size, contentType].
  * v3: filename maps are prototype-less, so legal names like __proto__ survive
- * as own keys; older cached entries are treated as a miss and rebuilt from D1.
+ * as own keys; older cached entries are treated as a miss and read from D1.
  * v4: adds the live version's number and go-live time (the embeddable badge reads
- * them from this entry, so it costs no extra D1 or R2 read); v3 entries are rebuilt.
+ * them from this entry, so it costs no extra D1 or R2 read).
+ * v5: rejects older entries that may have been poisoned by delayed miss fills.
  */
 export interface LiveSite {
-  /** 2 = stale (rebuilt on read); fresh writes are LIVE_VERSION. */
-  v: 2 | 3 | 4;
+  /** Older versions are stale (read from D1); fresh writes are LIVE_VERSION. */
+  v: 2 | 3 | 4 | 5;
   siteId: string;
   slug: string;
   tenantId: string | null;
@@ -31,7 +32,7 @@ export interface LiveSite {
 
 export const liveKey = (slug: string) => `live:${slug}`;
 
-const LIVE_VERSION = 4;
+const LIVE_VERSION = 5;
 
 /** Copy own file entries into a prototype-less map, preserving an own __proto__ key. */
 function ownFiles(files: LiveSite["files"]): LiveSite["files"] {
@@ -66,7 +67,9 @@ export async function getLiveSite(dc: DropwayContext, slug: string): Promise<Liv
   }
   const live = await loadLiveSiteFromD1(dc, { slug });
   remember(slug, live);
-  if (live) dc.waitUntil(putLive(dc, live).catch(() => {}));
+  // Never fill KV from a miss: this D1 snapshot may have been superseded by a
+  // mutation on another isolate. Only mutations write manifests; miss results
+  // stay in the short-lived memory cache without overwriting newer KV state.
   return live;
 }
 
