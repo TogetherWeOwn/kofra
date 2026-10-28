@@ -3685,7 +3685,7 @@ export function dropwayClient() {
                     try {
                       var ok = await confirmBox({ title: "Delete v" + v.number + "?", message: "The version and its file list are removed for good (use this for a version that leaked something). Other versions are not affected.", confirmText: "Delete version" });
                       if (!ok) return;
-                      await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id), { method: "DELETE" });
+                      await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id), { method: "DELETE", body: { confirm: site.slug } });
                       toast("v" + v.number + " deleted.");
                       // A successful deletion must not reload its now-invalid
                       // explicit link; unrelated inspected versions stay put.

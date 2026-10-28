@@ -828,7 +828,8 @@ const deleteCmd: Command = {
     if (ref) {
       const v = await resolveVersion(client, slug, ref);
       await confirm(io, out, p, slug, `delete version v${v.number} of ${slug}`);
-      const { data } = await client.request("DELETE", `/sites/${enc(slug)}/versions/${enc(v.id)}`);
+      const { site: canonicalSlug } = await getVersionDirect(client, slug, v.id);
+      const { data } = await client.request("DELETE", `/sites/${enc(slug)}/versions/${enc(v.id)}`, { json: { confirm: canonicalSlug } });
       out.result({ ...data, slug, version: v.number }, `Deleted version v${v.number} of ${slug}.`);
       return EXIT.ok;
     }

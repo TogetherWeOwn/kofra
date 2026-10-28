@@ -682,6 +682,8 @@ export interface GetVersionOutput {
 export interface DeleteVersionInput {
   slug: string;
   id: string;
+  /** Must equal the site's slug (destructive confirmation). */
+  confirm: string;
   [key: string]: unknown;
 }
 

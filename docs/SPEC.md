@@ -1201,8 +1201,19 @@ Codes are stable forever.
 | GET | `/api/v1/sites/{site}/versions/{version}` | `get_version` | `sites:read` | P0 | Done (status, counts, missing files; write keys also get fresh upload items) |
 | POST | `/api/v1/sites/{site}/versions/{version}/finalize` (alias `/deploys/{id}/finalize`) | `finalize_version` | `sites:write` | P0 | Done |
 | POST | `/api/v1/sites/{site}/versions/{version}/restore` | `restore_version` | `sites:write` | P0 | Done |
-| DELETE | `/api/v1/sites/{site}/versions/{version}` | `delete_version` | `sites:delete` | P1 | Done |
+| DELETE | `/api/v1/sites/{site}/versions/{version}` | `delete_version` | `sites:delete` | P1 | Done (JSON `confirm` = canonical site slug required) |
 | GET | `/api/v1/sites/{site}/diff?from=&to=` | `diff_versions` | `sites:read` | P1 | R-20 |
+
+Version DELETE requires `Content-Type: application/json` and a body such as
+`{"confirm":"bright-otter-x7k2"}`. This is a breaking change from the bodyless
+DELETE contract. Confirmation is the resolved site's canonical slug, even when
+`{site}` is an ID; missing `confirm` is `400 invalid_request` and a wrong value
+is `400 confirm_mismatch`. MCP uses the same canonical-slug check. The CLI,
+dashboard and generated SDK send confirmation without changing their existing
+prompt behavior. The entire deletion batch refuses if the version is now live,
+missing, on a different site, or the original site is no longer active and
+owned as authorized; manifest rows and usage counters roll back together.
+Pending non-live versions may still be deleted; transfer files may not.
 
 **Access and sharing**
 
