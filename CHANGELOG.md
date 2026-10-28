@@ -14,7 +14,14 @@
 - The cache policy is now the full matrix: gated sites `private, no-store`;
   sites shipping `.wasm` revalidate; fingerprinted build outputs immutable;
   HTML and unfingerprinted files revalidate. A `_headers` `Cache-Control`
-  overrides the non-gated classes.
+  overrides the non-gated classes. Configured redirects revalidate by default,
+  even when their source path looks fingerprinted; only stored files use the
+  immutable asset class. Self-redirect suppression compares the effective URL,
+  including encoded paths and query changes.
+- Authorized version previews use the selected version's hosting rules and the
+  current viewer setting, without reading or repairing the live KV pointer.
+  Preview privacy headers still win over custom headers. Root hosting inputs
+  are also excluded from Previous/Next viewer links; nested names stay ordinary files.
 - Site settings gain `noindex` (X-Robots-Tag plus a generated disallowing
   `robots.txt` when the site ships none; a site's own `robots.txt` is served
   verbatim), `viewers: false` (always serve the stored bytes), and

@@ -125,8 +125,9 @@ characters; anything else becomes a warning. Stored warnings retain their path,
 line and fix details on unchanged publishes and repeated finalization.
 
 Site-config files: after the password gate, `_redirects` rules run before
-file resolution (first non-self match wins; a rule pointing at its own path is
-skipped so later rules still apply and catch-alls cannot loop), and
+file resolution (first non-self match wins; effective URL identity includes the
+site prefix, encoded path and inherited or explicit query, so self targets are
+skipped without suppressing genuine query changes), and
 `_redirects`/`_headers` themselves always answer 404. `_headers` entries apply to file and rendered-viewer responses (including configured
 redirect responses), under the platform security headers, which are applied afterwards
 and win; platform-owned headers (cookies, length, type, validators, CSP, framing,
@@ -134,7 +135,9 @@ and win; platform-owned headers (cookies, length, type, validators, CSP, framing
 cannot be set at all, and a gated site's `Cache-Control` stays
 `private, no-store`. Otherwise the cache matrix is: gated `private, no-store`;
 any site shipping `.wasm` revalidates; fingerprinted build outputs are
-immutable for a year; HTML and other unfingerprinted files revalidate. A
+immutable for a year; HTML and other unfingerprinted files revalidate.
+Configured redirects revalidate regardless of source filename (or stay private/no-store
+when gated); permitted explicit public cache overrides still apply. A
 site's own `robots.txt` is served verbatim; without one, a `noindex` site
 (anonymous, expiring, or the `noindex` setting) gets a generated
 disallow-all and any other site a plain 404 — never a configured redirect or the
@@ -144,10 +147,10 @@ origin, even if a captured splat starts with a slash.
 ### Version previews
 
 `<slug>--v<N>` uses the same path/subdomain topology as the live site, but resolves
-its ready version and current SPA, Markdown, isolation and password settings directly
-from D1 (`services/previews.ts`). The preview manifest does not yet carry parsed
-hosting rules or the `viewers` switch; parity with those live-site settings is a
-separate follow-up. It never reads or repairs the live KV pointer, so newly published bytes are available
+its ready version and current SPA, Markdown, isolation, password and viewer settings
+directly from D1 (`services/previews.ts`). Hosting rules come from the selected
+immutable version's `config_json`, not the live version. It never reads or repairs
+the live KV pointer, so newly published bytes are available
 even during live-cache propagation. Pending versions and transfer sites are not previewable.
 
 Access requires a credential that can read the site or a signed `dw_preview` capability

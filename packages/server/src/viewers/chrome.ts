@@ -1,4 +1,4 @@
-import { encodePath, KIND_LABELS } from "@dropway/core";
+import { encodePath, isSiteConfigPath, KIND_LABELS } from "@dropway/core";
 import { escapeHtml, formatBytes, htmlPage } from "../html";
 import type { ViewerContext } from "./index";
 import { compareNames } from "./listing";
@@ -83,8 +83,8 @@ function siblingLinks(vc: ViewerContext): string {
   const slash = vc.file.path.lastIndexOf("/");
   const dir = vc.file.path.slice(0, slash + 1);
   const names = Object.keys(vc.live.files)
-    // .dropway/* is stored but never served, so listings (and these links) do not name it.
-    .filter((path) => path !== ".dropway" && !path.startsWith(".dropway/"))
+    // Private platform inputs are stored but never served or named in navigation.
+    .filter((path) => path !== ".dropway" && !path.startsWith(".dropway/") && !isSiteConfigPath(path))
     .filter((path) => path.startsWith(dir) && !path.slice(dir.length).includes("/"))
     .map((path) => path.slice(dir.length))
     .sort(compareNames);

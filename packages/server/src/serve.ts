@@ -456,11 +456,9 @@ export async function serveSiteContent(
   // wins (self-looping rules are skipped, so `/* /index.html` style
   // catch-alls cannot loop on their destination). Robots keep their dedicated
   // response below, even when a catch-all matches them (SRV-12).
-  const redirect = filePath === "robots.txt" ? null : findSiteRedirect(live.config, requestPath);
+  const redirect = filePath === "robots.txt" ? null : findSiteRedirect(live.config, requestPath, { url, base: mode.base });
   if (redirect) {
-    let location = redirect.destination.startsWith("/") ? `${mode.base}${redirect.destination.replace(/^\/+/, "")}` : redirect.destination;
-    if (!redirect.destination.includes("?") && url.search) location += url.search;
-    const h = new Headers({ Location: location, "Cache-Control": cacheControlFor(filePath, live) });
+    const h = new Headers({ Location: redirect.destination, "Cache-Control": live.passwordHash ? "private, no-store" : "public, max-age=0, must-revalidate" });
     applySiteHeaders(h, live, requestPath);
     securityHeaders(h, live, mode);
     const response = new Response(null, { status: redirect.rule.status, headers: h });

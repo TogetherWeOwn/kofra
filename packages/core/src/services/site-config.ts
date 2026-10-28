@@ -426,21 +426,23 @@ export function substituteSitePattern(template: string, match: SitePatternMatch)
 }
 
 /**
- * The first redirect rule matching `path` (leading "/"), with its substituted
- * destination. A rule pointing at its own path is skipped so later rules still
- * apply, and `/* /index.html` style catch-alls cannot loop on their destination.
+ * The first matching redirect with its effective Location, including the site
+ * prefix and inherited query. Compare URLs, not decoded paths: encoded self
+ * targets must be skipped, but a genuine query change must still redirect.
  */
 export function findSiteRedirect(
   config: SiteConfig | null | undefined,
   path: string,
+  request: { url: URL; base: string },
 ): { rule: SiteRedirectRule; destination: string } | null {
   if (!config) return null;
   for (const rule of config.redirects) {
     const match = matchSitePattern(rule.from, path);
     if (!match) continue;
-    const destination = substituteSitePattern(rule.to, match);
-    const destinationPath = destination.startsWith("/") ? destination.split("?")[0] : null;
-    if (destinationPath === path) continue;
+    const target = substituteSitePattern(rule.to, match);
+    let destination = target.startsWith("/") ? `${request.base}${target.replace(/^\/+/, "")}` : target;
+    if (!target.includes("?") && request.url.search) destination += request.url.search;
+    if (new URL(destination, request.url).href === request.url.href) continue;
     return { rule, destination };
   }
   return null;
