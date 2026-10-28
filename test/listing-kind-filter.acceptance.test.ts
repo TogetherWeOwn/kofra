@@ -635,6 +635,81 @@ describe("kind filter: empty and no match", () => {
     expect(ariaCurrent(all!)).not.toBeNull();
     expect(ariaCurrent(all!)).not.toBe("false");
   });
+
+  describe("selected kind on folders with no direct files", () => {
+    let encodedFolder: string;
+
+    beforeAll(async () => {
+      // Keep the mixed fixture and its existing totals/byte guards unchanged.
+      const folder = "only & café #1?/";
+      const s = await publishJson(dw, [textFile(`${folder}a/x.txt`, "x"), textFile(`${folder}b/x.txt`, "x")]);
+      encodedFolder = `/s/${s}/${encodePath(folder)}`;
+    });
+
+    // GUARD: selecting a kind must not turn an empty folder into a zero-match
+    // result. Removing either direct-file guard must fail these served-page checks.
+    it.each(["", "size", "type"])("selected PDF keeps the empty-folder state and navigation (sort=%j)", async (sort) => {
+      for (const folder of [`${root}only/`, encodedFolder]) {
+        const page = `${folder}?kind=pdf${sort ? `&sort=${sort}` : ""}`;
+        const { res, html } = await listing(dw, page);
+        expect(res.status, page).toBe(200);
+        expect(res.headers.get("x-kofra-viewer")).toBe("listing");
+        expect(summary(html), page).toBe("2 folders, 0 files · 0 B");
+        expect(counts(html), "empty folders must never say 0 of 0 files").toBeNull();
+        expect(html, page).not.toContain("No files of this kind");
+        expect(galleryNames(html)).toHaveLength(0);
+        expect(html).not.toContain('class="dw-gal"');
+        expect(html).not.toContain("<script");
+        expect(html).not.toContain("<form");
+        const rs = rows(html);
+        expect(rs.filter((r) => !r.isDir)).toHaveLength(0);
+        expect(rs.filter((r) => r.isDir).map((r) => [r.name, r.href])).toEqual([
+          ["a/", `${folder}a/`],
+          ["b/", `${folder}b/`],
+        ]);
+        const parent = anchors(html).filter((a) => a.label === "../");
+        expect(parent, "empty folder must retain its canonical parent escape").toHaveLength(1);
+        expect(parent[0]!.href).toBe("../");
+        expect((await listing(dw, follow(page, parent[0]!.href))).res.status).toBe(200);
+
+        const links = kindLinks(html);
+        expect(links.map((l) => l.label)).toContain("All");
+        expect(links.map((l) => l.label)).toContain(KIND_LABELS.pdf);
+        expect(links.filter((l) => ariaCurrent(l) !== null && ariaCurrent(l) !== "false").map((l) => l.label)).toEqual([KIND_LABELS.pdf]);
+        for (const link of links) {
+          const u = new URL(link.href, `https://dropway.test${page}`);
+          expect(u.origin).toBe("https://dropway.test");
+          expect(u.pathname, `${link.label} must stay in the same encoded folder`).toBe(folder);
+          expect(u.hash).toBe("");
+          expect(u.searchParams.getAll("kind")).toEqual(link.label === "All" ? [] : [idByLabel.get(link.label)]);
+          expect([...u.searchParams.keys()].filter((key) => key !== "kind" && key !== "sort")).toEqual([]);
+          if (sort) expect(u.searchParams.getAll("sort"), `${link.label} must preserve sort=${sort}`).toEqual([sort]);
+          else expect([[], ["name"]]).toContainEqual(u.searchParams.getAll("sort"));
+          expect(link.attrs).not.toMatch(/on\w+\s*=/i);
+          expect(link.attrs).not.toMatch(/tabindex\s*=\s*"-1"/i);
+        }
+        const sortValues = new Map([["Name", "name"], ["Largest first", "size"], ["Type", "type"]]);
+        const sorts = anchors(html).filter((a) => a.index < html.indexOf("</header>") && sortValues.has(a.label));
+        expect(sorts.map((l) => l.label)).toEqual([...sortValues.keys()]);
+        expect(sorts.filter((l) => ariaCurrent(l) !== null && ariaCurrent(l) !== "false").map((l) => l.label)).toEqual([
+          sort ? [...sortValues].find(([, value]) => value === sort)![0] : "Name",
+        ]);
+        for (const link of sorts) {
+          const u = new URL(link.href, `https://dropway.test${page}`);
+          expect(u.origin).toBe("https://dropway.test");
+          expect(u.pathname, `${link.label} must stay in the same encoded folder`).toBe(folder);
+          expect(u.hash).toBe("");
+          expect([...u.searchParams.keys()].sort()).toEqual(["kind", "sort"]);
+          expect(u.searchParams.getAll("sort")).toEqual([sortValues.get(link.label)]);
+          expect(u.searchParams.getAll("kind")).toEqual(["pdf"]);
+        }
+        const pdf = links.find((l) => l.label === KIND_LABELS.pdf)!;
+        const followed = await listing(dw, follow(page, pdf.href));
+        expect(followed.res.status).toBe(200);
+        expect(followed.html, "plain GET of the selected PDF control must keep the empty-folder state").toBe(html);
+      }
+    });
+  });
 });
 
 describe("kind filter: image gallery coherence", () => {
