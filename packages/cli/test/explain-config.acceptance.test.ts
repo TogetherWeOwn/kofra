@@ -529,6 +529,33 @@ describe("single-path mapping is not a mapping inventory (7, 13, 20–21, 29, 36
     expect(probe.reads.every((p) => [link, credentials].includes(p)), "only the two configuration files may be read").toBe(true);
   });
 
+  it("escapes terminal controls in human mapping keys and slugs without changing JSON", async () => {
+    // Include C0, DEL, and C1, including newline and ANSI/OSC introducers.
+    const controls = String.fromCodePoint(...Array.from({ length: 32 }, (_, i) => i), 127, ...Array.from({ length: 32 }, (_, i) => 128 + i));
+    const key = `dir-${controls}-東京`;
+    const slug = `site-${controls}-é`;
+    await putLink({ api: API, sites: { [key]: slug, ordinary: "ordinary-site" } });
+    const args = [key, "--api", API, "--key", API_KEY];
+    const human = await invoke(args);
+    expect(human.code).toBe(0);
+    expect(human.stderr).toBe("");
+    const visible = (value: string) => value.replace(/[\x00-\x1f\x7f-\x9f]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+    expect(human.stdout).toContain(`Mapping: ${visible(key)} -> ${visible(slug)}\n`);
+    expect(human.stdout).not.toMatch(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/);
+    expect(human.stdout.split("\n").filter((line) => line.startsWith("Mapping:"))).toHaveLength(1);
+
+    const json = await invoke([...args, "--json"]);
+    const report = data(json);
+    expect(report.projectLink.mapping).toEqual({ key, slug });
+    // Compare the actual serialized bytes, not only the parsed strings.
+    expect(json.stdout).toContain(`"key": ${JSON.stringify(key)},\n      "slug": ${JSON.stringify(slug)}`);
+
+    const ordinary = await invoke(["ordinary", "--api", API, "--key", API_KEY]);
+    expect(ordinary.stdout).toContain("Mapping: ordinary -> ordinary-site\n");
+    const missing = await invoke(["absent", "--api", API, "--key", API_KEY]);
+    expect(missing.stdout).toContain("Mapping: absent -> missing\n");
+  });
+
   it.each([true, false])("21: without path, mapping is null (link present: %s)", async (present) => {
     if (present) await putLink({ api: API, sites: { [HIDDEN_MAPPING]: HIDDEN_SLUG } });
     const r = await invoke(["--api", API, "--key", API_KEY, "--json"]);
