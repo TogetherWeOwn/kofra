@@ -42,7 +42,7 @@ const CLOSES_PARTS: Record<string, string[]> = {
 function tagNameAt(html: string, from: number): string {
   let j = from;
   while (j < html.length && !isSpace(html[j]!) && html[j] !== "/" && html[j] !== ">") j++;
-  return html.slice(from, j).toLowerCase();
+  return html.slice(from, j).replace(/[A-Z]/g, (c) => c.toLowerCase());
 }
 
 /** Index just past the ">" that ends the tag whose attributes start at `from`, honouring quoted values; -1 if unterminated. */
@@ -264,7 +264,7 @@ export function containOutputMarkup(html: string): string {
       break;
     }
     // Fold tags and end tags that close nothing this fragment opened become text.
-    let literal = name === "details" || name === "summary";
+    let literal = name === "details" || name === "summary" || name === "plaintext";
     if (!literal && region) {
       const top = regions[regions.length - 1]!;
       const foreign = region === "svg" || region === "math";
@@ -306,8 +306,9 @@ export function containOutputMarkup(html: string): string {
       }
     }
     if (literal) {
-      out.push(esc);
-      i++;
+      // Escape the entire scanned token; rescanning its attributes can be quadratic.
+      out.push(html.slice(i, end).split("<").join(esc));
+      i = end;
     } else {
       out.push(html.slice(i, end));
       i = end;

@@ -692,10 +692,10 @@ describe("notebook output folding", () => {
     expect(notebookViewer.maxBytes).toBe(20 * 1024 * 1024);
   });
 
-  it.each(["memory", "edge"])("cannot reuse a pre-fold notebook@1 fragment from %s", async (tier) => {
-    expect(notebookViewer.version).toBeGreaterThan(1);
+  it.each([["memory", 1], ["edge", 1], ["memory", 2], ["edge", 2]] as const)("cannot reuse a pre-fold fragment from %s at notebook@%i", async (tier, version) => {
+    expect(notebookViewer.version).toBeGreaterThan(2);
     const hash = await sha256Hex(new TextEncoder().encode(foldNb));
-    const legacyKey = `notebook@1/${hash}`;
+    const legacyKey = `notebook@${version}/${hash}`;
     const url = `${ORIGIN}/s/${slug}/nb/fold.ipynb`;
     const oldHtml = "<p>PRE_FOLD_LEGACY</p><pre>alpha-stream-sentinel</pre>";
     await caches.default.delete(new Request(`${ORIGIN}/__dropway/render/${legacyKey}`));
@@ -730,9 +730,9 @@ describe("notebook output folding", () => {
     expect(detailsBlocks(htmlA)).toHaveLength(3);
   });
 
-  it("does not answer 304 to a notebook@1 ETag, but revalidates the new render", async () => {
+  it.each([1, 2])("does not answer 304 to a notebook@%i ETag, but revalidates the new render", async (version) => {
     const hash = await sha256Hex(new TextEncoder().encode(foldNb));
-    const legacy = `W/"notebook@1-${hash}"`;
+    const legacy = `W/"notebook@${version}-${hash}"`;
     const res = await get("nb/fold.ipynb", { ...NAV, "If-None-Match": legacy });
     expect(res.status).toBe(200);
     const etag = res.headers.get("etag")!;
@@ -1310,6 +1310,8 @@ describe("notebook output fold containment", () => {
 
   const MISNESTED_HTML = [
     "<section><div></section></div>",
+    "<xİ></main>",
+    "<dİv></div>",
     "<section><div></section></div></div></div>",
     "<p><div></p></div></div>",
     "<ul><li><div><li><div></ul></div></div>",
@@ -1350,6 +1352,9 @@ describe("notebook output fold containment", () => {
     "<select><option>",
     "<button>",
     "<button/>",
+    "<plaintext>x",
+    "<plaintext>hello</plaintext>",
+    "<template><plaintext>hello</plaintext>",
   ])("an unclosed dropped element %j does not swallow the rest of the notebook", async (payload) => {
     expectNextCellFree(await renderTwo({ "text/html": payload }));
   });
@@ -1362,6 +1367,9 @@ describe("notebook output fold containment", () => {
   );
 
   it.each([
+    ["quote-paired stray end tags", '</x a="'.repeat(16_000) + 'x">'],
+    ["quote-paired tags inside svg", '<svg>' + '<g a="'.repeat(16_000) + 'x">'],
+    ["quote-paired literal tags", '<details a="'.repeat(16_000) + 'x">'],
     ["unterminated anchor tags", "<a ".repeat(53_334)],
     ["comments", "<!-- x -->".repeat(16_000)],
     ["open divs then stray paragraph ends", "<div>".repeat(32_000) + "</p>".repeat(40_000)],
