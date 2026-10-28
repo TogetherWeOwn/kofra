@@ -90,6 +90,7 @@ async function visit(path: string, theme: "light" | "dark", width: number, scrip
     return route.continue();
   });
   const page = await context.newPage(); page.setDefaultTimeout(2500);
+  page.setDefaultNavigationTimeout(5000);
   try {
     const response = await page.goto(`${origin}/s/${slug}/${path}${embed ? "?view=1&embed=1" : ""}`, { waitUntil: "networkidle" });
     expect(response!.status()).toBe(200);
@@ -272,7 +273,8 @@ async function layout(page: Page, width: number, actual: boolean) {
     expect(state.horizontal, "natural-size wide artwork remains horizontally scrollable").toBe(true);
     expect(state.vertical, "natural-size tall artwork remains vertically scrollable").toBe(true);
   } else expect(state.width).toBeLessThanOrEqual(width);
-  const boxes = await page.locator(".dw-mediabar label, .dw-mediabar select").evaluateAll(elements => elements.map(el => {
+  const boxes = await page.locator(".dw-mediabar label, .dw-mediabar select")
+    .or(page.getByRole("radiogroup", { name: /background/i }).locator("label")).evaluateAll(elements => elements.map(el => {
     const b = el.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, right: b.right, bottom: b.bottom };
   }));
   for (const box of boxes.filter(b => b.width > 0)) {
