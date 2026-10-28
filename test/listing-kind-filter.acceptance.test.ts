@@ -594,9 +594,10 @@ describe("kind filter: sort coexistence", () => {
 
 describe("kind filter: empty and no match", () => {
   // RED: the baseline renders the full listing for a valid-but-absent kind.
-  it("a valid kind with no files says No files of this kind with zero counts, keeps escape paths, drops the gallery", async () => {
-    const plain = await listing(dw, root);
-    const { res, html } = await listing(dw, `${root}?kind=video`);
+  it.each(["", "name", "size", "type"])("a valid kind with no files says No files of this kind with zero counts, keeps escape paths, drops the gallery (sort=%j)", async (sort) => {
+    const plain = await listing(dw, sort ? `${root}?sort=${sort}` : root);
+    const page = `${root}?kind=video${sort ? `&sort=${sort}` : ""}`;
+    const { res, html } = await listing(dw, page);
     expect(res.status).toBe(200);
     expect(res.headers.get("x-kofra-viewer")).toBe("listing");
     expect(html).toContain("No files of this kind");
@@ -607,11 +608,17 @@ describe("kind filter: empty and no match", () => {
     const all = kindLinks(html).find((l) => l.label === "All");
     expect(all, "no-match render must keep the All recovery link").toBeDefined();
     expect(new URL(all!.href, `https://dropway.test${root}`).searchParams.has("kind")).toBe(false);
-    const recovered = await listing(dw, follow(`${root}?kind=video`, all!.href));
+    const recovered = await listing(dw, follow(page, all!.href));
     expect(recovered.html).toBe(plain.html);
-    for (const link of anchors(html).filter((a) => a.label === "Clear")) {
-      expect(new URL(link.href, `https://dropway.test${root}`).searchParams.has("kind"), "Clear must return to All").toBe(false);
-    }
+    const clearLinks = anchors(html).filter((a) => a.label === "Clear filter");
+    expect(clearLinks, "no-match render must offer exactly one Clear filter recovery link").toHaveLength(1);
+    const clearUrl = new URL(clearLinks[0]!.href, `https://dropway.test${page}`);
+    expect(clearUrl.pathname, "Clear filter must stay in the same folder").toBe(root);
+    expect(clearUrl.searchParams.has("kind"), "Clear filter must return to All").toBe(false);
+    if (sort) expect(clearUrl.searchParams.get("sort"), "Clear filter must preserve the selected sort").toBe(sort);
+    const cleared = await listing(dw, follow(page, clearLinks[0]!.href));
+    expect(cleared.res.status).toBe(200);
+    expect(cleared.html).toBe(plain.html);
   });
 
   // RED (controls half): the empty/all distinction already holds, but the All control is new.
