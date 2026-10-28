@@ -8,7 +8,7 @@ const VOID = new Set(["area", "base", "br", "col", "embed", "frame", "hr", "img"
 /** Elements the sanitizer removes together with their content; markup inside them never reaches the page. */
 const DROPPED = new Set([...DROP].filter((n) => !VOID.has(n)));
 /** Dropped elements whose content is raw text: only their own end tag is markup. */
-const RAW_TEXT = new Set(["script", "style", "textarea", "title", "xmp", "iframe", "noembed", "noframes", "plaintext"]);
+const RAW_TEXT = new Set(["script", "style", "textarea", "title", "xmp", "iframe", "noscript", "noembed", "noframes", "plaintext"]);
 /** End tags stop at these when looking for the element to close ("has an element in scope"). */
 const SCOPE = new Set(["table", "td", "th", "caption"]);
 /** Table parts: their end tags are only blocked by an enclosing table, not by a cell. */
@@ -94,11 +94,11 @@ function commentEnd(html: string, i: number, close: Ahead, bang: Ahead): number 
     if (html.startsWith("->", j)) return j + 2;
     const a = close.find(j);
     const b = bang.find(j);
-    if (a < 0 && b < 0) return html.length;
+    if (a < 0 && b < 0) return -1;
     return b < 0 || (a >= 0 && a < b) ? a + 3 : b + 4;
   }
   const gt = html.indexOf(">", i);
-  return gt < 0 ? html.length : gt + 1;
+  return gt < 0 ? -1 : gt + 1;
 }
 
 const esc = "&lt;";
@@ -198,8 +198,8 @@ class Open {
  * outside the fold, and an unclosed table or list would swallow what follows.
  *
  * This makes the fragment self-contained and well nested: details/summary
- * tags and every end tag that closes nothing the fragment opened become
- * text, end tags close only elements in browser scope (a misnested `</b>`
+ * tags are unwrapped and unmatched end tags are discarded. End tags close
+ * only elements in browser scope (a misnested `</b>`
  * spells out the end tags of what it closes), what a start tag closes
  * implicitly (p, li/dd/dt, headings, table parts) is spelled out, and
  * whatever the fragment leaves open is closed. Content the sanitizer drops
@@ -246,6 +246,9 @@ export function containOutputMarkup(html: string): string {
     const closing = c1 === "/";
     if (c1 === "!" || c1 === "?" || (closing && !isAlpha(html[i + 2]))) {
       const end = commentEnd(html, i, close, bang);
+      // The sanitizer removes comments. Discard an unfinished one here so it
+      // cannot consume the generated wrappers and subsequent outputs.
+      if (end < 0) break;
       out.push("<" + html.slice(i + 1, end).split("<").join(esc));
       i = end;
       continue;
@@ -263,8 +266,12 @@ export function containOutputMarkup(html: string): string {
       out.push(html.slice(i).split("<").join(esc));
       break;
     }
-    // Fold tags and end tags that close nothing this fragment opened become text.
-    let literal = name === "details" || name === "summary" || name === "plaintext";
+    // Unwrap disclosure tags to prevent them from forging or closing our fold.
+    if (name === "details" || name === "summary") {
+      i = end;
+      continue;
+    }
+    let literal = name === "plaintext";
     if (!literal && region) {
       const top = regions[regions.length - 1]!;
       const foreign = region === "svg" || region === "math";
@@ -288,7 +295,10 @@ export function containOutputMarkup(html: string): string {
           i = end;
           continue;
         }
-        literal = name !== "p";
+        if (name !== "p") {
+          i = end;
+          continue;
+        }
       }
     } else if (!literal) {
       if (DROPPED.has(name)) {

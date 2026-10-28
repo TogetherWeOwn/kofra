@@ -233,15 +233,14 @@ initially-open `<details>` with an `Outputs (N)` summary, N counting only
 outputs that render a fragment; the code and its `In [n]:` prompt stay outside,
 so folding a long result never hides them. Cells with no rendered outputs get
 no control, controls toggle independently with no script, and the existing
-output rendering, sanitizer, 100,000-character clip and 20 MiB cap are
-unchanged inside the fold; HTML/Markdown output fragments are made self-contained first
-(`viewers/contain.ts`, linear time): details/summary tags and end tags that close
-nothing the fragment opened are escaped, misnested end tags and implied closes are
-spelled out, and anything left open is closed, so a fragment cannot close the
-generated fold or swallow the next output or cell.
-The render version bump retires cached pre-fold
-fragments and their conditional ETags; Raw, Download and Source bytes are
-untouched.
+output formats, sanitizer, 100,000-character clip and 20 MiB cap remain in
+place. HTML/Markdown output fragments are made self-contained first
+(`viewers/contain.ts`, linear time): details/summary tags are unwrapped,
+unmatched end tags are discarded, misnested end tags and implied closes are
+spelled out, and unfinished comments and open elements are contained. Thus a
+fragment cannot close the generated fold or swallow the next output or cell.
+The render version bump retires cached pre-fold fragments and their conditional
+ETags; Raw, Download and Source bytes are untouched.
 
 ### App-origin UI (`packages/server/src/ui`)
 

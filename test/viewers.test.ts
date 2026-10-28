@@ -417,8 +417,8 @@ describe("viewer pages", () => {
  *   error text (ANSI stripped), PNG/JPEG/GIF/SVG images, sanitized HTML and
  *   Markdown, plain text and JSON, the current MIME priority, the 100,000
  *   character text clip with its ellipsis and the 20 MiB viewer cap.
- * - The notebook render version is bumped past 1 so cached pre-fold
- *   fragments and "notebook@1" conditional ETags retire; Raw, Download,
+ * - The notebook render version is bumped past 2 so cached pre-fold
+ *   fragments and "notebook@1" / "notebook@2" conditional ETags retire; Raw, Download,
  *   Source and sub-resource bytes stay identical to the stored file.
  */
 describe("notebook output folding", () => {
@@ -1341,6 +1341,28 @@ describe("notebook output fold containment", () => {
     "<table><thead><a><summary></caption><tbody>",
   ])("an unclosed text/html output %j cannot annex the next cell", async (payload) => {
     expectNextCellFree(await renderTwo({ "text/html": payload }));
+  });
+
+  it.each([
+    ["text/html", "<!--"],
+    ["text/html", "<p>ok</p><!-- trailing note"],
+    ["text/html", "<!unfinished"],
+    ["text/html", "<?unfinished"],
+    ["text/markdown", "hello\n\n<!-- unterminated"],
+  ])("an unterminated comment in %s does not swallow later outputs or cells", async (mime, payload) => {
+    expectNextCellFree(await renderTwo({ [mime]: payload }));
+  });
+
+  it("a noscript raw-text end tag inside apparent attribute text cannot annex the next cell", async () => {
+    expectNextCellFree(await renderTwo({ "text/html": '<noscript><p title="</noscript>"><table><tr><td>' }));
+  });
+
+  it("unwraps output disclosure tags and ignores stray end tags without showing markup", async () => {
+    const html = await render({ "text/html": "<details><summary>More</summary><p>content</p></details></div>" });
+    const fold = expectContained(html);
+    expect(textOf(fold)).toContain("Morecontent");
+    expect(textOf(fold)).not.toContain("<details>");
+    expect(textOf(fold)).not.toContain("</div>");
   });
 
   it.each([
