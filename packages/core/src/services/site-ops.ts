@@ -68,13 +68,25 @@ export async function getSiteByRef(dc: DropwayContext, p: Principal, ref: unknow
 }
 
 /**
+ * True when a version reference means "the live version at execution time"
+ * ("live" or empty), as opposed to an explicit version id or number.
+ * Callers that resolve early must carry this intent to the service, whose
+ * fresh anchor is the only correct interpretation.
+ */
+export function isLiveVersionRef(ref: unknown): boolean {
+  if (ref === undefined || ref === null) return true;
+  const raw = String(ref).trim();
+  return raw === "" || raw.toLowerCase() === "live";
+}
+
+/**
  * Resolve a version reference on a site: "live" (or empty) for the live version,
  * "v12" or "12" for version number 12, otherwise a version id.
  */
 export async function resolveVersionRef(dc: DropwayContext, site: SiteRow, ref: unknown): Promise<VersionRow> {
   const raw = ref === undefined || ref === null ? "live" : String(ref).trim();
   const listHint = "List versions with list_versions (GET /api/v1/sites/{site}/versions).";
-  if (raw === "" || raw.toLowerCase() === "live") {
+  if (isLiveVersionRef(ref)) {
     if (!site.current_version_id) throw notFound("version_not_found", `Site ${site.slug} has no live version yet.`, "Publish files first with publish_site.");
     const v = await dc.env.DB.prepare("SELECT * FROM versions WHERE id = ?").bind(site.current_version_id).first<VersionRow>();
     if (!v) throw notFound("version_not_found", `Site ${site.slug} has no live version.`, listHint);

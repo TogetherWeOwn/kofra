@@ -9,6 +9,7 @@ import {
   getMember,
   getSiteByRef,
   getTenant,
+  isLiveVersionRef,
   listFiles,
   listSites,
   listVersions,
@@ -846,7 +847,7 @@ export const CORE_API_OPERATIONS = [
     async handler(a, { dw, principal }) {
       const site = await getSiteByRef(dw, principal, a.site, "sites:write");
       const version = await resolveVersionRef(dw, site, a.version);
-      const out = await restoreVersion(dw, principal, site, version.id);
+      const out = await restoreVersion(dw, principal, site, version.id, { symbolicLive: isLiveVersionRef(a.version) });
       return { ...out, slug: site.slug, url: siteUrl(dw, site.slug) };
     },
     http: {
@@ -860,7 +861,7 @@ export const CORE_API_OPERATIONS = [
         const dw = D(c);
         const site = await getSiteByRef(dw, P(c), c.req.param("slug")!, "sites:write");
         const version = await resolveVersionRef(dw, site, c.req.param("id")!);
-        const out = await restoreVersion(dw, P(c), site, version.id);
+        const out = await restoreVersion(dw, P(c), site, version.id, { symbolicLive: isLiveVersionRef(c.req.param("id")) });
         return c.json({ ...out, url: siteUrl(dw, site.slug) });
       },
     },

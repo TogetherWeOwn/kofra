@@ -348,7 +348,7 @@ export async function createSiteWithDeploy(
 }
 
 /** Read the live pointer and publication metadata together, not from a stale caller snapshot. */
-export async function versionConflict(dc: DropwayContext, site: SiteRow, base?: VersionRow): Promise<ApiError> {
+export async function versionConflict(dc: DropwayContext, site: SiteRow, base?: VersionRow, hint?: string): Promise<ApiError> {
   const live = await dc.env.DB.prepare(
     `SELECT s.current_version_id AS id, v.number, v.client, v.finalized_at
        FROM sites s LEFT JOIN versions v ON v.id = s.current_version_id AND v.site_id = s.id
@@ -358,7 +358,7 @@ export async function versionConflict(dc: DropwayContext, site: SiteRow, base?: 
     409,
     "version_conflict",
     `The live version is ${live?.number != null ? `v${live.number}` : "none"}; someone published since your base version.`,
-    "Call get_site to see what changed, re-apply your change, and pass the live version id as baseVersionId.",
+    hint ?? "Call get_site to see what changed, re-apply your change, and pass the live version id as baseVersionId.",
     {
       liveVersionId: live?.id ?? null,
       liveVersionNumber: live?.number ?? null,
@@ -717,13 +717,26 @@ export async function listVersions(dc: DropwayContext, site: SiteRow, opts: { li
   return results.map((v) => serializeVersion(v, site.current_version_id));
 }
 
+/** Guidance for a restore that lost a live-pointer race: re-inspect, then make a fresh deliberate call. */
+const RESTORE_CONFLICT_HINT =
+  "Call get_site to inspect the current live version, then decide on a fresh intentional restore invocation. Do not automatically retry this restore.";
+
 /** Make an older finalized version live again (a pointer flip; no files are copied). */
-export async function restoreVersion(dc: DropwayContext, p: Principal, site: SiteRow, versionId: string) {
+export async function restoreVersion(dc: DropwayContext, p: Principal, site: SiteRow, versionId: string, opts?: { symbolicLive?: boolean }) {
   site = await getSiteFor(dc, p, site.slug, "sites:write");
   if (site.mode === "transfer") throw conflict("transfer_immutable", "Transfer files cannot be restored.", "Create a new transfer instead.");
-  const version = await getVersion(dc, site.id, versionId);
+  // A symbolic "live" ref must resolve against this fresh anchor, never against the id a
+  // caller resolved from an older snapshot: that stale id would flip a moved pointer back.
+  let targetId = versionId;
+  if (opts?.symbolicLive) {
+    if (!site.current_version_id) {
+      throw notFound("version_not_found", `Site ${site.slug} has no live version yet.`, "Publish files first with publish_site.");
+    }
+    targetId = site.current_version_id;
+  }
+  const version = await getVersion(dc, site.id, targetId);
   if (!version || version.status !== "ready") {
-    throw notFound("version_not_found", `No finalized version ${versionId} on site ${site.slug}.`, "List versions with GET /api/v1/sites/:slug/versions.");
+    throw notFound("version_not_found", `No finalized version ${targetId} on site ${site.slug}.`, "List versions with GET /api/v1/sites/:slug/versions.");
   }
   if (version.id === site.current_version_id) return { restored: false, alreadyLive: true, version: serializeVersion(version, version.id) };
   const now = Date.now();
@@ -735,12 +748,17 @@ export async function restoreVersion(dc: DropwayContext, p: Principal, site: Sit
     ).bind(version.id, now, site.id, site.tenant_id, site.current_version_id, version.id, site.id),
   ]);
   if (!upd?.meta.changes) {
-    const fresh = await getSiteFor(dc, p, site.slug, "sites:write");
+    // Bind diagnostics to the original site by immutable id: the addressed slug may now
+    // resolve to a different same-tenant site, whose metadata must never leak into this error.
+    const original = await dc.env.DB.prepare("SELECT * FROM sites WHERE id = ?").bind(site.id).first<SiteRow>();
+    if (!original || original.deleted_at !== null || original.slug !== site.slug || original.tenant_id !== site.tenant_id) {
+      throw notFound("site_not_found", `No site "${site.slug}" that this key can access.`, "List your sites with GET /api/v1/sites.", { slug: site.slug });
+    }
     const latest = await getVersion(dc, site.id, version.id);
     if (!latest || latest.status !== "ready") {
       throw notFound("version_not_found", `No finalized version ${versionId} on site ${site.slug}.`, "List versions with GET /api/v1/sites/:slug/versions.");
     }
-    throw await versionConflict(dc, fresh);
+    throw await versionConflict(dc, original, undefined, RESTORE_CONFLICT_HINT);
   }
   await refreshLive(dc, site.id);
   emit(dc, "onPublish", {

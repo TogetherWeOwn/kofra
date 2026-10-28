@@ -317,8 +317,10 @@ implementation card starts:
   compare-and-swap in one batch, reusing the `finalizeDeploy` conditional-update
   and conflict pattern (`packages/core/src/services/deploys.ts`). The expected-live
   anchor is the service-loaded site row's live pointer, not a CLI-supplied token.
-  A live pointer that moved returns 409 (CLI exit 5, no retry); a target deleted
-  between check and flip must fail, never leave a dangling pointer.
+  A live pointer that moved returns 409 (CLI exit 5, no retry), including a move
+  to the requested target: the achieved state is not this request's replay
+  receipt, so the caller makes a fresh intentional invocation instead. A target
+  deleted between check and flip must fail, never leave a dangling pointer.
 - **P2 — atomic delete and confirm parity.** Move the non-live fence inside the
   mutating batch. Enforce server-side `confirm` (canonical site slug, same
   `requireConfirm` semantics as the MCP handler) on HTTP
