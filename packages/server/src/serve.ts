@@ -25,7 +25,9 @@ import { renderListing } from "./viewers/listing";
 import { MAX_CSS_REWRITE_BYTES, rewriteCss, rewriteHtml, type PathRewrite } from "./path-rewrite";
 import { PATH_SHIM_VERSION, pathShimScript } from "./path-shim";
 import { injectReportLink, REPORT_LINK_VERSION } from "./report-link";
+import { badgeFor, badgeResponse } from "./site-badge";
 import { serveTransfer } from "./transfers";
+import { attachmentDisposition } from "./content-disposition";
 
 /**
  * How a site is being served.
@@ -40,6 +42,8 @@ export interface ServeMode {
   sandbox: boolean;
   /** Path mode: prefix root-relative URLs in HTML and CSS (null = serve bytes untouched). */
   rewrite: PathRewrite | null;
+  /** Keep runtime URLs in path scope when a preview suppresses the Referer. */
+  pathShim?: boolean;
 }
 
 export const INDEX_NAMES = ["index.html", "index.htm", "index.md", "README.md", "readme.md"];
@@ -49,6 +53,8 @@ export const SITE_SANDBOX =
   "sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation allow-orientation-lock";
 
 const PASSWORD_PATH = "__dropway/password";
+/** Reserved at a site root: the provider-served live-version badge (a published file of this name is not served). */
+const BADGE_PATH = "badge.svg";
 
 export type Resolved =
   | { kind: "file"; path: string; status: number }
@@ -63,9 +69,33 @@ export function isNavigation(req: Request): boolean {
   return (req.headers.get("accept") ?? "").includes("text/html");
 }
 
-function hasChildren(files: LiveSite["files"], dir: string): boolean {
-  for (const k in files) if (k.startsWith(dir)) return true;
+/** Private configuration paths are stored with the version but never served. */
+function isPrivatePath(p: string): boolean {
+  return p === ".dropway" || p.startsWith(".dropway/");
+}
+
+/** A directory counts for serving only when it holds at least one non-private entry. */
+function hasVisibleChildren(files: LiveSite["files"], dir: string): boolean {
+  for (const k in files) if (k.startsWith(dir) && !isPrivatePath(k)) return true;
   return false;
+}
+
+/**
+ * The longest proper ancestor directory of `filePath` (with trailing "/")
+ * that prefixes at least one non-private path in the live manifest, or null when no
+ * ancestor folder has files. The site root never counts. Computed from the
+ * already-loaded manifest only. Object.keys keeps an ancestor folder named
+ * `__proto__` ordinary manifest data.
+ */
+function nearestManifestAncestor(files: LiveSite["files"], filePath: string): string | null {
+  // Empty segments (leading, trailing or repeated "/") are filtered out below.
+  const segments = filePath.split("/").filter(Boolean);
+  const paths = Object.keys(files);
+  for (let len = segments.length - 1; len >= 1; len--) {
+    const dir = `${segments.slice(0, len).join("/")}/`;
+    if (paths.some((k) => k.startsWith(dir) && !isPrivatePath(k))) return dir;
+  }
+  return null;
 }
 
 /**
@@ -75,16 +105,20 @@ function hasChildren(files: LiveSite["files"], dir: string): boolean {
 export function resolvePath(live: LiveSite, p: string, req: Request, mode: ServeMode, fallbacks = true): Resolved {
   const files = live.files;
   const search = new URL(req.url).search;
+  // .dropway and .dropway/* are stored with the version (site configuration) but never
+  // served: not as a file, not raw, not as a listing, and not through the SPA fallback.
+  // A directory holding only private entries therefore answers as if it were absent.
+  if (isPrivatePath(p)) return { kind: "not_found" };
   if (p === "" || p.endsWith("/")) {
     for (const name of INDEX_NAMES) if (files[p + name]) return { kind: "file", path: p + name, status: 200 };
     if (p === "") {
       const keys = Object.keys(files);
-      if (keys.length === 1) return { kind: "file", path: keys[0]!, status: 200 };
+      if (keys.length === 1 && keys[0] !== ".dropway" && !keys[0]!.startsWith(".dropway/")) return { kind: "file", path: keys[0]!, status: 200 };
     }
-    if (hasChildren(files, p)) return { kind: "listing", dir: p };
+    if (hasVisibleChildren(files, p)) return { kind: "listing", dir: p };
   } else {
     if (files[p]) return { kind: "file", path: p, status: 200 };
-    if (hasChildren(files, `${p}/`)) return { kind: "redirect", location: `${mode.base}${encodePath(p)}/${search}` };
+    if (hasVisibleChildren(files, `${p}/`)) return { kind: "redirect", location: `${mode.base}${encodePath(p)}/${search}` };
     if (files[`${p}.html`]) return { kind: "file", path: `${p}.html`, status: 200 };
     if (files[`${p}.htm`]) return { kind: "file", path: `${p}.htm`, status: 200 };
   }
@@ -251,6 +285,18 @@ function etagMatches(req: Request, etag: string): boolean {
   });
 }
 
+// Viewer ids and etagExtra output may be any string — including lone
+// (unpaired) UTF-16 surrogates, on which encodeURIComponent throws URIError.
+// Normalize those to U+FFFD first (same approach as content-disposition.ts);
+// valid surrogate pairs pass through untouched.
+function etagSegment(value: string): string {
+  return encodeURIComponent(
+    value.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, (m) =>
+      m.length === 2 ? m : "\uFFFD",
+    ),
+  );
+}
+
 const flag = (sp: URLSearchParams, name: string) => sp.has(name) && sp.get(name) !== "0" && sp.get(name) !== "false";
 
 /** Which view a request asks for: ?view=source, ?view=1, or a browser navigation (top level or iframe). null = raw bytes. */
@@ -275,16 +321,21 @@ export async function serveSite(
   mode: ServeMode,
   viewers: readonly Viewer[] = VIEWERS,
 ): Promise<Response> {
-  const started = Date.now();
   const url = new URL(req.url);
   const method = req.method.toUpperCase();
   // Transfer gates never depend on an eventually consistent live manifest.
   const transfer = await dw.env.DB.prepare("SELECT mode FROM sites WHERE slug = ? UNION ALL SELECT 'transfer' AS mode FROM transfer_slug_tombstones WHERE slug = ? AND NOT EXISTS (SELECT 1 FROM sites WHERE slug = ?) LIMIT 1").bind(slug, slug, slug).first<{ mode: string }>();
+  const badge = (method === "GET" || method === "HEAD") && requestPathToFilePath(pathname) === BADGE_PATH;
   if (transfer?.mode === "transfer") {
+    // The badge never reaches the transfer handler: no download is counted or attributed.
+    if (badge) return badgeResponse(badgeFor(null), method);
     const path = requestPathToFilePath(pathname);
     if (path === null) return new Response("Not found", { status: 404 });
     return serveTransfer(req, dw, slug, path);
   }
+  // Credentials, cookies and Fetch Metadata are never read: the same bytes for everyone.
+  // Not recorded as a site request (no analytics point, no usage meter, no hook).
+  if (badge) return badgeResponse(badgeFor(await getLiveSite(dw, slug)), method);
   if (method === "OPTIONS") {
     // Password-protected sites are not readable cross-origin, so their preflights grant nothing.
     const gated = !!(await getLiveSite(dw, slug))?.passwordHash;
@@ -313,6 +364,23 @@ export async function serveSite(
     }
     return systemResponse(dw, req, mode, null, 404, "404", "Nothing is published here", "There is no site at this address. It may have been deleted. See {app}.");
   }
+  return serveSiteContent(req, dw, live, pathname, mode, viewers);
+}
+
+/** Serve an already resolved manifest. Preview callers authorize and load their version in D1 first. */
+export async function serveSiteContent(
+  req: Request,
+  dw: DropwayContext,
+  live: LiveSite,
+  pathname: string,
+  mode: ServeMode,
+  viewers: readonly Viewer[] = VIEWERS,
+): Promise<Response> {
+  const started = Date.now();
+  const url = new URL(req.url);
+  const method = req.method.toUpperCase();
+  const filePath = requestPathToFilePath(pathname);
+  if (filePath === null) return systemResponse(dw, req, mode, live, 400, "400", "Bad request", "That address could not be decoded.");
   // Anonymous sites are untrusted: sandbox them even where other sites are not.
   if (!mode.sandbox && live.tenantId === null && dw.config.sitesSandboxAnonymous) mode = { ...mode, sandbox: true };
   if (live.expiresAt && live.expiresAt < Date.now()) {
@@ -336,7 +404,7 @@ export async function serveSite(
   if (method !== "GET" && method !== "HEAD") {
     return new Response("Method not allowed", { status: 405, headers: { Allow: "GET, HEAD, OPTIONS" } });
   }
-  if (!live.versionId) return systemResponse(dw, req, mode, live, 404, "EMPTY", "Nothing published yet", "This site exists but has no live version yet.");
+  if (!live.versionId) return systemResponse(dw, req, mode, live, 404, "EMPTY", "Nothing published yet", "This site exists but has no live version yet. See {app}.");
 
   const resolved = resolvePath(live, filePath, req, mode);
   let response: Response;
@@ -345,9 +413,17 @@ export async function serveSite(
     response = new Response(null, { status: 301, headers: { Location: resolved.location } });
     securityHeaders(response.headers, live, mode);
   } else if (resolved.kind === "not_found") {
-    response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", `There is no file at <code>/${escapeHtml(filePath)}</code> on this site.`);
+    // Post-gate only (like listings): lead back to the site instead of a dead end.
+    const ancestor = nearestManifestAncestor(live.files, filePath);
+    const recovery =
+      `<nav aria-label="Where to go next"><ul>` +
+      `<li><a href="${escapeHtml(mode.base)}">Site home</a></li>` +
+      (ancestor ? `<li><a href="${escapeHtml(mode.base + encodePath(ancestor))}">Folder: /${escapeHtml(ancestor)}</a></li>` : "") +
+      `<li><a href="${escapeHtml(`${appOrigin(dw)}/v/${live.slug}/${encodePath(ancestor ?? "")}`)}">Browse files</a></li>` +
+      `</ul></nav>`;
+    response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", `There is no file at <code>/${escapeHtml(filePath).replaceAll("{", "&#123;")}</code> on this site.`, recovery);
   } else if (resolved.kind === "listing") {
-    response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`);
+    response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`, url.searchParams.get("sort"));
     securityHeaders(response.headers, live, mode);
   } else {
     response = await serveFile(req, dw, url, live, mode, resolved.path, resolved.status, viewers);
@@ -382,7 +458,10 @@ async function serveFile(
   // Rendered views: see ./viewers (one per file kind, plus ?view=source).
   if (viewer && viewMode) {
     const embed = flag(sp, "embed");
-    const etag = `W/"${viewer.id}@${viewer.version ?? 1}-${sha256}${viewer.etagExtra?.(file, live) ?? ""}${embed ? "-e" : ""}${reportVariant}"`;
+    // The shared bar links live siblings even when this file's bytes are unchanged.
+    // Images/SVG have their own validator; embeds do not render the shared bar.
+    const folderVariant = !embed && viewer.id !== "image" && viewer.id !== "svg" ? `-folder${live.versionId}` : "";
+    const etag = `W/"${etagSegment(viewer.id)}@${viewer.version ?? 1}-${sha256}${etagSegment(viewer.etagExtra?.(file, live) ?? "")}${folderVariant}${embed ? "-e" : ""}${reportVariant}"`;
     const h = new Headers();
     if (etagMatches(req, etag)) {
       h.set("ETag", etag);
@@ -428,7 +507,12 @@ async function serveFile(
     else out.set("ETag", etag);
     out.set("Cache-Control", live.passwordHash ? "private, no-store" : viewerCacheControl ?? "public, max-age=0, must-revalidate");
     out.set("Vary", "Accept, Sec-Fetch-Dest");
-    out.set("X-Kofra-Viewer", viewer.id);
+    // Headers.set throws on CR, LF and NUL: a viewer id containing them would
+    // 500 an otherwise healthy render. Omit this diagnostic header for such
+    // ids; the ETag above already carries the encoded identity.
+    if (!viewer.id.includes("\r") && !viewer.id.includes("\n") && !viewer.id.includes("\0")) {
+      out.set("X-Kofra-Viewer", viewer.id);
+    }
     out.delete("Content-Length");
     securityHeaders(out, live, mode);
     let page = new Response(head ? null : rendered.body, { status, headers: out });
@@ -439,8 +523,8 @@ async function serveFile(
   // Path mode: HTML and CSS get root-relative URLs prefixed with the site base.
   const rewriteKind = mode.rewrite && !raw && !download && !precompressed(path) ? (isHtml(contentType) ? "html" : baseType(contentType) === "text/css" && size <= MAX_CSS_REWRITE_BYTES ? "css" : null) : null;
   if (rewriteKind || report) {
-    // Sandboxed pages send no Referer, so their HTML also carries the run-time shim (./path-shim).
-    const shim = rewriteKind === "html" && mode.sandbox;
+    // Sandboxed pages and private previews send no Referer, so they need runtime URL repair.
+    const shim = rewriteKind === "html" && (mode.sandbox || mode.pathShim === true);
     const etag = `W/"${rewriteKind ? "pm-" : ""}${sha256}${shim ? `-js${PATH_SHIM_VERSION}` : ""}${reportVariant}"`;
     const h = new Headers({ "Content-Type": contentType, ETag: etag, "Cache-Control": cacheControlFor(path, live) });
     if (rewriteKind) h.set("X-Kofra-Rewritten", "path-prefix");
@@ -448,7 +532,7 @@ async function serveFile(
     if (etagMatches(req, etag)) return new Response(null, { status: 304, headers: h });
     if (head) return new Response(null, { status, headers: h });
     const blob = await readBlob(dw, sha256, size);
-    if (!blob) return blobMissing(dw, req, mode, live);
+    if (!blob) return blobMissing(dw, req, mode, live, path);
     if (rewriteKind === "css" && mode.rewrite) {
       const css = blob.body ? await new Response(blob.body).text() : "";
       return new Response(rewriteCss(css, mode.rewrite), { status, headers: h });
@@ -475,7 +559,7 @@ async function serveFile(
   } else {
     h.set("Content-Type", contentType);
   }
-  if (download) h.set("Content-Disposition", `attachment; filename="${(path.split("/").pop() ?? "file").replace(/["\\\r\n]/g, "_")}"`);
+  if (download) h.set("Content-Disposition", attachmentDisposition(path.split("/").pop() ?? "file"));
   securityHeaders(h, live, mode);
 
   if (etagMatches(req, etag)) return new Response(null, { status: 304, headers: h });
@@ -493,19 +577,22 @@ async function serveFile(
     init.status = 206;
     if (head) return new Response(null, init);
     const body = await readBlobRange(dw, sha256, range);
-    if (!body) return blobMissing(dw, req, mode, live);
+    if (!body) return blobMissing(dw, req, mode, live, path);
     return new Response(body, init);
   }
   h.set("Content-Length", String(size));
   if (head || size === 0) return new Response(null, init);
   const blob = await readBlob(dw, sha256, size);
-  if (!blob) return blobMissing(dw, req, mode, live);
+  if (!blob) return blobMissing(dw, req, mode, live, path);
   return new Response(blob.body, init);
 }
 
-function blobMissing(dw: DropwayContext, req: Request, mode: ServeMode, live: LiveSite): Response {
+function blobMissing(dw: DropwayContext, req: Request, mode: ServeMode, live: LiveSite, path: string): Response {
   console.error(JSON.stringify({ event: "blob_missing", slug: live.slug, version: live.versionId, url: req.url }));
-  return systemResponse(dw, req, mode, live, 502, "502", "File unavailable", "This file is listed in the site but its contents could not be read. Try again shortly.");
+  // Rebuild the retry href from the serving base and the manifest path only:
+  // never copy the raw request URL or its query into the page.
+  const retry = `<p><a href="${escapeHtml(mode.base + encodePath(path))}">Try again</a></p>`;
+  return systemResponse(dw, req, mode, live, 502, "502", "File unavailable", "This file is listed in the site but its contents could not be read. Try again shortly.", retry);
 }
 
 function recordHit(dw: DropwayContext, req: Request, live: LiveSite, path: string, status: number, bytes: number, ms: number) {

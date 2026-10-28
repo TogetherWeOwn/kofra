@@ -9,7 +9,7 @@ import type { Viewer } from "./index";
  * numeric columns, and row/column counts. Shows the first 2,000 rows; reads at
  * most the first 4 MB of the file, so even very large files open fast.
  */
-const CSV_VERSION = 2;
+const CSV_VERSION = 3;
 export const MAX_ROWS = 2_000;
 const READ_MAX_BYTES = 4 * 1024 * 1024;
 const MAX_CELL = 1_000;
@@ -232,6 +232,7 @@ export const csvViewer: Viewer = {
     if (m) meta = m[1]!;
     return viewerPage(vc, {
       tabs: standardTabs(vc, { rendered: "Table", source: true }),
+      print: true,
       css: CSV_CSS,
       body: `<main class="dw-csv"><p class="dw-csvmeta">${meta}</p>${m ? r.html.slice(m[0].length) : r.html}</main>`,
       headers: { "X-Kofra-Render-Cache": r.cache },

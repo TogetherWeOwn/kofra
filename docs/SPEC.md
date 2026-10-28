@@ -103,7 +103,7 @@ What Kofra is not:
 | PUB-09 | Client attribution: `X-Kofra-Client: <harness>/<detail>` header or MCP `clientInfo`, stored per version | P0 | Done (header); MCP in R-06 |
 | PUB-10 | Version message (like a commit message, up to 200 chars) | P0 | Done |
 | PUB-11 | Pending versions expire after 1 hour; finalizing with missing bytes returns `409 missing_blobs` with fresh upload links | P0 | Done |
-| PUB-12 | Publish warnings: root-absolute paths in path mode, SPA without a base path, browser storage on a sandboxed origin, `.wasm` without cross-origin isolation, possible secrets, invalid config files | P0 | R-12 |
+| PUB-12 | Publish warnings: root-absolute paths in path mode, SPA without a base path, browser storage on a sandboxed origin, `.wasm` without cross-origin isolation, possible secrets, invalid config files | P0 | Done (R-12) |
 | PUB-13 | Files larger than one request (above about 95 MB): multipart upload through the Worker, resumable | P1 | R-35 |
 | PUB-14 | `archiveUrl` (publish a zip from a URL) and chat-client attachments (`{download_url, file_name}`) as sources | P1 | R-35 |
 | PUB-15 | Duplicate a site server-side (immediately live) | P1 | Done |
@@ -118,12 +118,12 @@ What Kofra is not:
 | ID | Feature | Pri | Status |
 |---|---|---|---|
 | SRV-01 | Three serving modes: subdomain (each site its own origin), path on a dedicated sites origin, path on the app origin (always sandboxed). Section 11.2 | P0 | Done |
-| SRV-02 | Path mode keeps sites inside `/<slug>/`: HTML and CSS root-relative URLs are rewritten; URLs built at runtime are resolved by `Referer` with a 307 (unsandboxed pages) or by an injected run-time shim (sandboxed pages, which send no Referer); navigations inside an SPA fall back to the SPA. Interim until an instance has a domain | P0 | Done (SPA navigation fallback in R-12) |
+| SRV-02 | Path mode keeps sites inside `/<slug>/`: HTML and CSS root-relative URLs are rewritten; URLs built at runtime are resolved by `Referer` with a 307 (unsandboxed pages) or by an injected run-time shim (sandboxed pages, which send no Referer); navigations inside an SPA fall back to the SPA. Interim until an instance has a domain | P0 | Done |
 | SRV-03 | Index resolution: `index.html`, `index.htm`, `index.md`, `README.md`; a one-file site serves that file at `/`; folders without an index get a listing; `404.html`; SPA fallback | P0 | Done |
 | SRV-04 | Headers: `ETag` (sha256), `Range`/206, pre-compressed `.br`/`.gz` with `Content-Encoding`, `X-Kofra-Version`, `X-Robots-Tag: noindex` on expiring sites, `X-Content-Type-Options: nosniff` | P0 | Done |
 | SRV-05 | Cache policy matrix (HTML and unfingerprinted files revalidate; fingerprinted files immutable; gated sites `private, no-store`; sites with `.wasm` revalidate) | P0 | Partial; R-27 |
 | SRV-06 | Content-addressed edge cache (Cache API by sha256, pointer memo). Live URL shows a new version within about 60 s worldwide, the version URL at once | P0 | R-14 |
-| SRV-07 | Version preview URLs `<slug>--v<N>` for the owner (signed links for others) | P0 | R-13 |
+| SRV-07 | Version preview URLs `<slug>--v<N>` for the owner (signed links for others) | P0 | Done: exact ready version from D1 in both modes; owner Authorization or 24 h signed link with preview-root cookie, noindex/no-referrer |
 | SRV-08 | Cross-origin isolation per site (COOP/COEP for `SharedArrayBuffer` and threaded WebAssembly) | P0 | Done |
 | SRV-09 | `_redirects` and `_headers` files at the site root (Netlify/Cloudflare Pages syntax subset), parsed at finalize, never served | P1 | R-27 |
 | SRV-10 | Agent-readable pages: `Accept: text/markdown` on a navigation returns a Markdown rendering of HTML and text files | P1 | R-34 |
@@ -154,6 +154,7 @@ Full matrix in section 10.
 | VER-03 | Diff two versions (added, removed, changed; unified text diffs for small text files) | P1 | R-20 |
 | VER-04 | Thumbnail per version | P1 | R-20 |
 | VER-05 | Admin-set retention (keep last N versions or N days per site; default keep all) | P2 | R-42 |
+| VER-06 | Authenticated immutable-version ZIP export; dashboard Download ZIP for known ready versions up to 16 MiB stored bytes and 1,000 files, with a 32 MiB streamed response bound and REST/CLI fallback | P1 | Done |
 
 The dashboard Versions list loads only the newest 100 versions. **Filter loaded
 versions** matches literal, case-insensitive text in the number (`73` or `v73`),
@@ -213,6 +214,7 @@ the local filter.
 | ORG-05 | Opt-in public gallery of the instance's public sites with a JSON feed | P2 | R-50 |
 | ORG-06 | Dashboard version files: sort the loaded manifest by path, kind or exact byte size, ascending/descending, composed with the path filter; client-side only, default Path ascending | P1 | Done |
 | ORG-07 | Dashboard version jump: labelled reference input (live, vN, N or immutable id) with explicit Open submit; one bounded direct lookup per submit, never on typing; history lists the newest 100 only; the management URL records the displayed manifest by immutable id (explicit selections push, traversal and initial load replace; refused traversal restores the displayed id without adding an entry); deleting the inspected version clears its link before reloading live; every file download is pinned to the inspected manifest id | P1 | Done |
+| ORG-08 | Dashboard version files: the path filter announces matching-vs-loaded counts and the matching byte total for the selected version only, distinguishes a genuinely empty manifest from zero matches (query quoted as inert text), and offers a Clear filter recovery that resets only the query and returns focus to the filter; client-side only over the loaded manifest, literal case-insensitive matching | P1 | Done |
 
 ### 4.9 Agent surfaces (AX)
 
@@ -221,7 +223,7 @@ the local filter.
 | AX-01 | REST API v1 and OpenAPI 3.1, generated from one operation registry | P0 | Done (R-02); legacy wire adapters preserved |
 | AX-02 | Remote MCP server, Streamable HTTP, stateless, API-key auth, `core` toolset | P0 | R-06 |
 | AX-03 | MCP: OAuth, every toolset, `?toolsets=`, read-only mode, single-site scope, resources, prompts, an MCP Apps site card | P1 | R-24, R-25 |
-| AX-04 | CLI `npx kofra`: `publish --json --wait`, management commands, exit codes, `kofra api` escape hatch | P0 | R-09, R-10 |
+| AX-04 | CLI `npx kofra`: `publish --json --wait`, management commands, exit codes, `kofra api` escape hatch | P0 | Partial (R-09, R-10): explicit `rename <source> <new-slug> --yes`, offline plan and unchanged local mappings; remaining management commands pending |
 | AX-05 | Local stdio MCP (`npx kofra mcp`) with local-path sources | P1 | R-26 |
 | AX-06 | Discovery: `llms.txt` v2, a skill templated with the instance's own URLs, `/.well-known/agent-skills/index.json`, `/.well-known/api-catalog`, `/connect` | P0 | Partial (`llms.txt`, OpenAPI); R-11 |
 | AX-07 | Error envelope with `code`, `hint`, `retryable`, `retryAfterSeconds`, `docs`, `next`, `details.fields` | P0 | Done (manifest and schema validation; legacy service validators retain stable codes) |
@@ -730,7 +732,7 @@ run before core viewers. Section 10 lists core viewers.
 
 ### 6.9 Testing kit and contract (R-01 done, R-18 remaining)
 
-- `@dropway/server` exports `EXTENSION_API_VERSION = 4`; extension API changes update that value and
+- `@dropway/server` exports `EXTENSION_API_VERSION = 5`; extension API changes update that value and
   the Extension API section in `CHANGELOG.md`.
 - `test/extension-contract.test.ts` builds `createDropway()` with fake adapters and exercises every
   existing point: identity and scopes, policy limits and refusals, all five metering event kinds,
@@ -1316,6 +1318,7 @@ Sites origin:
 | any path declared in `.dropway/proxy.json` | Proxy route | P1 | R-31 |
 | `/__dropway/assets/<hash>.<ext>` | Our viewer scripts and styles (static assets) | P1 | R-34 |
 | `/__dropway/report` | Abuse report form | P1 | R-37 |
+| `<site>/badge.svg` | Live-version badge: SVG with the live version and coarse age for public sites; one identical generic SVG otherwise ([SITE_BADGE](SITE_BADGE.md)) | P1 | Done |
 
 Reserved: slugs never contain `--` and never match the reserved list; file paths under `__dropway/` are
 rejected at publish; files under `.dropway/` are stored but never served.
@@ -1544,6 +1547,13 @@ CLI hashes and uploads from disk. Credentials as for the CLI.
 
 ### 10.2 Matrix
 
+Shipped report printing: Markdown, code/text/Source, JSON, CSV and notebook
+viewers use print-only black-on-white styles, path context, wrapped content and
+page-aware tables without viewer controls. Existing caps, notices, selected
+panes and closed disclosures remain; HTML applications own their print styles.
+See [Printing reports](VIEWERS.md#printing-reports) for boundaries and browser
+URL-header settings. This describes repository behavior, not deployment status.
+
 | Kind (`detectFileKind`) | Typical extensions | Rendered view | Source / raw | Viewer cap | Scripts | Pri | Status |
 |---|---|---|---|---|---|---|---|
 | html | `.html`, `.htm` | The page itself; `?view=1` = viewer frame | highlighted source; raw as text | - | page's own | P0 | Page + raw done; frame, source R-07 |
@@ -1569,7 +1579,7 @@ CLI hashes and uploads from disk. Credentials as for the CLI.
 | model3d | `.glb .gltf` | `<model-viewer>` from first-party assets | download | 50 MB | first-party | P2 | R-51 |
 | map | `.geojson` (opt-in) | Map with features (tiles from a configurable source) | JSON view | 10 MB | first-party | P2 | R-51 |
 | epub | `.epub` | Chapter list and reader | download | 50 MB | first-party | P2 | R-51 |
-| folder | (no index file) | Listing: folders, sizes, image gallery, and `README.md` rendered below | - | - | none | P0 | Done (README below in R-08) |
+| folder | (no index file) | Listing: folders first by name; plain links for Name (default), Largest first (size descending, then name) and Type (displayed kind label, then name). `?sort=name\|size\|type` affects only listings; unknown values use Name. English collation with code-unit ties pins name order. File/folder links stay canonical; the gallery follows the selected order, capped at 60 images | - | - | none | P0 | Done (sorting and gallery; README below in R-08) |
 
 ---
 
@@ -1602,7 +1612,7 @@ Path mode is interim. It exists so an instance works on `workers.dev` with no do
   `SITES_SANDBOX=true`.
 - Root-absolute URLs are handled by HTML/CSS rewriting, `Referer` redirects (unsandboxed pages) and an
   injected run-time shim (sandboxed pages: no Referer is ever sent from an opaque origin). Import
-  specifiers, `location.href` and `pushState` with root-relative URLs should be relative. Publish warnings (R-12) say this with the exact framework fix.
+  specifiers, `location.href` and `pushState` with root-relative URLs should be relative. Publish warnings say this with the exact framework fix.
 
 `SITES_SANDBOX` (default `auto` since 2026-10-22):
 
@@ -1672,7 +1682,15 @@ grant more than they hold. Keys can be limited to one site and, for drives, a pa
 - **Enumeration.** Newly generated slugs are `adjective-noun-xxxxxx` (60 x 60 words x 32^6 suffixes,
   about 3.9 trillion names, about 42 bits). That makes them hard to guess, not secret: anything private
   must use an access mode. Existing four-character slugs remain valid and are not renamed. Listing endpoints
-  need credentials; version previews need a signed link; 404s look the same for "never existed" and "no access".
+  need credentials; ready version previews need owner Authorization or a signed link; 404s look the same
+  for "never existed" and "no access". The link-permanence contract preserves 308 redirects for former
+  names and 410 for deleted-version addresses before preview authorization; neither serves content.
+- **Preview isolation.** A preview cookie is host-only and scoped to its version root, not an origin
+  boundary between paths. As with password sites, use subdomain mode for sensitive content or mutually
+  untrusted sites: path-mode sites share an origin, including ambient-cookie classic-script inclusions
+  from opaque sandboxes. Signed links and cookies expire at the same absolute 24-hour deadline.
+  Link issuance requires HTTPS except on loopback development origins; non-loopback HTTP
+  omits `versionUrl` without failing publication.
 - **IPs.** Only salted hashes (`SIGNING_SECRET`) are stored. Analytics visitors are daily salted hashes.
 - **SSRF.** URL sources, proxy routes and webhooks fetch `https` only, refuse private, loopback,
   link-local and Cloudflare-internal addresses, follow at most 3 redirects (re-checking each), time out at
@@ -1807,7 +1825,7 @@ Workspaces 24, Variables 3, Billing 4, Support 1.
 | Byte-identical republish `unchanged` | Same | P0 | Done |
 | Update in place, settings as patches | `publish_site` with `site`, `update_site_settings` | P0 | Done |
 | `baseVersionId` -> 409 | Same, with `next` | P0 | Done |
-| Finalize `warnings[]` | Publish warnings (more kinds) | P0 | R-12 |
+| Finalize `warnings[]` | Publish warnings (more kinds) | P0 | Done (R-12) |
 | Client attribution header and badge | `X-Kofra-Client`, MCP `clientInfo` | P0 | Done / R-06 |
 | `urls[]` (slug, domain, label...) | `site.urls[]` (slug, domain, mount) | P1 | R-33 |
 | TTL | `ttlSeconds` | P1 | R-27 |
@@ -1828,7 +1846,7 @@ Workspaces 24, Variables 3, Billing 4, Support 1.
 | Serving precedence, listings, gallery | Same, plus README under listings | P0 | Done / R-08 |
 | Markdown render + toggle + `?raw=1` | Same | P0 | Done |
 | JSON, CSV, code, text, SVG served raw | Rendered viewers for all of them, with raw toggle | P0 | R-07, R-08 |
-| Headers, Range, edge compression, WASM handling, COOP/COEP, pre-compressed files | Same | P0 / P1 | Done (warning R-12) |
+| Headers, Range, edge compression, WASM handling, COOP/COEP, pre-compressed files | Same | P0 / P1 | Done |
 | New version live in about 10 s | Version URL at once; live URL within about 60 s; `--wait` confirms | P0 | R-13, R-14 |
 | Owner-only preview hosts `{versionId}--{slug}` | `<slug>--v<N>` with signed links | P0 | R-13 |
 | Thumbnails and OG cards | Browser Run screenshots | P1 | R-20 |
