@@ -194,7 +194,10 @@ describe("versions naming: canonical /versions routes with /deploys aliases", ()
     await dw.json("/api/v1/sites", { key: dw.ownerKey, ...jsonBody({ slug: "ref-target" }) });
     for (const ref of ["v999", "999", "ver_not_there", foreignId]) {
       for (const [method, suffix] of [["POST", "/finalize"], ["POST", "/restore"], ["DELETE", ""]] as const) {
-        const res = await dw.json(`/api/v1/sites/ref-target/versions/${ref}${suffix}`, { method, key: dw.ownerKey });
+        const res = await dw.json(`/api/v1/sites/ref-target/versions/${ref}${suffix}`, {
+          ...(method === "DELETE" ? jsonBody({ confirm: "ref-target" }) : {}),
+          method, key: dw.ownerKey,
+        });
         expect(res.status, `${method} ${ref}${suffix}`).toBe(404);
         expect(res.body.error.code, `${method} ${ref}${suffix}`).toBe("version_not_found");
       }
