@@ -285,7 +285,7 @@ export const fontViewer: Viewer = {
 .dw-sizes legend{padding:0;margin-bottom:.4rem;color:var(--muted);font-size:.85rem}
 .dw-sizes div{display:flex;flex-wrap:wrap;gap:.5rem}
 .dw-sizes label{display:inline-flex;gap:.35rem;align-items:center;border:1px solid var(--line);border-radius:8px;padding:.3rem .6rem;font-size:.85rem;cursor:pointer}
-.dw-sizes label:has(:checked){border-color:var(--accent);color:var(--accent);font-weight:600}
+.dw-sizes label:has(:checked){border-color:var(--accent);font-weight:600}
 .dw-sizes label:has(:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
 .dw-fs{display:flex;gap:1rem;align-items:baseline;border-top:1px solid var(--line);padding:.4rem 0}
 .dw-fs span{flex:none;width:3.5rem;color:var(--muted);font-size:.8rem;font-family:ui-monospace,monospace}

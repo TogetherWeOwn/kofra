@@ -152,9 +152,9 @@ as before; it reads no font bytes and parses nothing. The editable sample is a
 plain-text `<textarea>` (multiline, Unicode and HTML-like text stay literal;
 pasted rich text becomes plain text) with three native, labelled size presets:
 16px, 32px (default) and 64px. They are CSS-only radios, so they need no
-script, form submission or storage, and typed text is never sent anywhere or
-restored on reload. Choosing 32px resets the size. The presets resize only the
-editable sample; the seven static rows keep their labelled sizes (12-72px) and
+script, form submission or application storage, and typed text is not sent
+anywhere. Browsers may restore entered text and selected presets on reload.
+Choosing 32px resets the size. The presets resize only the editable sample; the seven static rows keep their labelled sizes (12-72px) and
 wrap on narrow screens instead of being cut with an ellipsis. The page does not
 claim the font covers every displayed character: the browser may substitute a
 fallback font for missing glyphs. Raw, Download, CSP and read budgets are
