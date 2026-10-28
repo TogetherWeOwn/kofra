@@ -13,7 +13,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "test": "vitest run && npm run test:cli && npm run test:browser-code && npm run test:client",
-    "test:cli": "vitest run -c packages/cli/vitest.config.ts",
+    "test:cli": "npm run build -w kofra && vitest run -c packages/cli/vitest.config.ts",
     "test:client": "vitest run -c packages/client/vitest.config.ts",
     "test:browser-code": "vitest run -c packages/server/vitest.config.ts",
     "test:watch": "vitest",
