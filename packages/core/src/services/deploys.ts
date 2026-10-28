@@ -10,7 +10,7 @@ import { findSecrets, lineAt } from "../lib/secrets";
 import { detectFileKind } from "../lib/filetypes";
 import { stringField } from "../lib/input";
 import { hasScope, type Principal } from "../principal";
-import { blobKey, blobScope, putVerifiedBlob } from "./blobs";
+import { blobScope, putVerifiedBlob } from "./blobs";
 import { emit, meter } from "./events";
 import { refreshLive } from "./live";
 import { createSite, discardNewSite, getSiteFor, getVersion, serializeVersion, type SiteRow, type SiteSettingsInput, type VersionRow } from "./sites";
@@ -540,11 +540,15 @@ export async function deployWarnings(dc: DropwayContext, site: SiteRow, versionI
   const warnings: Warning[] = [];
   // Advisory reads must not turn an already-published version into an API failure.
   // Keep this guard local to the scan: authorization and finalization still fail normally.
+  type StoredEntry = NormalisedEntry & { storageKey: string | null };
   const files = await dc.env.DB.prepare(
-    "SELECT path, sha256, size, content_type AS contentType FROM version_files WHERE version_id = ? ORDER BY path",
+    `SELECT vf.path, vf.sha256, vf.size, vf.content_type AS contentType,
+       COALESCE(b.storage_key, 'blobs/' || b.sha256) AS storageKey
+     FROM version_files vf LEFT JOIN blobs b ON b.sha256 = vf.sha256
+     WHERE vf.version_id = ? ORDER BY vf.path`,
   )
     .bind(versionId)
-    .all<NormalisedEntry>()
+    .all<StoredEntry>()
     .then((result) => result.results)
     .catch(() => null);
   if (files === null) return warnings;
@@ -572,14 +576,14 @@ export async function deployWarnings(dc: DropwayContext, site: SiteRow, versionI
   // into the shared edge cache as a side effect of publishing.
   const texts = new Map<string, Promise<string | null>>();
   let scanned = 0;
-  const textFor = (f: NormalisedEntry): Promise<string | null> => {
+  const textFor = (f: StoredEntry): Promise<string | null> => {
     let pending = texts.get(f.sha256);
     if (!pending) {
       pending =
-        f.size > WARN_SCAN_MAX_BYTES || scanned >= WARN_SCAN_MAX_FILES
+        !f.storageKey || f.size > WARN_SCAN_MAX_BYTES || scanned >= WARN_SCAN_MAX_FILES
           ? Promise.resolve(null)
           : ((scanned += 1),
-            dc.env.FILES.get(blobKey(f.sha256), { range: { offset: 0, length: f.size } })
+            dc.env.FILES.get(f.storageKey, { range: { offset: 0, length: f.size } })
               .then((obj) => (obj ? obj.text() : null))
               .catch(() => null));
       texts.set(f.sha256, pending);

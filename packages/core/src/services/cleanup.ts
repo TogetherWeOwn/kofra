@@ -1,6 +1,6 @@
 import type { DropwayContext } from "../context";
 import { siteUrl } from "../context";
-import { blobKey } from "./blobs";
+import { cleanupBlobs } from "./blob-cleanup";
 import { emit, meter } from "./events";
 import { dropLive } from "./live";
 import { convertRedirectsStatements, insertTombstone, purgeExpiredHolds } from "./slug-holds";
@@ -99,27 +99,8 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
     if (result[1]?.meta.changes) report.abandonedDeploys++;
   }
 
-  // 4. Unreferenced blobs. The row is deleted only if still unreferenced at that instant;
-  // only then is the R2 object removed. (Known gap: a re-upload of the same bytes in the
-  // milliseconds between those two steps would be lost; the next finalize reports it missing.)
-  const { results: orphans } = await db
-    .prepare(
-      `SELECT b.sha256 FROM blobs b
-        WHERE b.created_at < ? AND NOT EXISTS (SELECT 1 FROM version_files vf WHERE vf.sha256 = b.sha256)
-        LIMIT 500`,
-    )
-    .bind(now - DAY)
-    .all<{ sha256: string }>();
-  for (const b of orphans) {
-    const [del] = await db.batch([
-      db.prepare("DELETE FROM blobs WHERE sha256 = ? AND NOT EXISTS (SELECT 1 FROM version_files WHERE sha256 = ?)").bind(b.sha256, b.sha256),
-      db.prepare("DELETE FROM blob_scopes WHERE sha256 = ? AND NOT EXISTS (SELECT 1 FROM blobs WHERE sha256 = ?)").bind(b.sha256, b.sha256),
-    ]);
-    if (del?.meta.changes) {
-      await dc.env.FILES.delete(blobKey(b.sha256));
-      report.deletedBlobs++;
-    }
-  }
+  // 4. Retire unreferenced generations and reclaim crash/failed-delete objects.
+  report.deletedBlobs = await cleanupBlobs(dc, now);
   // 6. One statement selects and deletes against current expiry, so a reclaimed
   // key cannot be removed using a stale snapshot of its previous owner.
   const purgedKeys = await db.prepare(

@@ -1,12 +1,15 @@
 import type { DropwayContext } from "../context";
-import { badRequest } from "../errors";
+import { badRequest, conflict } from "../errors";
 
-/**
- * Content-addressed file storage. Every file is stored once in R2 at
- * blobs/<sha256>; versions only reference hashes, so identical files across
- * versions and sites cost nothing extra.
- */
+/** Legacy physical key. New uploads use a unique generation under this prefix. */
 export const blobKey = (sha256: string) => `blobs/${sha256}`;
+
+/** Resolve the verified generation, retaining existing pre-migration objects. */
+export async function storedBlobKey(dc: DropwayContext, sha256: string): Promise<string | null> {
+  const row = await dc.env.DB.prepare("SELECT storage_key FROM blobs WHERE sha256 = ?")
+    .bind(sha256).first<{ storage_key: string | null }>();
+  return row ? row.storage_key ?? blobKey(sha256) : null;
+}
 
 const IMMUTABLE = "public, max-age=31536000, immutable";
 
@@ -37,7 +40,9 @@ export async function readBlob(dc: DropwayContext, sha256: string, size: number)
     const hit = await cache.match(key).catch(() => undefined);
     if (hit?.body) return { body: hit.body, size };
   }
-  const obj = await dc.env.FILES.get(blobKey(sha256));
+  const storageKey = await storedBlobKey(dc, sha256);
+  if (!storageKey) return null;
+  const obj = await dc.env.FILES.get(storageKey);
   if (!obj) return null;
   if (!cache || obj.size > 50 * 1024 * 1024) return { body: obj.body, size: obj.size };
   const [a, b] = obj.body.tee();
@@ -49,7 +54,9 @@ export async function readBlob(dc: DropwayContext, sha256: string, size: number)
 
 /** Read a byte range straight from R2 (Range requests: video, audio, large wasm). */
 export async function readBlobRange(dc: DropwayContext, sha256: string, range: { offset: number; length: number }) {
-  const obj = await dc.env.FILES.get(blobKey(sha256), { range });
+  const storageKey = await storedBlobKey(dc, sha256);
+  if (!storageKey) return null;
+  const obj = await dc.env.FILES.get(storageKey, { range });
   return obj ? obj.body : null;
 }
 
@@ -60,8 +67,9 @@ export async function readBlobText(dc: DropwayContext, sha256: string, size: num
 }
 
 /**
- * Write bytes to R2 at blobs/<sha256>, letting R2 verify the SHA-256 while it
- * streams in, then record the blob and the scope that proved it holds it.
+ * Verify bytes into a fresh physical generation, then atomically attach it (or
+ * reuse the existing verified generation) and record the scope's proof. A
+ * cleanup of an older generation can never delete this upload's bytes.
  */
 export async function putVerifiedBlob(
   dc: DropwayContext,
@@ -71,6 +79,10 @@ export async function putVerifiedBlob(
   size: number,
   contentType: string | null,
 ): Promise<void> {
+  const storageKey = `${blobKey(sha)}/${crypto.randomUUID()}`;
+  const db = dc.env.DB;
+  await db.prepare("INSERT INTO blob_uploads (storage_key, created_at) VALUES (?, ?)")
+    .bind(storageKey, Date.now()).run();
   try {
     let value: ReadableStream | ArrayBuffer | Uint8Array = body;
     if (body instanceof ReadableStream) {
@@ -79,8 +91,11 @@ export async function putVerifiedBlob(
       body.pipeTo(fixed.writable).catch(() => {});
       value = fixed.readable;
     }
-    await dc.env.FILES.put(blobKey(sha), value, { sha256: sha, httpMetadata: contentType ? { contentType } : undefined });
+    await dc.env.FILES.put(storageKey, value, { sha256: sha, httpMetadata: contentType ? { contentType } : undefined });
   } catch (e) {
+    // Invalid bytes must not accumulate reservations until the next daily GC.
+    // If D1 itself is unavailable, the bounded reservation sweep is the fallback.
+    await db.prepare("DELETE FROM blob_uploads WHERE storage_key = ?").bind(storageKey).run().catch(() => {});
     const msg = String(e);
     if (/checksum|sha-?256|digest|match/i.test(msg)) {
       throw badRequest("hash_mismatch", "The uploaded bytes do not match the SHA-256 in the URL.", "Upload the exact file bytes; do not re-encode or compress them.");
@@ -89,8 +104,28 @@ export async function putVerifiedBlob(
     throw e;
   }
   const now = Date.now();
-  await dc.env.DB.batch([
-    dc.env.DB.prepare("INSERT OR IGNORE INTO blobs (sha256, size, created_at) VALUES (?, ?, ?)").bind(sha, size, now),
-    dc.env.DB.prepare("INSERT OR IGNORE INTO blob_scopes (scope, sha256, created_at) VALUES (?, ?, ?)").bind(scope, sha, now),
+  const result = await db.batch<{ storage_key: string | null }>([
+    db.prepare(`INSERT OR IGNORE INTO blobs (sha256, size, created_at, storage_key)
+      SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM blob_uploads WHERE storage_key = ?)`)
+      .bind(sha, size, now, storageKey, storageKey),
+    db.prepare(`INSERT OR IGNORE INTO blob_scopes (scope, sha256, created_at)
+      SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM blob_uploads WHERE storage_key = ?)
+      AND EXISTS (SELECT 1 FROM blobs WHERE sha256 = ?)`)
+      .bind(scope, sha, now, storageKey, sha),
+    db.prepare(`SELECT storage_key FROM blobs WHERE sha256 = ?
+      AND EXISTS (SELECT 1 FROM blob_uploads WHERE storage_key = ?)`)
+      .bind(sha, storageKey),
+    db.prepare("DELETE FROM blob_uploads WHERE storage_key = ?").bind(storageKey),
   ]);
+  const stored = result[2]?.results[0];
+  // A slow/crashed writer's reservation may have been retired by GC. It must
+  // not attach bytes after GC decided to delete this physical key.
+  if (!stored) {
+    throw conflict("missing_blobs", "This upload expired while its bytes were being stored.", "Upload the bytes again, then finalize the deploy.");
+  }
+  if (stored.storage_key !== storageKey) {
+    // Another verified writer won deduplication. A failed delete is recovered
+    // by the bounded inventory sweep; do not turn a successful upload into 500.
+    await dc.env.FILES.delete(storageKey).catch(() => {});
+  }
 }

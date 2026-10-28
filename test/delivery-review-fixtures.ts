@@ -106,9 +106,9 @@ export async function lifecycle(ref: string, by: "slug" | "id" = "slug") {
 }
 
 export async function references(siteId: string) {
-  const result = await env.DB.prepare(`SELECT vf.path, vf.sha256, vf.size FROM version_files vf
-    JOIN versions v ON v.id = vf.version_id WHERE v.site_id = ? ORDER BY vf.path`).bind(siteId)
-    .all<{ path: string; sha256: string; size: number }>();
+  const result = await env.DB.prepare(`SELECT vf.path, vf.sha256, vf.size, COALESCE(b.storage_key, 'blobs/' || vf.sha256) AS storage_key FROM version_files vf
+    JOIN versions v ON v.id = vf.version_id LEFT JOIN blobs b ON b.sha256 = vf.sha256 WHERE v.site_id = ? ORDER BY vf.path`).bind(siteId)
+    .all<{ path: string; sha256: string; size: number; storage_key: string }>();
   return result.results;
 }
 
@@ -116,7 +116,7 @@ export async function assertStoredBytes(siteId: string) {
   const refs = await references(siteId);
   expect(refs.map((file) => [file.path, file.size])).toEqual([["alpha.txt", 6], ["beta.html", 12]]);
   for (const file of refs) {
-    const blob = await env.FILES.get(`blobs/${file.sha256}`);
+    const blob = await env.FILES.get(file.storage_key);
     expect(blob, `${file.path} remains in R2`).not.toBeNull();
     expect(await blob!.text()).toBe(REVIEW_FILES.find((fixture) => fixture.path === file.path)!.content);
   }
