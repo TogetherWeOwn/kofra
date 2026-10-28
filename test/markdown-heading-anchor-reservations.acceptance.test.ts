@@ -7,6 +7,7 @@
  */
 import { beforeAll, describe, expect, it } from "vitest";
 import { renderMarkdown } from "../packages/server/src/viewers/markdown";
+import { sanitizeHtml } from "../packages/server/src/viewers/sanitize";
 import { form, freshInstance, type Instance } from "./helpers";
 
 const NAV = { Accept: "text/html", "Sec-Fetch-Dest": "document" };
@@ -18,6 +19,10 @@ const fixtures: Record<string, string> = {
   "escaped-after.md": '<script><!-- hidden </script>\n\n<h2 id="install">Raw</h2>\n\n## Install\n',
   // Control: here the escape is closed by `-->` before the end tag.
   "escaped-closed-future.md": '<h2 id="notes">Raw</h2>\n\n## Notes\n\n<script><!-- hidden --></script>\n\n<h2 id="notes-1">Future</h2>\n',
+  // `-->` also exits the double-escaped script state, so the following
+  // `</script>` closes the script and the sanitizer serves the next heading.
+  "double-escaped-after.md": '<script><!--<script>--></script>\n\n<h2 id="notes">Raw</h2>\n\n## Notes\n',
+  "double-escaped-future.md": '<h2 id="notes">Raw</h2>\n\n## Notes\n\n<script><!--<script>--></script>\n\n<h2 id="notes-1">Future</h2>\n',
   "custom-underscore.md": `<div><x_widget data-note='<h2 id="install">Ghost</h2>'></x_widget></div>\n\n## Install\n`,
   "custom-dot.md": `<div><x.widget data-note='<h2 id="install">Ghost</h2>'></x.widget></div>\n\n## Install\n`,
   "leading-equals.md": '<h2 =id="install" id="other">Raw</h2>\n\n## Install\n\n## Other\n',
@@ -116,6 +121,23 @@ describe("Markdown anchors reserve only free DOM ids in the served page", () => 
     expectUnambiguousLinks(headings, links);
   });
 
+  it("reserves the served raw owner after --> exits double-escaped script state", async () => {
+    const { headings, links } = await inspect(await page("double-escaped-after.md"));
+    expect(headings[0]).toEqual({ id: "notes", text: "Raw" });
+    expect(headings.map((h) => h.id)).toEqual(["notes", "notes-1"]);
+    expect(links).toEqual(["#notes-1"]);
+    expectUnambiguousLinks(headings, links);
+  });
+
+  it("reserves a future raw suffix after --> exits double-escaped script state", async () => {
+    const { headings, links } = await inspect(await page("double-escaped-future.md"));
+    expect(headings[0]).toEqual({ id: "notes", text: "Raw" });
+    expect(headings[2]).toEqual({ id: "notes-1", text: "Future" });
+    expect(headings.map((h) => h.id)).toEqual(["notes", "notes-2", "notes-1"]);
+    expect(links).toEqual(["#notes-2"]);
+    expectUnambiguousLinks(headings, links);
+  });
+
   it.each(["custom-underscore.md", "custom-dot.md"])(
     "does not reserve a heading that only appears inside a quoted custom-tag attribute in %s",
     async (path) => {
@@ -164,6 +186,22 @@ describe("Markdown anchors reserve only free DOM ids in the served page", () => 
     expect(headings.map((h) => h.id)).toEqual(["notes", "notes-2", authored]);
     expect(headings[2]!.text).toBe("Future");
     expect(links).toEqual(["#notes-2"]);
+  });
+});
+
+describe("Markdown script-state reservations in the synchronous helper", () => {
+  it.each([
+    { path: "double-escaped-after.md", ids: ["notes", "notes-1"], links: ["#notes-1"] },
+    { path: "double-escaped-future.md", ids: ["notes", "notes-2", "notes-1"], links: ["#notes-2"] },
+  ])("reserves the real raw owners after --> exits double-escaped script state in $path", async ({ path, ids, links }) => {
+    const rendered = renderMarkdown(fixtures[path]!, path);
+    expect(rendered).not.toBeInstanceOf(Promise);
+    expect(typeof rendered.html).toBe("string");
+    const inspected = await inspect(await sanitizeHtml(rendered.html), "");
+    expect(inspected.headings[0]).toEqual({ id: "notes", text: "Raw" });
+    expect(inspected.headings.map((h) => h.id)).toEqual(ids);
+    expect(inspected.links).toEqual(links);
+    expectUnambiguousLinks(inspected.headings, inspected.links);
   });
 });
 
