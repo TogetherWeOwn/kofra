@@ -347,13 +347,16 @@ export async function createSiteWithDeploy(
   }
 }
 
-/** Read the live pointer and publication metadata together, not from a stale caller snapshot. */
+/** Read live metadata together, still bound to the authorized site's ownership snapshot. */
 export async function versionConflict(dc: DropwayContext, site: SiteRow, base?: VersionRow, hint?: string): Promise<ApiError> {
   const live = await dc.env.DB.prepare(
     `SELECT s.current_version_id AS id, v.number, v.client, v.finalized_at
        FROM sites s LEFT JOIN versions v ON v.id = s.current_version_id AND v.site_id = s.id
-      WHERE s.id = ? AND s.deleted_at IS NULL`,
-  ).bind(site.id).first<{ id: string | null; number: number | null; client: string | null; finalized_at: number | null }>();
+      WHERE s.id = ? AND s.tenant_id IS ? AND s.deleted_at IS NULL`,
+  ).bind(site.id, site.tenant_id).first<{ id: string | null; number: number | null; client: string | null; finalized_at: number | null }>();
+  if (!live) {
+    return notFound("site_not_found", `No site "${site.slug}" that this key can access.`, "List your sites with GET /api/v1/sites.");
+  }
   return new ApiError(
     409,
     "version_conflict",
@@ -777,7 +780,11 @@ export async function restoreVersion(dc: DropwayContext, p: Principal, site: Sit
 
 /** Permanently delete one non-live version (for example one that leaked a secret). */
 export async function deleteVersion(dc: DropwayContext, p: Principal, site: SiteRow, versionId: string) {
+  const originalSiteId = site.id;
   site = await getSiteFor(dc, p, site.slug, "sites:delete");
+  if (site.id !== originalSiteId) {
+    throw notFound("site_not_found", `No site "${site.slug}" that this key can access.`, "List your sites with GET /api/v1/sites.");
+  }
   if (site.mode === "transfer") throw conflict("transfer_immutable", "Transfer files cannot be deleted separately.", "Revoke the transfer; retained bytes are purged by cleanup when not held.");
   const version = await getVersion(dc, site.id, versionId);
   if (!version) throw notFound("version_not_found", `No version ${versionId} on site ${site.slug}.`);
