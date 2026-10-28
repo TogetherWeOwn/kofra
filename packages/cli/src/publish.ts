@@ -3,7 +3,8 @@
  *
  *   1. (new site) POST /sites                 -> slug (+ claimToken when anonymous)
  *   2. POST /sites/:slug/deploys {files}      -> which sha256 values the instance still needs
- *   3. PUT  /blobs/:sha256 for each missing   -> in parallel, retried on 429/5xx/network errors
+ *   3. PUT  /blobs/:sha256 for each missing   -> in parallel, retried on 429/5xx/network errors;
+ *      files above 95 MiB instead go through POST /uploads + PUT parts + complete (resumable)
  *   4. POST <finalizeUrl>                     -> the new version goes live atomically
  *
  * Files are content-addressed: bytes the instance already holds for this owner
@@ -107,6 +108,17 @@ interface SiteBody {
 
 const enc = encodeURIComponent;
 
+/** Above this size a single request no longer fits a Worker; use the resumable multipart protocol. */
+const MULTIPART_THRESHOLD_BYTES = 95 * 1024 * 1024;
+
+interface MultipartSession {
+  id: string;
+  sha256: string;
+  size: number;
+  partSize: number;
+  parts?: Array<{ partNumber: number; size: number; etag: string }>;
+}
+
 function settingsOf(opts: PublishOptions): Record<string, unknown> {
   const s: Record<string, unknown> = {};
   if (opts.title !== undefined) s.title = opts.title;
@@ -187,6 +199,39 @@ export async function publish(client: DropwayClient, files: SourceFile[], opts: 
   for (const f of files) if (!bySha.has(f.sha256)) bySha.set(f.sha256, f);
   const uploaded = new Set<string>();
   let bytesUploaded = 0;
+  const versionId = deploy.deploy.id;
+
+  // One large file through the resumable protocol: start a session, ask it
+  // which parts it already acknowledged, PUT only the missing slices (the
+  // source Blob stays lazy and is sliced, never read whole), then complete
+  // so the instance hash-verifies before the bytes become a blob.
+  const uploadMultipart = async (t: UploadTarget, file: SourceFile) => {
+    const started = (await client.post<MultipartSession>("/uploads", { versionId, sha256: t.sha256 }, { token })).data;
+    if (!started?.id || !Number.isInteger(started.partSize) || started.partSize <= 0) {
+      throw new CliError({ code: "unexpected_response", message: "The instance did not return a resumable upload session.", exitCode: EXIT.error });
+    }
+    const session = (await client.get<MultipartSession>(`/uploads/${enc(started.id)}`, { token })).data ?? started;
+    const partSize = session.partSize;
+    const acknowledged = new Map((session.parts ?? []).map((part) => [part.partNumber, part.size]));
+    const body = await file.body();
+    const partCount = Math.ceil(t.size / partSize);
+    for (let partNumber = 1; partNumber <= partCount; partNumber++) {
+      const start = (partNumber - 1) * partSize;
+      const end = Math.min(t.size, start + partSize);
+      if (acknowledged.get(partNumber) === end - start) continue;
+      const slice = body instanceof Blob ? body.slice(start, end) : body.subarray(start, end);
+      await client.request("PUT", `/uploads/${enc(session.id)}/parts/${partNumber}`, {
+        body: slice,
+        headers: { "Content-Type": "application/octet-stream" },
+        token,
+        retry: "safe",
+      });
+    }
+    const completed = (await client.post<{ sha256?: string; size?: number }>(`/uploads/${enc(session.id)}/complete`, {}, { token, retry: "safe" })).data;
+    if ((completed?.sha256 !== undefined && completed.sha256 !== t.sha256) || (completed?.size !== undefined && completed.size !== t.size)) {
+      throw new CliError({ code: "unexpected_response", message: "The completed upload does not match this file's hash and size.", exitCode: EXIT.error });
+    }
+  };
 
   const upload = async (targets: UploadTarget[]) => {
     const queue = targets.filter((t) => !uploaded.has(t.sha256));
@@ -201,7 +246,8 @@ export async function publish(client: DropwayClient, files: SourceFile[], opts: 
         if (!file) {
           throw new CliError({ code: "unexpected_upload", message: `The instance asked for ${t.sha256}, which is not in this publish.`, exitCode: EXIT.error });
         }
-        await client.request(t.method ?? "PUT", t.url, { body: await file.body(), headers: t.headers ?? {}, token, retry: "safe" });
+        if (t.size > MULTIPART_THRESHOLD_BYTES) await uploadMultipart(t, file);
+        else await client.request(t.method ?? "PUT", t.url, { body: await file.body(), headers: t.headers ?? {}, token, retry: "safe" });
         uploaded.add(t.sha256);
         done++;
         bytes += t.size;
