@@ -8,8 +8,11 @@
   `-1`-style suffix without taking an existing heading's fragment destination. Raw-HTML ids
   are never rewritten; Markdown-before-raw and raw-vs-raw duplicates remain as authored.
   Comments and sanitizer-dropped content reserve no ids, and documents without the collision
-  render byte-identical output. Cached renders and ETags move from `markdown@3` to `markdown@5`
-  with the change.
+  render byte-identical output. Cached renders and ETags move from `markdown@3` to `markdown@6`
+  with the change. Notebook Markdown cells and Markdown outputs inherit the same repair, so
+  notebook fragments and ETags move from `notebook@2` to `notebook@3`. Raw ids are read from
+  the served output order, matching the production tokenizer on dropped elements, script
+  escapes, comments and tags completed by generated markup.
 
 ### Sites
 
