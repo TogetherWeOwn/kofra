@@ -28,6 +28,38 @@ const MEDIA_CSS = `
 .dw-fallback{max-width:34rem;margin:15vh auto;text-align:center;color:var(--muted)}
 `;
 
+const IMAGE_CSS = `
+body{height:100vh;height:100dvh;display:flex;flex-direction:column}
+/* Keep chrome in flow so native focus scrolling cannot hide controls below it. */
+.dw-vbar{position:static;flex-shrink:0}
+.dw-media{flex:1;min-height:0}
+/* If controls exhaust the viewport, keep a usable stage in document overflow. */
+.dw-media:not(:has(#dw-zoom:checked))>.dw-stage{flex:1;min-height:8rem;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+.dw-media:not(:has(#dw-zoom:checked))>.dw-stage img{max-height:100%}
+.dw-media:has(#dw-zoom:checked){flex:none}
+.dw-media:has(#dw-zoom:checked)>.dw-stage{grid-template-columns:minmax(max-content,1fr);grid-template-rows:minmax(max-content,1fr)}
+/* A separate paint layer preserves inspection colors, not control colors. */
+.dw-media>.dw-stage{display:grid;isolation:isolate;background:none}
+.dw-stage::before{content:"";grid-area:1/1;align-self:stretch;justify-self:stretch;forced-color-adjust:none;z-index:-1;background-color:var(--card);background-image:linear-gradient(45deg,var(--code) 25%,transparent 25%),linear-gradient(-45deg,var(--code) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,var(--code) 75%),linear-gradient(-45deg,transparent 75%,var(--code) 75%);background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0}
+.dw-stage img{grid-area:1/1;align-self:center;justify-self:center}
+#dw-zoom:checked~.dw-stage img{align-self:start;justify-self:start}
+.dw-backgrounds{display:flex;gap:.4rem;align-items:center;justify-content:center;flex-wrap:wrap}
+.dw-backgrounds label{display:inline-flex;align-items:center;gap:.35rem}
+.dw-backgrounds input{margin:0;accent-color:var(--accent)}
+.dw-backgrounds input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.dw-backgrounds label:has(input:checked){border-color:var(--accent);font-weight:600}
+.dw-media:has(#dw-bg-light:checked)>.dw-stage::before{background:#fff}
+.dw-media:has(#dw-bg-dark:checked)>.dw-stage::before{background:#000}
+#dw-zoom:checked~.dw-stage img{flex-shrink:0}
+` + MEDIA_CSS;
+
+const IMAGE_BACKGROUNDS = `<div class="dw-backgrounds" role="radiogroup" aria-label="Image background">
+<span class="dw-meta" style="margin:0" aria-hidden="true">Background</span>
+<label class="dw-btn"><input type="radio" name="dw-background" id="dw-bg-checker" value="checker" checked>Checker</label>
+<label class="dw-btn"><input type="radio" name="dw-background" id="dw-bg-light" value="light">Light</label>
+<label class="dw-btn"><input type="radio" name="dw-background" id="dw-bg-dark" value="dark">Dark</label>
+</div>`;
+
 /** Pixel size from the first bytes of a PNG, GIF, JPEG, WebP or BMP file. */
 export function imageSize(b: Uint8Array): { width: number; height: number } | null {
   const u16be = (o: number) => (b[o]! << 8) | b[o + 1]!;
@@ -150,7 +182,7 @@ function folderNavHtml(vc: ViewerContext): string {
 
 export const imageViewer: Viewer = {
   id: "image",
-  version: 3,
+  version: 4,
   etagExtra: folderNavEtag,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "image" && topLevelOnly(mode),
@@ -163,9 +195,10 @@ export const imageViewer: Viewer = {
       .join(" · ");
     return viewerPage(vc, {
       tabs: mediaTabs(vc, "Image"),
-      css: MEDIA_CSS,
+      css: IMAGE_CSS,
       body: `<main class="dw-media"><input type="checkbox" id="dw-zoom" class="dw-toggle">
 <div class="dw-mediabar">${folderNavHtml(vc)}<span class="dw-meta" style="margin:0">${escapeHtml(meta)}</span><label for="dw-zoom" class="dw-btn">Actual size</label></div>
+${IMAGE_BACKGROUNDS}
 <label for="dw-zoom" class="dw-stage dw-checker"><img src="${escapeHtml(vc.fileUrl)}" alt="${escapeHtml(name)}"${dim ? ` width="${dim.width}" height="${dim.height}"` : ""}></label></main>`,
       headers: dim ? { "X-Kofra-Image-Size": `${dim.width}x${dim.height}` } : {},
     });
@@ -174,7 +207,7 @@ export const imageViewer: Viewer = {
 
 export const svgViewer: Viewer = {
   id: "svg",
-  version: 3,
+  version: 4,
   etagExtra: folderNavEtag,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "svg" && topLevelOnly(mode),
@@ -183,11 +216,11 @@ export const svgViewer: Viewer = {
     // Shown through <img>, so scripts inside the SVG never run.
     return viewerPage(vc, {
       tabs: standardTabs(vc, { rendered: "Image", source: true }),
-      // Order-independent (MEDIA_CSS sets no min-width); kept ahead of it so the
-      // style block's rule order matches the body's bar-then-stage order.
-      css: ".dw-stage img{min-width:min(16rem,100%)}" + MEDIA_CSS,
+      // Keep small SVGs legible without reading or embedding their markup.
+      css: ".dw-stage img{min-width:min(16rem,100%)}" + IMAGE_CSS,
       body: `<main class="dw-media"><input type="checkbox" id="dw-zoom" class="dw-toggle">
 <div class="dw-mediabar">${folderNavHtml(vc)}<span class="dw-meta" style="margin:0">${escapeHtml(`${formatBytes(vc.file.size)} · SVG (scripts inside it do not run here)`)}</span><label for="dw-zoom" class="dw-btn">Actual size</label></div>
+${IMAGE_BACKGROUNDS}
 <label for="dw-zoom" class="dw-stage dw-checker"><img src="${escapeHtml(vc.fileUrl)}" alt="${escapeHtml(name)}"></label></main>`,
     });
   },
@@ -260,7 +293,7 @@ const FONT_FORMATS: Record<string, string> = { woff2: "woff2", woff: "woff", ttf
 
 export const fontViewer: Viewer = {
   id: "font",
-  version: 2,
+  version: 3,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "font" && topLevelOnly(mode),
   async render(vc) {
@@ -276,15 +309,26 @@ export const fontViewer: Viewer = {
 .dw-font .s{font-family:"dw-specimen",ui-monospace,monospace}
 .dw-font .big{font-size:clamp(5rem,16vw,11rem);line-height:1;margin:.5rem 0 1rem}
 .dw-font .set{font-size:1.6rem;line-height:1.5;word-break:break-all;margin:0 0 .6rem}
-.dw-font .try{font-size:2rem;line-height:1.35;border:1px dashed var(--line);border-radius:10px;padding:1rem;margin:1.5rem 0;outline:0}
+.dw-font .try{display:block;box-sizing:border-box;width:100%;min-height:6rem;font-size:32px;line-height:1.35;color:inherit;background:transparent;border:1px dashed var(--line);border-radius:10px;padding:1rem;margin:.6rem 0 1.5rem;resize:vertical;field-sizing:content;white-space:pre-wrap;overflow-wrap:anywhere}
 .dw-font .try:focus{border-color:var(--accent)}
+.dw-font .try:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.dw-font:has(#dw-sz-16:checked) .try{font-size:16px}
+.dw-font:has(#dw-sz-64:checked) .try{font-size:64px}
+.dw-sizes{border:0;padding:0;margin:1.5rem 0 0;min-width:0}
+.dw-sizes legend{padding:0;margin-bottom:.4rem;color:var(--muted);font-size:.85rem}
+.dw-sizes div{display:flex;flex-wrap:wrap;gap:.5rem}
+.dw-sizes label{display:inline-flex;gap:.35rem;align-items:center;border:1px solid var(--line);border-radius:8px;padding:.3rem .6rem;font-size:.85rem;cursor:pointer}
+.dw-sizes label:has(:checked){border-color:var(--accent);font-weight:600}
+.dw-sizes label:has(:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
 .dw-fs{display:flex;gap:1rem;align-items:baseline;border-top:1px solid var(--line);padding:.4rem 0}
 .dw-fs span{flex:none;width:3.5rem;color:var(--muted);font-size:.8rem;font-family:ui-monospace,monospace}
-.dw-fs p{margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:"dw-specimen",ui-monospace,monospace}`,
+.dw-fs p{margin:0;min-width:0;overflow-wrap:anywhere;font-family:"dw-specimen",ui-monospace,monospace}
+@media (max-width:36rem){.dw-fs{flex-direction:column;gap:.1rem}.dw-fs span{width:auto}}`,
       body: `<main class="dw-font"><p class="dw-meta" style="text-align:left">${escapeHtml(`${name} · ${formatBytes(vc.file.size)} · ${vc.file.contentType.split(";")[0]}`)}</p>
 <div class="s big" aria-hidden="true">Aa Gg</div>
 <p class="s set">ABCDEFGHIJKLMNOPQRSTUVWXYZ<br>abcdefghijklmnopqrstuvwxyz<br>0123456789 !?&amp;@#%()[]{}.,;:'"-+=*/\\</p>
-<div class="s try" contenteditable="true" spellcheck="false" aria-label="Type to try the font">Type here to try this font.</div>
+<fieldset class="dw-sizes"><legend>Sample size</legend><div>${[16, 32, 64].map((px) => `<label><input type="radio" name="dw-sz" id="dw-sz-${px}" value="${px}"${px === 32 ? " checked" : ""}>${px}px${px === 32 ? " (default)" : ""}</label>`).join("")}</div></fieldset>
+<textarea class="s try" rows="3" spellcheck="false" aria-label="Type to try the font">Type here to try this font.</textarea>
 ${sizes}</main>`,
     });
   },

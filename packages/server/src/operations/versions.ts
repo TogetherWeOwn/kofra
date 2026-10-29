@@ -97,7 +97,7 @@ export const VERSION_OPERATIONS = [
         site: SITE_REF,
         version: VERSION_REF,
         confirm: CONFIRM_SLUG,
-        idempotencyKey: { type: "string", description: "Optional replay key (24 h); reuse only with the exact same request." },
+        idempotencyKey: { type: "string" },
       },
       required: ["site", "version", "confirm"],
       additionalProperties: false,
