@@ -242,7 +242,9 @@ function buildServer(compiled: CompiledTool[], ctx: { dw: DropwayContext; princi
           }
           const args = { ...((rawArgs ?? {}) as Record<string, unknown>) };
           const idempotencyKey = def.idempotent ? validateIdempotencyKey(args.idempotencyKey) : null;
-          delete args.idempotencyKey;
+          // Self-managed operation schemas may carry a key into a core service
+          // that authorizes and binds immutable identity before looking up replay.
+          if (def.idempotent) delete args.idempotencyKey;
           const toolCtx = { dw, principal, request, client: clientName(server, request), idempotencyKey };
           const { result, replayed } = await withIdempotency(
             dw,

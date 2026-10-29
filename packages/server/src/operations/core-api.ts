@@ -9,7 +9,6 @@ import {
   getMember,
   getSiteByRef,
   getTenant,
-  isLiveVersionRef,
   listFiles,
   listSites,
   listVersions,
@@ -19,7 +18,7 @@ import {
   requireConfirm,
   resolveSiteSlug,
   resolveVersionRef,
-  restoreVersion,
+  restoreVersionByRef,
   serializeMember,
   serializeTenant,
   setSiteAccess,
@@ -827,13 +826,17 @@ export const CORE_API_OPERATIONS = [
       'Make an older version live again (instant rollback; nothing is copied). version accepts "v3", "3" or a version id. Restoring the version that is already live is a harmless no-op.',
     input: fromSchema({
       type: "object",
-      properties: { site: SITE_REF, version: VERSION_REF },
+      properties: {
+        site: SITE_REF, version: VERSION_REF,
+        idempotencyKey: { type: "string", description: "Optional replay key (24 h); reuse only with the exact same request." },
+      },
       required: ["site", "version"],
       additionalProperties: false,
     }),
     output: fromSchema(
       obj(
         {
+          replayed: { type: "boolean" },
           restored: { type: "boolean" },
           alreadyLive: { type: "boolean" },
           version: VERSION_OUT,
@@ -844,13 +847,9 @@ export const CORE_API_OPERATIONS = [
       ),
     ),
     annotations: WRITE,
-    async handler(a, { dw, principal }) {
-      const site = await getSiteByRef(dw, principal, a.site, "sites:write");
-      const symbolicLive = isLiveVersionRef(a.version);
-      const versionId = symbolicLive ? "live" : (await resolveVersionRef(dw, site, a.version)).id;
-      const out = await restoreVersion(dw, principal, site, versionId, { symbolicLive });
-      return { ...out, slug: site.slug, url: siteUrl(dw, site.slug) };
-    },
+    handler: (a, { dw, principal }) => restoreVersionByRef(dw, principal, a.site, a.version, {
+      transport: "mcp", idempotencyKey: a.idempotencyKey,
+    }),
     http: {
       input: fromSchema({
         type: "object",
@@ -859,12 +858,10 @@ export const CORE_API_OPERATIONS = [
       }),
       output: fromSchema({ type: "object" }),
       handler: async (c) => {
-        const dw = D(c);
-        const site = await getSiteByRef(dw, P(c), c.req.param("slug")!, "sites:write");
-        const symbolicLive = isLiveVersionRef(c.req.param("id"));
-        const versionId = symbolicLive ? "live" : (await resolveVersionRef(dw, site, c.req.param("id")!)).id;
-        const out = await restoreVersion(dw, P(c), site, versionId, { symbolicLive });
-        return c.json({ ...out, url: siteUrl(dw, site.slug) });
+        const { slug: _slug, ...out } = await restoreVersionByRef(D(c), P(c), c.req.param("slug")!, c.req.param("id")!, {
+          transport: "rest", idempotencyKey: c.req.header("idempotency-key"),
+        });
+        return c.json(out);
       },
     },
     tool: {

@@ -32,6 +32,7 @@ export * from "./services/previews";
 export * from "./services/blobs";
 export * from "./services/sites";
 export * from "./services/deploys";
+export * from "./services/version-actions";
 export * from "./services/publish";
 export * from "./services/cleanup";
 export * from "./services/idempotency";

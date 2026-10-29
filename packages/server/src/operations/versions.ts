@@ -1,5 +1,5 @@
 import { HTTP_UPLOAD, HTTP_UPLOAD_ITEM, HTTP_VERSION } from "./http-schemas";
-import { deleteVersion, exportVersionZip, getVersionStatus, getSiteByRef, requireConfirm, resolveVersionRef } from "@dropway/core";
+import { deleteVersionByRef, exportVersionZip, getVersionStatus, getSiteByRef, resolveVersionRef } from "@dropway/core";
 import { CONFIRM_SLUG, SITE_REF, VERSION_OUT, VERSION_REF, obj } from "../mcp/schemas";
 import { defineOperation } from "../operations";
 import { fromSchema, RO, DESTROY, P, D } from "./shared";
@@ -97,18 +97,16 @@ export const VERSION_OPERATIONS = [
         site: SITE_REF,
         version: VERSION_REF,
         confirm: CONFIRM_SLUG,
+        idempotencyKey: { type: "string", description: "Optional replay key (24 h); reuse only with the exact same request." },
       },
       required: ["site", "version", "confirm"],
       additionalProperties: false,
     }),
-    output: fromSchema(obj({ deleted: { type: "boolean" }, id: { type: "string" } }, ["deleted", "id"])),
+    output: fromSchema(obj({ deleted: { type: "boolean" }, id: { type: "string" }, replayed: { type: "boolean" } }, ["deleted", "id"])),
     annotations: DESTROY,
-    async handler(a, { dw, principal }) {
-      const site = await getSiteByRef(dw, principal, a.site, "sites:delete");
-      requireConfirm(a.confirm, site.slug);
-      const v = await resolveVersionRef(dw, site, a.version);
-      return deleteVersion(dw, principal, site, v.id);
-    },
+    handler: (a, { dw, principal }) => deleteVersionByRef(dw, principal, a.site, a.version, a.confirm, {
+      transport: "mcp", idempotencyKey: a.idempotencyKey,
+    }),
     http: {
       input: fromSchema({
         type: "object",
@@ -117,11 +115,10 @@ export const VERSION_OPERATIONS = [
       }),
       output: fromSchema({ type: "object" }),
       handler: async (c) => {
-        const site = await getSiteByRef(D(c), P(c), c.req.param("slug")!, "sites:delete");
         const body = await readJson(c);
-        requireConfirm(body.confirm, site.slug);
-        const v = await resolveVersionRef(D(c), site, c.req.param("id")!);
-        return c.json(await deleteVersion(D(c), P(c), site, v.id));
+        return c.json(await deleteVersionByRef(D(c), P(c), c.req.param("slug")!, c.req.param("id")!, body.confirm, {
+          transport: "rest", idempotencyKey: c.req.header("idempotency-key"),
+        }));
       },
     },
     tool: { summarize: (r) => `Deleted version ${r.id}.` },
