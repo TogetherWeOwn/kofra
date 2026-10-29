@@ -19,8 +19,8 @@ async function storedSite(slug: string) {
 }
 
 describe("extension API contract", () => {
-  it("exports extension API version 4 from the public server entry point", () => {
-    expect(server).toHaveProperty("EXTENSION_API_VERSION", 4);
+  it("exports extension API version 5 from the public server entry point", () => {
+    expect(server).toHaveProperty("EXTENSION_API_VERSION", 5);
   });
 
   it("enforces the extension's transferMaxExpiryDays on creation and update", async () => {

@@ -77,7 +77,8 @@ export const unauthorized = (message = "This endpoint needs an API key.", hint?:
 
 export const forbidden = (message: string, hint?: string, code = "forbidden") => new ApiError(403, code, message, hint);
 
-export const notFound = (code: string, message: string, hint?: string) => new ApiError(404, code, message, hint);
+export const notFound = (code: string, message: string, hint?: string, details?: Record<string, unknown>) =>
+  new ApiError(404, code, message, hint, details);
 
 export const conflict = (code: string, message: string, hint?: string, details?: Record<string, unknown>) =>
   new ApiError(409, code, message, hint, details);

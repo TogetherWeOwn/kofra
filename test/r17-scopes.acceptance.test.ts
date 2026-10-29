@@ -115,7 +115,7 @@ describe("R-17 deletion authorization", () => {
     await publish(dw, "keep-history", "second");
     const key = await keyWith(dw, ["sites:read", "sites:write"]);
     if (surface === "REST") {
-      const result = await dw.json(`/api/v1/sites/keep-history/versions/${first.version.id}`, { key, method: "DELETE" });
+      const result = await dw.json(`/api/v1/sites/keep-history/versions/${first.version.id}`, { key, method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: "keep-history" }) });
       expect(result.status).toBe(403);
       expect(result.body.error.code).toBe("insufficient_scope");
     } else {
