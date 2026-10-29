@@ -3659,7 +3659,7 @@ export function dropwayClient() {
                     if (siteMutationPending) return;
                     setSiteMutationPending(true);
                     try {
-                      await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id) + "/restore", { method: "POST" });
+                      await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id) + "/restore", { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID() } });
                       toast("v" + v.number + " is live again.");
                       pages.site();
                     } catch (e) {
@@ -3685,7 +3685,7 @@ export function dropwayClient() {
                     try {
                       var ok = await confirmBox({ title: "Delete v" + v.number + "?", message: "The version and its file list are removed for good (use this for a version that leaked something). Other versions are not affected.", confirmText: "Delete version" });
                       if (!ok) return;
-                      await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id), { method: "DELETE", body: { confirm: site.slug } });
+                      await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id), { method: "DELETE", body: { confirm: site.slug }, headers: { "Idempotency-Key": crypto.randomUUID() } });
                       toast("v" + v.number + " deleted.");
                       // A successful deletion must not reload its now-invalid
                       // explicit link; unrelated inspected versions stay put.

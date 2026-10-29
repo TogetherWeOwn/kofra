@@ -108,6 +108,12 @@ Sites can be named by slug, site id or any URL of the site. Versions by `live`,
 - `update_site_files` and `publish_site` take `baseVersionId`; a newer publish by
   someone else gives `409 version_conflict` with the live version in `details`.
 - Destructive tools need `confirm` (the slug, or the member's email).
+- `restore_version` and `delete_version` use the [version-action replay contract](OPERATIONS.md#version-action-replay):
+  fresh site authorization and canonical delete confirmation precede any replay;
+  target resolution is inside the claim. Callback exceptions retain an unknown
+  pending claim (409) rather than permit another effect. REST/MCP keys are scoped
+  separately. Retention is bounded to 24 hours, not an exactly-once guarantee;
+  never infer success from a subsequent 404 or live-pointer read.
 
 ## Extending (embedding applications)
 

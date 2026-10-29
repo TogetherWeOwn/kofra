@@ -1202,7 +1202,7 @@ export class DropwayClient extends DropwayHttpClient {
   }
   /** Restore a version */
   async restoreVersion(input: RestoreVersionInput, opts?: CallOptions): Promise<RestoreVersionOutput> {
-    return this.call<RestoreVersionInput, RestoreVersionOutput>(OPERATIONS["restore_version"], input, opts);
+    return this.call<RestoreVersionInput, RestoreVersionOutput>(OPERATIONS["restore_version"], input, { ...opts, retry: "none" });
   }
   /** Change site settings */
   async updateSiteSettings(input: UpdateSiteSettingsInput, opts?: CallOptions): Promise<UpdateSiteSettingsOutput> {
@@ -1242,7 +1242,7 @@ export class DropwayClient extends DropwayHttpClient {
   }
   /** Delete a version */
   async deleteVersion(input: DeleteVersionInput, opts?: CallOptions): Promise<DeleteVersionOutput> {
-    return this.call<DeleteVersionInput, DeleteVersionOutput>(OPERATIONS["delete_version"], input, opts);
+    return this.call<DeleteVersionInput, DeleteVersionOutput>(OPERATIONS["delete_version"], input, { ...opts, retry: "none" });
   }
   /** Download a version as a ZIP */
   async exportVersion(input: ExportVersionInput, opts?: CallOptions): Promise<BytesResult> {

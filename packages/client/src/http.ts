@@ -116,9 +116,10 @@ export interface RequestOptions {
   headers?: Record<string, string>;
   /**
    * "safe": retry on 429, 5xx and network errors (GET, PUT blob, finalize: all idempotent).
-   * "rate-limit": retry only on 429 (the server refused before doing anything).
+   * "rate-limit": retry only on 429 (use only when refusal is known to be pre-effect).
+   * "none": one attempt, including on 429; required for uncertain mutations.
    */
-  retry?: "safe" | "rate-limit";
+  retry?: "safe" | "rate-limit" | "none";
   /** Override the bearer token for this call (null = none). */
   token?: string | null;
   /** Allowed non-2xx statuses that should be returned instead of thrown. */
@@ -170,7 +171,7 @@ export interface CallOptions {
   token?: string | null;
   accept?: number[];
   idempotencyKey?: string;
-  retry?: "safe" | "rate-limit";
+  retry?: RequestOptions["retry"];
 }
 
 function queryValue(value: unknown): string[] {
@@ -237,7 +238,8 @@ export class DropwayHttpClient {
     const retry = opts.retry ?? (method === "GET" || method === "HEAD" ? "safe" : "rate-limit");
     let lastError: DropwayError | null = null;
 
-    for (let attempt = 1; attempt <= this.attempts; attempt++) {
+    const attempts = retry === "none" ? 1 : this.attempts;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
       const sent = new Headers(headers);
       sent.set("Accept", "application/json");
       sent.set("X-Kofra-Client", this.clientName);
@@ -254,7 +256,7 @@ export class DropwayHttpClient {
           hint: "Check the instance URL (--api or KOFRA_API) and your network, then retry.",
           retryable: true,
         });
-        if (retry === "safe" && attempt < this.attempts) {
+        if (retry === "safe" && attempt < attempts) {
           await sleep(this.backoff(attempt));
           continue;
         }
@@ -274,7 +276,7 @@ export class DropwayHttpClient {
 
       const err = await errorFromResponse(res);
       const retryable = res.status === 429 || (retry === "safe" && res.status >= 500);
-      if (retryable && attempt < this.attempts) {
+      if (retryable && attempt < attempts) {
         const ra = Number(res.headers.get("retry-after"));
         if (res.status === 429 && Number.isFinite(ra) && ra > this.maxRetryAfter) throw err;
         await sleep(res.status === 429 && Number.isFinite(ra) && ra > 0 ? ra * 1000 : this.backoff(attempt));

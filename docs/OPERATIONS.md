@@ -133,6 +133,40 @@ budget. New definitions should not need adapters. Notably:
   Bootstrap setup remains REST-only. Old aliases such as `/accounts` and blob
   POST still work and are documented as deprecated aliases.
 
+### Version-action replay
+
+Restore (`POST /sites/{slug}/versions/{id}/restore`) and version delete
+(`DELETE /sites/{slug}/versions/{id}` with canonical-slug `confirm`) accept an
+optional REST `Idempotency-Key`; their MCP tools accept `idempotencyKey`.
+Keys are 1–255 printable ASCII characters without spaces. Unkeyed calls remain
+compatible but have no result-replay guarantee.
+
+Core services authorize the current credential/site and validate delete confirmation
+before consulting replay. The input hash binds the authorized immutable site ID,
+the original submitted version reference and, for deletion, confirmation. The key
+is scoped to the credential's current restrictions and operation; REST and MCP
+have independent namespaces. No target is re-resolved on a completed replay, even
+when it has since been deleted or `live`/a number now names something different.
+The original result is returned with `replayed: true`; current URLs/pointers do not
+replace the stored receipt. Another site's acquisition of an old slug cannot replay
+its previous holder's result.
+
+Changed input under the same key returns 422 `idempotency_key_reused`. Concurrent
+or unknown outcomes return 409 `idempotency_in_progress`, without another action.
+These workflows opt into `withIdempotency`'s `retainOnError`: callback errors leave
+the pending claim intact, since a D1 response or post-commit cache refresh can fail
+after the mutation. Result-persistence failure preserves the first successful
+response and its pending claim, rather than permitting re-execution. Other services
+retain their existing claim-release behavior by default.
+
+Records expire after 24 hours (completed-result retention starts on completion).
+After expiry a key may be reclaimed; this is not unlimited exactly-once execution.
+Never infer a replay receipt from a later 404 or live-pointer read. CLI and dashboard
+version actions generate a new UUID per deliberate invocation/click, do not persist
+it, and never auto-retry; a later action is fresh intent. Typed SDK actions also
+never auto-retry and can carry a caller-retained key. In particular, 429 is surfaced,
+not presumed to prove a pre-effect refusal.
+
 Run `npm run check` and `npm run openapi:lint`. CI validates the emitted OpenAPI
 3.1 document with Redocly and requires ids, summaries, descriptions, successful
 examples and JSON error responses. Browser/discovery routes are documented

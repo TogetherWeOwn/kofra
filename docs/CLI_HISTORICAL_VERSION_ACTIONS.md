@@ -177,28 +177,31 @@ preview signing, browser navigation or invented site identity in the receipt.
 
 ### 3.4 Retries are not replay protection
 
-Neither operation currently has idempotency-key result replay. MCP annotations
-are not replay implementation; custom REST adapters bypass generated replay
-(`packages/server/src/operations.ts:304-326`; `packages/server/src/mcp/index.ts:243-250`).
-Do not add an `--idempotency-key` promise to these actions.
+P3 selects the **replay alternative**, replacing the earlier 429-only proposal.
+MCP annotations alone are not replay protection, and custom REST adapters still
+bypass generated replay. Both surfaces now call the core version-action workflow
+explicitly; its [bounded replay contract](OPERATIONS.md#version-action-replay)
+authorizes before replay and retains pending claims after uncertain errors.
 
-Today restore explicitly uses `retry: "safe"`; the shared transport therefore
-can resend POST after network/5xx failures. DELETE defaults to rate-limit retries.
-The SDK defaults to four attempts; 429 respects its 30-second Retry-After cap
-(`packages/client/src/http.ts:187-199,237-284`). A repeat restore is a no-op only
-while the target stays live: after another publish it can overwrite live again.
-A repeat completed delete normally yields 404, not a replayed success.
+All CLI restore invocations (including omitted-version restore) and version-delete
+invocations pass `retry: "none"`: one mutation attempt, including on 429. The typed
+SDK methods enforce the same policy; GET retains ordinary read retries. There is
+no automatic retry on network/5xx/409 and no retry loop or follow-up probe in the
+CLI. Each deliberate invocation sends a fresh UUID `Idempotency-Key` without
+printing or saving it; there is no `--idempotency-key` flag for these actions.
+A future explicit-ref implementation must retain this policy, not reintroduce
+bounded 429 retries. Omitted restore's selection algorithm remains unchanged;
+its unsafe mutation-retry behavior is intentionally removed by P3.
 
-**Proposed execution rule:** for the changed explicit-ref paths, pass
-`retry: "rate-limit"` explicitly to both POST and DELETE, replacing restore's
-safe retry override; retain only existing bounded 429 retries on mutations.
-GET retains ordinary read retries. Never re-resolve the target during a retry.
-No automatic POST/DELETE retry on network/5xx/409, no retry loop in the CLI, and
-no new key/header. On an unknown outcome, read the same ID/site, report what can
-be observed, and require a fresh intentional invocation; a current live pointer
-or 404 cannot prove who performed the action. This is not exactly-once behavior.
-Whether 429 is guaranteed pre-effect is prerequisite P3 (section 5.1).
-Omitted restore's existing retry behavior is documented, not silently changed.
+An explicit API/SDK consumer can retain a key and submit the identical request
+under the same current authorization to retrieve the first stored successful
+result. Input includes the authorized immutable site and originally submitted
+version ref (plus delete confirmation), not a freshly selected target/pointer.
+Unknown/pending results fail closed with 409; changed input returns 422. Replay is
+credential/restriction-scoped, REST/MCP-separated and limited to 24 hours, not an
+unlimited exactly-once guarantee. On an unknown outcome, inspect the same ID/site
+and decide whether to make a fresh intentional invocation. A current live pointer
+or 404 cannot prove who performed the action, and must never synthesize success.
 
 ### 3.5 Offline dry-run for the changed action surface
 
@@ -264,7 +267,7 @@ transport is not used. Each table row is a separately parameterized test.
 | H10 confirmation | Non-TTY or `--json` delete without `--yes`; terminal mismatch; terminal match | First two: `confirmation_required` or `not_confirmed`/2, no DELETE. Match or `--yes`: only selected version DELETE; never whole-site DELETE. No non-TTY prompt. |
 | H11 dry-run | Both explicit actions, with/without `--api`, `--json`, `--yes`, missing key, unreadable config; also absent version, `--dry-run=false`, `--dry-run=0`, `--no-dry-run`, repeated target/mode flags, and execution without `--api` | Valid plan equals §3.5, exit 0; zero network/filesystem/prompt calls. All listed invalid modes refuse `usage`/2 with zero reads/requests. Malformed refs still refuse. |
 | H12 omitted compatibility | `restore history-site`; F with live outside list; F with no previous candidate | Existing list-only algorithm/receipt unchanged, including fallback when live is absent and `no_previous_version`/4; no direct GET added. Baseline this separately from explicit-ref tests. |
-| H13 retry / unknown result | GET 503 then success; action 503/network loss; bounded 429 then success; deletion succeeded but response lost | Reads retry within existing bounds. Explicit mutations never retry 503/network or change ID; return exit 7 and actual error. 429 retries same immutable request only once P3 is satisfied via the pre-commit-proof branch. A later 404 is not synthesized success/replay. |
+| H13 retry / unknown result | GET 503 then success; action 429/503/network loss; deletion succeeded but response lost | Reads retry within existing bounds. Mutations make one attempt, including 429; return exit 7 and the actual error. P3 selects replay instead of pre-commit-proof/429 retries. An explicit same-key API/SDK replay retrieves only a stored receipt; a pending outcome is 409. A later 404 is not synthesized success/replay. |
 | H14 envelope / malformed success | GET/action return existing error metadata; GET 200 with missing/invalid ID/status/live/site or mismatched ID/number | Error fields pass through unchanged. Malformed/mismatched GET refuses `invalid_version_response`/1 before mutation; stdout is exactly one JSON value, no credentials/upload links. |
 | H15 service race characterization | Pause DELETE after non-live read, restore that ID concurrently, then resume; pause restore after target lookup, delete target, then resume | Characterize current unfenced results in disposable service tests. Do **not** label them safe or make a CLI-only fix pass this safety gate. Implementation cannot start until prerequisites P1–P4 (section 5.1) merge. |
 
