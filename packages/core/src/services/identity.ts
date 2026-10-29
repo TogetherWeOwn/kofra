@@ -46,8 +46,19 @@ export const defaultIdentity: IdentityAdapter = {
     const ip = requestIp(request);
     const token = bearerToken(request);
     if (!token) return { kind: "anonymous", ip };
-    if (token.startsWith(UPLOAD_TOKEN_PREFIX) && (!/^(PUT|POST)$/.test(request.method) || !/^\/api\/v1\/blobs\/[a-fA-F0-9]{64}$/.test(new URL(request.url).pathname))) {
-      throw forbidden("Upload tokens can only PUT file bytes to their upload links.", "Use an API key for other operations.");
+    if (token.startsWith(UPLOAD_TOKEN_PREFIX)) {
+      const pathname = new URL(request.url).pathname;
+      const blobUpload = /^(PUT|POST)$/.test(request.method) && /^\/api\/v1\/blobs\/[a-fA-F0-9]{64}$/.test(pathname);
+      // The same one pending version may instead stage a large file through
+      // the resumable multipart protocol; nothing else is reachable.
+      const multipart =
+        (request.method === "POST" && pathname === "/api/v1/uploads") ||
+        (request.method === "GET" && /^\/api\/v1\/uploads\/[A-Za-z0-9_-]+$/.test(pathname)) ||
+        (request.method === "PUT" && /^\/api\/v1\/uploads\/[A-Za-z0-9_-]+\/parts\/[^/]+$/.test(pathname)) ||
+        (request.method === "POST" && /^\/api\/v1\/uploads\/[A-Za-z0-9_-]+\/complete$/.test(pathname));
+      if (!blobUpload && !multipart) {
+        throw forbidden("Upload tokens can only PUT file bytes to their upload links.", "Use an API key for other operations.");
+      }
     }
     return principalFromToken(dc, token, ip);
   },
