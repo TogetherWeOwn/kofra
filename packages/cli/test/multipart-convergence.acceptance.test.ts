@@ -356,3 +356,80 @@ describe("CLI part_busy convergence (actual CLI + SDK, fake transport)", () => {
     expect(fake.finalizeCalls).toBe(0);
   }, 30_000);
 });
+
+describe("CLI upload_busy beyond the SDK retry window (actual CLI + SDK, fake transport)", () => {
+  const sdkAttempts = 4;
+  const retryClient = (fake: FakeInstance) => new DropwayClient({
+    api: "https://fake.test", token: "dw_fixture", fetch: fake.fetch,
+    attempts: sdkAttempts, backoffMs: 1,
+  });
+
+  // Removing the outer 503/upload_busy retry must fail this case even when
+  // smaller parts mean ordinary two-file publication never needs admission.
+  it("outlives the SDK's short upload_busy retries, then completes and finalizes exactly once", async () => {
+    vi.useFakeTimers({ loopLimit: 200 });
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const fake = new FakeInstance();
+    const busyLimit = sdkAttempts + 1;
+    let busyResponses = 0;
+    fake.partScript = (_instance, _session, partNumber, attempt) => {
+      if (partNumber !== 1 || attempt > busyLimit) return null;
+      busyResponses++;
+      return errorJson(503, "upload_busy", true, 1, { "Retry-After": "1" });
+    };
+    let callsAtSettle: string[] = [];
+    const published = track(publish(retryClient(fake), [source("busy.bin", "f")], { site: "outer-upload-busy" }))
+      .then((outcome) => { callsAtSettle = [...fake.calls]; return outcome; });
+    await vi.runAllTimersAsync();
+    const outcome = await published;
+
+    expect(busyResponses, "the fake transport must really return admission refusals").toBeGreaterThan(0);
+    expect(outcome.ok, outcome.ok ? "" : `publish failed with ${outcome.e?.code} after ${busyResponses} upload_busy responses`).toBe(true);
+    if (!outcome.ok) return;
+    expect(busyResponses).toBe(busyLimit);
+    expect(outcome.v).toMatchObject({ uploaded: 1, files: 1, bytesUploaded: LARGE });
+    expect(fake.sessions.size).toBe(1);
+    const session = [...fake.sessions.values()][0]!;
+    expect(fake.attemptsFor(session.id, 1), "success must require another CLI attempt after the SDK exhausts its window").toBe(busyLimit + 1);
+    expect(session.parts.size).toBe(Math.ceil(LARGE / session.partSize));
+    expect(session.completed).toBe(true);
+    expect(session.completes).toBe(1);
+    expect(fake.finalizeCalls).toBe(1);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(fake.calls, "no requests may land after publication settles").toEqual(callsAtSettle);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    ["upload_busy", false],
+    ["service_unavailable", true],
+  ] as const)("does not extend the SDK retry window for 503 %s (retryable=%s)", async (code, retryable) => {
+    vi.useFakeTimers({ loopLimit: 200 });
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const fake = new FakeInstance();
+    let refusals = 0;
+    fake.partScript = (_instance, _session, partNumber) => {
+      if (partNumber !== 1) return null;
+      refusals++;
+      return errorJson(503, code, retryable, 1, { "Retry-After": "1" });
+    };
+    let callsAtSettle: string[] = [];
+    const published = track(publish(retryClient(fake), [source("refused.bin", "f")], { site: `outer-refuses-${code}` }))
+      .then((outcome) => { callsAtSettle = [...fake.calls]; return outcome; });
+    await vi.runAllTimersAsync();
+    const outcome = await published;
+
+    expect(outcome.ok, "only retryable upload_busy can enter the CLI's admission wait").toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.e).toMatchObject({ status: 503, code, retryable });
+    expect(refusals, "the SDK may retry safe 5xx requests, but the outer CLI must not prolong these errors").toBe(sdkAttempts);
+    const session = [...fake.sessions.values()][0]!;
+    expect(fake.attemptsFor(session.id, 1)).toBe(sdkAttempts);
+    expect(session.parts.size).toBe(0);
+    expect(session.completes).toBe(0);
+    expect(fake.finalizeCalls).toBe(0);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(fake.calls, "terminal refusal leaves no stray requests after settlement").toEqual(callsAtSettle);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
