@@ -29,7 +29,7 @@ export interface PublishSiteInput {
     content?: string;
     /** Content encoding. Default "utf8". */
     encoding?: "utf8" | "base64";
-    /** Public https URL to download (100 MiB, 30 s, 3 redirects; file caps also apply). */
+    /** Public https URL (URL_FETCH_MAX_BYTES default 100 MiB; 30 s, 3 redirects; other caps). */
     url?: string;
     /** Headers for the url download; used once, never stored. */
     headers?: Record<string, string>;
@@ -37,15 +37,15 @@ export interface PublishSiteInput {
     sha256?: string;
     /** Bytes; required with an unstored sha256. */
     size?: number;
-    /** Copy a file you already published: from a site you can read (default: this site), a version (default: live) and a path (default: the same path). */
+    /** Copy a published file: site you can read (default: this site), version (default: live), path (default: same). */
     copyFrom?: {
-      /** Site slug, site_... id, or site URL. */
+      /** Site slug, site_... id or URL. */
       site?: string;
-      /** A version: "live", "v3" or "3" (version number 3), or a version id (ver_...). */
+      /** "live", "v3"/"3", or a ver_... id. */
       version?: string;
       path?: string;
     };
-    /** MIME type. Default: from the file extension. */
+    /** MIME type; default from extension. */
     contentType?: string;
   })[];
   /** Public https .zip to unpack, instead of files (never both). */
@@ -56,11 +56,11 @@ export interface PublishSiteInput {
   title?: string | null;
   /** One or two sentences about the site. */
   description?: string | null;
-  /** Single-page app: unknown paths serve index.html instead of a 404. */
+  /** SPA: unknown paths serve index.html instead of 404. */
   spa?: boolean;
-  /** Browsers see .md files rendered as pages (default true); false serves them raw. */
+  /** Render .md files as pages for browsers (default true); false serves raw. */
   renderMarkdown?: boolean;
-  /** Send COOP/COEP headers (needed for SharedArrayBuffer and threaded WebAssembly). */
+  /** Send COOP/COEP headers (for SharedArrayBuffer/threaded WASM). */
   crossOriginIsolation?: boolean;
   /** Optional visitor password (see set_site_access). */
   password?: string;
@@ -75,7 +75,7 @@ export interface PublishSiteOutput {
   /** Live URL. Share it exactly as returned. */
   url: string;
   slug: string;
-  /** Owner dashboard link pinned by version id. */
+  /** 24 h signed preview; bearer capability. */
   versionUrl?: string;
   site?: {
     slug: string;
@@ -85,9 +85,16 @@ export interface PublishSiteOutput {
   };
   version?: Record<string, unknown> | null;
   files?: Record<string, unknown>;
-  /** Only when status is awaiting_upload: items to PUT, then finalize. */
+  /** Only for awaiting_upload: items to PUT, then finalize. */
   upload?: Record<string, unknown>;
-  warnings?: unknown[];
+  warnings?: {
+    code?: string;
+    message?: string;
+    path?: string;
+    line?: number;
+    fix?: string;
+    [key: string]: unknown;
+  }[];
   next?: unknown[];
   [key: string]: unknown;
 }
@@ -132,7 +139,7 @@ export interface UpdateSiteFilesOutput {
   status?: "live" | "unchanged" | "awaiting_upload";
   url?: string;
   slug?: string;
-  /** Owner dashboard link pinned to the exact version id; requires the owner's API key in the dashboard. */
+  /** 24 h signed preview; bearer capability. */
   versionUrl?: string;
   site?: {
     slug?: string;
@@ -194,7 +201,14 @@ export interface UpdateSiteFilesOutput {
     [key: string]: unknown;
   };
   changes?: Record<string, unknown>;
-  warnings?: Record<string, unknown>[];
+  warnings?: {
+    code?: string;
+    message?: string;
+    path?: string;
+    line?: number;
+    fix?: string;
+    [key: string]: unknown;
+  }[];
   next?: Record<string, unknown>[];
   [key: string]: unknown;
 }
@@ -294,11 +308,11 @@ export interface ListFilesInput {
 export type ListFilesOutput = Record<string, unknown>;
 
 export interface ReadFileInput {
-  /** Site slug, site_... id, or site URL. */
+  /** Site slug, site_... id or URL. */
   site: string;
   /** File path, e.g. "index.html". */
   path: string;
-  /** A version: "live", "v3" or "3" (version number 3), or a version id (ver_...). */
+  /** "live", "v3"/"3", or a ver_... id. */
   version?: string;
   /** Default "auto". */
   encoding?: "auto" | "text" | "base64";
@@ -582,7 +596,7 @@ export interface RenameSiteOutput {
 }
 
 export interface DuplicateSiteInput {
-  /** Site slug, site_... id, or site URL. */
+  /** Site slug, site_... id or URL. */
   site: string;
   /** 3-56 chars: a-z, 0-9, single hyphens. */
   newSlug: string;
@@ -894,7 +908,7 @@ export type PublishUploadOutput = {
   status?: "live" | "unchanged" | "awaiting_upload";
   url?: string;
   slug?: string;
-  /** Owner dashboard link pinned to the exact version id; requires the owner's API key in the dashboard. */
+  /** 24 h signed preview; bearer capability. */
   versionUrl?: string;
   site?: {
     slug?: string;
@@ -956,12 +970,21 @@ export type PublishUploadOutput = {
     [key: string]: unknown;
   };
   changes?: Record<string, unknown>;
-  warnings?: Record<string, unknown>[];
+  warnings?: {
+    code?: string;
+    message?: string;
+    path?: string;
+    line?: number;
+    fix?: string;
+    [key: string]: unknown;
+  }[];
   next?: Record<string, unknown>[];
   [key: string]: unknown;
 } | {
   url?: string;
   slug?: string;
+  /** Signed exact-version preview link, valid for 24 hours. */
+  versionUrl?: string;
   created?: boolean;
   unchanged?: boolean;
   site?: {
@@ -1013,6 +1036,9 @@ export type PublishUploadOutput = {
   warnings?: {
     code?: string;
     message?: string;
+    path?: string;
+    line?: number;
+    fix?: string;
     [key: string]: unknown;
   }[];
   /** Anonymous publishes only; shown once. */
@@ -1200,7 +1226,7 @@ export const OPERATIONS = {
   "get_version": { method: "GET", path: "/api/v1/sites/{slug}/versions/{id}", summary: "Get a version" },
   "delete_version": { method: "DELETE", path: "/api/v1/sites/{slug}/versions/{id}", summary: "Delete a version" },
   "export_version": { method: "GET", path: "/api/v1/sites/{slug}/versions/{version}/export", summary: "Download a version as a ZIP" },
-  "create_multipart_upload": { method: "POST", path: "/api/v1/uploads", summary: "Start a resumable multipart upload" },
+  "create_multipart_upload": { method: "POST", path: "/api/v1/uploads", summary: "Start or resume a multipart upload" },
   "get_multipart_upload": { method: "GET", path: "/api/v1/uploads/{id}", summary: "Show a resumable upload's acknowledged parts" },
   "upload_multipart_part": { method: "PUT", path: "/api/v1/uploads/{id}/parts/{partNumber}", summary: "Upload one part's raw bytes" },
   "complete_multipart_upload": { method: "POST", path: "/api/v1/uploads/{id}/complete", summary: "Complete and verify a resumable upload" },
@@ -1314,7 +1340,7 @@ export class DropwayClient extends DropwayHttpClient {
   async exportVersion(input: ExportVersionInput, opts?: CallOptions): Promise<BytesResult> {
     return this.callBytes(OPERATIONS["export_version"], input, opts);
   }
-  /** Start a resumable multipart upload */
+  /** Start or resume a multipart upload */
   async createMultipartUpload(input: CreateMultipartUploadInput, opts?: CallOptions): Promise<CreateMultipartUploadOutput> {
     return this.call<CreateMultipartUploadInput, CreateMultipartUploadOutput>(OPERATIONS["create_multipart_upload"], input, opts);
   }

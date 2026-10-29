@@ -40,6 +40,9 @@ export interface VersionInfo {
 export interface Warning {
   code: string;
   message: string;
+  path?: string;
+  line?: number;
+  fix?: string;
 }
 
 export interface PublishOptions {

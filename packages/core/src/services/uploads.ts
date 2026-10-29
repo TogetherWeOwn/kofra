@@ -84,6 +84,15 @@ export async function getVersionStatus(dc: DropwayContext, site: SiteRow, versio
 export const MULTIPART_MIN_PART_BYTES = 10 * 1024 * 1024;
 export const MULTIPART_MAX_PART_BYTES = 95 * 1024 * 1024;
 export const MULTIPART_DEFAULT_PART_BYTES = 50 * 1024 * 1024;
+// Workers share a 128 MiB isolate across requests. Bound live part buffers
+// across all concurrent uploads, not just each request, leaving 32 MiB for
+// runtime/metadata. DigestStream hashes incrementally without copying a part.
+const MULTIPART_BUFFER_BUDGET = 96 * 1024 * 1024;
+let bufferedPartBytes = 0;
+// Recover a Worker lost after claiming a part, without ever permitting a
+// lease takeover to overwrite the original R2 handle. Recovery aborts the
+// entire old handle first, then a new session can safely stage fresh bytes.
+const MULTIPART_CLAIM_GRACE_MS = 10 * 60_000;
 /** Owner-created sessions live at most a day; capability-created ones keep the capability's earlier expiry. */
 export const MULTIPART_SESSION_TTL_MS = 24 * 3600_000;
 
@@ -216,22 +225,41 @@ async function sessionView(dc: DropwayContext, session: SessionRow): Promise<Mul
   };
 }
 
+/** Unknown and inaccessible sessions have one wire shape, with no echoed identifiers. */
+function missingUpload() {
+  return notFound("upload_not_found", "No upload session this credential can access.", "Start one with POST /api/v1/uploads for a pending version you control.");
+}
+
 async function loadSession(dc: DropwayContext, sessionId: string): Promise<SessionRow> {
   const session = await dc.env.DB.prepare("SELECT * FROM upload_sessions WHERE id = ?").bind(sessionId).first<SessionRow>();
-  if (!session) throw notFound("upload_not_found", `No upload session ${sessionId}.`, "Start one with POST /api/v1/uploads.");
+  if (!session) throw missingUpload();
   return session;
 }
 
 /** Load a session and re-authorize its pending target and lifetime for this call. */
 async function authorizedSession(dc: DropwayContext, p: Principal, sessionId: string): Promise<{ session: SessionRow; target: PendingTarget }> {
   const session = await loadSession(dc, sessionId);
-  const target = await pendingTarget(dc, p, session.version_id, session.sha256);
+  let target: PendingTarget;
+  try {
+    target = await pendingTarget(dc, p, session.version_id, session.sha256);
+  } catch (error) {
+    // Preserve lifetime/closure errors for authorized callers, but never
+    // serialize a version id learned from an inaccessible session row.
+    if (isApiError(error) && error.status === 404) throw missingUpload();
+    throw error;
+  }
   if (target.size !== session.size) throw conflict("upload_closed", "This upload session no longer matches its pending manifest file.", "Start a new upload session.");
   if (session.expires_at <= Date.now()) throw uploadExpired();
   return { session, target };
 }
 
-/** POST /api/v1/uploads: start a real R2 multipart upload bound to one pending manifest file. */
+/** The single unfinished session for a pending file, regardless of requested geometry. */
+async function activeSession(dc: DropwayContext, versionId: string, sha256: string): Promise<SessionRow | null> {
+  return dc.env.DB.prepare("SELECT * FROM upload_sessions WHERE version_id = ? AND sha256 = ? AND status IN ('active', 'completing')")
+    .bind(versionId, sha256).first<SessionRow>();
+}
+
+/** POST /api/v1/uploads: start or resume the one R2 multipart session for a pending manifest file. */
 export async function createMultipartUpload(
   dc: DropwayContext,
   p: Principal,
@@ -247,7 +275,22 @@ export async function createMultipartUpload(
     throw badRequest("invalid_part", `partSize must be an integer between ${MULTIPART_MIN_PART_BYTES} and ${MULTIPART_MAX_PART_BYTES} bytes.`, "Omit partSize for the 50 MiB default or choose a size in that range.");
   }
   const target = await pendingTarget(dc, p, input.versionId, sha256);
+  // The partial unique index is the allocation fence. The lookup alone is
+  // only a fast path; concurrent misses still converge at the INSERT below.
+  const existing = await activeSession(dc, target.version.id, sha256);
   const now = Date.now();
+  if (existing) {
+    const staleClaim = await dc.env.DB.prepare("SELECT 1 FROM upload_parts WHERE session_id = ? AND etag = '' AND created_at <= ? LIMIT 1")
+      .bind(existing.id, now - MULTIPART_CLAIM_GRACE_MS).first();
+    if (existing.expires_at > now && !staleClaim) return sessionView(dc, existing);
+    // A stale claimant might still finish late. Close its physical handle
+    // before freeing the unique D1 slot; never re-use a part claim by timeout.
+    await discardSessionStorage(dc, existing);
+    await dc.env.DB.batch([
+      dc.env.DB.prepare("DELETE FROM upload_parts WHERE session_id = ?").bind(existing.id),
+      dc.env.DB.prepare("DELETE FROM upload_sessions WHERE id = ?").bind(existing.id),
+    ]);
+  }
   let expiresAt = now + MULTIPART_SESSION_TTL_MS;
   if (p.kind === "upload") expiresAt = Math.min(expiresAt, p.expiresAt);
   if (target.site.expires_at) expiresAt = Math.min(expiresAt, target.site.expires_at);
@@ -272,10 +315,17 @@ export async function createMultipartUpload(
     completed_at: null,
   };
   try {
-    await dc.env.DB.prepare(
+    const inserted = await dc.env.DB.prepare(
       `INSERT INTO upload_sessions (id, version_id, site_id, sha256, size, part_size, part_count, r2_key, r2_upload_id, status, staged, content_type, created_at, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, ?, ?, ?) ON CONFLICT DO NOTHING`,
     ).bind(id, session.version_id, session.site_id, sha256, session.size, partSize, session.part_count, handle.key, handle.uploadId, target.contentType, now, expiresAt).run();
+    if (!inserted.meta.changes) {
+      await handle.abort();
+      const winner = await activeSession(dc, target.version.id, sha256);
+      if (!winner) throw conflict("upload_closed", "The concurrent upload session closed.", "Retry POST /api/v1/uploads.");
+      if (winner.expires_at <= Date.now()) throw uploadExpired();
+      return sessionView(dc, winner);
+    }
   } catch (e) {
     await handle.abort().catch(() => {});
     throw e;
@@ -289,13 +339,15 @@ export async function getMultipartUpload(dc: DropwayContext, p: Principal, sessi
   return sessionView(dc, session);
 }
 
-/** Read exactly `expected` body bytes; any other actual length is a size mismatch. */
-async function readPartBody(body: ReadableStream | null, expected: number): Promise<Uint8Array> {
-  const out = new Uint8Array(expected);
-  if (!body) {
-    if (expected === 0) return out;
-    throw badRequest("size_mismatch", "The part upload has no body.", "Send the raw part bytes as the request body.");
-  }
+/** Read and incrementally hash exactly `expected` bytes, never duplicating a whole part for hashing. */
+async function readPartBody(body: ReadableStream | null, expected: number): Promise<{ bytes: Uint8Array; digest: string }> {
+  if (!body) throw badRequest("size_mismatch", "The part upload has no body.", "Send the raw part bytes as the request body.");
+  const bytes = new Uint8Array(expected);
+  const hash = new crypto.DigestStream("SHA-256");
+  // An abort rejects the digest, too; the caller observes the original body
+  // error, without leaving a second unhandled rejection behind.
+  hash.digest.catch(() => {});
+  const writer = hash.getWriter();
   const reader = body.getReader();
   let total = 0;
   try {
@@ -303,19 +355,24 @@ async function readPartBody(body: ReadableStream | null, expected: number): Prom
       const { done, value } = await reader.read();
       if (done) break;
       if (total + value.byteLength > expected) {
-        await reader.cancel().catch(() => {});
         throw badRequest("size_mismatch", `The part body is longer than the ${expected} bytes this part must hold.`, "Send exactly the bytes of this part.", { expected });
       }
-      out.set(value, total);
+      bytes.set(value, total);
       total += value.byteLength;
+      await writer.write(value);
     }
+    if (total !== expected) {
+      throw badRequest("size_mismatch", `The part body is ${total} bytes but this part must hold ${expected}.`, "Send exactly the bytes of this part.", { expected, received: total });
+    }
+    await writer.close();
+    return { bytes, digest: toHex(await hash.digest) };
+  } catch (error) {
+    await Promise.all([reader.cancel().catch(() => {}), writer.abort(error).catch(() => {})]);
+    throw error;
   } finally {
     reader.releaseLock();
+    writer.releaseLock();
   }
-  if (total !== expected) {
-    throw badRequest("size_mismatch", `The part body is ${total} bytes but this part must hold ${expected}.`, "Send exactly the bytes of this part.", { expected, received: total });
-  }
-  return out;
 }
 
 /** PUT /api/v1/uploads/{id}/parts/{n}: acknowledge one part's exact bytes. Identical retries replay; changed bytes are refused. */
@@ -358,68 +415,73 @@ export async function uploadMultipartPart(
     await cancel();
     throw badRequest("size_mismatch", `Part ${partNumber} must hold ${expected} bytes but the upload declares ${contentLength}.`, "Send exactly the bytes of this part.", { expected, received: contentLength });
   }
-  const bytes = await readPartBody(body, expected);
-  const digest = await sha256Hex(bytes);
-  const existing = (await sessionParts(dc, session.id)).find((part) => part.partNumber === partNumber);
-  if (existing) {
-    if (existing.sha256 === digest) return { partNumber, size: expected, etag: existing.etag };
-    throw conflict("part_conflict", `Part ${partNumber} was already acknowledged with different bytes.`, "Resume with the acknowledged bytes, or start a new upload session to change them.");
+  if (bufferedPartBytes + expected > MULTIPART_BUFFER_BUDGET) {
+    await cancel();
+    throw new ApiError(503, "upload_busy", "Concurrent part uploads have filled this Worker's buffer budget.", "Retry shortly or reduce upload concurrency.", undefined, { retryAfterSeconds: 1 });
   }
-  // The target or session may have closed while the part streamed in; check
-  // again before any byte reaches R2, then claim the part before uploading,
-  // so concurrent first PUTs cannot both mutate R2 and then disagree about
-  // whose etag won. The claim row carries an empty etag until R2 confirms.
-  session = (await authorizedSession(dc, p, sessionId)).session;
-  if (session.status !== "active") throw conflict("upload_closed", "This upload session accepts no more parts.", "Start a new upload session for this pending version.");
-  const now = Date.now();
-  const claimed = await dc.env.DB.prepare(
-    `INSERT OR IGNORE INTO upload_parts (session_id, part_number, size, etag, sha256, created_at)
-     SELECT ?, ?, ?, '', ?, ? WHERE EXISTS (SELECT 1 FROM upload_sessions WHERE id = ? AND status = 'active')`,
-  ).bind(session.id, partNumber, expected, digest, now, session.id).run();
-  if (!claimed.meta.changes) {
-    const raced = await sessionClaim(dc, session.id, partNumber);
-    if (raced?.etag && raced.sha256 === digest) return { partNumber, size: expected, etag: raced.etag };
-    if (raced && !raced.etag && raced.sha256 === digest) {
-      // An identical upload is still in flight; same bytes mean the same
-      // R2 etag, so uploading again below converges instead of conflicting.
-    } else if (raced) {
-      // Another writer owns this part (acknowledged or still uploading):
-      // refuse before R2 so the winner's bytes stay intact. Retryable: the
-      // caller can resume with the acknowledged bytes once they land.
-      throw new ApiError(409, "part_conflict", `Part ${partNumber} was already claimed with different bytes.`, "Resume with the acknowledged bytes, or start a new upload session to change them.", undefined, { retryable: true });
-    } else {
-      throw conflict("upload_closed", "This upload session accepts no more parts.", "Start a new upload session for this pending version.");
-    }
-  }
-  let uploaded: { etag: string };
+  bufferedPartBytes += expected;
   try {
-    uploaded = await dc.env.FILES.resumeMultipartUpload(session.r2_key, session.r2_upload_id).uploadPart(partNumber, bytes);
-  } catch (e) {
-    // The session may have been aborted after the final authority check
-    // above. A closed R2 handle is a 409, never a 500; genuine storage
-    // failures still propagate. The unacknowledged claim row stays out of
-    // resume/complete views and dies with the session.
-    if (!isApiError(e) && isClosedMultipartUpload(e)) {
-      throw conflict("upload_closed", "This upload session was closed before the part reached storage.", "Start a new upload session for this pending version.");
+    const { bytes, digest } = await readPartBody(body, expected);
+    session = (await authorizedSession(dc, p, sessionId)).session;
+    if (session.status !== "active") throw conflict("upload_closed", "This upload session accepts no more parts.", "Start a new upload session for this pending version.");
+    const existing = (await sessionParts(dc, session.id)).find((part) => part.partNumber === partNumber);
+    if (existing) {
+      if (existing.sha256 === digest) return { partNumber, size: expected, etag: existing.etag };
+      throw conflict("part_conflict", `Part ${partNumber} was already acknowledged with different bytes.`, "Resume with the acknowledged bytes, or publish again to create a new pending version if they must change.");
     }
-    throw e;
+    // The target or session may have closed while the part streamed in; check
+    // again before any byte reaches R2, then claim the part before uploading,
+    // so concurrent first PUTs cannot both mutate R2 and then disagree about
+    // whose etag won. The claim row carries an empty etag until R2 confirms.
+    session = (await authorizedSession(dc, p, sessionId)).session;
+    if (session.status !== "active") throw conflict("upload_closed", "This upload session accepts no more parts.", "Start a new upload session for this pending version.");
+    const now = Date.now();
+    const claimed = await dc.env.DB.prepare(
+      `INSERT OR IGNORE INTO upload_parts (session_id, part_number, size, etag, sha256, created_at)
+       SELECT ?, ?, ?, '', ?, ? WHERE EXISTS (SELECT 1 FROM upload_sessions WHERE id = ? AND status = 'active')`,
+    ).bind(session.id, partNumber, expected, digest, now, session.id).run();
+    if (!claimed.meta.changes) {
+      const raced = await sessionClaim(dc, session.id, partNumber);
+      if (raced?.etag && raced.sha256 === digest) return { partNumber, size: expected, etag: raced.etag };
+      if (raced) {
+        // R2 etags identify writes, not contents. Even identical in-flight
+        // PUTs must lose before R2, or D1 can acknowledge a superseded etag.
+        throw conflict("part_busy", `Part ${partNumber} is already claimed.`, "Retry after the in-flight PUT finishes; acknowledged identical bytes replay without another storage write.");
+      } else {
+        throw conflict("upload_closed", "This upload session accepts no more parts.", "Start a new upload session for this pending version.");
+      }
+    }
+    try {
+      const uploaded = await dc.env.FILES.resumeMultipartUpload(session.r2_key, session.r2_upload_id).uploadPart(partNumber, bytes);
+      const acknowledged = await dc.env.DB.prepare("UPDATE upload_parts SET etag = ? WHERE session_id = ? AND part_number = ? AND etag = ''")
+        .bind(uploaded.etag, session.id, partNumber).run();
+      if (!acknowledged.meta.changes) {
+        const raced = await sessionClaim(dc, session.id, partNumber);
+        if (raced?.etag) return { partNumber, size: expected, etag: raced.etag };
+        throw conflict("upload_closed", "This upload session accepts no more parts.", "Start a new upload session for this pending version.");
+      }
+      return { partNumber, size: expected, etag: uploaded.etag };
+    } catch (error) {
+      // An R2 or D1 failure before acknowledgement must not strand the claim.
+      // Re-uploading is safe here: no etag was acknowledged to any client.
+      await dc.env.DB.prepare("DELETE FROM upload_parts WHERE session_id = ? AND part_number = ? AND etag = ''")
+        .bind(session.id, partNumber).run();
+      if (!isApiError(error) && isClosedMultipartUpload(error)) {
+        throw conflict("upload_closed", "This upload session was closed before the part reached storage.", "Start a new upload session for this pending version.");
+      }
+      throw error;
+    }
+  } finally {
+    bufferedPartBytes -= expected;
   }
-  const acknowledged = await dc.env.DB.prepare("UPDATE upload_parts SET etag = ? WHERE session_id = ? AND part_number = ? AND etag = ''")
-    .bind(uploaded.etag, session.id, partNumber).run();
-  if (!acknowledged.meta.changes) {
-    const raced = await sessionClaim(dc, session.id, partNumber);
-    if (raced?.etag) return { partNumber, size: expected, etag: raced.etag };
-    throw conflict("upload_closed", "This upload session accepts no more parts.", "Start a new upload session for this pending version.");
-  }
-  return { partNumber, size: expected, etag: uploaded.etag };
 }
 
 /** Streaming SHA-256 of the staged object, without holding its bytes in memory. */
 async function hashStagedObject(dc: DropwayContext, key: string): Promise<{ hash: string; size: number }> {
   const obj = await dc.env.FILES.get(key);
   if (!obj) throw new ApiError(502, "blob_missing", "The completed upload's staged bytes could not be read.", "Retry shortly; if it repeats, start a new upload session.");
-  if (typeof DigestStream === "function") {
-    const digestStream = new DigestStream("SHA-256");
+  if (typeof crypto.DigestStream === "function") {
+    const digestStream = new crypto.DigestStream("SHA-256");
     await obj.body.pipeTo(digestStream);
     return { hash: toHex(await digestStream.digest), size: obj.size };
   }
@@ -465,7 +527,7 @@ export async function completeMultipartUpload(dc: DropwayContext, p: Principal, 
   // its response. The scope check keeps that shortcut owner-scoped: another
   // owner's identical blob never verifies this session's bytes.
   if ((await missingForScope(dc, target.scope, [session.sha256])).length === 0 && session.staged === 1) {
-    await dc.env.FILES.delete(session.r2_key).catch(() => {});
+    await dc.env.FILES.delete(session.r2_key);
     await markSession(dc, session.id, "completed");
     return done;
   }
@@ -498,7 +560,7 @@ export async function completeMultipartUpload(dc: DropwayContext, p: Principal, 
 
   const staged = await hashStagedObject(dc, session.r2_key);
   if (staged.size !== session.size || staged.hash !== session.sha256) {
-    await dc.env.FILES.delete(session.r2_key).catch(() => {});
+    await dc.env.FILES.delete(session.r2_key);
     await dc.env.DB.batch([
       dc.env.DB.prepare("UPDATE upload_sessions SET status = 'failed', staged = 0 WHERE id = ?").bind(session.id),
     ]);
@@ -513,6 +575,20 @@ export async function completeMultipartUpload(dc: DropwayContext, p: Principal, 
   return done;
 }
 
+/** Remove staging, or fail while its durable session row still owns every resource. */
+async function discardSessionStorage(dc: DropwayContext, session: SessionRow): Promise<void> {
+  if (session.status !== "completed" && session.staged !== 1) {
+    try {
+      await dc.env.FILES.resumeMultipartUpload(session.r2_key, session.r2_upload_id).abort();
+    } catch (error) {
+      if (!isClosedMultipartUpload(error)) throw error;
+    }
+  }
+  // A completion may have staged the object before its D1 flag landed.
+  // Deleting an absent key is safe; failures must retain the ownership row.
+  await dc.env.FILES.delete(session.r2_key);
+}
+
 /**
  * Abort and drop at most 500 expired upload sessions (the cron's bounded
  * slice). Sessions that already completed only lose their session rows; the
@@ -524,16 +600,11 @@ export async function cleanupExpiredMultipartUploads(dc: DropwayContext, now = D
     .all<SessionRow>();
   let cleaned = 0;
   for (const session of results) {
-    if (session.status === "active" || (session.status === "completing" && session.staged !== 1)) {
-      try {
-        await dc.env.FILES.resumeMultipartUpload(session.r2_key, session.r2_upload_id).abort();
-      } catch {
-        // The upload may have completed between the list and here; staged
-        // bytes are deleted below either way.
-        await dc.env.FILES.delete(session.r2_key).catch(() => {});
-      }
-    } else if (session.staged === 1) {
-      await dc.env.FILES.delete(session.r2_key).catch(() => {});
+    try {
+      await discardSessionStorage(dc, session);
+    } catch {
+      // Transient storage errors are retried by the next native cleanup run.
+      continue;
     }
     const batch = await dc.env.DB.batch([
       dc.env.DB.prepare("DELETE FROM upload_parts WHERE session_id = ?").bind(session.id),

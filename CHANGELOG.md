@@ -12,16 +12,69 @@
   Owner keys, claim tokens and the version's dwu_ token are accepted with the
   same per-operation rechecks as blob uploads; sessions expire within a day
   and hourly cleanup aborts them in bounded slices (migration
-  `0007_multipart_uploads.sql`). New error codes: `upload_not_found`,
-  `invalid_part`, `upload_incomplete`, `upload_closed`, `part_conflict`.
+  `0007_multipart_uploads.sql`, `0008_multipart_session_cap.sql`). Starts atomically
+  reuse the one unfinished session per pending file. In-flight part claims are
+  exclusive, including identical bytes; transient storage cleanup failures keep
+  their durable retry obligations. Lost claims can be recovered after ten minutes
+  by aborting the entire old physical handle before session replacement. New error codes: `upload_not_found`,
+  `invalid_part`, `upload_incomplete`, `upload_closed`, `part_busy`, `part_conflict`, `upload_busy`.
+  In-flight `part_busy` is retryable; changed acknowledged `part_conflict` is not.
+  Live part buffers share a 96 MiB per-isolate admission budget (503 on overload),
+  with incremental part hashing rather than a second whole-part digest copy.
 - The CLI uses multipart above 95 MiB (the raw PUT at or below), resuming from
-  the server's acknowledged parts with the existing retries and dedupe.
+  the server's acknowledged parts when retrying the same pending version, with
+  the existing retries and dedupe. Separate CLI invocations create new versions;
+  there is no persisted cross-invocation resume checkpoint.
 - `publish_site` and REST JSON publishing accept `archiveUrl` alone (a public
   https .zip, fetched and unpacked like an uploaded zip) and chat-client
   attachments `{download_url, file_name}` as file sources under the existing
   URL fetch guards. A sha256 file source with an explicit size no longer needs
   an API key merely to resolve, so an anonymous publish can return
   `awaiting_upload`; owner-scoped dedupe is unchanged.
+
+### Sites
+
+- Every site serves an embeddable live-version badge at `<site URL>badge.svg` (path and
+  subdomain mode): a flat SVG with the live version and a coarse age for public sites, and one
+  identical generic image for passworded, expired, deleted, transfer, missing and renamed-away
+  sites. The dashboard site page shows the Markdown snippet for public sites. It reads the cached
+  live manifest (now version 4, which also carries the live version number and time; cached v3
+  entries rebuild from D1 on first read) and is not recorded as a site request. `badge.svg` at a
+  site root is reserved. See `docs/SITE_BADGE.md`.
+
+### Dashboard
+
+- The selected-version file table now announces matching-vs-loaded file counts
+  and the matching byte total as you filter by path. A version with files but
+  no matches shows a distinct no-match message with a Clear filter action
+  (instead of a blank table), while a genuinely empty manifest stays labelled
+  as empty. Clearing resets only the query, keeps the selected version and
+  sort, and returns focus to the filter.
+
+### Path-mode hardening and publish warnings (R-12)
+
+- Publish and finalize return warnings with `fix` text (and `path`/`line` where known),
+  computed from the stored bytes over a bounded scan: `root_absolute_paths` (path mode),
+  `spa_without_base`, `uses_browser_storage` (when the site will be sandboxed),
+  `wasm_without_coi` (renamed from `wasm_without_cross_origin_isolation`),
+  `possible_secret` (file and line; matched values are never included) and
+  `invalid_config` (a `.dropway/*.json` file that is not valid JSON). `no_index` now
+  carries fix text too. Replayed finalizes and unchanged republishes (including
+  file-source REST/MCP publishes and updates) return the same warnings instead of an
+  empty list. Advisory database-read failures return no warnings without failing a
+  successful publication; bounded blob reads run concurrently in deterministic order.
+- A page navigation with a same-origin `Referer` inside an SPA site to a path the site
+  lacks now 307-redirects to that path inside the site (SRV-02), where the SPA fallback
+  serves it; app routes, paths with a file extension and sub-resource requests are
+  untouched. On a separate sites origin, existing destination sites (even empty or
+  expired), renamed-away slugs (their 308 redirect) and version addresses keep their
+  own routing instead of being captured by the referring SPA.
+- Publishing a path under `__dropway/` is refused with the new `reserved_path` error on
+  every publish path (the manifest, one-shot and file-source flows share the check).
+- `.dropway` and `.dropway/*` files are stored with the version (owner read-back works)
+  but are never served from the sites origin, including through the single-file root
+  shortcut, and no longer appear in folder listings. A directory holding only private
+  entries answers 404 instead of an empty listing or a redirect.
 
 ### Versions naming
 
@@ -160,6 +213,10 @@
   Add `delete_folder` to the registry; deleting an organizer keeps its sites.
 
 ### Extension API
+
+- Bump `EXTENSION_API_VERSION` to 5: `Viewer` gains an optional `etagExtra(file, live)` that adds render
+  identity (for example linked neighbours) to the viewer ETag. The server percent-encodes the viewer id
+  and this value in the ETag, so any string is safe; built-in viewers' ETags are unchanged.
 
 - Bump `EXTENSION_API_VERSION` to 4: Principal adds an upload-only variant
   (versionId, expiresAt in epoch milliseconds, ip), and DropwayConfig adds

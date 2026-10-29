@@ -89,12 +89,14 @@ Extension adapters can add codes and override guidance without changing built-in
 | `missing_blobs` | 409 | false | PUT missing files' raw bytes to their upload URLs with the same credential, then finalize again. |
 | `not_available` | 403 | false | Use the instance's supported owner recovery process. |
 | `not_set_up` | 404 | false | Call POST /api/v1/setup with the bootstrap key first. |
-| `part_conflict` | 409 | false | This part was already acknowledged with different bytes; start a new upload session to change it. |
+| `part_busy` | 409 | true | Retry after the in-flight PUT finishes; identical acknowledged bytes replay without another storage write. |
+| `part_conflict` | 409 | false | Resume with the acknowledged bytes, or publish again to create a new pending version if they must change. |
 | `password_required` | 400 | false | Call again with a password of 4–200 characters. |
 | `path_required` | 400 | false | Add a path query parameter or X-Kofra-Path header to name the raw file. |
 | `rate_limited` | 429 | true | Wait retryAfterSeconds before retrying; update an existing anonymous site using its claim token. |
 | `reason_required` | 400 | false | Provide a non-empty reason for releasing the held name, such as a trademark dispute reference. |
 | `request_too_large` | 413 | false | Split the request or use manifest/upload/finalize instead of embedding file bytes. |
+| `reserved_path` | 400 | false | Rename the __dropway/ folder: paths under __dropway/ belong to the server (password form, report link). |
 | `route_not_found` | 404 | false | See /openapi.json for supported methods and endpoints. |
 | `scope_not_grantable` | 403 | false | Request only scopes held by both the caller and the target member's role. |
 | `site_changed` | 409 | false | Reload the site, reconcile the change, and retry manually. |
@@ -119,6 +121,7 @@ Extension adapters can add codes and override guidance without changing built-in
 | `transfer_unavailable` | 451 | false | Contact the sender. |
 | `transfer_unlock_unavailable` | 503 | true | Retry later. |
 | `unauthorized` | 401 | false | Send Authorization: Bearer dw_...; the instance owner creates keys through /api/v1/keys or /api/v1/members. |
+| `upload_busy` | 503 | true | Retry shortly or reduce upload concurrency; the Worker's shared part-buffer budget is full. |
 | `upload_closed` | 409 | false | Start a new upload session for this pending version; a finished or failed session accepts no parts. |
 | `upload_expired` | 410 | false | Publish again for fresh upload links; stored files are reused. |
 | `upload_incomplete` | 409 | false | PUT every missing part the session lists, then call complete again. |

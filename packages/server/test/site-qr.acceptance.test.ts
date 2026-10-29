@@ -772,10 +772,15 @@ function expectZeroThirdParty(calls: string[], doc: FakeDocument): void {
     expect(url.startsWith("/api/"), `same-origin API call only (got ${url})`).toBe(true);
     expect(url, "no QR/image endpoint").not.toMatch(/\/(qr|barcode|chart)([\/?#]|$)|image\/generate/i);
   }
-  // No external image: every img src is data: (QR) — no https:// third-party.
+  // No external image: every img src is data: (QR) — no https:// third-party (the first-party badge preview excepted).
   for (const img of doc.querySelectorAll("img")) {
     const src = img.getAttribute("src") ?? "";
     if (!src) continue;
+    // The badge embed preview is the site's own first-party badge address (SITE-BADGE), not a third-party image.
+    if (img.getAttribute("data-testid") === "site-badge-preview") {
+      expect(src.endsWith("/badge.svg"), `badge preview is the site's own badge address (got ${src.slice(0, 60)})`).toBe(true);
+      continue;
+    }
     expect(src.startsWith("data:") || src.startsWith("/"), `img src is first-party (got ${src.slice(0, 60)})`).toBe(true);
     expect(src, "no third-party image host").not.toMatch(/^https?:\/\//);
   }

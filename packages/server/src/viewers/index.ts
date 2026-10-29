@@ -73,6 +73,15 @@ export interface Viewer {
   id: string;
   /** Bump when the output changes: it is part of the ETag and of the render cache key. Default 1. */
   version?: number;
+  /**
+   * Extra render identity beyond the file's own bytes (e.g. neighbours the
+   * page links to), appended to the ETag so a conditional request cannot
+   * revalidate a page whose surroundings changed. Must be cheap and
+   * synchronous: it runs before rendering, on every request. Any string is
+   * allowed: the server percent-encodes it into the ETag, normalizing lone
+   * surrogates to U+FFFD first.
+   */
+  etagExtra?(file: ViewerFile, live: LiveSite): string;
   /** Files larger than this are served raw instead. */
   maxBytes: number;
   /** `mode` is undefined for viewers written before view modes existed; treat it as "document". */

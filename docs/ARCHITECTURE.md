@@ -117,6 +117,42 @@ Path mode is interim. Root-relative URLs (`/assets/app.js`) would escape the
    import specifiers, CSS set from JS, `location.href = "/x"` and
    `history.pushState("/x")`. Use relative URLs there, or subdomain mode.
 
+### Version previews
+
+`<slug>--v<N>` uses the same path/subdomain topology as the live site, but resolves
+its ready version and current site settings directly from D1 (`services/previews.ts`).
+It never reads or repairs the live KV pointer, so newly published bytes are available
+even during live-cache propagation. Pending versions and transfer sites are not previewable.
+
+Access requires a credential that can read the site or a signed `dw_preview` capability
+bound to the site id, version id and an absolute 24-hour expiry. Publish and finalize
+results return that signed `versionUrl`. Redeeming it sets a Secure, HttpOnly, host-only
+cookie scoped to the preview root and redirects to the same address without the token;
+the cookie cannot extend the signed expiry. Share the returned link carefully: it is a
+bearer credential. Unchanged publishes keep the same version address, but issue a fresh
+expiring capability. Idempotency replay retains the original result and its original expiry.
+The `version_previews` capability is built in; a policy refusal omits `versionUrl` without
+blocking ordinary publication, and live refusals deny existing links and owner previews.
+Signed links require an HTTPS preview origin; HTTP is allowed only for loopback development
+(`localhost`, `127.0.0.0/8` and `[::1]`). Other HTTP origins omit the link without failing publication.
+A pending result's link becomes readable only after finalization.
+
+`server/previews.ts` authorizes before reusing the normal file/viewer/password machinery.
+Preview responses are private/no-store, `noindex` and `no-referrer`, including conditional,
+range, HEAD and error responses. Path rewriting retains the version address for assets.
+Path-mode preview HTML also gets the existing runtime URL shim, even without a sandbox:
+root-relative JavaScript requests cannot rely on Referer recovery under `no-referrer`.
+The shim carries only the versioned path prefix, never the signed capability; its normal
+path-mode limitations still apply. Live unsandboxed pages keep their Referer fallback.
+Site passwords still apply; a preview capability is not a password unlock.
+
+As with password sites, path-scoped cookies are routing scope, **not origin isolation**.
+Path-mode sites share an origin; hostile content there can cause ambient-cookie requests
+(including classic-script inclusions from opaque sandbox origins). Use subdomain mode
+for sensitive previews or mutually untrusted sites. Its host-only `__Host-` cookie and
+same-site/cross-site subresource refusal isolate sibling sites. Removing CORS permission
+in path mode does not make different paths different origins.
+
 ### Viewing files
 
 `serveFile` asks `findViewer(file, live, viewers, mode)` (`packages/server/src/viewers`)
@@ -136,9 +172,20 @@ and has its own toolbar).
 
 Every view shares one bar (`viewers/chrome.ts`: kind, path, size, type; view
 tabs; Download; Files) built from plain links, so it works with JavaScript off.
+Except for image/SVG viewers and embeds, the bar also links to the previous
+and next direct files in the same folder, in listing name order, without
+wrapping. These default-view links use the loaded live manifest, never the
+request query. Their HTTP validators include the live version id so republishing
+siblings cannot revalidate stale navigation; content-only render fragments stay
+independent of the manifest. Image/SVG viewers retain their own stage navigation.
 View pages get `VIEWER_CSP` (no scripts). The code view adds one static inline
 script (Copy, `#L10-L20` ranges) allowed by its SHA-256 hash, which stays valid
-across 304 responses, unlike a nonce. User markup (Markdown, notebook HTML)
+across 304 responses, unlike a nonce. Line ranges are selected without typing a
+fragment: shift-click extends from the first line of the current `#L…` selection,
+and the toolbar's First/Last line inputs (bounded to the rendered lines, at most
+5000 at a time) do the same from the keyboard. Selection only rewrites the
+fragment — no request, storage or extra history beyond the new hash — and the
+address remains a live address, not a pinned one. User markup (Markdown, notebook HTML)
 goes through `viewers/sanitize.ts`, an allowlist sanitizer on `HTMLRewriter`.
 Expensive output (highlighting, Markdown, JSON trees, CSV tables) is cached by
 content in `viewers/cache.ts` (`render/<viewer>@<version>/<variant>/<sha256>`:
@@ -209,6 +256,15 @@ The dashboard never renders user content on the app origin: files open in an
 iframe on the sites origin (with `allow-same-origin` only when that origin is
 not the app origin), and downloads go through a forced-download blob.
 
+The loaded version's file detail offers **Download ZIP** through the authenticated
+immutable-ID export route. Browser downloads require known metadata of at most
+16 MiB stored bytes and 1,000 files; pending, larger or unknown versions show an
+explanation and the authenticated REST/CLI route instead. The client verifies
+`X-Kofra-Version`, ZIP type and the server attachment filename, reads at most
+32 MiB of actual response bytes, and offers no attachment until the stream is
+complete. The file selection and filter stay intact. These browser limits do not
+change the server export limits.
+
 Drag-and-drop publishing hashes files in the browser (SHA-256), sends the
 manifest to `POST /api/v1/sites/:slug/deploys`, uploads only the blobs the
 server reports missing (4 at a time, retried on 429/5xx), then finalizes. A
@@ -227,6 +283,19 @@ remain excluded (an unreadable folder's contents are not listed); other read
 failures block publishing until the selection is reselected. The displayed
 selection stays bound to the in-flight publish.
 
+The update picker lists only the first page of sites, so an explicit update
+destination (the `?site=` target, or a slug entered in the update panel's
+lookup field) is verified with the single-site `GET /api/v1/sites/:slug`
+instead of paging through every site: the reference is encoded as one path
+segment (dot-only references are rejected locally before URL normalization),
+the returned slug is added to the picker and selected, and
+publishing stays disabled until that verification succeeds — a failed or
+superseded lookup never falls back to another listed site or a new site.
+Typing in the lookup field makes no request; Enter or the lookup button
+submits it. A sequence fence makes the newest explicit choice win over
+late list or lookup responses, and a verified destination stays selected
+through the list refresh after a successful publish.
+
 ## Data model (D1, `packages/core/migrations`)
 
 - `tenants`: exactly one in this build (created by `POST /api/v1/setup`).
@@ -236,7 +305,7 @@ selection stays bound to the in-flight publish.
 - `versions`: immutable manifests; `status` pending|ready; `manifest_hash` (identical republish = `unchanged`); `base_version_id` (409 `version_conflict`).
 - `version_files`: path -> sha256, size, content type.
 - `blobs` + `blob_scopes`: bytes exist once in R2; a scope (`t:<tenant>` or `s:<anonymous site>`) skips an upload only for bytes it has proven it holds, so dedupe never reveals another owner's files.
-- `upload_sessions` + `upload_parts` (`0007_multipart_uploads.sql`): one session per pending manifest file (R2 key/upload id, part size, status, expiry capped by any dwu_ capability that created it); part rows are the durable acknowledgements (number, size, etag, part digest) a client resumes from. Completion fenced by the session status assembles the R2 object, stream-hashes it, and only then registers the blob in the owner's scope; hourly cleanup aborts at most 500 expired sessions per run.
+- `upload_sessions` + `upload_parts` (`0007_multipart_uploads.sql`, `0008_multipart_session_cap.sql`): one unfinished session per pending manifest file (partial unique index) (R2 key/upload id, part size, status, expiry capped by any dwu_ capability that created it); part rows are the durable acknowledgements (number, size, etag, part digest) a client resumes from. Completion fenced by the session status assembles the R2 object, stream-hashes it, and only then registers the blob in the owner's scope; hourly cleanup aborts at most 500 expired sessions per run and keeps ownership rows when storage cleanup fails. Concurrent first-part writes are exclusive even for identical content (R2 etags identify writes, not hashes). Storage or acknowledgement failures release unacknowledged claims. A ten-minute-old lost claim is recovered by confirming abort of its whole old R2 handle before replacing the session, never by lease takeover of a physical part. Live application part buffers share a 96 MiB isolate budget and hashing is incremental; overload is retryable `503 upload_busy`.
 - `usage_counters`: active owned sites and unique bytes in ordinary sites' ready versions, plus each transfer's reserved bytes until purge (including deleted or held deliveries). Lifecycle transactions refresh counters; transfer insert/purge triggers preserve their retention charge. `recomputeUsage(dc, tenantId)` repairs drift; the midnight cron emits one `storage_snapshot` per tenant. Ordinary pending manifests are not charged; a transfer reserves its bytes before its initial deploy, so that deploy's `newBytes` is zero. `0003_scopes_usage.sql` extends the table from `0002_transfers.sql` without rewriting the applied migration.
 
 - `idempotency_keys` (`0005_publish_idempotency.sql`): authorization/operation/key
@@ -261,7 +330,7 @@ tables in their own migrations or their own D1 database.
 
 ## Extension points: `createDropway(options)`
 
-`@dropway/server` exports `EXTENSION_API_VERSION = 4` for this public embedding
+`@dropway/server` exports `EXTENSION_API_VERSION = 5` for this public embedding
 contract. Update it and the Extension API section in `CHANGELOG.md` when changing
 the contract. `test/extension-contract.test.ts` exercises every existing extension
 point with fake adapters and real emulated D1/R2/KV bindings; it runs in public CI.

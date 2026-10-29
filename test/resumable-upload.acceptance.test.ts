@@ -137,7 +137,10 @@ describe("resumable upload integrity and real R2 multipart", () => {
     accepted(await putPart(dw, s, 1, bytes, p.token));
     const before = (await state(dw, s, p.token)).body.parts;
     const changed = bytes.slice(); changed[0] = 0;
-    await refused(dw, await putPart(dw, s, 1, changed, p.token), [400, 409, 422]);
+    const rejected = await putPart(dw, s, 1, changed, p.token);
+    await refused(dw, rejected, [400, 409, 422]);
+    expect(rejected.body.error.code).toBe("part_conflict");
+    expect(rejected.body.error.retryable, "changed acknowledged bytes cannot converge by retrying").toBe(false);
     expect((await state(dw, s, p.token)).body.parts).toEqual(before);
     accepted(await complete(dw, s, p.token));
     accepted(await finalize(dw, p));
@@ -389,6 +392,98 @@ describe("multipart policy and cleanup contracts", () => {
     accepted(await state(dw, live, livePending.key));
     accepted(await complete(dw, live, livePending.key));
     accepted(await finalize(dw, livePending));
+  }, 180_000);
+
+  // Review round: the slice above bounds ROWS, not service calls. 500 rows at
+  // abort + delete + one D1 batch each is 1501 internal-service calls before
+  // later housekeeping, over the documented 1000-per-invocation budget. This
+  // simulation counts real D1 executions (a batch counts once) plus R2/KV
+  // calls during runCleanup; storage for seeded sessions is a counting
+  // double at the abort boundary, never a live quota test.
+  it("keeps one cleanup invocation inside a 1000 internal-service-call budget while later housekeeping still runs and the backlog drains", async () => {
+    const dw = await instance();
+    const realNow = Date.now();
+    const cleanupNow = realNow + 2 * DAY;
+    // Fixtures for phases that run AFTER expired-upload cleanup.
+    const stale = await pending(dw, await sha256Hex(bytes), bytes.length, "cleanup-budget-stale");
+    const orphanSha = "e".repeat(64);
+    await env.DB.prepare("INSERT INTO blobs (sha256, size, created_at) VALUES (?, ?, ?)").bind(orphanSha, 3, realNow).run();
+    await env.FILES.put(`blobs/${orphanSha}`, new Uint8Array([1, 2, 3]));
+    await env.DB.prepare("INSERT INTO idempotency_keys (key_hash, input_hash, owner_token, state, result_json, expires_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind("cleanup-budget-key", "cleanup-budget-input", "cleanup-budget-owner", "done", null, cleanupNow - 1).run();
+    // 600 expired unfinished sessions plus one live neighbor (raw rows only;
+    // creating 600 real R2 uploads just to count their aborts would test the
+    // fixture, not the budget).
+    const seedSession = (i: number, expiresAt: number) => env.DB.prepare(
+      "INSERT INTO upload_sessions (id, version_id, site_id, sha256, size, part_size, part_count, r2_key, r2_upload_id, status, staged, content_type, created_at, expires_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, NULL, ?, ?, NULL)",
+    ).bind(`upl_budget_${i}`, `ver_budget_${i}`, "site_budget", i.toString(16).padStart(64, "0"), 1, 10 * MiB, 1, `uploads/budget-${i}`, `budget-${i}`, realNow, expiresAt);
+    for (let startAt = 0; startAt < 600; startAt += 100) {
+      await env.DB.batch(Array.from({ length: Math.min(100, 600 - startAt) }, (_, k) => seedSession(startAt + k, cleanupNow - 1_000 + startAt + k)));
+    }
+    await seedSession(10_001, cleanupNow + DAY).run();
+    const sessionsLeft = async () =>
+      (await env.DB.prepare("SELECT COUNT(*) AS n FROM upload_sessions WHERE id LIKE 'upl_budget_%' AND expires_at <= ?").bind(cleanupNow).first<{ n: number }>())!.n;
+    expect(await sessionsLeft()).toBe(600);
+
+    let calls = 0;
+    let counting = false;
+    const count = () => { if (counting) calls++; };
+    const prepare = env.DB.prepare.bind(env.DB);
+    const wrapStatement = (stmt: any): any => {
+      const bind = stmt.bind.bind(stmt);
+      vi.spyOn(stmt, "bind").mockImplementation(((...values: unknown[]) => wrapStatement(bind(...values))) as never);
+      for (const method of ["run", "all", "first"] as const) {
+        const orig = typeof stmt[method] === "function" ? stmt[method].bind(stmt) : null;
+        if (!orig) continue;
+        vi.spyOn(stmt, method).mockImplementation((async (...args: unknown[]) => { count(); return orig(...args); }) as never);
+      }
+      return stmt;
+    };
+    vi.spyOn(env.DB, "prepare").mockImplementation(((sql: string) => wrapStatement(prepare(sql))) as never);
+    const batch = env.DB.batch.bind(env.DB);
+    vi.spyOn(env.DB, "batch").mockImplementation((async (statements: unknown) => { count(); return batch(statements as never); }) as never);
+    const del = env.FILES.delete.bind(env.FILES);
+    vi.spyOn(env.FILES, "delete").mockImplementation((async (key: string | string[]) => { count(); return del(key); }) as never);
+    vi.spyOn(env.FILES, "resumeMultipartUpload").mockImplementation((key, id) => ({
+      key, uploadId: id,
+      async uploadPart() { throw new Error("counting double accepts no parts"); },
+      async complete() { throw new Error("counting double never completes"); },
+      async abort() { count(); },
+    }));
+    for (const method of ["get", "put", "delete"] as const) {
+      const orig = (env.CACHE[method] as (...args: any[]) => unknown).bind(env.CACHE);
+      vi.spyOn(env.CACHE, method).mockImplementation((async (...args: unknown[]) => { count(); return orig(...args); }) as never);
+    }
+    const countedCleanup = async () => {
+      calls = 0;
+      const report = await context(dw, async (dc) => {
+        counting = true;
+        try { return await runCleanup(dc, cleanupNow); } finally { counting = false; }
+      });
+      return { report, calls };
+    };
+
+    const first = await countedCleanup();
+    expect(first.calls, "one runCleanup invocation must fit the documented 1000 internal-service-call budget (each D1 execution, R2 call or KV call = 1; one D1 batch = 1)").toBeLessThanOrEqual(1_000);
+    expect(first.report.expiredUploads).toBeGreaterThan(0);
+    // Later housekeeping phases still executed in the same invocation.
+    expect(first.report.abandonedDeploys).toBeGreaterThanOrEqual(1);
+    expect(first.report.deletedBlobs).toBeGreaterThanOrEqual(1);
+    expect(await env.DB.prepare("SELECT id FROM versions WHERE id = ?").bind(stale.versionId).first()).toBeNull();
+    expect(await env.DB.prepare("SELECT sha256 FROM blobs WHERE sha256 = ?").bind(orphanSha).first()).toBeNull();
+    expect(await env.DB.prepare("SELECT key_hash FROM idempotency_keys WHERE key_hash = 'cleanup-budget-key'").first()).toBeNull();
+    // Leftovers stay owned and exactly accounted, then drain on later runs,
+    // each inside the same budget; the live neighbor is never touched.
+    expect(await sessionsLeft()).toBe(600 - first.report.expiredUploads);
+    for (let run = 0; run < 12 && (await sessionsLeft()) > 0; run++) {
+      const beforeCount = await sessionsLeft();
+      const next = await countedCleanup();
+      expect(next.calls).toBeLessThanOrEqual(1_000);
+      expect(await sessionsLeft()).toBe(beforeCount - next.report.expiredUploads);
+      expect(next.report.expiredUploads).toBeGreaterThan(0);
+    }
+    expect(await sessionsLeft()).toBe(0);
+    expect(await env.DB.prepare("SELECT id FROM upload_sessions WHERE id = 'upl_budget_10001'").first()).not.toBeNull();
   }, 180_000);
 
   it("does not grant a site-restricted key access to another site's multipart session", async () => {

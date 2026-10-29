@@ -12,6 +12,7 @@ import { CliError, DropwayClient, EXIT, normaliseApi, type FetchLike } from "./c
 import { linkKey, linkPath, readCredentials, readLink, removeCredentials, saveCredentials, writeLink, type ProjectLink } from "./config.ts";
 import { collectFiles } from "./files.ts";
 import { encryptFiles } from "./encrypt.ts";
+import { explainConfig, explainConfigHuman } from "./explain-config.ts";
 import { withLegacyEnv } from "./legacy-brand.ts";
 import { formatBytes, plural, shellQuote, shortTime, table } from "./output.ts";
 import { publish, publishZip, waitForVersion, type ProgressEvent, type PublishResult, type VersionInfo } from "./publish.ts";
@@ -164,12 +165,12 @@ function makeClient(io: Io, api: string, token: string | null): DropwayClient {
   return new DropwayClient({ api, token, fetch: io.fetch, client: clientName(io.env), onMoved });
 }
 
-function requireKey(inst: Instance, what = "This command"): string {
+function requireKey(inst: Instance, what = "This command", hint = "Run `kofra login`, set KOFRA_API_KEY, or pass --key. (To publish without a key, use --anonymous if the instance allows it.)"): string {
   if (inst.key) return inst.key;
   throw new CliError({
     code: "not_logged_in",
     message: `${what} needs an API key for ${inst.api}.`,
-    hint: "Run `kofra login`, set KOFRA_API_KEY, or pass --key. (To publish without a key, use --anonymous if the instance allows it.)",
+    hint,
     exitCode: EXIT.auth,
   });
 }
@@ -543,6 +544,79 @@ const siteCmd: Command = {
         `Updated:  ${shortTime(s.updatedAt)}`,
       ].join("\n"),
     );
+    return EXIT.ok;
+  },
+};
+
+const RENAME_LINK_GUIDANCE = "Saved local project mappings remain unchanged. Before a later publish, update the affected dropway.json mapping or use kofra publish <path> --site <new-slug> to update and save the explicit target.";
+
+/** Recover the old canonical address only for a recognizable returned site URL. */
+function renamedFromUrl(url: string, slug: string, oldSlug: string): string | null {
+  try {
+    const old = new URL(url);
+    if (old.hostname.startsWith(`${slug}.`)) {
+      old.hostname = `${oldSlug}${old.hostname.slice(slug.length)}`;
+    } else if (old.pathname.endsWith(`/${slug}/`)) {
+      old.pathname = `${old.pathname.slice(0, -(slug.length + 1))}${oldSlug}/`;
+    } else {
+      return null;
+    }
+    return old.href;
+  } catch {
+    return null;
+  }
+}
+
+const renameCmd: Command = {
+  summary: "Rename an explicit site; leave local project mappings unchanged",
+  usage: "kofra rename <source> <new-slug> --yes [--dry-run] [--json]",
+  maxPositionals: 2,
+  flags: { yes: { kind: "boolean", short: "y" }, "dry-run": { kind: "boolean" } },
+  details: `The source must be an explicit site slug, id or URL; saved targets are never used.
+  --yes       Required to rename, even in a terminal; this command never prompts
+  --dry-run   Offline normalized target/patch plan; no key or --yes needed
+
+Calls rename_site once through POST /api/v1/sites/{source}/rename. The server
+validates the name and permissions. A canonical no-op is a successful result.
+Only a returned redirectUntil establishes an old-URL redirect deadline; no
+redirect duration is assumed. Release and override flags are not supported.
+
+${RENAME_LINK_GUIDANCE}
+
+Examples:
+  kofra rename old-report new-report --dry-run --json
+  kofra rename old-report new-report --yes --json`,
+  async run(p, io, out) {
+    const source = positional(p, 0, "source", this.usage);
+    const slug = positional(p, 1, "new-slug", this.usage).trim().toLowerCase();
+    if (!source.trim() || source === "." || source === "..") throw new UsageError("Use an explicit site slug, id or URL as the source.");
+    if (!slug) throw new UsageError("The new slug must not be empty.");
+    const dryRun = bool(p, "dry-run") === true;
+    if (!dryRun && bool(p, "yes") !== true) {
+      throw new CliError({ code: "confirmation_required", message: "Refusing to rename without --yes.", hint: "Re-run with --yes, or inspect an offline plan with --dry-run.", exitCode: EXIT.usage });
+    }
+    const inst = await resolveInstance(p, io);
+    if (dryRun) {
+      const plan = { schemaVersion: 1, operation: "rename_site", target: { api: inst.api, site: source }, patch: { slug }, localLinksUpdated: false };
+      if (out.json) io.stdout(`${JSON.stringify(plan, null, 2)}\n`);
+      else out.result(plan, `Would rename ${source} to ${slug} on ${inst.api}. No request made; source identity and server policy are not resolved.\n${RENAME_LINK_GUIDANCE}`);
+      return EXIT.ok;
+    }
+    const client = makeClient(io, inst.api, requireKey(inst, "Renaming", "Run `kofra login`, set KOFRA_API_KEY, or pass --key."));
+    const result = await client.renameSite({ slug: source, newSlug: slug });
+    const data = { ...result, localLinksUpdated: false };
+    // Preserve the API body, including identity and null deadlines, without an envelope.
+    if (out.json) io.stdout(`${JSON.stringify(data, null, 2)}\n`);
+    else out.result(data, () => {
+      const oldUrl = result.url && result.slug && result.oldSlug ? renamedFromUrl(result.url, result.slug, result.oldSlug) : null;
+      return [
+        result.renamed ? `Renamed ${result.oldSlug} to ${result.slug}.` : `${result.slug}: unchanged (no rename).`,
+        oldUrl ? `Old URL: ${oldUrl}` : `Old name: ${result.oldSlug ?? "not returned"} (old URL unavailable from the returned address).`,
+        `New URL: ${result.url}`,
+        ...(result.redirectUntil ? [`Old URL redirects until ${result.redirectUntil}.`] : []),
+        RENAME_LINK_GUIDANCE,
+      ].join("\n");
+    });
     return EXIT.ok;
   },
 };
@@ -1291,11 +1365,28 @@ const apiCmd: Command = {
   },
 };
 
+const explainConfigCmd: Command = {
+  summary: "Show which configuration wins, without contacting anything",
+  usage: "kofra explain-config [path] [--api <url>] [--key <key>] [--json] [-q]",
+  maxPositionals: 1,
+  flags: {},
+  details: `Offline, read-only diagnostics. Exit 0 means presence, not authorization.
+Callers using --anonymous may treat exit 3 as OK; never auto-login on exit 3.
+Contract: https://github.com/TogetherWeOwn/kofra/blob/main/docs/CLI_DIAGNOSTICS.md`,
+  async run(p, io, out) {
+    const report = await explainConfig({ api: str(p, "api"), key: str(p, "key"), path: p.positionals[0], env: io.env, cwd: io.cwd });
+    out.result({ ...report }, () => explainConfigHuman(report));
+    return report.exitCode;
+  },
+};
+
 const COMMANDS: Record<string, Command> = {
   publish: publishCmd,
+  "explain-config": explainConfigCmd,
   duplicate: duplicateCmd,
   list: listCmd,
   site: siteCmd,
+  rename: renameCmd,
   files: filesCmd,
   "read-file": readFileCmd,
   versions: versionsCmd,
@@ -1349,7 +1440,8 @@ ${HELP_FOOTER}`;
 
 /** Run the CLI. Returns the exit code (never calls process.exit). */
 export async function run(argv: string[], io: Io): Promise<number> {
-  io = { ...io, env: withLegacyEnv(io.env) };
+  // Diagnostics needs literal provenance; all existing commands keep legacy folding.
+  io = { ...io, env: argv[0] === "explain-config" ? io.env : withLegacyEnv(io.env) };
   const first = argv[0];
   if (!first || first === "help" || first === "--help" || first === "-h") {
     const topic = first === "help" ? argv[1] : undefined;
@@ -1383,7 +1475,9 @@ export async function run(argv: string[], io: Io): Promise<number> {
     return await command.run(p, io, new Output(io, bool(p, "json") === true, bool(p, "quiet") === true));
   } catch (e) {
     const err =
-      e instanceof CliError
+      name === "explain-config" && !(e instanceof UsageError)
+        ? new CliError({ code: "unexpected_error", message: "Unexpected internal failure.", exitCode: EXIT.error })
+        : e instanceof CliError
         ? e
         : e instanceof UsageError
           ? new CliError({ code: "usage", message: e.message, hint: `Run \`kofra ${name} --help\`.`, exitCode: EXIT.usage })

@@ -325,7 +325,9 @@ Keep `"workers_dev": true`, set `APP_ORIGIN` to the new origin and list the old 
 - **Upgrade**: pull the latest code (or sync your copy on GitHub), then `npm run deploy` (pushing
   your copy does this through Workers Builds). Migrations are additive and run before the new code.
 - **Backups**: D1 Time Travel restores the database to any minute in the last 30 days (7 on the free
-  plan). R2 objects are immutable and named by their SHA-256.
+  plan). R2 objects are immutable and named by their SHA-256. The full procedure — per-binding
+  backup commands, numbered restore order, what is not recoverable, and cadence — is the
+  [backup and restore runbook](BACKUP.md).
 - **Removal**: delete the Worker(s), the D1 database, the R2 bucket and the KV namespace in the dashboard.
 
 ## Verify a deployment

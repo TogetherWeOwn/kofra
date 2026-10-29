@@ -410,6 +410,9 @@ export const CORE_API_OPERATIONS = [
         const fresh = await getSiteFor(dw, P(c), result.slug);
         return c.json({
           url: siteUrl(dw, fresh.slug),
+          versionUrl: result.versionUrl,
+          version: result.version,
+          slug: result.slug,
           live: result.status === "live",
           replayed: result.replayed,
           site: await describeSite(dw, fresh),

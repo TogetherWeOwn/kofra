@@ -1,5 +1,7 @@
+import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { zipSync, strToU8 } from "fflate";
+import { zipSync, strToU8, Zip, ZipPassThrough } from "fflate";
+import { ApiError, unzipFiles } from "@dropway/core";
 import { freshInstance, jsonBody, type Instance } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
 
@@ -63,6 +65,89 @@ function zipResponse(files: Record<string, string>): Response {
   return new Response(zipSync(entries) as unknown as BodyInit, {
     headers: { "Content-Type": "application/zip" },
   });
+}
+
+function zipBytesResponse(zip: Uint8Array): Response {
+  return new Response(zip as unknown as BodyInit, { headers: { "Content-Type": "application/zip" } });
+}
+
+/**
+ * Build a stored (uncompressed) ZIP from an ordered entry list, so legal
+ * names like "__proto__" and repeated names survive fixture construction:
+ * an object literal cannot carry either. Small benign text entries only.
+ */
+function buildStoredZip(entries: Array<[string, string]>): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    const chunks: Uint8Array[] = [];
+    const zip = new Zip((err, chunk, final) => {
+      if (err) { reject(err); return; }
+      chunks.push(chunk);
+      if (!final) return;
+      const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+      let at = 0;
+      for (const c of chunks) { out.set(c, at); at += c.length; }
+      resolve(out);
+    });
+    for (const [name, text] of entries) {
+      const file = new ZipPassThrough(name);
+      zip.add(file);
+      file.push(strToU8(text), true);
+    }
+    zip.end();
+  });
+}
+
+/**
+ * Rewrite only the declared uncompressed-size fields (local + central
+ * headers) of a small stored ZIP, leaving the stored bytes untouched. This
+ * is the bounded declaration/output disagreement seam: a few KB of fixture
+ * bytes whose headers claim far fewer than the extractor will produce.
+ */
+function withDeclaredUncompressedSize(zip: Uint8Array, declared: number): Uint8Array {
+  const out = zip.slice();
+  const dv = new DataView(out.buffer, out.byteOffset, out.byteLength);
+  for (let i = 0; i + 4 <= out.length; i++) {
+    const sig = dv.getUint32(i, true);
+    if (sig === 0x04034b50) dv.setUint32(i + 22, declared, true);
+    if (sig === 0x02014b50) dv.setUint32(i + 24, declared, true);
+  }
+  return out;
+}
+
+/** Settings + live-cache state of an existing site, as a refusal must preserve it. */
+async function siteSnapshot(inst: Instance, slug: string) {
+  const got = await inst.json(`/api/v1/sites/${slug}`, { key: inst.ownerKey });
+  expect(got.status, JSON.stringify(got.body)).toBe(200);
+  const row = await env.DB.prepare("SELECT title, password_hash, current_version_id FROM sites WHERE slug = ?")
+    .bind(slug)
+    .first<{ title: string | null; password_hash: string | null; current_version_id: string | null }>();
+  expect(row).not.toBeNull();
+  const liveRaw = await env.CACHE.get(`live:${slug}`);
+  expect(liveRaw, "a live site must have a live-cache entry").not.toBeNull();
+  const live = JSON.parse(liveRaw!);
+  return {
+    title: got.body.site.title,
+    settings: got.body.site.settings,
+    currentVersionId: got.body.site.currentVersionId,
+    passwordHash: row!.password_hash,
+    livePasswordHash: live.passwordHash,
+    liveVersionId: live.versionId,
+    liveFiles: Object.keys(live.files).sort().map((path) => [path, live.files[path]]),
+  };
+}
+
+async function createProtectedSite(inst: Instance, slug: string) {
+  const created = await inst.json("/api/v1/publish", {
+    ...jsonBody({ site: slug, title: "Old title", spa: true, password: "old-password", files: [{ path: "index.html", content: "oldv1!" }] }),
+    key: inst.ownerKey,
+  });
+  expect(created.status, JSON.stringify(created.body)).toBe(201);
+  expect(created.body.status).toBe("live");
+  const before = await siteSnapshot(inst, slug);
+  expect(before.settings.passwordProtected).toBe(true);
+  expect(before.passwordHash).toEqual(expect.any(String));
+  expect(before.livePasswordHash).toBe(before.passwordHash);
+  return before;
 }
 
 async function readRaw(url: string, path: string) {
@@ -179,12 +264,19 @@ describe("archiveUrl publishes a zip from a URL", () => {
 
     const capped = await freshInstance({ limits: { maxFiles: 1 } });
     externalFetch(() => zipResponse({ "a.txt": "a", "b.txt": "b" }));
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    let hashedEntries = 0;
+    vi.spyOn(crypto.subtle, "digest").mockImplementation((algorithm, data) => {
+      if (data.byteLength === 1) hashedEntries++;
+      return digest(algorithm, data);
+    });
     const tooMany = await capped.json("/api/v1/publish", {
       ...jsonBody({ archiveUrl: "https://93.184.216.34/two.zip" }),
       key: capped.ownerKey,
     });
     expect(tooMany.status).toBeGreaterThanOrEqual(400);
-    expectApiError(tooMany.body);
+    expectApiError(tooMany.body, ["too_many_files"]);
+    expect(hashedEntries, "an over-count archive must be rejected before entry hashing").toBe(0);
     expect((await capped.json("/api/v1/sites", { key: capped.ownerKey })).body.sites).toHaveLength(0);
   });
 });
@@ -389,5 +481,175 @@ describe("chat-client attachments as file sources", () => {
     expectApiError(over.body);
     expect(over.body.error.code).toMatch(/too_large/);
     expect((await capped.json("/api/v1/sites", { key: capped.ownerKey })).body.sites).toHaveLength(1);
+  });
+});
+
+// Review round: a refused REPLACEMENT archive must be validated before any
+// settings of the existing site change. Applying updateSite ahead of manifest
+// validation would strip the live site's password (and rewrite its live
+// cache) even though the new version is then refused.
+describe("rejected replacement archives leave an existing site untouched", () => {
+  it("archiveUrl per-file refusal keeps password, other settings and the live cache; a valid replacement still applies them", async () => {
+    const capped = await freshInstance({ limits: { maxFileBytes: 8 } });
+    const before = await createProtectedSite(capped, "keep-per-file");
+    externalFetch(() => zipResponse({ "big.txt": "123456789" })); // 9 bytes over an 8-byte per-file cap
+    const refusedRes = await capped.json("/api/v1/publish", {
+      ...jsonBody({ site: "keep-per-file", title: "New title", spa: false, password: null, archiveUrl: "https://93.184.216.34/big.zip" }),
+      key: capped.ownerKey,
+    });
+    expect(refusedRes.status, JSON.stringify(refusedRes.body)).toBe(413);
+    expectApiError(refusedRes.body, ["file_too_large"]);
+    expect(await siteSnapshot(capped, "keep-per-file")).toEqual(before);
+    // The old password still gates the live bytes: no unauthenticated read.
+    const gated = await capped.call("/s/keep-per-file/index.html?raw=1");
+    expect(gated.status).toBe(401);
+    expect(await gated.text()).not.toContain("oldv1!");
+
+    // Positive control: the same settings change DOES apply with a valid archive,
+    // so the unchanged assertions above cannot pass vacuously.
+    externalFetch(() => zipResponse({ "index.html": "new" }));
+    const ok = await capped.json("/api/v1/publish", {
+      ...jsonBody({ site: "keep-per-file", title: "New title", spa: false, password: null, archiveUrl: "https://93.184.216.34/ok.zip" }),
+      key: capped.ownerKey,
+    });
+    expect(ok.status, JSON.stringify(ok.body)).toBeLessThan(300);
+    expect(ok.body.status).toBe("live");
+    const after = await siteSnapshot(capped, "keep-per-file");
+    expect(after.title).toBe("New title");
+    expect(after.settings).toMatchObject({ spa: false, passwordProtected: false });
+    expect(after.livePasswordHash).toBeNull();
+  });
+
+  it("archiveUrl aggregate refusal keeps an existing site's password, settings and live cache", async () => {
+    const capped = await freshInstance({ limits: { maxFileBytes: 100, maxSiteBytes: 10 } });
+    const before = await createProtectedSite(capped, "keep-aggregate");
+    // Each entry fits the per-file cap; together they exceed the site cap.
+    externalFetch(() => zipResponse({ "a.txt": "123456", "b.txt": "abcdef" }));
+    const refusedRes = await capped.json("/api/v1/publish", {
+      ...jsonBody({ site: "keep-aggregate", title: "New title", spa: false, password: null, archiveUrl: "https://93.184.216.34/two.zip" }),
+      key: capped.ownerKey,
+    });
+    expect(refusedRes.status, JSON.stringify(refusedRes.body)).toBe(413);
+    expectApiError(refusedRes.body, ["site_too_large"]);
+    expect(await siteSnapshot(capped, "keep-aggregate")).toEqual(before);
+  });
+
+  it("uploaded-ZIP per-file refusal keeps an existing site's password, settings and live cache", async () => {
+    const capped = await freshInstance({ limits: { maxFileBytes: 8 } });
+    const before = await createProtectedSite(capped, "keep-uploaded");
+    const zip = zipSync({ "big.txt": strToU8("123456789") });
+    const refusedRes = await capped.json("/api/v1/publish?slug=keep-uploaded&title=New%20title&spa=false&password=", {
+      method: "POST", key: capped.ownerKey, headers: { "Content-Type": "application/zip" }, body: zip,
+    });
+    expect(refusedRes.status, JSON.stringify(refusedRes.body)).toBe(413);
+    expectApiError(refusedRes.body, ["file_too_large"]);
+    expect(await siteSnapshot(capped, "keep-uploaded")).toEqual(before);
+  });
+});
+
+// Review round: extraction budgets apply to ACTUAL produced bytes, not to
+// sizes declared in ZIP headers, and inconsistent accounting is refused
+// before extracted entries are hashed or published. Declared-size summing
+// alone admits stored entries whose real bytes exceed every budget.
+describe("archive extraction enforces actual output accounting", () => {
+  // Await-tolerant: a streaming extractor may make this seam asynchronous.
+  async function thrown(fn: () => unknown): Promise<unknown> {
+    try { await fn(); } catch (e) { return e; }
+    return null;
+  }
+
+  it("extractor refuses aggregate stored output beyond budget when declared sizes lie small", async () => {
+    const zip = withDeclaredUncompressedSize(zipSync({
+      "a.txt": [strToU8("a".repeat(700)), { level: 0 }],
+      "b.txt": [strToU8("b".repeat(700)), { level: 0 }],
+    }), 10);
+    const err = await thrown(() => unzipFiles(zip, 1_000));
+    expect(err, "1400 actual bytes must not pass a 1000-byte budget on declared sizes alone").toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(413);
+    expect((err as ApiError).code).toMatch(/too_large/);
+  });
+
+  it("extractor rejects an entry whose actual length disagrees with its declared length, even under budget", async () => {
+    const zip = withDeclaredUncompressedSize(zipSync({ "a.txt": [strToU8("x".repeat(50)), { level: 0 }] }), 10);
+    const err = await thrown(() => unzipFiles(zip, 10_000));
+    expect(err, "declared 10 vs actual 50 must not be published as if the accounting agreed").toBeInstanceOf(ApiError);
+    expect((err as ApiError).code).toMatch(SNAKE);
+    expect((err as ApiError).hint?.length).toBeGreaterThan(0);
+  });
+
+  it("extractor still accepts honest stored entries and returns exact bytes (control)", async () => {
+    const zip = zipSync({ "a.txt": [strToU8("x".repeat(50)), { level: 0 }], "index.html": strToU8("hi") });
+    const files = await unzipFiles(zip, 1_000);
+    expect(files.map((f) => f.path).sort()).toEqual(["a.txt", "index.html"]);
+    expect(new TextDecoder().decode(files.find((f) => f.path === "a.txt")!.bytes)).toBe("x".repeat(50));
+    expect(new TextDecoder().decode(files.find((f) => f.path === "index.html")!.bytes)).toBe("hi");
+  });
+
+  it.each(["archiveUrl", "uploaded zip"] as const)("%s refuses a lying stored entry over the per-file cap before hashing its bytes", async (caller) => {
+    const capped = await freshInstance({ limits: { maxFileBytes: 100, maxSiteBytes: 100_000, oneShotMaxBytes: 100_000 }, urlFetchMaxBytes: 100_000 });
+    const zip = withDeclaredUncompressedSize(zipSync({ "big.txt": [strToU8("z".repeat(4_000)), { level: 0 }] }), 10);
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    let hashedEntryBytes = 0;
+    vi.spyOn(crypto.subtle, "digest").mockImplementation((algorithm, data) => {
+      if ((data as ArrayBufferView | ArrayBuffer).byteLength === 4_000) hashedEntryBytes++;
+      return digest(algorithm, data as any);
+    });
+    externalFetch(() => zipBytesResponse(zip));
+    const result = caller === "archiveUrl"
+      ? await capped.json("/api/v1/publish", { ...jsonBody({ archiveUrl: "https://93.184.216.34/lying.zip" }), key: capped.ownerKey })
+      : await capped.json("/api/v1/publish", { method: "POST", key: capped.ownerKey, headers: { "Content-Type": "application/zip" }, body: zip });
+    expect(result.status, JSON.stringify(result.body)).toBeGreaterThanOrEqual(400);
+    expectApiError(result.body);
+    expect(result.body.error.code).toMatch(/too_large|invalid_zip/);
+    expect(hashedEntryBytes, "actual-output refusal must happen before the refused entry is hashed").toBe(0);
+    expect((await capped.json("/api/v1/sites", { key: capped.ownerKey })).body.sites).toHaveLength(0);
+  });
+});
+
+// Review round: individual ZIP entries must survive extraction as entries.
+// A filename-keyed plain object loses a legal "__proto__" entry entirely and
+// silently overwrites exact duplicates, so neither the manifest validator
+// nor the reader ever sees them.
+describe("archive extraction preserves individual entries", () => {
+  it.each(["archiveUrl", "uploaded zip"] as const)("%s publishes a legal __proto__ file alongside index.html with exact bytes", async (caller) => {
+    const zip = await buildStoredZip([["__proto__", "proto-bytes"], ["index.html", "<p>home</p>"]]);
+    externalFetch(() => zipBytesResponse(zip));
+    const result = caller === "archiveUrl"
+      ? await publishRest({ site: "proto-archive", archiveUrl: "https://93.184.216.34/proto.zip" })
+      : await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, headers: { "Content-Type": "application/zip" }, body: zip });
+    expect(result.status, JSON.stringify(result.body)).toBe(201);
+    if (caller === "archiveUrl") {
+      expect(result.body.status).toBe("live");
+      expect(result.body.files.total).toBe(2);
+    } else {
+      expect((result.body.files as string[]).sort()).toEqual(["__proto__", "index.html"]);
+    }
+    expect(await readRaw(result.body.url, "__proto__")).toBe("proto-bytes");
+    expect(await readRaw(result.body.url, "index.html")).toBe("<p>home</p>");
+  });
+
+  it.each(["archiveUrl", "uploaded zip"] as const)("%s rejects exact duplicate entry names instead of silently keeping the last one", async (caller) => {
+    const zip = await buildStoredZip([["index.html", "first"], ["index.html", "second"]]);
+    externalFetch(() => zipBytesResponse(zip));
+    const result = caller === "archiveUrl"
+      ? await publishRest({ archiveUrl: "https://93.184.216.34/dup.zip" })
+      : await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, headers: { "Content-Type": "application/zip" }, body: zip });
+    expect(result.status, JSON.stringify(result.body)).toBeGreaterThanOrEqual(400);
+    expectApiError(result.body, ["duplicate_path", "invalid_zip"]);
+    await expectNoSites();
+  });
+
+  it("rejects duplicate normalized paths before mutating an existing site", async () => {
+    const inst = await freshInstance();
+    const before = await createProtectedSite(inst, "keep-dup-normalized");
+    const zip = await buildStoredZip([["./dup.txt", "one"], ["dup.txt", "two"]]);
+    externalFetch(() => zipBytesResponse(zip));
+    const result = await inst.json("/api/v1/publish", {
+      ...jsonBody({ site: "keep-dup-normalized", title: "New title", spa: false, password: null, archiveUrl: "https://93.184.216.34/dupn.zip" }),
+      key: inst.ownerKey,
+    });
+    expect(result.status, JSON.stringify(result.body)).toBeGreaterThanOrEqual(400);
+    expectApiError(result.body, ["duplicate_path", "invalid_zip"]);
+    expect(await siteSnapshot(inst, "keep-dup-normalized")).toEqual(before);
   });
 });

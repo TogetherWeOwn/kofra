@@ -47,11 +47,11 @@ export const UPLOAD_OPERATIONS = [
     id: "create_multipart_upload",
     method: "POST",
     path: "/api/v1/uploads",
-    summary: "Start a resumable multipart upload",
+    summary: "Start or resume a multipart upload",
     toolset: "versions",
     scopes: ["sites:write"],
     description:
-      "Start staging one file of a pending version through R2 multipart: pass versionId and the file's sha256. partSize is 10-95 MiB (default 50 MiB); every part but the last holds exactly partSize bytes. The credential must control that pending version (an owner's API key, a claim token or the version's own dwu_ upload token).",
+      "Start or resume the one unfinished session for a pending version's file: pass versionId and sha256. An existing session keeps its partSize and acknowledgements. New partSize is 10-95 MiB (default 50 MiB); every part but the last holds exactly partSize bytes. The credential must control that pending version (an owner's API key, a claim token or the version's own dwu_ upload token).",
     input: fromSchema({
       type: "object",
       properties: {
@@ -102,7 +102,7 @@ export const UPLOAD_OPERATIONS = [
     toolset: "versions",
     scopes: ["sites:write"],
     description:
-      "Body = exactly this part's bytes, with Content-Length (a one-based partNumber; every part but the last holds partSize bytes). Acknowledged only when the length matches. Repeating a part with identical bytes replays the acknowledgement; different bytes are refused.",
+      "Body = exactly this part's bytes, with Content-Length (a one-based partNumber; every part but the last holds partSize bytes). Acknowledged only when the length matches. Acknowledged identical bytes replay without another storage write; all in-flight contenders get retryable 409 part_busy. Concurrent part buffers share a 96 MiB isolate budget (retryable 503 upload_busy when full); different acknowledged bytes are refused.",
     input: fromSchema({
       type: "object",
       properties: {
