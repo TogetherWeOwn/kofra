@@ -32,8 +32,10 @@ vendored encoder also serves the dashboard, whose QR output is unchanged.
 The server limits QR input to 1,273 UTF-8 bytes (version 40, H correction) and
 SVG output to 128 KiB, with a four-module quiet zone. Display is at most 256
 CSS pixels at whole pixels per module (never a fractional module scale), and
-shrinks further so the complete code fits the panel in short viewports. Above
-capacity or on an encoder failure, the full link remains without a QR.
+shrinks toward one pixel per module in short viewports. The open bar is
+non-sticky and its panel does not clip: native document scrolling can expose
+the complete code even when its module grid exceeds the available panel height.
+Above capacity or on an encoder failure, the full link remains without a QR.
 URL-specific chrome is generated outside cached body fragments; built-in
 viewer versions advance so conditional responses refresh the markup, and every
 full-page ETag also carries the shared-chrome revision (`-chrome<N>`), so a

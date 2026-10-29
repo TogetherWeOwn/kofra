@@ -31,10 +31,10 @@ function phoneSvg(url: string): string {
     // which aliases modules to unequal widths at devicePixelRatio 1):
     // the largest whole multiple of the module grid up to 256px. The
     // inline width keeps that alignment when the panel or a short
-    // viewport is the tighter bound (the panel scrollport is
-    // 100dvh - 8rem less its 2rem of padding), so some scroll position
-    // can always expose the complete code. Browsers without round()
-    // drop the declaration and use the aligned width attribute.
+    // viewport is the tighter bound. Never shrink below one pixel per
+    // module: the open bar is non-sticky and the panel does not clip,
+    // so native document scrolling can expose larger grids in full.
+    // Browsers without round() use the aligned width attribute.
     const px = size * Math.max(1, Math.floor(256 / size));
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="${px}" height="${px}" style="width:max(${size}px,round(down,min(${px}px,100%,calc(100dvh - 10rem - 2px)),${size}px));height:auto" role="img" aria-label="Scan to open this file on your phone" shape-rendering="crispEdges"><rect width="${size}" height="${size}" fill="#fff"/><path d="${runs.join("")}" fill="#000"/></svg>`;
     return svg.length <= MAX_SVG_LENGTH ? svg : "";
