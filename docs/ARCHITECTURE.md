@@ -255,6 +255,20 @@ changes bump the viewer version, which retires both cached fragments and
 conditional ETags; raw/download bytes, the no-script viewer CSP and the 4 MiB /
 2,000-row / 1,000-character caps stay unchanged.
 
+Notebook outputs (`viewers/notebook.ts`) are grouped per code cell in a native
+initially-open `<details>` with an `Outputs (N)` summary, N counting only
+outputs that render a fragment; the code and its `In [n]:` prompt stay outside,
+so folding a long result never hides them. Cells with no rendered outputs get
+no control, controls toggle independently with no script, and the existing
+output formats, sanitizer, 100,000-character clip and 20 MiB cap remain in
+place. HTML/Markdown output fragments are made self-contained first
+(`viewers/contain.ts`, linear time): details/summary tags are unwrapped,
+unmatched end tags are discarded, misnested end tags and implied closes are
+spelled out, and unfinished comments and open elements are contained. Thus a
+fragment cannot close the generated fold or swallow the next output or cell.
+The render version bump retires cached pre-fold fragments and their conditional
+ETags; Raw, Download and Source bytes are untouched.
+
 ### App-origin UI (`packages/server/src/ui`)
 
 | Path | Page |
