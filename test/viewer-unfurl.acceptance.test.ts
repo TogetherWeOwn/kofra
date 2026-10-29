@@ -28,9 +28,10 @@
  * - Raw, download and sub-resource responses stay byte-identical; source
  *   view and &embed=1 keep working (their <head> tags are deliberately not
  *   pinned either way).
- * - Viewer ETags move past their baseline versions, so a stale tag-less
- *   cached render is never revalidated as current (old validators must not
- *   earn a 304). Viewer CSP is unchanged.
+ * - All 15 viewers, including source, HTML frame, binary and embedded views,
+ *   reject the tag-less main validators from 9431d2b. Historical versions are
+ *   fixed independently of the implementation; current validators still earn
+ *   a 304. Viewer CSP is unchanged.
  * - Hostile/unicode file names are attribute-escaped in every emitted tag
  *   and percent-encoded in every emitted URL.
  *
@@ -39,6 +40,7 @@
  * the viewport meta that narrow layouts rely on must remain.
  */
 import { beforeAll, describe, expect, it } from "vitest";
+import { zipSync } from "fflate";
 import { form, freshInstance, jsonBody, ORIGIN, type Instance } from "./helpers";
 
 const NAV = { Accept: "text/html,application/xhtml+xml,*/*;q=0.8", "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate" };
@@ -96,8 +98,16 @@ function titleOf(head: string): string {
   return decodeEntities(m![1]!);
 }
 
-/** Baseline viewer versions observed on the pre-feature main (ETag `<id>@<n>-<sha>`). */
-const BASELINE_VIEWER_VERSION: Record<string, number> = { code: 1, image: 1, pdf: 1 };
+/**
+ * Tag-less main 9431d2b: fixed historical facts, NOT read from VIEWERS or the
+ * implementation under test. Notebook folding (#74) already shipped @3 there,
+ * so unfurl must advance notebook past 3, not reuse that cached render identity.
+ */
+const TAGLESS_MAIN_VERSION = {
+  source: 3, "html-frame": 2, markdown: 3, notebook: 3, json: 3, csv: 3,
+  svg: 4, image: 4, pdf: 2, video: 2, audio: 2, font: 3, archive: 2,
+  code: 3, binary: 3,
+} as const;
 
 interface UnfurlExpect {
   /** Exact og:url (and og:image when `image` is set). */
@@ -167,6 +177,15 @@ describe("unfurl head tags: file viewers (path mode on the app origin)", () => {
         "notes/big.txt": BIG,
         "notes/guide.md": MD,
         "data.json": JSON_TEXT,
+        "data.csv": "name,value\nalpha,1\n",
+        "notebooks/analysis.ipynb": JSON.stringify({
+          nbformat: 4, nbformat_minor: 5, metadata: {},
+          cells: [{ cell_type: "markdown", metadata: {}, source: ["# Cache identity\n", "Notebook body.\n"] }],
+        }),
+        "media/clip.mp4": new Uint8Array([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70]),
+        "media/song.mp3": new Uint8Array([0x49, 0x44, 0x33, 3]),
+        "fonts/sample.woff2": new Uint8Array([0x77, 0x4f, 0x46, 0x32, 0, 1]),
+        "archives/bundle.zip": zipSync({ "entry.txt": new TextEncoder().encode("cache-entry\n") }, { level: 0 }),
         "img/logo.png": PNG,
         "img/icon.svg": SVG,
         "docs/report.pdf": PDF,
@@ -280,33 +299,67 @@ describe("unfurl head tags: file viewers (path mode on the app origin)", () => {
     expect(embedHtml).toContain("export");
   });
 
-  it("viewer CSP is unchanged in kind, and ETags move past the baseline render versions", async () => {
+  it("viewer CSP is unchanged in kind", async () => {
     const code = await dw.call(`/s/${slug}/src/app.ts`, { headers: NAV });
     const csp = code.headers.get("content-security-policy") ?? "";
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("sandbox");
     expect(csp).toMatch(/script-src 'sha256-[A-Za-z0-9+/=]+'/);
     await code.text();
-
-    for (const [path, id] of [["src/app.ts", "code"], ["img/logo.png", "image"], ["docs/report.pdf", "pdf"]] as const) {
-      const res = await dw.call(`/s/${slug}/${path}`, { headers: NAV });
-      const etag = res.headers.get("etag") ?? "";
-      await res.text();
-      const parsed = etag.match(new RegExp(`^W/"${id}@(\\d+)-`));
-      expect(parsed, `${id} ETag keeps the versioned shape (got ${etag})`).not.toBeNull();
-      const baseline = BASELINE_VIEWER_VERSION[id]!;
-      expect(Number(parsed![1]), `${id} render version is bumped past baseline @${baseline}`).toBeGreaterThan(baseline);
-      // The new validator still earns a 304...
-      const hit = await dw.call(`/s/${slug}/${path}`, { headers: { ...NAV, "If-None-Match": etag } });
-      expect(hit.status, `${id} current validator revalidates`).toBe(304);
-      // ...but a tag-less baseline render never does: its old validator must miss.
-      const sha = etag.match(/-([a-f0-9]{64})/)?.[1];
-      expect(sha).toBeTruthy();
-      const stale = await dw.call(`/s/${slug}/${path}`, { headers: { ...NAV, "If-None-Match": `W/"${id}@${baseline}-${sha}"` } });
-      expect(stale.status, `${id} baseline (tag-less) validator must not earn a 304`).toBe(200);
-      await stale.text();
-    }
   });
+
+  const cacheCases: Array<{ viewer: keyof typeof TAGLESS_MAIN_VERSION; path: string; query?: string }> = [
+    { viewer: "source", path: "src/app.ts", query: "?view=source" },
+    { viewer: "html-frame", path: "page.html" },
+    { viewer: "markdown", path: "notes/guide.md" },
+    { viewer: "notebook", path: "notebooks/analysis.ipynb" },
+    { viewer: "json", path: "data.json" },
+    { viewer: "csv", path: "data.csv" },
+    { viewer: "svg", path: "img/icon.svg" },
+    { viewer: "image", path: "img/logo.png" },
+    { viewer: "pdf", path: "docs/report.pdf" },
+    { viewer: "video", path: "media/clip.mp4" },
+    { viewer: "audio", path: "media/song.mp3" },
+    { viewer: "font", path: "fonts/sample.woff2" },
+    { viewer: "archive", path: "archives/bundle.zip" },
+    { viewer: "code", path: "src/app.ts" },
+    { viewer: "binary", path: "bin/data.bin" },
+  ];
+
+  for (const c of cacheCases) {
+    for (const embed of [false, true]) {
+      it(`${c.viewer} ${embed ? "embed" : "viewer"} rejects its tag-less main @${TAGLESS_MAIN_VERSION[c.viewer]} HTTP validator`, async () => {
+        const path = `/s/${slug}/${c.path}${c.query ?? "?view=1"}${embed ? "&embed=1" : ""}`;
+        const res = await dw.call(path, { headers: NAV });
+        expect(res.status).toBe(200);
+        expect(res.headers.get("x-kofra-viewer")).toBe(c.viewer);
+        const html = await res.text();
+        const etag = res.headers.get("etag") ?? "";
+        const parsed = etag.match(new RegExp(`^W/"${c.viewer}@(\\d+)(-[^"]+)"$`));
+        expect(parsed, `${c.viewer} ETag keeps its versioned identity (got ${etag})`).not.toBeNull();
+        if (embed) expect(etag, "embedded validator keeps its own discriminator").toMatch(/-e"$/);
+
+        const hit = await dw.call(path, { headers: { ...NAV, "If-None-Match": etag } });
+        expect(hit.status, `${c.viewer} current validator still revalidates`).toBe(304);
+        expect(await hit.text()).toBe("");
+
+        // Only the historical version is fixed. Preserve the opaque identity
+        // suffix (file hash, live manifest and embed variant): dropping it would
+        // trivially miss even if a regressed viewer reused the tag-less version.
+        const baseline = TAGLESS_MAIN_VERSION[c.viewer];
+        const legacyEtag = `W/"${c.viewer}@${baseline}${parsed![2]}"`;
+        const stale = await dw.call(path, { headers: { ...NAV, "If-None-Match": legacyEtag } });
+        expect.soft(stale.status, `${c.viewer} tag-less main @${baseline} validator must get a fresh body, not 304 (${legacyEtag})`).toBe(200);
+        const fresh = await stale.text();
+        if (stale.status === 200) {
+          expect(stale.headers.get("x-kofra-viewer")).toBe(c.viewer);
+          expect(stale.headers.get("etag")).toBe(etag);
+          expect(fresh, "stale validator receives the current complete page").toBe(html);
+        }
+        expect.soft(Number(parsed![1]), `${c.viewer} render version advances past tag-less main @${baseline}`).toBeGreaterThan(baseline);
+      });
+    }
+  }
 });
 
 describe("unfurl head tags: folder listings", () => {
