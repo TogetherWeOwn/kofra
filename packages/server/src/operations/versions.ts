@@ -86,7 +86,7 @@ export const VERSION_OPERATIONS = [
     id: "delete_version",
     method: "DELETE",
     path: "/api/v1/sites/{slug}/versions/{id}",
-    summary: "Delete a version",
+    summary: "Delete version",
     toolset: "versions",
     scopes: ["sites:delete"],
     description:
@@ -97,7 +97,7 @@ export const VERSION_OPERATIONS = [
         site: SITE_REF,
         version: VERSION_REF,
         confirm: CONFIRM_SLUG,
-        idempotencyKey: { type: "string" },
+        idempotencyKey: { type: "string", minLength: 1 },
       },
       required: ["site", "version", "confirm"],
       additionalProperties: false,

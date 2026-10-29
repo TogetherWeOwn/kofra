@@ -1,5 +1,6 @@
 import { siteUrl, type DropwayContext } from "../context";
 import type { Principal } from "../principal";
+import { badRequest } from "../errors";
 import type { SiteRow } from "./sites";
 import { deleteVersion, restoreVersion } from "./deploys";
 import { idempotencyScope, validateIdempotencyKey, withIdempotency } from "./idempotency";
@@ -17,6 +18,9 @@ async function replayVersionAction<T>(
   // Re-authorize even a completed key, but do not require a deleted target to exist.
   const site = await getSiteByRef(dc, p, siteRef, action === "restore" ? "sites:write" : "sites:delete");
   if (action === "delete") requireConfirm(confirm, site.slug);
+  if (opts.idempotencyKey === "") {
+    throw badRequest("invalid_idempotency_key", "The idempotency key must not be empty.", "Use a fresh UUID per logical operation, and reuse it only for the exact same request.");
+  }
   const { result, replayed } = await withIdempotency(dc, {
     scope: idempotencyScope(p), operation: `${opts.transport}:${action}_version`,
     key: validateIdempotencyKey(opts.idempotencyKey),

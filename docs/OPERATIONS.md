@@ -138,8 +138,8 @@ budget. New definitions should not need adapters. Notably:
 Restore (`POST /sites/{slug}/versions/{id}/restore`) and version delete
 (`DELETE /sites/{slug}/versions/{id}` with canonical-slug `confirm`) accept an
 optional REST `Idempotency-Key`; their MCP tools accept `idempotencyKey`.
-Keys are 1–255 printable ASCII characters without spaces. Unkeyed calls remain
-compatible but have no result-replay guarantee.
+Keys are 1–255 printable ASCII characters without spaces. An explicitly empty key
+is rejected; omitting the key remains compatible but has no result-replay guarantee.
 
 Core services authorize the current credential/site and validate delete confirmation
 before consulting replay. The input hash binds the authorized immutable site ID,

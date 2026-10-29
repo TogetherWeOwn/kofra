@@ -1216,7 +1216,7 @@ export const OPERATIONS = {
   "list_files": { method: "GET", path: "/api/v1/sites/{slug}/files", summary: "List files" },
   "read_file": { method: "GET", path: "/api/v1/read-file", summary: "Read a file" },
   "list_versions": { method: "GET", path: "/api/v1/sites/{slug}/versions", summary: "List versions" },
-  "restore_version": { method: "POST", path: "/api/v1/sites/{slug}/versions/{id}/restore", summary: "Restore a version" },
+  "restore_version": { method: "POST", path: "/api/v1/sites/{slug}/versions/{id}/restore", summary: "Restore version" },
   "update_site_settings": { method: "PATCH", path: "/api/v1/sites/{slug}", summary: "Change site settings" },
   "set_site_access": { method: "PUT", path: "/api/v1/sites/{slug}/access", summary: "Set who can open a site" },
   "delete_site": { method: "DELETE", path: "/api/v1/sites/{slug}", summary: "Delete a site" },
@@ -1226,7 +1226,7 @@ export const OPERATIONS = {
   "duplicate_site": { method: "POST", path: "/api/v1/sites/{site}/duplicate", summary: "Duplicate a site's live version into a new slug" },
   "release_slug": { method: "POST", path: "/api/v1/slugs/release", summary: "Release a held site name early" },
   "get_version": { method: "GET", path: "/api/v1/sites/{slug}/versions/{id}", summary: "Get a version" },
-  "delete_version": { method: "DELETE", path: "/api/v1/sites/{slug}/versions/{id}", summary: "Delete a version" },
+  "delete_version": { method: "DELETE", path: "/api/v1/sites/{slug}/versions/{id}", summary: "Delete version" },
   "export_version": { method: "GET", path: "/api/v1/sites/{slug}/versions/{version}/export", summary: "Download a version as a ZIP" },
   "create_multipart_upload": { method: "POST", path: "/api/v1/uploads", summary: "Start or resume a multipart upload" },
   "get_multipart_upload": { method: "GET", path: "/api/v1/uploads/{id}", summary: "Show a resumable upload's acknowledged parts" },
@@ -1294,7 +1294,7 @@ export class DropwayClient extends DropwayHttpClient {
   async listVersions(input: ListVersionsInput, opts?: CallOptions): Promise<ListVersionsOutput> {
     return this.call<ListVersionsInput, ListVersionsOutput>(OPERATIONS["list_versions"], input, opts);
   }
-  /** Restore a version */
+  /** Restore version */
   async restoreVersion(input: RestoreVersionInput, opts?: CallOptions): Promise<RestoreVersionOutput> {
     return this.call<RestoreVersionInput, RestoreVersionOutput>(OPERATIONS["restore_version"], input, { ...opts, retry: "none" });
   }
@@ -1334,7 +1334,7 @@ export class DropwayClient extends DropwayHttpClient {
   async getVersion(input: GetVersionInput, opts?: CallOptions): Promise<GetVersionOutput> {
     return this.call<GetVersionInput, GetVersionOutput>(OPERATIONS["get_version"], input, opts);
   }
-  /** Delete a version */
+  /** Delete version */
   async deleteVersion(input: DeleteVersionInput, opts?: CallOptions): Promise<DeleteVersionOutput> {
     return this.call<DeleteVersionInput, DeleteVersionOutput>(OPERATIONS["delete_version"], input, { ...opts, retry: "none" });
   }

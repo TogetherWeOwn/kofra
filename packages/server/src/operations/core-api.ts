@@ -828,7 +828,7 @@ export const CORE_API_OPERATIONS = [
     id: "restore_version",
     method: "POST",
     path: "/api/v1/sites/{slug}/versions/{id}/restore",
-    summary: "Restore a version",
+    summary: "Restore version",
     toolset: "core",
     scopes: ["sites:write"],
     description:
@@ -837,7 +837,7 @@ export const CORE_API_OPERATIONS = [
       type: "object",
       properties: {
         site: SITE_REF, version: VERSION_REF,
-        idempotencyKey: { type: "string" },
+        idempotencyKey: { type: "string", minLength: 1 },
       },
       required: ["site", "version"],
       additionalProperties: false,
