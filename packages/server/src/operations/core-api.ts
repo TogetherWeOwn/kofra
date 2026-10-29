@@ -171,7 +171,7 @@ export const CORE_API_OPERATIONS = [
     mcp: { alwaysLoad: true },
     scopes: ["sites:write"],
     description:
-      "Publish files to a live URL in one call. Without `site` a new site with a generated name is created; with `site` set to a slug you own, ALL its files are replaced by `files` (a new immutable version); with a new slug, a site of that name is created. Each file needs a path plus one source: content (text, or base64 for small binaries), url (the server downloads a public https URL), sha256+size (bytes already stored or uploaded afterwards), or copyFrom. Returns status (live, unchanged or awaiting_upload), the live `url`, version and next steps. Share `url` exactly as returned. Use update_site_files for partial edits. A root index.html, index.md or README.md opens as the site's page.",
+      "Publish files to a live URL in one call. Without `site` a new site with a generated name is created; with `site` set to a slug you own, ALL its files are replaced by `files` (a new immutable version); with a new slug, a site of that name is created. Each file needs a path plus one source: content (text, or base64 for small binaries), url (the server downloads a public https URL), sha256+size (bytes already stored or uploaded afterwards), copyFrom, or a chat attachment (download_url+file_name). Instead of files, pass archiveUrl alone: a public https .zip the server downloads and unpacks. Returns status (live, unchanged or awaiting_upload), the live `url`, version and next steps. Share `url` exactly as returned. Use update_site_files for partial edits. A root index.html, index.md or README.md opens as the site's page.",
     input: fromSchema({
       type: "object",
       properties: {
@@ -179,7 +179,11 @@ export const CORE_API_OPERATIONS = [
           type: "array",
           minItems: 1,
           items: FILE_INPUT,
-          description: "Every file of the site.",
+          description: "Every file of the site. Omit when archiveUrl is given.",
+        },
+        archiveUrl: {
+          type: "string",
+          description: "Public https .zip to unpack, instead of files (never both).",
         },
         site: {
           type: "string",
@@ -202,8 +206,13 @@ export const CORE_API_OPERATIONS = [
           description: "Fail with version_conflict if the live version is no longer this one (protects someone else's newer publish).",
         },
       },
-      required: ["files"],
       additionalProperties: false,
+    }).superRefine((value: { files?: unknown; archiveUrl?: unknown }, ctx) => {
+      const hasFiles = value?.files != null;
+      const hasArchive = value?.archiveUrl != null;
+      if (hasFiles === hasArchive) {
+        ctx.addIssue({ code: "custom", path: [hasFiles ? "archiveUrl" : "files"], message: "Give exactly one of files or archiveUrl." });
+      }
     }),
     output: fromSchema(PUBLISH_OUT),
     annotations: {
@@ -662,7 +671,7 @@ export const CORE_API_OPERATIONS = [
     toolset: "core",
     scopes: ["sites:read"],
     description:
-      "Read back one published file. Text types return UTF-8 text; images and other binaries return base64 (force either with encoding). Reads up to 64 KB by default (max 1 MB per call); when truncated, call again with offset = nextOffset. Use it to check what you published.",
+      "Read back one published file. Text types return UTF-8 text; images and other binaries return base64 (force either with encoding). Reads 64 KB by default (max 1 MB per call); text page boundaries may adjust by up to 3 bytes to preserve UTF-8 characters. When truncated, call again with offset = nextOffset. Use it to check what you published.",
     input: fromSchema({
       type: "object",
       properties: {

@@ -11,7 +11,7 @@
  */
 
 /** Removed together with everything inside them. */
-const DROP = new Set([
+export const DROP = new Set([
   "script", "style", "iframe", "frame", "frameset", "object", "embed", "applet", "noscript", "noembed", "noframes", "template",
   "base", "meta", "link", "title", "head", "svg", "math", "textarea", "select", "option", "optgroup", "button", "datalist",
   "canvas", "portal", "dialog", "xmp", "plaintext", "param", "slot", "frameset", "output", "progress", "meter", "map", "area",
