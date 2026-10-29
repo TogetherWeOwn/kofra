@@ -131,7 +131,8 @@ export async function startHistoryFixture() {
           view.violations.push(`unexpected mutation ${request.method()} ${url.pathname}`);
           return route.abort("blockedbyclient");
         }
-        if (!["/login", "/dashboard", `/dashboard/sites/${slug}`, "/api/v1/me", base, "/favicon.ico"].includes(url.pathname)
+        // The site page's embed snippet previews the site's own first-party badge image (SITE-BADGE).
+        if (!["/login", "/dashboard", `/dashboard/sites/${slug}`, "/api/v1/me", base, "/favicon.ico", `/s/${slug}/badge.svg`].includes(url.pathname)
           && !/^\/__dropway\/ui\/app-[a-f0-9]{8}\.js$/.test(url.pathname)) {
           view.violations.push(`unexpected request ${url.pathname}`);
           return route.abort("blockedbyclient");

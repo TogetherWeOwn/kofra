@@ -140,9 +140,14 @@ async function visit(options: { route?: (route: Route) => Promise<void>; clipboa
   const response = await page.goto(`${origin}/dashboard/sites/${options.site ?? slug}`, { waitUntil: "networkidle" });
   const csp = response!.headers()["content-security-policy"] ?? "";
   expect(wire.filter(request => request.method !== "GET"), "dashboard bootstrap is read-only").toEqual([]);
-  expect(wire.filter(request => new URL(request.url).pathname.startsWith(`/api/v1/sites/${slug}/files/`) || new URL(request.url).pathname.startsWith("/s/")), "opening the dashboard must not prefetch artifact bytes").toEqual([]);
+  expect(wire.filter(request => new URL(request.url).pathname.startsWith(`/api/v1/sites/${slug}/files/`) || isArtifactPath(new URL(request.url).pathname)), "opening the dashboard must not prefetch artifact bytes").toEqual([]);
   wire.length = 0; // Assertions below observe the explicit selection, not dashboard bootstrap.
   return { context, page, wire, csp, consoleErrors };
+}
+
+/** Site content served under /s/. The embed snippet's own badge image is first-party chrome, not an artifact read (SITE-BADGE). */
+function isArtifactPath(pathname: string): boolean {
+  return pathname.startsWith("/s/") && !/^\/s\/[^/]+\/badge\.svg$/.test(pathname);
 }
 
 function versionRow(page: Page, number: number) {
@@ -211,7 +216,7 @@ async function flush(page: Page) {
 function metadataOnly(wire: Wire[]) {
   expect(wire.filter(request => request.method !== "GET"), "viewing/copying checksums must not mutate anything").toEqual([]);
   expect(wire.filter(request => new URL(request.url).pathname.startsWith(`/api/v1/sites/${slug}/files/`)), "no content request merely to display or copy a digest").toEqual([]);
-  expect(wire.filter(request => new URL(request.url).pathname.startsWith("/s/")), "Open links remain links, not background verification requests").toEqual([]);
+  expect(wire.filter(request => isArtifactPath(new URL(request.url).pathname)), "Open links remain links, not background verification requests").toEqual([]);
   expect(wire.filter(request => new URL(request.url).pathname.startsWith("/api/")).every(request => isManifestUrl(request.url)), "the manifest remains the only metadata source; no second export endpoint").toBe(true);
 }
 function isManifestUrl(url: string) {

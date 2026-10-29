@@ -71,6 +71,22 @@ export async function putVerifiedBlob(
   size: number,
   contentType: string | null,
 ): Promise<void> {
+  await writeVerifiedBlob(dc, sha, body, size, contentType);
+  const now = Date.now();
+  await dc.env.DB.batch([
+    dc.env.DB.prepare("INSERT OR IGNORE INTO blobs (sha256, size, created_at) VALUES (?, ?, ?)").bind(sha, size, now),
+    dc.env.DB.prepare("INSERT OR IGNORE INTO blob_scopes (scope, sha256, created_at) VALUES (?, ?, ?)").bind(scope, sha, now),
+  ]);
+}
+
+/** Storage only; multipart completion commits ownership against live D1 state. */
+export async function writeVerifiedBlob(
+  dc: DropwayContext,
+  sha: string,
+  body: ReadableStream | ArrayBuffer | Uint8Array,
+  size: number,
+  contentType: string | null,
+): Promise<void> {
   try {
     let value: ReadableStream | ArrayBuffer | Uint8Array = body;
     if (body instanceof ReadableStream) {
@@ -88,9 +104,4 @@ export async function putVerifiedBlob(
     if (/length|size|bytes/i.test(msg)) throw badRequest("size_mismatch", "The upload length does not match Content-Length.", "Send the raw file as the body.");
     throw e;
   }
-  const now = Date.now();
-  await dc.env.DB.batch([
-    dc.env.DB.prepare("INSERT OR IGNORE INTO blobs (sha256, size, created_at) VALUES (?, ?, ?)").bind(sha, size, now),
-    dc.env.DB.prepare("INSERT OR IGNORE INTO blob_scopes (scope, sha256, created_at) VALUES (?, ?, ?)").bind(scope, sha, now),
-  ]);
 }

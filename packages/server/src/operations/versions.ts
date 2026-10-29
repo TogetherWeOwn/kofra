@@ -4,6 +4,7 @@ import { CONFIRM_SLUG, SITE_REF, VERSION_OUT, VERSION_REF, obj } from "../mcp/sc
 import { defineOperation } from "../operations";
 import { fromSchema, RO, DESTROY, P, D } from "./shared";
 import { attachmentDisposition } from "../content-disposition";
+import { readJson } from "../routes/api";
 
 export const VERSION_OPERATIONS = [
   defineOperation({
@@ -111,12 +112,14 @@ export const VERSION_OPERATIONS = [
     http: {
       input: fromSchema({
         type: "object",
-        properties: { slug: { type: "string" }, id: { type: "string" } },
-        required: ["slug", "id"],
+        properties: { slug: { type: "string" }, id: { type: "string" }, confirm: CONFIRM_SLUG },
+        required: ["slug", "id", "confirm"],
       }),
       output: fromSchema({ type: "object" }),
       handler: async (c) => {
         const site = await getSiteByRef(D(c), P(c), c.req.param("slug")!, "sites:delete");
+        const body = await readJson(c);
+        requireConfirm(body.confirm, site.slug);
         const v = await resolveVersionRef(D(c), site, c.req.param("id")!);
         return c.json(await deleteVersion(D(c), P(c), site, v.id));
       },

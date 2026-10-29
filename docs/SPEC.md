@@ -104,8 +104,8 @@ What Kofra is not:
 | PUB-10 | Version message (like a commit message, up to 200 chars) | P0 | Done |
 | PUB-11 | Pending versions expire after 1 hour; finalizing with missing bytes returns `409 missing_blobs` with fresh upload links | P0 | Done |
 | PUB-12 | Publish warnings: root-absolute paths in path mode, SPA without a base path, browser storage on a sandboxed origin, `.wasm` without cross-origin isolation, possible secrets, invalid config files | P0 | Done (R-12) |
-| PUB-13 | Files larger than one request (above about 95 MB): multipart upload through the Worker, resumable | P1 | R-35 |
-| PUB-14 | `archiveUrl` (publish a zip from a URL) and chat-client attachments (`{download_url, file_name}`) as sources | P1 | R-35 |
+| PUB-13 | Files larger than one request (above about 95 MB): multipart upload through the Worker, resumable | P1 | Implemented (R-35); workers.dev boundary measurement pending |
+| PUB-14 | `archiveUrl` (publish a zip from a URL) and chat-client attachments (`{download_url, file_name}`) as sources | P1 | Implemented (R-35); deployment verification pending |
 | PUB-15 | Duplicate a site server-side (immediately live) | P1 | Done |
 | PUB-16 | TTL for keyed sites (`ttlSeconds`, `null` clears) | P1 | R-27 |
 | PUB-17 | Dry run: `dryRun: true` returns added, changed, removed and skipped files and the resulting size without creating a version | P1 | R-20 |
@@ -123,7 +123,7 @@ What Kofra is not:
 | SRV-04 | Headers: `ETag` (sha256), `Range`/206, pre-compressed `.br`/`.gz` with `Content-Encoding`, `X-Kofra-Version`, `X-Robots-Tag: noindex` on expiring sites, `X-Content-Type-Options: nosniff` | P0 | Done |
 | SRV-05 | Cache policy matrix (HTML and unfingerprinted files revalidate; fingerprinted files immutable; gated sites `private, no-store`; sites with `.wasm` revalidate) | P0 | Partial; R-27 |
 | SRV-06 | Content-addressed edge cache (Cache API by sha256, pointer memo). Live URL shows a new version within about 60 s worldwide, the version URL at once | P0 | R-14 |
-| SRV-07 | Version preview URLs `<slug>--v<N>` for the owner (signed links for others) | P0 | R-13 |
+| SRV-07 | Version preview URLs `<slug>--v<N>` for the owner (signed links for others) | P0 | Done: exact ready version from D1 in both modes; owner Authorization or 24 h signed link with preview-root cookie, noindex/no-referrer |
 | SRV-08 | Cross-origin isolation per site (COOP/COEP for `SharedArrayBuffer` and threaded WebAssembly) | P0 | Done |
 | SRV-09 | `_redirects` and `_headers` files at the site root (Netlify/Cloudflare Pages syntax subset), parsed at finalize, never served | P1 | R-27 |
 | SRV-10 | Agent-readable pages: `Accept: text/markdown` on a navigation returns a Markdown rendering of HTML and text files | P1 | R-34 |
@@ -154,6 +154,7 @@ Full matrix in section 10.
 | VER-03 | Diff two versions (added, removed, changed; unified text diffs for small text files) | P1 | R-20 |
 | VER-04 | Thumbnail per version | P1 | R-20 |
 | VER-05 | Admin-set retention (keep last N versions or N days per site; default keep all) | P2 | R-42 |
+| VER-06 | Authenticated immutable-version ZIP export; dashboard Download ZIP for known ready versions up to 16 MiB stored bytes and 1,000 files, with a 32 MiB streamed response bound and REST/CLI fallback | P1 | Done |
 
 The dashboard Versions list loads only the newest 100 versions. **Filter loaded
 versions** matches literal, case-insensitive text in the number (`73` or `v73`),
@@ -222,7 +223,7 @@ the local filter.
 | AX-01 | REST API v1 and OpenAPI 3.1, generated from one operation registry | P0 | Done (R-02); legacy wire adapters preserved |
 | AX-02 | Remote MCP server, Streamable HTTP, stateless, API-key auth, `core` toolset | P0 | R-06 |
 | AX-03 | MCP: OAuth, every toolset, `?toolsets=`, read-only mode, single-site scope, resources, prompts, an MCP Apps site card | P1 | R-24, R-25 |
-| AX-04 | CLI `npx kofra`: `publish --json --wait`, management commands, exit codes, `kofra api` escape hatch | P0 | R-09, R-10 |
+| AX-04 | CLI `npx kofra`: `publish --json --wait`, management commands, exit codes, `kofra api` escape hatch | P0 | Partial (R-09, R-10): explicit `rename <source> <new-slug> --yes`, offline plan and unchanged local mappings; remaining management commands pending |
 | AX-05 | Local stdio MCP (`npx kofra mcp`) with local-path sources | P1 | R-26 |
 | AX-06 | Discovery: `llms.txt` v2, a skill templated with the instance's own URLs, `/.well-known/agent-skills/index.json`, `/.well-known/api-catalog`, `/connect` | P0 | Partial (`llms.txt`, OpenAPI); R-11 |
 | AX-07 | Error envelope with `code`, `hint`, `retryable`, `retryAfterSeconds`, `docs`, `next`, `details.fields` | P0 | Done (manifest and schema validation; legacy service validators retain stable codes) |
@@ -430,7 +431,36 @@ URL in the publish response is correct at once; `X-Kofra-Version` on every site 
 2. Upload each missing blob: `PUT <app>/api/v1/blobs/<sha256>` with `Authorization: Bearer dwu_...`
    (upload token) or the caller's key. The Worker streams into
    `R2.put("blobs/<sha256>", body, { sha256 })`; R2 rejects bytes that do not match the hash. Bytes that
-   already exist physically are verified and not rewritten. Files above about 95 MB use multipart (R-35).
+   already exist physically are verified and not rewritten. Files above 95 MiB use resumable multipart
+   instead: `POST /api/v1/uploads` `{versionId, sha256, partSize?}` (10-95 MiB parts, default 50 MiB)
+   starts a real R2 multipart upload staged at `uploads/<session id>`, bound to that one pending
+   manifest file. An atomic D1 constraint permits only one unfinished session per `(versionId, sha256)`;
+   repeated starts return that session and its original part size, so clients can find durable parts.
+   A claim left unacknowledged for ten minutes can be recovered by POST: the old R2 handle is
+   confirmed aborted before its slot is freed and a fresh session starts (old acknowledgements are
+   discarded). This is session replacement, never a timeout takeover of a live physical part.
+   `PUT /api/v1/uploads/{id}/parts/{n}` acknowledges exact part bytes (acknowledged identical retries
+   replay; every overlapping PUT of an in-flight part gets retryable `409 part_busy`, even for
+   identical bytes; changed acknowledged bytes are refused), `GET /api/v1/uploads/{id}` lists acknowledged parts for
+   resume, and `POST /api/v1/uploads/{id}/complete` assembles the parts, stream-hashes the result and
+   only then promotes it to `blobs/<sha256>` in the caller's scope. Sessions expire within a day (a
+   dwu_-created session keeps the token's earlier expiry) and the hourly cleanup aborts expired ones
+   in slices of at most 100, retaining ownership records on transient storage failures so later runs retry.
+   Scope registration and completion are fenced against current ownership, pending state and lifetime
+   in D1; a concurrent anonymous-site claim cannot strand a blob in the old scope. Corrupt staged
+   bytes enter a durable cleanup-intent state before deletion, releasing the unfinished slot only
+   after storage cleanup succeeds. Core hourly housekeeping reserves capacity for all phases
+   (at most 785 binding calls before embedding hooks, below the Free invocation's 1000-call budget).
+   Part buffers share a 96 MiB per-isolate admission budget; excess concurrent requests get retryable
+   `503 upload_busy`. Part hashing is incremental, without a second whole-part digest buffer. This
+   bounds application part buffers, not all isolate memory; deployed memory profiling is still pending.
+   The CLI picks multipart above 95 MiB and the raw PUT at or below it. It resumes acknowledged parts
+   when retrying the same pending version; a new CLI invocation creates a new version, not a persisted
+   cross-invocation resume checkpoint. New CLI sessions request 10 MiB parts (six default uploads
+   reserve at most 60 MiB). Retryable `part_busy`/`upload_busy` have a separate bounded wait:
+   at most 60 admission cycles in a two-minute scheduling window, with acknowledgement refresh
+   for `part_busy`. Each in-flight request still has the transport's separate retry budget.
+   Other conflicts are not retried; failed publishes settle their sibling workers before returning.
 3. `POST .../versions/{version}/finalize`: check every hash, then flip the pointer with a conditional
    `UPDATE sites SET current_version_id = ? WHERE id = ? AND current_version_id IS ?` (the last value is
    `baseVersionId` when given; zero rows changed = `409 version_conflict`). Refresh KV, enqueue jobs,
@@ -731,7 +761,7 @@ run before core viewers. Section 10 lists core viewers.
 
 ### 6.9 Testing kit and contract (R-01 done, R-18 remaining)
 
-- `@dropway/server` exports `EXTENSION_API_VERSION = 4`; extension API changes update that value and
+- `@dropway/server` exports `EXTENSION_API_VERSION = 5`; extension API changes update that value and
   the Extension API section in `CHANGELOG.md`.
 - `test/extension-contract.test.ts` builds `createDropway()` with fake adapters and exercises every
   existing point: identity and scopes, policy limits and refusals, all five metering event kinds,
@@ -751,7 +781,7 @@ run before core viewers. Section 10 lists core viewers.
 | Store | Keys and contents |
 |---|---|
 | D1 `DB` | All metadata (tables below). Times are unix epoch milliseconds |
-| R2 `FILES` | `blobs/<sha256>` file bytes (never overwritten); `thumbs/<versionId>.webp`, `og/<versionId>.png` (R-20); `uploads/<uploadId>/<part>` multipart staging (R-35, lifecycle 1 day); `manifests/<versionId>.json` (R-44) |
+| R2 `FILES` | `blobs/<sha256>` file bytes (never overwritten); `thumbs/<versionId>.webp`, `og/<versionId>.png` (R-20); `uploads/<session id>` multipart staging (R-35, lifecycle 1 day); `manifests/<versionId>.json` (R-44) |
 | KV `CACHE` | `live:<slug>` live pointer and manifest (exists); `host:<hostname>` mount map (R-33); `settings:instance` (R-42) |
 | KV `OAUTH_KV` | OAuth clients, grants and hashed tokens, owned by `workers-oauth-provider` (R-24) |
 | Durable Object `SITE_DATA` | One SQLite store per site with Site Data records (R-30) |
@@ -1173,9 +1203,10 @@ Codes are stable forever.
 | GET | `/api/v1/sites/{site}/files` | `list_files` | `sites:read` | P0 | Done |
 | GET, HEAD | `/api/v1/sites/{site}/files/{path}` | `read_file` | `sites:read` | P0 | Done (`as=markdown`, ranges in R-25/R-34) |
 | PUT | `/api/v1/blobs/{sha256}` | - (raw bytes) | `sites:write`, claim or upload token | P0 | Done (upload token R-04) |
-| POST | `/api/v1/uploads` | - (multipart start) | `sites:write` or upload token | P1 | R-35 |
-| PUT | `/api/v1/uploads/{id}/parts/{n}` | - | same | P1 | R-35 |
-| POST | `/api/v1/uploads/{id}/complete` | - | same | P1 | R-35 |
+| POST | `/api/v1/uploads` | - (multipart start) | `sites:write` or upload token | P1 | Implemented (R-35) |
+| GET | `/api/v1/uploads/{id}` | - (acknowledged parts) | same | P1 | Implemented (R-35) |
+| PUT | `/api/v1/uploads/{id}/parts/{n}` | - | same | P1 | Implemented (R-35) |
+| POST | `/api/v1/uploads/{id}/complete` | - | same | P1 | Implemented (R-35) |
 | POST | `/api/v1/sites/{site}/check` | `check_site` | `sites:read` | P1 | R-20 |
 
 **Sites**
@@ -1200,8 +1231,19 @@ Codes are stable forever.
 | GET | `/api/v1/sites/{site}/versions/{version}` | `get_version` | `sites:read` | P0 | Done (status, counts, missing files; write keys also get fresh upload items) |
 | POST | `/api/v1/sites/{site}/versions/{version}/finalize` (alias `/deploys/{id}/finalize`) | `finalize_version` | `sites:write` | P0 | Done |
 | POST | `/api/v1/sites/{site}/versions/{version}/restore` | `restore_version` | `sites:write` | P0 | Done |
-| DELETE | `/api/v1/sites/{site}/versions/{version}` | `delete_version` | `sites:delete` | P1 | Done |
+| DELETE | `/api/v1/sites/{site}/versions/{version}` | `delete_version` | `sites:delete` | P1 | Done (JSON `confirm` = canonical site slug required) |
 | GET | `/api/v1/sites/{site}/diff?from=&to=` | `diff_versions` | `sites:read` | P1 | R-20 |
+
+Version DELETE requires `Content-Type: application/json` and a body such as
+`{"confirm":"bright-otter-x7k2"}`. This is a breaking change from the bodyless
+DELETE contract. Confirmation is the resolved site's canonical slug, even when
+`{site}` is an ID; missing `confirm` is `400 invalid_request` and a wrong value
+is `400 confirm_mismatch`. MCP uses the same canonical-slug check. The CLI,
+dashboard and generated SDK send confirmation without changing their existing
+prompt behavior. The entire deletion batch refuses if the version is now live,
+missing, on a different site, or the original site is no longer active and
+owned as authorized; manifest rows and usage counters roll back together.
+Pending non-live versions may still be deleted; transfer files may not.
 
 **Access and sharing**
 
@@ -1317,6 +1359,7 @@ Sites origin:
 | any path declared in `.dropway/proxy.json` | Proxy route | P1 | R-31 |
 | `/__dropway/assets/<hash>.<ext>` | Our viewer scripts and styles (static assets) | P1 | R-34 |
 | `/__dropway/report` | Abuse report form | P1 | R-37 |
+| `<site>/badge.svg` | Live-version badge: SVG with the live version and coarse age for public sites; one identical generic SVG otherwise ([SITE_BADGE](SITE_BADGE.md)) | P1 | Done |
 
 Reserved: slugs never contain `--` and never match the reserved list; file paths under `__dropway/` are
 rejected at publish; files under `.dropway/` are stored but never served.
@@ -1456,14 +1499,16 @@ type VersionRef = string;  // "live" | "v12" | "12" | version id
 
 // Exactly one source per file. Flat on purpose (some model APIs mishandle oneOf).
 interface FileInput {
-  path: string;                       // "index.html", "assets/app.js"; "/" and "./" prefixes accepted
+  path?: string;                      // "index.html", "assets/app.js"; "/" and "./" prefixes accepted; omitted for attachments
   content?: string; encoding?: "utf8" | "base64";   // inline; utf8 <= 1 MB/file, base64 <= 256 KB/file
   url?: string; headers?: Record<string, string>;   // server fetch; headers never stored
+  download_url?: string; file_name?: string;        // chat attachment: fetched like url, file_name is the path
   sha256?: string; size?: number;     // manifest entry (bytes stored or to be uploaded)
   copyFrom?: { site?: SiteRef; version?: VersionRef; path?: string };
   contentType?: string;
   localPath?: string;                 // local stdio MCP and CLI only
 }
+// publish_site also accepts archiveUrl (public https .zip) instead of files.
 
 // publish_site output (REST returns the same JSON)
 interface PublishResult {
@@ -1577,7 +1622,7 @@ URL-header settings. This describes repository behavior, not deployment status.
 | model3d | `.glb .gltf` | `<model-viewer>` from first-party assets | download | 50 MB | first-party | P2 | R-51 |
 | map | `.geojson` (opt-in) | Map with features (tiles from a configurable source) | JSON view | 10 MB | first-party | P2 | R-51 |
 | epub | `.epub` | Chapter list and reader | download | 50 MB | first-party | P2 | R-51 |
-| folder | (no index file) | Listing: folders, sizes, image gallery, and `README.md` rendered below | - | - | none | P0 | Done (README below in R-08) |
+| folder | (no index file) | Listing: folders first by name; plain links for Name (default), Largest first (size descending, then name) and Type (displayed kind label, then name). `?sort=name\|size\|type` affects only listings; unknown values use Name. English collation with code-unit ties pins name order. File/folder links stay canonical; the gallery follows the selected order, capped at 60 images | - | - | none | P0 | Done (sorting and gallery; README below in R-08) |
 
 ---
 
@@ -1680,7 +1725,15 @@ grant more than they hold. Keys can be limited to one site and, for drives, a pa
 - **Enumeration.** Newly generated slugs are `adjective-noun-xxxxxx` (60 x 60 words x 32^6 suffixes,
   about 3.9 trillion names, about 42 bits). That makes them hard to guess, not secret: anything private
   must use an access mode. Existing four-character slugs remain valid and are not renamed. Listing endpoints
-  need credentials; version previews need a signed link; 404s look the same for "never existed" and "no access".
+  need credentials; ready version previews need owner Authorization or a signed link; 404s look the same
+  for "never existed" and "no access". The link-permanence contract preserves 308 redirects for former
+  names and 410 for deleted-version addresses before preview authorization; neither serves content.
+- **Preview isolation.** A preview cookie is host-only and scoped to its version root, not an origin
+  boundary between paths. As with password sites, use subdomain mode for sensitive content or mutually
+  untrusted sites: path-mode sites share an origin, including ambient-cookie classic-script inclusions
+  from opaque sandboxes. Signed links and cookies expire at the same absolute 24-hour deadline.
+  Link issuance requires HTTPS except on loopback development origins; non-loopback HTTP
+  omits `versionUrl` without failing publication.
 - **IPs.** Only salted hashes (`SIGNING_SECRET`) are stored. Analytics visitors are daily salted hashes.
 - **SSRF.** URL sources, proxy routes and webhooks fetch `https` only, refuse private, loopback,
   link-local and Cloudflare-internal addresses, follow at most 3 redirects (re-checking each), time out at
@@ -1722,7 +1775,7 @@ The link alone is not an operational reporting channel.
 | Limit | Default | Setting |
 |---|---|---|
 | Largest file (single request) | 100 MB (Workers request body limit on Free/Pro zones) | `MAX_FILE_BYTES` |
-| Largest file (multipart, R-35) | 5 GB | `MAX_MULTIPART_FILE_BYTES` |
+| Largest file (multipart, R-35) | `MAX_FILE_BYTES` when an operator raises it above the single-request cap; parts are 10-95 MiB | `MAX_FILE_BYTES` |
 | Files per version | 2,500 | `MAX_FILES` |
 | Bytes per version | 10 GB | `MAX_SITE_BYTES` |
 | One-shot publish body | 25 MB | `ONESHOT_MAX_BYTES` |
@@ -1825,7 +1878,7 @@ Workspaces 24, Variables 3, Billing 4, Support 1.
 | Duplicate site | `duplicate_site` | P1 | Done |
 | Publish from Drive | `duplicate_site` from a drive | P1 | R-32 |
 | Delete site | `delete_site` (with `confirm`) | P0 | Done |
-| Caps: 2,500 files, 10 GB per version, 250 MB anonymous file, 5 GB keyed file | 2,500 / 10 GB / 25 MB anonymous (configurable) / 100 MB single request, 5 GB multipart | P0 / P1 | Done / R-35 |
+| Caps: 2,500 files, 10 GB per version, 250 MB anonymous file, 5 GB keyed file | 2,500 / 10 GB / 25 MB anonymous (configurable) / 100 MB single request, multipart up to the configured per-file cap | P0 / P1 | Done |
 | Anonymous publish 24 h + claim token/URL (Sites) | Same; off by default | P0 | Done |
 | Agent sign-up by email code (Auth 2) | Not in this edition (no strangers). Owner mints member keys; login links; email codes for existing members | P1 | R-21 |
 | Dashboard sign-in by magic link or Google | Login links, email codes (with an email binding), Cloudflare Access identity | P1 | R-21 |

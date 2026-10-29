@@ -58,7 +58,7 @@ export function mcpInstructions(dw: DropwayContext): string {
   return `${dw.config.instanceName} publishes files, folders and small static sites to live URLs. Every publish is an immutable version you can roll back.
 
 How to work:
-- Publish: publish_site with files [{path, ...one source}]. Sources: content (text; base64 only for small binaries), url (the server downloads a public https URL; best for big or binary files already online), sha256+size (then PUT the bytes to the returned upload link and call finalize_version), copyFrom (reuse a file you already published). Put index.html (or index.md / README.md) at the root.
+- Publish: publish_site with files [{path, ...one source}]. Sources: content (text; base64 only for small binaries), url (the server downloads a public https URL; best for big or binary files already online), sha256+size (then PUT the bytes to the returned upload link and call finalize_version), copyFrom (reuse a file you already published), or a chat attachment {download_url, file_name}; or archiveUrl alone for a public https .zip. Put index.html (or index.md / README.md) at the root.
 - Share the url field exactly as returned. Never build site URLs yourself; their shape depends on the instance.
 - Edit: update_site_files writes, deletes or moves some files and keeps the rest. Pass baseVersionId from your last result; version_conflict means someone published since: re-read, re-apply, retry.
 - Roll back: list_versions, then restore_version ("v3", "3" or an id).

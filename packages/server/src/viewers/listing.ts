@@ -9,6 +9,10 @@ const LISTING_CSS = `
 .dw-ls h1 a{color:var(--muted);text-decoration:none}.dw-ls h1 a:hover{color:var(--accent)}
 .dw-ls .sum{color:var(--muted);font-size:.85rem}
 .dw-ls .sum a{margin-left:.6rem}
+.dw-ls .sort{display:flex;flex-wrap:wrap;gap:.4rem .75rem;align-items:baseline;width:100%;font-size:.85rem;color:var(--muted)}
+.dw-ls .sort a{padding:.25rem .4rem;border-radius:4px}
+.dw-ls .sort a[aria-current]{background:var(--card);color:var(--fg);font-weight:600}
+.dw-ls .sort a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .dw-ls ul{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .dw-ls li{display:grid;grid-template-columns:1fr auto auto;gap:1rem;align-items:baseline;padding:.5rem .9rem;border-top:1px solid var(--line);background:var(--card)}
 .dw-ls li:first-child{border-top:0}.dw-ls li a{text-decoration:none;word-break:break-all}.dw-ls li a:hover{text-decoration:underline}
@@ -22,13 +26,21 @@ const LISTING_CSS = `
 `;
 
 const GALLERY_MAX = 60;
+const SORTS = [["name", "Name"], ["size", "Largest first"], ["type", "Type"]] as const;
+
+// Keep English name collation; distinct Unicode spellings must not depend on manifest order.
+export function compareNames(a: string, b: string): number {
+  return a.localeCompare(b, "en", { sensitivity: "variant" }) || (a < b ? -1 : a > b ? 1 : 0);
+}
 
 /**
  * Directory listing for a folder (or site root) without an index file:
  * folders first, then files with their kind and size, then a gallery of the
  * folder's images. `appViewerUrl` links to the app-origin file browser.
  */
-export function renderListing(live: LiveSite, dir: string, mode: ServeMode, appViewerUrl?: string): Response {
+export function renderListing(live: LiveSite, dir: string, mode: ServeMode, appViewerUrl?: string, sort?: string | null): Response {
+  const order = sort === "size" || sort === "type" ? sort : "name";
+  const sortLinks = `<nav class="sort" aria-label="Sort files"><span>Sort:</span>${SORTS.map(([value, label]) => `<a href="?sort=${value}"${order === value ? ' aria-current="true"' : ""}>${label}</a>`).join("")}</nav>`;
   const dirs = new Map<string, number>();
   const files: Array<{ name: string; size: number; kind: ReturnType<typeof detectFileKind> }> = [];
   let total = 0;
@@ -47,11 +59,15 @@ export function renderListing(live: LiveSite, dir: string, mode: ServeMode, appV
     }
   }
   const base = mode.base + encodePath(dir);
-  files.sort((a, b) => a.name.localeCompare(b.name));
+  files.sort((a, b) => {
+    const primary = order === "size" ? b.size - a.size
+      : order === "type" ? compareNames(KIND_LABELS[a.kind], KIND_LABELS[b.kind]) : 0;
+    return primary || compareNames(a.name, b.name);
+  });
   const items = [
     ...(dir ? [`<li class="dir"><a href="../">../</a><span></span><span></span></li>`] : []),
     ...[...dirs.entries()]
-      .sort()
+      .sort(([a], [b]) => compareNames(a, b))
       .map(([d, n]) => `<li class="dir"><a href="${escapeHtml(base + encodeURIComponent(d))}/">${escapeHtml(d)}/</a><span class="k">Folder</span><span>${n} file${n === 1 ? "" : "s"}</span></li>`),
     ...files.map(
       (f) =>
@@ -75,7 +91,7 @@ export function renderListing(live: LiveSite, dir: string, mode: ServeMode, appV
     title: `${live.slug}/${dir}`,
     css: LISTING_CSS,
     head: '<meta name="robots" content="noindex">',
-    body: `<main class="dw-ls"><header><h1>${crumb} /</h1><span class="sum">${summary}${appViewerUrl ? `<a href="${escapeHtml(appViewerUrl)}" rel="nofollow">Browse files</a>` : ""}</span></header><ul>${items.join("")}</ul>${gallery}</main>`,
+    body: `<main class="dw-ls"><header><h1>${crumb} /</h1><span class="sum">${summary}${appViewerUrl ? `<a href="${escapeHtml(appViewerUrl)}" rel="nofollow">Browse files</a>` : ""}</span>${sortLinks}</header><ul>${items.join("")}</ul>${gallery}</main>`,
   });
   return new Response(page, {
     status: 200,
