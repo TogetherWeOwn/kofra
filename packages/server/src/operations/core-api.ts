@@ -671,7 +671,7 @@ export const CORE_API_OPERATIONS = [
     toolset: "core",
     scopes: ["sites:read"],
     description:
-      "Read back one published file. Text types return UTF-8 text; images and other binaries return base64 (force either with encoding). Reads up to 64 KB by default (max 1 MB per call); when truncated, call again with offset = nextOffset. Use it to check what you published.",
+      "Read back one published file. Text types return UTF-8 text; images and other binaries return base64 (force either with encoding). Reads 64 KB by default (max 1 MB per call); text page boundaries may adjust by up to 3 bytes to preserve UTF-8 characters. When truncated, call again with offset = nextOffset. Use it to check what you published.",
     input: fromSchema({
       type: "object",
       properties: {
