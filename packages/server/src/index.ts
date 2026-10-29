@@ -25,7 +25,7 @@ export { routeSiteRequest, type SiteRoute } from "./route-sites";
 export { serveSite, resolvePath, isNavigation, requestedViewMode, securityHeaders, systemResponse, SITE_SANDBOX, type ServeMode } from "./serve";
 export { VIEWERS, VIEWER_CSP, viewerCsp, findViewer, toViewerFile, type Viewer, type ViewerContext, type ViewerFile, type ViewMode } from "./viewers";
 export { viewerPage, standardTabs, VIEWER_CSS, type ViewerTab } from "./viewers/chrome";
-export { renderMarkdown } from "./viewers/markdown";
+export { renderMarkdown, type MarkdownHeading } from "./viewers/markdown";
 export { sanitizeHtml } from "./viewers/sanitize";
 export { highlight, hljsLanguage } from "./viewers/highlight";
 export { cachedRender } from "./viewers/cache";

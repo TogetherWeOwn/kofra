@@ -217,6 +217,15 @@ Expensive output (highlighting, Markdown, JSON trees, CSV tables) is cached by
 content in `viewers/cache.ts` (`render/<viewer>@<version>/<variant>/<sha256>`:
 isolate memory, then the Cache API).
 
+A standalone rendered Markdown document with at least two headings also gets
+a native contents outline: a collapsible `<details>` navigation of fragment
+links to the exact heading ids that same render assigned (h1–h6, first 200
+headings, with a note when a document has more). It needs no JavaScript, its
+labels are the headings' plain sanitized text, and it is part of the cached
+Markdown fragment. The shared `renderMarkdown()` helper behind notebook cells
+and other embedded fragments returns the heading list but never injects the
+outline itself.
+
 Syntax highlighting is highlight.js core plus about 80 languages registered in
 `viewers/hljs.js` (about 106 KB gzipped). That file is plain JavaScript with
 its own `hljs.d.ts` because highlight.js's types pull in the DOM lib.
