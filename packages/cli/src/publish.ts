@@ -110,6 +110,9 @@ const enc = encodeURIComponent;
 
 /** Above this size a single request no longer fits a Worker; use the resumable multipart protocol. */
 const MULTIPART_THRESHOLD_BYTES = 95 * 1024 * 1024;
+// Six default file workers reserve at most 60 MiB, below the server's 96 MiB
+// application buffer bound. Existing sessions retain their original geometry.
+const MULTIPART_PART_BYTES = 10 * 1024 * 1024;
 
 interface MultipartSession {
   id: string;
@@ -200,13 +203,16 @@ export async function publish(client: DropwayClient, files: SourceFile[], opts: 
   const uploaded = new Set<string>();
   let bytesUploaded = 0;
   const versionId = deploy.deploy.id;
+  let uploadFailed = false;
+  let uploadFailure: unknown;
+  const checkUploadFailure = () => { if (uploadFailed) throw uploadFailure; };
 
   // One large file through the resumable protocol: start a session, ask it
   // which parts it already acknowledged, PUT only the missing slices (the
   // source Blob stays lazy and is sliced, never read whole), then complete
   // so the instance hash-verifies before the bytes become a blob.
   const uploadMultipart = async (t: UploadTarget, file: SourceFile) => {
-    const started = (await client.post<MultipartSession>("/uploads", { versionId, sha256: t.sha256 }, { token })).data;
+    const started = (await client.post<MultipartSession>("/uploads", { versionId, sha256: t.sha256, partSize: MULTIPART_PART_BYTES }, { token })).data;
     if (!started?.id || !Number.isInteger(started.partSize) || started.partSize <= 0) {
       throw new CliError({ code: "unexpected_response", message: "The instance did not return a resumable upload session.", exitCode: EXIT.error });
     }
@@ -216,17 +222,44 @@ export async function publish(client: DropwayClient, files: SourceFile[], opts: 
     const body = await file.body();
     const partCount = Math.ceil(t.size / partSize);
     for (let partNumber = 1; partNumber <= partCount; partNumber++) {
+      checkUploadFailure();
       const start = (partNumber - 1) * partSize;
       const end = Math.min(t.size, start + partSize);
       if (acknowledged.get(partNumber) === end - start) continue;
       const slice = body instanceof Blob ? body.slice(start, end) : body.subarray(start, end);
-      await client.request("PUT", `/uploads/${enc(session.id)}/parts/${partNumber}`, {
-        body: slice,
-        headers: { "Content-Type": "application/octet-stream" },
-        token,
-        retry: "safe",
-      });
+      const deadline = Date.now() + 120_000;
+      let lastBusy: unknown;
+      for (let attempt = 0; ; attempt++) {
+        checkUploadFailure();
+        if (attempt > 0 && Date.now() >= deadline) throw lastBusy;
+        try {
+          await client.request("PUT", `/uploads/${enc(session.id)}/parts/${partNumber}`, {
+            body: slice,
+            headers: { "Content-Type": "application/octet-stream" },
+            token,
+            retry: "safe",
+          });
+          break;
+        } catch (error) {
+          // These two protocol refusals mean another request is making
+          // progress. Never retry arbitrary 409s or conflicting bytes.
+          const busy = error instanceof CliError && error.retryable
+            && ((error.status === 409 && error.code === "part_busy") || (error.status === 503 && error.code === "upload_busy"));
+          if (!busy || attempt >= 59 || Date.now() >= deadline) throw error;
+          lastBusy = error;
+          const guidance = error.retryAfterSeconds;
+          const delay = guidance != null && Number.isFinite(guidance) && guidance > 0 ? Math.min(guidance, 30) * 1000 : 1000;
+          await new Promise((resolve) => setTimeout(resolve, Math.min(delay, deadline - Date.now())));
+          checkUploadFailure();
+          if (Date.now() >= deadline) throw error;
+          if (error.code === "part_busy") {
+            const refreshed = (await client.get<MultipartSession>(`/uploads/${enc(session.id)}`, { token })).data;
+            if (refreshed.parts?.some((part) => part.partNumber === partNumber && part.size === end - start)) break;
+          }
+        }
+      }
     }
+    checkUploadFailure();
     const completed = (await client.post<{ sha256?: string; size?: number }>(`/uploads/${enc(session.id)}/complete`, {}, { token, retry: "safe" })).data;
     if ((completed?.sha256 !== undefined && completed.sha256 !== t.sha256) || (completed?.size !== undefined && completed.size !== t.size)) {
       throw new CliError({ code: "unexpected_response", message: "The completed upload does not match this file's hash and size.", exitCode: EXIT.error });
@@ -240,23 +273,32 @@ export async function publish(client: DropwayClient, files: SourceFile[], opts: 
     let done = 0;
     let bytes = 0;
     opts.onProgress?.({ phase: "upload", done, total, bytes, totalBytes });
+    uploadFailed = false;
     const worker = async () => {
-      for (let t = queue.shift(); t; t = queue.shift()) {
-        const file = bySha.get(t.sha256);
-        if (!file) {
-          throw new CliError({ code: "unexpected_upload", message: `The instance asked for ${t.sha256}, which is not in this publish.`, exitCode: EXIT.error });
+      try {
+        for (let t = queue.shift(); t; t = queue.shift()) {
+          checkUploadFailure();
+          const file = bySha.get(t.sha256);
+          if (!file) {
+            throw new CliError({ code: "unexpected_upload", message: `The instance asked for ${t.sha256}, which is not in this publish.`, exitCode: EXIT.error });
+          }
+          if (t.size > MULTIPART_THRESHOLD_BYTES) await uploadMultipart(t, file);
+          else await client.request(t.method ?? "PUT", t.url, { body: await file.body(), headers: t.headers ?? {}, token, retry: "safe" });
+          uploaded.add(t.sha256);
+          done++;
+          bytes += t.size;
+          bytesUploaded += t.size;
+          opts.onProgress?.({ phase: "upload", done, total, bytes, totalBytes });
         }
-        if (t.size > MULTIPART_THRESHOLD_BYTES) await uploadMultipart(t, file);
-        else await client.request(t.method ?? "PUT", t.url, { body: await file.body(), headers: t.headers ?? {}, token, retry: "safe" });
-        uploaded.add(t.sha256);
-        done++;
-        bytes += t.size;
-        bytesUploaded += t.size;
-        opts.onProgress?.({ phase: "upload", done, total, bytes, totalBytes });
+      } catch (error) {
+        if (!uploadFailed) { uploadFailed = true; uploadFailure = error; }
+        throw error;
       }
     };
     const n = Math.max(1, Math.min(opts.concurrency ?? 6, total));
-    await Promise.all(Array.from({ length: n }, worker));
+    // Do not return while siblings can still PUT parts or complete sessions.
+    await Promise.allSettled(Array.from({ length: n }, worker));
+    checkUploadFailure();
   };
 
   await upload(deploy.uploads ?? []);

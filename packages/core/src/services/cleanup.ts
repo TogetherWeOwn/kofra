@@ -30,7 +30,10 @@ export interface CleanupReport {
  * 4. delete blobs no version references any more (older than a day);
  * 5. purge expired, unreleased name holds (released rows are the audit trail);
  * 6. purge expired idempotency records, oldest first.
- * Each step is bounded so one run stays well inside Worker limits.
+ * Core binding calls total at most 785 even when every slice is full:
+ * transfers 103, sites 101 + 26, holds 1, multipart 301, abandoned 51,
+ * orphans 201, idempotency 1. This reserves 215 of Free's 1000 calls for
+ * other invocation work; embedding hooks must budget their own calls.
  */
 export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<CleanupReport> {
   const report: CleanupReport = { expiredSites: 0, purgedSites: 0, abandonedDeploys: 0, deletedBlobs: 0, expiredUploads: 0, ...await cleanupTransfers(dc, now) };
@@ -38,7 +41,7 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
 
   // 1. Expire anonymous sites.
   const { results: expired } = await db
-    .prepare("SELECT * FROM sites WHERE mode = 'site' AND expires_at IS NOT NULL AND expires_at < ? AND deleted_at IS NULL LIMIT 200")
+    .prepare("SELECT * FROM sites WHERE mode = 'site' AND expires_at IS NOT NULL AND expires_at < ? AND deleted_at IS NULL LIMIT 50")
     .bind(now)
     .all<SiteRow>();
   for (const s of expired) {
@@ -66,7 +69,7 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
   // 2. Purge deleted sites (rows only; their blobs become orphans for step 4,
   // their tombstones keep holding the names).
   const { results: gone } = await db
-    .prepare("SELECT id FROM sites WHERE mode = 'site' AND deleted_at IS NOT NULL AND deleted_at < ? LIMIT 50")
+    .prepare("SELECT id FROM sites WHERE mode = 'site' AND deleted_at IS NOT NULL AND deleted_at < ? LIMIT 25")
     .bind(now - HOUR)
     .all<{ id: string }>();
   for (const s of gone) {
@@ -85,7 +88,7 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
   const purgedHolds = await purgeExpiredHolds(dc, now);
 
   // Expired resumable uploads: abort their R2 multipart uploads and drop the
-  // session rows (at most 500 per run; staged bytes go with them).
+  // session rows (at most 301 binding calls; staged bytes go with them).
   report.expiredUploads = await cleanupExpiredMultipartUploads(dc, now);
 
   // 3. Abandoned uploads. Transfer references belong to cleanupTransfers, even
@@ -93,7 +96,7 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
   const abandoned = `status = 'pending' AND created_at < ?
     AND NOT EXISTS (SELECT 1 FROM transfers t WHERE t.site_id = versions.site_id)`;
   const { results: stale } = await db
-    .prepare(`SELECT id FROM versions WHERE ${abandoned} LIMIT 200`)
+    .prepare(`SELECT id FROM versions WHERE ${abandoned} LIMIT 50`)
     .bind(now - DAY)
     .all<{ id: string }>();
   for (const v of stale) {
@@ -112,7 +115,7 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
     .prepare(
       `SELECT b.sha256 FROM blobs b
         WHERE b.created_at < ? AND NOT EXISTS (SELECT 1 FROM version_files vf WHERE vf.sha256 = b.sha256)
-        LIMIT 500`,
+        LIMIT 100`,
     )
     .bind(now - DAY)
     .all<{ sha256: string }>();

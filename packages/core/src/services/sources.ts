@@ -10,7 +10,7 @@ import type { Principal } from "../principal";
 import { blobScope, putVerifiedBlob } from "./blobs";
 import { createDeploy, deployWarnings, finalizeDeploy, parseDeployOptions, versionConflict, type Warning } from "./deploys";
 import { discardNewSite, findSite, getVersion, serializeSite, serializeVersion, type SiteRow, type VersionRow } from "./sites";
-import { resolvePublishTarget, unzipFiles } from "./publish";
+import { resolvePublishTarget, unzipFiles, validateInlineFiles } from "./publish";
 import { getSiteByRef, resolveSiteSlug, resolveVersionRef } from "./site-ops";
 import { PENDING_VERSION_TTL_MS } from "./upload-tokens";
 import { versionPreviewUrl } from "./previews";
@@ -629,6 +629,7 @@ async function resolveArchiveUrl(dc: DropwayContext, archiveUrl: string, lim: Li
   if (extracted.length > lim.maxFiles) {
     throw badRequest("too_many_files", `A version can have at most ${lim.maxFiles} files.`, "Split the content across sites or trim build output. Never drop files silently.", { limit: lim.maxFiles });
   }
+  validateInlineFiles(extracted, lim);
   const files = await Promise.all(extracted.map(async (f): Promise<ResolvedFile> => ({
     path: f.path,
     size: f.bytes.length,

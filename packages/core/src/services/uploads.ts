@@ -2,7 +2,7 @@ import type { DropwayContext } from "../context";
 import { appOrigin } from "../context";
 import { canAccess, serializeVersion, type SiteRow, type VersionRow } from "./sites";
 import { missingForScope } from "./deploys";
-import { blobScope, putVerifiedBlob } from "./blobs";
+import { blobScope, writeVerifiedBlob } from "./blobs";
 import { createUploadToken, PENDING_VERSION_TTL_MS, uploadExpired } from "./upload-tokens";
 import { hasScope, type Principal } from "../principal";
 import { ApiError, badRequest, conflict, forbidden, isApiError, notFound, unauthorized } from "../errors";
@@ -496,6 +496,75 @@ async function markSession(dc: DropwayContext, sessionId: string, status: Sessio
     .run();
 }
 
+/** Register against current ownership in the same transaction as the lifetime fence. */
+async function registerVerifiedUpload(dc: DropwayContext, p: Principal, session: SessionRow, completed: boolean): Promise<string | null> {
+  const now = Date.now();
+  let authority: string;
+  let values: Array<string | number | null>;
+  if (p.kind === "member") {
+    authority = "s.tenant_id = ? AND (? IS NULL OR s.id = ?) AND (s.mode <> 'transfer' OR s.created_by = ?)";
+    values = [p.tenantId, p.siteId, p.siteId, p.memberId];
+  } else if (p.kind === "claim") {
+    authority = "s.id = ? AND s.tenant_id IS NULL";
+    values = [p.siteId];
+  } else if (p.kind === "upload") {
+    authority = "v.id = ? AND v.created_at + ? = ? AND ? > ?";
+    values = [p.versionId, PENDING_VERSION_TTL_MS, p.expiresAt, p.expiresAt, now];
+  } else {
+    throw unauthorized("Completing an upload needs its upload credential.");
+  }
+  const current = `FROM upload_sessions u
+    JOIN versions v ON v.id = u.version_id AND v.site_id = u.site_id
+    JOIN sites s ON s.id = u.site_id
+    JOIN version_files vf ON vf.version_id = v.id AND vf.sha256 = u.sha256 AND vf.size = u.size
+    WHERE u.id = ? AND u.status IN ('completing', 'completed') AND u.staged IN (0, 1)
+      AND u.expires_at > ? AND v.status = 'pending' AND s.deleted_at IS NULL
+      AND (s.expires_at IS NULL OR s.expires_at > ?) AND (${authority})`;
+  const binds = [session.id, now, now, ...values];
+  try {
+    const result = await dc.env.DB.batch([
+      dc.env.DB.prepare(`SELECT CASE WHEN EXISTS (SELECT 1 ${current}) THEN 1
+        ELSE json_extract('{}', 'dropway_upload_target_changed') END`).bind(...binds),
+      dc.env.DB.prepare("INSERT OR IGNORE INTO blobs (sha256, size, created_at) VALUES (?, ?, ?)").bind(session.sha256, session.size, now),
+      dc.env.DB.prepare(`INSERT OR IGNORE INTO blob_scopes (scope, sha256, created_at)
+        SELECT CASE WHEN s.tenant_id IS NULL THEN 's:' || s.id ELSE 't:' || s.tenant_id END, u.sha256, ? ${current}`).bind(now, ...binds),
+      ...(completed ? [dc.env.DB.prepare("UPDATE upload_sessions SET status = 'completed', completed_at = ? WHERE id = ?").bind(now, session.id)] : []),
+      dc.env.DB.prepare("SELECT tenant_id FROM sites WHERE id = ?").bind(session.site_id),
+    ]);
+    return (result[result.length - 1]?.results[0] as { tenant_id: string | null } | undefined)?.tenant_id ?? null;
+  } catch (error) {
+    if (String(error).includes("JSON path") && String(error).includes("dropway_upload_target_changed")) {
+      throw conflict("upload_closed", "The upload target changed before completion could commit.", "Retry complete with the current owner's credential while the version is pending.");
+    }
+    throw error;
+  }
+}
+
+/**
+ * Durable cleanup inventory for bytes about to be promoted, recorded before
+ * the R2 write and carrying no ownership scope. If the fenced registration
+ * then refuses (target deleted, lifetime expired) or this request dies, the
+ * orphan reaper can still find the promoted object; scope rows remain the
+ * only proof of ownership, so this row alone exposes nothing.
+ */
+async function recordBlobInventory(dc: DropwayContext, session: SessionRow): Promise<void> {
+  await dc.env.DB.prepare("INSERT OR IGNORE INTO blobs (sha256, size, created_at) VALUES (?, ?, ?)")
+    .bind(session.sha256, session.size, Date.now())
+    .run();
+}
+
+/** Persist cleanup intent before removing corrupt bytes; retain the allocation fence until deletion succeeds. */
+async function rejectCorruptUpload(dc: DropwayContext, session: SessionRow): Promise<never> {
+  if (session.staged !== 2) {
+    await dc.env.DB.prepare("UPDATE upload_sessions SET staged = 2 WHERE id = ? AND status = 'completing'").bind(session.id).run();
+  }
+  await dc.env.FILES.delete(session.r2_key);
+  await dc.env.DB.batch([
+    dc.env.DB.prepare("UPDATE upload_sessions SET status = 'failed', staged = 0 WHERE id = ? AND staged = 2").bind(session.id),
+  ]);
+  throw badRequest("hash_mismatch", "The uploaded bytes do not match the SHA-256 in the manifest.", "Start a new upload session and upload the exact file bytes; do not re-encode or compress them.");
+}
+
 /** POST /api/v1/uploads/{id}/complete: assemble, hash-verify, then promote to blobs/<sha256>. Safe to repeat. */
 export async function completeMultipartUpload(dc: DropwayContext, p: Principal, sessionId: string): Promise<{ sha256: string; size: number; stored: true }> {
   const loaded = await authorizedSession(dc, p, sessionId);
@@ -523,12 +592,14 @@ export async function completeMultipartUpload(dc: DropwayContext, p: Principal, 
     if (session.status === "failed") throw badRequest("hash_mismatch", "The uploaded bytes do not match the SHA-256 in the manifest.", "Start a new upload session and upload the exact file bytes.");
   }
 
+  if (session.staged === 2) return rejectCorruptUpload(dc, session);
+
   // A previous attempt may have promoted the verified bytes and then lost
   // its response. The scope check keeps that shortcut owner-scoped: another
   // owner's identical blob never verifies this session's bytes.
   if ((await missingForScope(dc, target.scope, [session.sha256])).length === 0 && session.staged === 1) {
     await dc.env.FILES.delete(session.r2_key);
-    await markSession(dc, session.id, "completed");
+    await registerVerifiedUpload(dc, p, session, true);
     return done;
   }
 
@@ -539,8 +610,9 @@ export async function completeMultipartUpload(dc: DropwayContext, p: Principal, 
       await markSession(dc, session.id, "failed");
       throw badRequest("hash_mismatch", "The uploaded bytes do not match the SHA-256 in the manifest.", "Start a new upload session and upload the exact file bytes.");
     }
-    await putVerifiedBlob(dc, target.scope, session.sha256, new Uint8Array(0), 0, session.content_type);
-    await markSession(dc, session.id, "completed");
+    await recordBlobInventory(dc, session);
+    await writeVerifiedBlob(dc, session.sha256, new Uint8Array(0), 0, session.content_type);
+    await registerVerifiedUpload(dc, p, session, true);
     return done;
   }
 
@@ -554,24 +626,23 @@ export async function completeMultipartUpload(dc: DropwayContext, p: Principal, 
     } catch (e) {
       if (!(await dc.env.FILES.head(session.r2_key).catch(() => null))) throw e;
     }
-    await dc.env.DB.prepare("UPDATE upload_sessions SET staged = 1 WHERE id = ?").bind(session.id).run();
+    // Only the first assembler may claim the staged flag: an unconditional
+    // write would let a late completer erase another completer's durable
+    // corrupt-cleanup intent (staged = 2) or revive a terminal session.
+    await dc.env.DB.prepare("UPDATE upload_sessions SET staged = 1 WHERE id = ? AND staged = 0 AND status = 'completing'").bind(session.id).run();
     session = { ...session, staged: 1 };
   }
 
   const staged = await hashStagedObject(dc, session.r2_key);
-  if (staged.size !== session.size || staged.hash !== session.sha256) {
-    await dc.env.FILES.delete(session.r2_key);
-    await dc.env.DB.batch([
-      dc.env.DB.prepare("UPDATE upload_sessions SET status = 'failed', staged = 0 WHERE id = ?").bind(session.id),
-    ]);
-    throw badRequest("hash_mismatch", "The uploaded bytes do not match the SHA-256 in the manifest.", "Start a new upload session and upload the exact file bytes; do not re-encode or compress them.");
-  }
+  if (staged.size !== session.size || staged.hash !== session.sha256) return rejectCorruptUpload(dc, session);
   const verified = await dc.env.FILES.get(session.r2_key);
   if (!verified) throw new ApiError(502, "blob_missing", "The completed upload's staged bytes could not be read.", "Retry shortly; if it repeats, start a new upload session.");
-  await putVerifiedBlob(dc, target.scope, session.sha256, verified.body, session.size, session.content_type);
-  meter(dc, { type: "blob_upload", tenantId: target.site.tenant_id, sha256: session.sha256, bytes: session.size, at: Date.now() });
+  await recordBlobInventory(dc, session);
+  await writeVerifiedBlob(dc, session.sha256, verified.body, session.size, session.content_type);
+  await registerVerifiedUpload(dc, p, session, false);
   await dc.env.FILES.delete(session.r2_key);
-  await markSession(dc, session.id, "completed");
+  const tenantId = await registerVerifiedUpload(dc, p, session, true);
+  meter(dc, { type: "blob_upload", tenantId, sha256: session.sha256, bytes: session.size, at: Date.now() });
   return done;
 }
 
@@ -590,12 +661,12 @@ async function discardSessionStorage(dc: DropwayContext, session: SessionRow): P
 }
 
 /**
- * Abort and drop at most 500 expired upload sessions (the cron's bounded
+ * Abort and drop at most 100 expired upload sessions (the cron's bounded
  * slice). Sessions that already completed only lose their session rows; the
  * R2 multipart handles of unfinished ones are aborted first.
  */
 export async function cleanupExpiredMultipartUploads(dc: DropwayContext, now = Date.now()): Promise<number> {
-  const { results } = await dc.env.DB.prepare("SELECT * FROM upload_sessions WHERE expires_at <= ? ORDER BY expires_at, id LIMIT 500")
+  const { results } = await dc.env.DB.prepare("SELECT * FROM upload_sessions WHERE expires_at <= ? ORDER BY expires_at, id LIMIT 100")
     .bind(now)
     .all<SessionRow>();
   let cleaned = 0;

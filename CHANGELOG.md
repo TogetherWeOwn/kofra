@@ -21,16 +21,30 @@
   In-flight `part_busy` is retryable; changed acknowledged `part_conflict` is not.
   Live part buffers share a 96 MiB per-isolate admission budget (503 on overload),
   with incremental part hashing rather than a second whole-part digest copy.
+  Completion registers ownership against current site/version state in a D1
+  transaction, including an anonymous site claimed during assembly. Corrupt
+  staging has durable cleanup intent before deletion, so a later D1 failure
+  cannot wedge its unfinished-session slot. Cleanup reserves capacity for every
+  phase: at most 100 multipart sessions and 785 core binding calls per invocation.
 - The CLI uses multipart above 95 MiB (the raw PUT at or below), resuming from
   the server's acknowledged parts when retrying the same pending version, with
   the existing retries and dedupe. Separate CLI invocations create new versions;
-  there is no persisted cross-invocation resume checkpoint.
+  there is no persisted cross-invocation resume checkpoint. New CLI sessions
+  request 10 MiB parts so six default file workers fit the shared buffer budget.
+  Retryable `part_busy` and `upload_busy` get bounded admission-aware waits
+  (at most 60 admission cycles in a two-minute scheduling window, in addition
+  to each request's transport retry budget); other conflicts fail immediately.
+  Failed publishes settle in-flight siblings before returning.
 - `publish_site` and REST JSON publishing accept `archiveUrl` alone (a public
   https .zip, fetched and unpacked like an uploaded zip) and chat-client
   attachments `{download_url, file_name}` as file sources under the existing
   URL fetch guards. A sha256 file source with an explicit size no longer needs
   an API key merely to resolve, so an anonymous publish can return
-  `awaiting_upload`; owner-scoped dedupe is unchanged.
+  `awaiting_upload`; owner-scoped dedupe is unchanged. ZIP extraction counts
+  actual output incrementally and checks declared lengths, preserves legal
+  names such as `__proto__`, and refuses duplicate normalized entries. All
+  extracted file sizes/paths are validated before hashing or changing an
+  existing site's settings, password or live cache.
 
 ### Sites
 

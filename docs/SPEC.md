@@ -445,13 +445,22 @@ URL in the publish response is correct at once; `X-Kofra-Version` on every site 
    resume, and `POST /api/v1/uploads/{id}/complete` assembles the parts, stream-hashes the result and
    only then promotes it to `blobs/<sha256>` in the caller's scope. Sessions expire within a day (a
    dwu_-created session keeps the token's earlier expiry) and the hourly cleanup aborts expired ones
-   in bounded slices, retaining ownership records on transient storage failures so later runs retry.
+   in slices of at most 100, retaining ownership records on transient storage failures so later runs retry.
+   Scope registration and completion are fenced against current ownership, pending state and lifetime
+   in D1; a concurrent anonymous-site claim cannot strand a blob in the old scope. Corrupt staged
+   bytes enter a durable cleanup-intent state before deletion, releasing the unfinished slot only
+   after storage cleanup succeeds. Core hourly housekeeping reserves capacity for all phases
+   (at most 785 binding calls before embedding hooks, below the Free invocation's 1000-call budget).
    Part buffers share a 96 MiB per-isolate admission budget; excess concurrent requests get retryable
    `503 upload_busy`. Part hashing is incremental, without a second whole-part digest buffer. This
    bounds application part buffers, not all isolate memory; deployed memory profiling is still pending.
    The CLI picks multipart above 95 MiB and the raw PUT at or below it. It resumes acknowledged parts
    when retrying the same pending version; a new CLI invocation creates a new version, not a persisted
-   cross-invocation resume checkpoint.
+   cross-invocation resume checkpoint. New CLI sessions request 10 MiB parts (six default uploads
+   reserve at most 60 MiB). Retryable `part_busy`/`upload_busy` have a separate bounded wait:
+   at most 60 admission cycles in a two-minute scheduling window, with acknowledgement refresh
+   for `part_busy`. Each in-flight request still has the transport's separate retry budget.
+   Other conflicts are not retried; failed publishes settle their sibling workers before returning.
 3. `POST .../versions/{version}/finalize`: check every hash, then flip the pointer with a conditional
    `UPDATE sites SET current_version_id = ? WHERE id = ? AND current_version_id IS ?` (the last value is
    `baseVersionId` when given; zero rows changed = `409 version_conflict`). Refresh KV, enqueue jobs,
