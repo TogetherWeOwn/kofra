@@ -116,7 +116,9 @@ export function expectFailure(r: Outcome, status: number, code: string) {
 export function expectReplay(r: Outcome, original: Outcome) {
   expect.soft(r.isError, JSON.stringify(r.body)).toBe(false);
   if (r.status !== undefined) expect.soft(r.status).toBe(original.status ?? 200);
-  // A transport may add replay metadata, but must not recompute the receipt.
+  expect.soft(original.body.replayed, "the first execution must not be marked as a replay").not.toBe(true);
+  expect.soft(r.body.replayed, "a completed replay must be explicitly identified").toBe(true);
+  // Only replay metadata may differ; never recompute the persisted receipt.
   const { replayed: _firstReplay, ...first } = original.body;
   const { replayed: _nextReplay, ...next } = r.body;
   expect.soft(next, "only the first persisted success may be returned").toEqual(first);
@@ -134,10 +136,11 @@ export function observe(h: Harness) {
   }, () => [h.published, h.deleted, h.metered]);
   return {
     clear() { statements.length = 0; effects.clear(); },
-    expectNoAction({ noResolution = true } = {}) {
+    expectNoAction({ noResolution = true, noClaim = false } = {}) {
       const requestSql = [...statements];
       expect.soft(requestSql.filter(sql => isMutation(sql) && !/\bidempotency_\w+\b/i.test(sql)), "replay/refusal must not prepare business writes").toEqual([]);
       if (noResolution) expect.soft(requestSql.filter(readsVersions), "target resolution must be inside the protected execution, not before replay").toEqual([]);
+      if (noClaim) expect.soft(requestSql.filter(sql => isMutation(sql) && /\bidempotency_\w+\b/i.test(sql)), "invalid keys must not claim or release replay ownership").toEqual([]);
       effects.expectNoEffects();
     },
   };

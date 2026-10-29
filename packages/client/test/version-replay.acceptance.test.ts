@@ -222,6 +222,33 @@ describe("deleteVersion never automatically retries", () => {
   });
 });
 
+describe.each(["restoreVersion", "deleteVersion"] as const)("%s overrides caller retry policies", method => {
+  const cases: Array<{ label: string; retry: "safe" | "rate-limit"; first: Reply; code: string }> = [
+    { label: "429", retry: "safe", first: { status: 429, headers: { "Retry-After": "0" }, body: RATE }, code: "rate_limited" },
+    { label: "429", retry: "rate-limit", first: { status: 429, headers: { "Retry-After": "0" }, body: RATE }, code: "rate_limited" },
+    { label: "network loss", retry: "safe", first: { network: true }, code: "network_error" },
+    { label: "500", retry: "safe", first: { status: 500, body: BOOM }, code: "internal_error" },
+    { label: "503", retry: "safe", first: { status: 503, body: BOOM }, code: "internal_error" },
+  ];
+
+  it.each(cases)("$retry cannot resubmit after $label even when a second fetch would succeed", async ({ label, retry, first, code }) => {
+    const s = stubReplies([first, { status: 200, body: { restored: true, deleted: true } }]);
+    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const key = `caller-${method}-${retry}-${label.replaceAll(" ", "-")}`;
+    const opts: CallOptions = { retry, idempotencyKey: key };
+    const call = method === "restoreVersion"
+      ? c.restoreVersion({ slug: "s", id: "ver_1" }, opts)
+      : c.deleteVersion({ slug: "s", id: "ver_1", confirm: "s" }, opts);
+    const error = await threw(call);
+    expect(error.code, "preserve the first rejection, not the later success").toBe(code);
+    expect(s.calls(), "caller retry options cannot override a single-attempt intent").toBe(1);
+    expect(s.requests).toHaveLength(1);
+    expect(s.requests[0]!.headers.get("Idempotency-Key")).toBe(key);
+    expect(s.requests[0]!.method).toBe(method === "restoreVersion" ? "POST" : "DELETE");
+    expect(new URL(s.requests[0]!.url).pathname).toBe(`/api/v1/sites/s/versions/ver_1${method === "restoreVersion" ? "/restore" : ""}`);
+  });
+});
+
 describe("transport retry:'none' means one fetch including 429", () => {
   it("POST with retry none and Retry-After 429: one fetch", async () => {
     const s = stubReplies([

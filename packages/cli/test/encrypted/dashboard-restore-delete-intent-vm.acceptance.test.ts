@@ -23,9 +23,9 @@
  * and accessibility-tree requirements live in Chromium suites. Chromium
  * verification for this contract is a not-run gap (see final report).
  *
- * Expected behavioral RED against the current dashboard: restore and delete
- * send no Idempotency-Key, so every fresh-UUID assertion fails while the
- * harness controls (asset execution, Cancel without mutation) pass.
+ * The insecure-context regression exposes only bound real getRandomValues,
+ * never randomUUID or Math.random. Both actions must still send fresh keyed
+ * intents while preserving cancellation, in-flight locks and file selection.
  */
 import vm from "node:vm";
 import { webcrypto } from "node:crypto";
@@ -62,7 +62,8 @@ type VersionRow = { id: string; number: number; live?: boolean };
 type Mounted = {
   doc: FakeDocument; root: FakeElement; site: Site; versions: VersionRow[];
   writes: Write[]; reads: Read[]; violations: string[]; location: { href: string };
-  queueMutationReply: (reply: MutationReply) => void;
+  queueMutationReply: (reply: MutationReply | Promise<MutationReply>) => void;
+  entropyCalls: () => number;
 };
 
 async function fixtureSiteWithHistory(count: number): Promise<Site> {
@@ -78,7 +79,7 @@ async function fixtureSiteWithHistory(count: number): Promise<Site> {
   return site;
 }
 
-async function mount(options: { historyCount?: number; nonCanonicalPath?: boolean } = {}): Promise<Mounted> {
+async function mount(options: { historyCount?: number; nonCanonicalPath?: boolean; withoutRandomUUID?: boolean } = {}): Promise<Mounted> {
   const historyCount = options.historyCount ?? 3;
   const site: Site = await fixtureSiteWithHistory(historyCount);
   const pathSlug = options.nonCanonicalPath ? site.slug.toUpperCase() : site.slug;
@@ -118,7 +119,7 @@ async function mount(options: { historyCount?: number; nonCanonicalPath?: boolea
   const reads: Read[] = [];
   const violations: string[] = [];
   recordedViolations.push(violations);
-  const mutationReplies: MutationReply[] = [];
+  const mutationReplies: Array<MutationReply | Promise<MutationReply>> = [];
   const location = {
     origin, href: `${origin}/dashboard/sites/${encodeURIComponent(pathSlug)}`,
     pathname: `/dashboard/sites/${encodeURIComponent(pathSlug)}`, search: "",
@@ -127,6 +128,14 @@ async function mount(options: { historyCount?: number; nonCanonicalPath?: boolea
   };
   const timers = new Set<ReturnType<typeof setTimeout>>();
   cleanups.push(() => { for (const timer of timers) clearTimeout(timer); });
+  let entropyCalls = 0;
+  const fillRandom = webcrypto.getRandomValues.bind(webcrypto);
+  const crypto = options.withoutRandomUUID ? {
+    getRandomValues(...args: Parameters<typeof webcrypto.getRandomValues>) {
+      entropyCalls++;
+      return fillRandom(...args);
+    },
+  } : webcrypto;
   const sandbox: Record<string, unknown> = {
     document: doc, sessionStorage: storage, localStorage: new Storage(), location,
     history: {
@@ -134,7 +143,7 @@ async function mount(options: { historyCount?: number; nonCanonicalPath?: boolea
       replaceState(_a: unknown, _b: unknown, value: string) { location.assign(value); },
     },
     navigator: { clipboard: { writeText: async () => {} } },
-    crypto: webcrypto, AbortController, TextEncoder, Request, Response,
+    crypto, isSecureContext: !options.withoutRandomUUID, AbortController, TextEncoder, Request, Response,
     fetch: async (path: string, init: RequestInit = {}) => {
       const url = new URL(String(path), origin);
       if (url.origin !== origin) { violations.push("off-origin request"); throw Error("off-origin fixture request refused"); }
@@ -153,7 +162,7 @@ async function mount(options: { historyCount?: number; nonCanonicalPath?: boolea
           && ((!!match[3] && method === "POST") || (!match[3] && method === "DELETE"));
         if (!allowed) { violations.push(`${method} ${url.pathname}`); throw Error("unexpected fixture mutation"); }
         if (mutationReplies.length > 0) {
-          const next = mutationReplies.shift()!;
+          const next = await mutationReplies.shift()!;
           if ("network" in next) throw new Error("simulated network failure");
           return new Response(JSON.stringify(next.body), { status: next.status, headers: { "Content-Type": "application/json" } });
         }
@@ -192,9 +201,14 @@ async function mount(options: { historyCount?: number; nonCanonicalPath?: boolea
   }).toBe(true);
   expect(violations).toEqual([]);
   expect(writes).toEqual([]);
+  if (options.withoutRandomUUID) {
+    expect((crypto as { randomUUID?: unknown }).randomUUID).toBeUndefined();
+    vm.runInContext("Math.random = () => { throw new Error('Insecure entropy cannot create intent keys'); };", sandbox);
+  }
   return {
     doc, root, site, versions: versionsBody.versions, writes, reads, violations, location,
-    queueMutationReply: (reply: MutationReply) => { mutationReplies.push(reply); },
+    queueMutationReply: (reply: MutationReply | Promise<MutationReply>) => { mutationReplies.push(reply); },
+    entropyCalls: () => entropyCalls,
   };
 }
 
@@ -376,6 +390,94 @@ it("version delete opened at a non-canonical path still confirms the canonical s
   expect(confirmOf(first), "wire confirmation is the canonical loaded slug, not the typed path").toBe(view.site.slug);
   expectFreshUuid(first.idempotencyKey, "non-canonical delete");
   expect(view.violations).toEqual([]);
+});
+
+async function beginIntent(view: Mounted, action: "restore" | "delete") {
+  if (action === "restore") {
+    const button = restoreButtonFor(view, 1);
+    button.click();
+    return () => button.click();
+  }
+  deleteButtonFor(view, 1).click();
+  const dialog = await waitForDialog(view);
+  const confirm = dialog.querySelectorAll("button").find(button => /^delete version$/i.test(button.textContent.trim()))!;
+  expect(confirm, "explicit version-delete confirmation").toBeTruthy();
+  submitDialog(dialog, confirm);
+  return () => submitDialog(dialog, confirm);
+}
+
+it.each(["restore", "delete"] as const)("%s uses real CSPRNG intents without randomUUID, retaining cancellation, lock and selection", async action => {
+  const view = await mount({ withoutRandomUUID: true, nonCanonicalPath: true });
+  const target = view.versions.find(row => row.number === 1)!;
+  const files = versionRowFor(view, 1).querySelectorAll("button").find(button => button.textContent.trim() === "Files");
+  expect(files, "inspect an immutable historical selection before mutating").toBeTruthy();
+  files!.click();
+  await expect.poll(() => view.root.querySelector("#files")?.textContent, { timeout: 5000 }).toContain("Files in v1");
+  await quiet(100);
+  const selection = () => ({ files: view.root.querySelector("#files")!.textContent, url: view.location.href });
+  const selected = selection();
+  const baselineReads = view.reads.length;
+
+  if (action === "delete") {
+    deleteButtonFor(view, 1).click();
+    const dialog = await waitForDialog(view);
+    const cancel = dialog.querySelectorAll("button").find(button => /^cancel$/i.test(button.textContent.trim()))!;
+    expect(cancel).toBeTruthy();
+    submitDialog(dialog, cancel);
+    await quiet(100);
+    expect(view.writes, "Cancel sends no write without secure-context crypto").toEqual([]);
+    expect(view.reads).toHaveLength(baselineReads);
+    expect(selection()).toEqual(selected);
+  }
+
+  const refusal: MutationReply = { status: 429, body: { error: { code: "rate_limited", message: "Insecure-context refusal.", hint: "Retry deliberately." } } };
+  let release!: (reply: MutationReply) => void;
+  const held = new Promise<MutationReply>(resolve => { release = resolve; });
+  view.queueMutationReply(held);
+  try {
+    const repeat = await beginIntent(view, action);
+    await expect.poll(() => view.writes.length > 0 || hasErrorToast(view), { timeout: 5000 }).toBe(true);
+    expect(view.writes, `getRandomValues-only ${action}; toasts: ${toastTexts(view).join(" | ")}`).toHaveLength(1);
+    const first = view.writes[0]!;
+    expectFreshUuid(first.idempotencyKey, `getRandomValues-only ${action}`);
+    expect(view.entropyCalls(), "the real CSPRNG supplies the UUID entropy").toBeGreaterThan(0);
+    repeat();
+    await quiet(100);
+    expect(view.writes, "an in-flight intent cannot be submitted twice").toHaveLength(1);
+    expect(view.reads, "the pending action cannot probe or replace the selection").toHaveLength(baselineReads);
+    expect(selection()).toEqual(selected);
+
+    release(refusal);
+    await expect.poll(() => hasErrorToast(view), { timeout: 5000 }).toBe(true);
+    expect(toastTexts(view).join("\n")).toMatch(/insecure-context refusal/i);
+    await quiet();
+    expect(view.writes, "a 429 does not automatically retry").toHaveLength(1);
+    expect(view.reads).toHaveLength(baselineReads);
+    expect(selection()).toEqual(selected);
+    expect(hasSuccessToast(view, /is live again|deleted\./i)).toBe(false);
+
+    await beginIntent(view, action);
+    await expect.poll(() => view.writes.length, { timeout: 5000 }).toBe(2);
+    const second = view.writes[1]!;
+    expectFreshUuid(second.idempotencyKey, `later getRandomValues-only ${action}`);
+    expect(second.idempotencyKey, "a deliberate later click creates a distinct intent").not.toBe(first.idempotencyKey);
+    for (const write of view.writes) {
+      expect(write.method).toBe(action === "restore" ? "POST" : "DELETE");
+      const parsed = parseVersionMutation(write.path);
+      expect(parsed).toMatchObject({ idSeg: target.id, isRestore: action === "restore" });
+      expect(parsed!.slugSeg.toLowerCase()).toBe(view.site.slug);
+      if (action === "delete") expect(confirmOf(write), "canonical confirmation, not the upper-case page path").toBe(view.site.slug);
+    }
+    await expect.poll(() => hasSuccessToast(view, action === "restore" ? /is live again/i : /deleted\./i), { timeout: 5000 }).toBe(true);
+    await quiet();
+    expect(view.writes, "two deliberate clicks produce exactly two mutations").toHaveLength(2);
+    if (action === "restore") {
+      expect((await api(`/api/v1/sites/${view.site.slug}`) as Site).currentVersionId).toBe(target.id);
+    } else {
+      const history = await api(`/api/v1/sites/${view.site.slug}/versions?limit=100`) as { versions: VersionRow[] };
+      expect(history.versions.map(row => row.number).sort((a, b) => a - b)).toEqual([2, 3]);
+    }
+  } finally { release(refusal); }
 });
 
 type ErrorCase = { label: string; reply: MutationReply; toast: RegExp };

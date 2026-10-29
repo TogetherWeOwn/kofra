@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { clearLiveMemoryCache } from "@dropway/core";
 import { jsonBody } from "./helpers";
+import { connectMcp } from "./mcp-helpers";
 import {
   ACTIONS, OTHER, SLUG, SURFACES, claims, expectFailure, expectReplay, expectSuccess,
   fixture, input, observe, pointer, publish, snapshot, transport,
@@ -101,6 +102,25 @@ for (const surface of SURFACES) describe(`${surface} version-action result repla
       } finally { await t.close(); }
     });
 
+    it("rejects an explicitly empty key before resolution, replay claims or effects", async () => {
+      const h = await fixture();
+      const t = await transport(h, surface);
+      try {
+        // Drain first-use credential bookkeeping before measuring the refusal.
+        const warm = await h.dw.json(`/api/v1/sites/${SLUG}/versions`, { key: h.actor.key });
+        expect(warm.status, JSON.stringify(warm.body)).toBe(200);
+        const before = await snapshot();
+        const observed = observe(h);
+        const refused = await t.invoke(action, input(h, action), "");
+        const code = surface === "MCP" && refused.body.error?.code === "invalid_request"
+          ? "invalid_request" : "invalid_idempotency_key";
+        expectFailure(refused, 400, code);
+        observed.expectNoAction({ noClaim: true });
+        expect.soft(await snapshot()).toEqual(before);
+        expect.soft(await claims()).toEqual([]);
+      } finally { await t.close(); }
+    });
+
     it.each(["has space", "non-ascii-é", "x".repeat(256)])("rejects an invalid key before any action (%s)", async key => {
       const h = await fixture();
       const t = await transport(h, surface);
@@ -158,6 +178,21 @@ for (const surface of SURFACES) describe(`${surface} version-action result repla
       expect.soft(await snapshot()).toEqual(before);
     } finally { await t.close(); }
   });
+});
+
+it("MCP version actions advertise optional but nonempty idempotency keys", async () => {
+  const h = await fixture();
+  const mcp = await connectMcp(h.dw, h.actor.key);
+  try {
+    const tools = await mcp.tools();
+    for (const action of ACTIONS) {
+      const tool = tools.find(tool => tool.name === `${action}_version`);
+      expect(tool, `${action}_version is discoverable`).toBeDefined();
+      expect.soft(tool.inputSchema.properties.idempotencyKey, `${action}_version rejects supplied empty keys`)
+        .toMatchObject({ type: "string", minLength: 1 });
+      expect.soft(tool.inputSchema.required ?? [], "omitting a key remains compatible").not.toContain("idempotencyKey");
+    }
+  } finally { await mcp.client.close(); }
 });
 
 for (const action of ACTIONS) it(`${action} cannot retrieve a REST result from the MCP namespace`, async () => {
