@@ -105,6 +105,13 @@ for (const surface of SURFACES) describe(`${surface} version-action result repla
       const h = await fixture();
       const t = await transport(h, surface);
       try {
+        // Warm auth before instrumentation: a credential's first use stamps
+        // api_keys.last_used_at (throttled bookkeeping, drained here by the
+        // test helper's waitOnExecutionContext). That audit write is not a
+        // version-action effect; warming it keeps the measured window to
+        // resolution/mutation/cache/event writes only.
+        const warm = await h.dw.json(`/api/v1/sites/${SLUG}/versions`, { key: h.actor.key });
+        expect(warm.status, JSON.stringify(warm.body)).toBe(200);
         const before = await snapshot();
         const observed = observe(h);
         expectFailure(await t.invoke(action, input(h, action), key), 400, "invalid_idempotency_key");

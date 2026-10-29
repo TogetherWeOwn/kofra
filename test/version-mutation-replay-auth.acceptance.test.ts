@@ -106,6 +106,11 @@ for (const surface of SURFACES) for (const action of ACTIONS) describe(`${surfac
         key: h.dw.ownerKey, ...jsonBody({ newSlug: "mutation-original-renamed" }),
       });
       expect(renamed.status).toBe(200);
+      // The old slug now redirects to the renamed site and is held until that
+      // hold expires, so no other site may take it yet. This fixture is
+      // disposable: expire the hold (as time eventually would) so the
+      // replacement site can legitimately acquire the name.
+      await env.DB.prepare("UPDATE slug_redirects SET hold_until = 0 WHERE slug = ? AND site_id = ?").bind(SLUG, h.site.id).run();
       const retargeted = await h.dw.json(`/api/v1/sites/${OTHER}/rename`, {
         key: h.dw.ownerKey, ...jsonBody({ newSlug: SLUG }),
       });
