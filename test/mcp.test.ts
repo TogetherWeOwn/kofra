@@ -390,6 +390,22 @@ describe("MCP tools: publish, read back, edit, roll back", () => {
     expect(eof.data).toMatchObject({ content: "", length: 0, truncated: false, nextOffset: null });
   });
 
+  it("read_file completes a valid E0 lower-bound sequence across a byte page", async () => {
+    // E0 A0 80 is U+0800, the lowest valid three-byte UTF-8 sequence.
+    const published = await mcp.call("publish_site", { site: "utf8-valid-e0", files: [{ path: "text.txt", content: b64(new Uint8Array([0xe0, 0xa0, 0x80, 0x7a])), encoding: "base64" }] });
+    expect(published.isError).toBe(false);
+    const first = await mcp.call("read_file", { site: "utf8-valid-e0", path: "text.txt", encoding: "text", offset: 0, length: 1 });
+    expect(first.isError).toBe(false);
+    expect(first.data).toMatchObject({ content: "ࠀ", offset: 0, length: 3, truncated: true, nextOffset: 3, encoding: "text", size: 4 });
+    expect(first.data.length).toBeGreaterThan(0);
+    expect(first.data.nextOffset).toBe(first.data.offset + first.data.length);
+    expect(first.data.nextOffset).toBeGreaterThan(first.data.offset);
+    const last = await mcp.call("read_file", { site: "utf8-valid-e0", path: "text.txt", encoding: "text", offset: first.data.nextOffset, length: 1 });
+    expect(last.isError).toBe(false);
+    expect(last.data).toMatchObject({ content: "z", offset: 3, length: 1, truncated: false, nextOffset: null, encoding: "text", size: 4 });
+    expect(first.data.content + last.data.content).toBe("ࠀz");
+  });
+
   it("read_file does not extend a page for a malformed UTF-8 crossing", async () => {
     // Publish the exact bytes as base64 so no text decoding rewrites them.
     const published = await mcp.call("publish_site", { site: "utf8-malformed", files: [{ path: "bad.txt", content: b64(new Uint8Array([0xe0, 0x80, 0x80, 0x41])), encoding: "base64" }] });
