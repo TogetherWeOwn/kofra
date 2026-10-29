@@ -2,13 +2,14 @@ import { Marked, type Tokens } from "marked";
 import { escapeHtml } from "../html";
 import { cachedRender } from "./cache";
 import { standardTabs, viewerPage } from "./chrome";
+import { HEADING_REFERENCES } from "./heading-references";
 import { HIGHLIGHT_CSS, highlight, hljsLanguage } from "./highlight";
 import type { Viewer } from "./index";
 import { DROP, sanitizeHtml } from "./sanitize";
 
 // Bump whenever the rendered output changes: this retires cached fragments
 // and render ETags keyed `markdown@<version>/...`.
-const MD_VERSION = 6;
+const MD_VERSION = 7;
 
 const MD_CSS = `
 .dw-md{max-width:48rem;margin:0 auto;padding:2.5rem 1.25rem 5rem}
@@ -68,8 +69,36 @@ const RAWTEXT = new Set([
   "script", "style", "iframe", "noembed", "noframes", "noscript", "title", "textarea", "xmp", "plaintext",
 ]);
 
-const TAG_OPEN = /<(\/?)([a-z][a-z0-9:-]*)(?=[\t\n\f\r />])/iy;
+// After the initial ASCII letter, HTML tag names consume every non-space,
+// non-slash, non-">" character, including unfamiliar custom-element names.
+const TAG_OPEN = /<(\/?)([a-z][^\t\n\f\r />]*)/iy;
 const HTML_SPACE = /[\t\n\f\r ]/;
+
+// HTML numeric references in the C1 range use the Windows-1252 replacements.
+const C1: Readonly<Record<number, number>> = {
+  128: 8364, 130: 8218, 131: 402, 132: 8222, 133: 8230, 134: 8224, 135: 8225,
+  136: 710, 137: 8240, 138: 352, 139: 8249, 140: 338, 142: 381, 145: 8216,
+  146: 8217, 147: 8220, 148: 8221, 149: 8226, 150: 8211, 151: 8212, 152: 732,
+  153: 8482, 154: 353, 155: 8250, 156: 339, 158: 382, 159: 376,
+};
+
+/** Comparison keys only: authored attributes are never rewritten. */
+function headingKey(value: string): string {
+  return value.replace(/\r\n?/g, "\n").replace(/\0/g, "�").replace(
+    /&(#(?:x[0-9a-f]+|[0-9]+);?|[a-z][a-z0-9]*;?)/gi,
+    (ref, name: string, offset: number, input: string) => {
+      if (name[0] !== "#") {
+        // In attributes, a legacy reference followed by alphanumeric or '='
+        // stays literal. Named references themselves are case-sensitive.
+        if (!name.endsWith(";") && /[=a-z0-9]/i.test(input[offset + ref.length] ?? "")) return ref;
+        return Object.hasOwn(HEADING_REFERENCES, name) ? HEADING_REFERENCES[name]! : ref;
+      }
+      const n = name[1]?.toLowerCase() === "x" ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10);
+      if (!n || n > 0x10ffff || (n >= 0xd800 && n <= 0xdfff)) return "�";
+      return String.fromCodePoint(C1[n] ?? n);
+    },
+  );
+}
 
 interface ParsedTag {
   closing: boolean;
@@ -99,8 +128,10 @@ function parseTag(html: string, start: number): ParsedTag | "eof" | null {
     if (HTML_SPACE.test(html[i]!)) { i++; continue; }
     if (html[i] === "/") { selfClosing = html[i + 1] === ">"; i++; continue; }
     const attrStart = i;
+    // At "before attribute name", '=' starts a name (a parse error), rather
+    // than being discarded: =id and id are distinct attributes.
+    if (html[i] === "=") i++;
     while (i < html.length && !/[\t\n\f\r />=]/.test(html[i]!)) i++;
-    if (i === attrStart) { i++; continue; }
     const attr = html.slice(attrStart, i).toLowerCase();
     while (i < html.length && HTML_SPACE.test(html[i]!)) i++;
     let value = "";
@@ -156,35 +187,37 @@ function scanProbe(html: string, nonce: string): AnchorEvent[] {
   // Script tokenizer states: data, escaped (`<!--` seen), double-escaped.
   let escaped = 0;
   let comment = false;
+  const commentEnd = /--!?>/g;
+  let scriptEscapeEnd: number | undefined;
+  const openNames = new Map<string, number[]>();
 
   const finish = (): AnchorEvent[] => {
-    const all: Array<{ pos: number; seq: number; event: AnchorEvent }> = [
-      ...mdAt.map((m, seq) => ({ pos: m.pos, seq, event: { kind: "md", index: m.index } as AnchorEvent })),
-      ...rawAt.map((r, k) => ({ pos: r.pos, seq: mdAt.length + k, event: { kind: "raw", id: r.id } as AnchorEvent })),
-    ];
-    all.sort((a, b) => a.pos - b.pos || a.seq - b.seq);
+    // Both scans advance monotonically; merge their already-ordered events.
     const seenMd = new Set<number>();
     const events: AnchorEvent[] = [];
-    for (const { event } of all) {
-      if (event.kind === "md") {
+    let m = 0;
+    let r = 0;
+    while (m < mdAt.length || r < rawAt.length) {
+      if (r < rawAt.length && (m === mdAt.length || rawAt[r]!.pos < mdAt[m]!.pos)) {
+        events.push({ kind: "raw", id: rawAt[r++]!.id });
+      } else {
+        const index = mdAt[m++]!.index;
         // Each generated heading carries two occurrences (id and href).
-        if (seenMd.has(event.index)) continue;
-        seenMd.add(event.index);
+        if (!seenMd.has(index)) { seenMd.add(index); events.push({ kind: "md", index }); }
       }
-      events.push(event);
     }
     return events;
   };
 
-  /** Pop through the named open element, HTML "any other end tag" style. */
+  /** Successful pops are amortized; missing names never scan the stack. */
   const popTo = (name: string): void => {
-    let found = -1;
-    for (let k = open.length - 1; k >= 0; k--) {
-      if (open[k]!.name === name) { found = k; break; }
-    }
-    if (found < 0) return;
+    const found = openNames.get(name)?.at(-1);
+    if (found === undefined) return;
     while (open.length > found) {
       const el = open.pop()!;
+      const indices = openNames.get(el.name)!;
+      indices.pop();
+      if (!indices.length) openNames.delete(el.name);
       if (el.dropped) dropped--;
       if (el.name === rawText) { rawText = null; escaped = 0; }
     }
@@ -193,11 +226,10 @@ function scanProbe(html: string, nonce: string): AnchorEvent[] {
   let i = 0;
   for (;;) {
     if (comment) {
-      const endGt = html.indexOf("-->", i);
-      const endBang = html.indexOf("--!>", i);
-      const end = endGt < 0 ? endBang : endBang < 0 ? endGt : Math.min(endGt, endBang);
-      if (end < 0) return finish();
-      i = html.startsWith("-->", end) ? end + 3 : end + 4;
+      // Find either terminator in one forward search, not two suffix scans.
+      commentEnd.lastIndex = i;
+      if (!commentEnd.exec(html)) return finish();
+      i = commentEnd.lastIndex;
       comment = false;
       continue;
     }
@@ -221,8 +253,12 @@ function scanProbe(html: string, nonce: string): AnchorEvent[] {
     }
     if (rawText === "script") {
       const lt = html.indexOf("<", i);
-      // In the escaped state `-->` returns to script data; elsewhere it is text.
-      const dd = escaped === 1 ? html.indexOf("-->", i) : -1;
+      // In either escaped state `-->` returns to script data. Cache its next
+      // position so repeated '<' markers never re-search an unchanged suffix.
+      if (escaped !== 0 && (scriptEscapeEnd === undefined || (scriptEscapeEnd >= 0 && scriptEscapeEnd < i))) {
+        scriptEscapeEnd = html.indexOf("-->", i);
+      }
+      const dd = escaped !== 0 ? scriptEscapeEnd! : -1;
       if (dd >= 0 && (lt < 0 || dd < lt)) { escaped = 0; i = dd + 3; continue; }
       if (lt < 0) return finish();
       if (html.startsWith("<!--", lt)) { if (escaped === 0) escaped = 1; i = lt + 4; continue; }
@@ -235,9 +271,6 @@ function scanProbe(html: string, nonce: string): AnchorEvent[] {
           i = lt + 1;
         } else if (escaped === 2) {
           escaped = 1;
-          i = lt + 1;
-        } else if (escaped === 1) {
-          escaped = 0;
           i = lt + 1;
         } else {
           const tag = parseTag(html, lt);
@@ -280,12 +313,15 @@ function scanProbe(html: string, nonce: string): AnchorEvent[] {
     if (!VOID.has(tag.name) && !(tag.selfClosing && (tag.name === "svg" || tag.name === "math"))) {
       // A self-closing slash on HTML elements is ignored: <template/> stays open.
       const isDrop = DROP.has(tag.name);
+      const indices = openNames.get(tag.name) ?? [];
+      indices.push(open.length);
+      openNames.set(tag.name, indices);
       open.push({ name: tag.name, dropped: isDrop });
       if (isDrop) dropped++;
       if (RAWTEXT.has(tag.name)) { rawText = tag.name; escaped = 0; }
     }
     if (/^h[1-6]$/.test(tag.name) && tag.id && !tag.id.startsWith(prefix) && dropped === 0) {
-      rawAt.push({ pos: lt, id: tag.id });
+      rawAt.push({ pos: lt, id: headingKey(tag.id) });
     }
   }
 }
@@ -307,19 +343,14 @@ function randomNonce(): string {
  * free base-N suffix, skipping every raw id and every baseline destination
  * in the document (past and future) so no reachable fragment moves.
  */
-function assignIds(events: AnchorEvent[], bases: string[]): string[] {
+function assignIds(events: AnchorEvent[], bases: string[], baselines: string[]): string[] {
   const rawAll = new Set<string>();
   for (const e of events) if (e.kind === "raw") rawAll.add(e.id);
-  const seen = new Map<string, number>();
-  const baselines = bases.map((base) => {
-    const n = seen.get(base) ?? 0;
-    seen.set(base, n + 1);
-    return n ? `${base}-${n}` : base;
-  });
   const baselineAll = new Set(baselines);
   const finals: Array<string | undefined> = new Array(bases.length);
   const assigned = new Set<string>();
   const rawSeen = new Set<string>();
+  const nextSuffix = new Map<string, number>();
   for (const e of events) {
     if (e.kind === "raw") {
       rawSeen.add(e.id);
@@ -331,12 +362,13 @@ function assignIds(events: AnchorEvent[], bases: string[]): string[] {
     if (!rawSeen.has(baseline)) {
       finals[e.index] = baseline;
     } else {
-      let n = 1;
+      let n = nextSuffix.get(base) ?? 1;
       let cand = `${base}-${n}`;
       while (rawAll.has(cand) || baselineAll.has(cand) || assigned.has(cand)) {
         n++;
         cand = `${base}-${n}`;
       }
+      nextSuffix.set(base, n + 1);
       finals[e.index] = cand;
     }
     assigned.add(finals[e.index]!);
@@ -346,13 +378,12 @@ function assignIds(events: AnchorEvent[], bases: string[]): string[] {
 }
 
 function markedFor(
-  mode: "probe" | "final",
   nonce: string,
-  finals: readonly string[] | null,
   basesOut: string[] | null,
+  baselinesOut: string[] | null,
 ): Marked {
+  // Baseline counters belong to one Markdown fragment, even in a notebook.
   const seen = new Map<string, number>();
-  let n = 0;
   return new Marked({
     gfm: true,
     breaks: false,
@@ -360,17 +391,15 @@ function markedFor(
     renderer: {
       heading(this: { parser: { parseInline(t: Tokens.Generic[]): string } }, token: Tokens.Heading) {
         const { tokens, depth } = token;
-        let id: string;
-        if (mode === "probe") {
-          id = sentinelId(nonce, basesOut!.length);
-          basesOut!.push(headingId(token.text));
-        } else if (finals) {
-          id = finals[n++]!;
-        } else {
-          const base = headingId(token.text);
-          const k = seen.get(base) ?? 0;
-          seen.set(base, k + 1);
-          id = k ? `${base}-${k}` : base;
+        const base = headingId(token.text);
+        const k = seen.get(base) ?? 0;
+        seen.set(base, k + 1);
+        const baseline = k ? `${base}-${k}` : base;
+        let id = baseline;
+        if (basesOut && baselinesOut) {
+          id = sentinelId(nonce, basesOut.length);
+          basesOut.push(base);
+          baselinesOut.push(baseline);
         }
         const inner = this.parser.parseInline(tokens);
         return `<h${depth} id="${escapeHtml(id)}">${inner}<a class="dw-anchor" href="#${escapeHtml(id)}" aria-label="Link to this section">#</a></h${depth}>\n`;
@@ -386,28 +415,53 @@ function markedFor(
   });
 }
 
+function markdownSource(src: string, path: string) {
+  const { title: fmTitle, body, frontMatter } = splitFrontMatter(src.replace(/^\uFEFF/, ""));
+  const h1 = /^#\s+(.+?)\s*#*\s*$/m.exec(body);
+  const title = fmTitle ?? (h1 ? h1[1]!.replace(/[*_`]/g, "") : (path.split("/").pop() ?? path));
+  return { title, body, frontMatter };
+}
+
+/** Internal document planner shared by the Markdown and notebook viewers.
+ * Render all Markdown fragments first, assemble their actual wrappers/raw
+ * outputs, then resolve once in served order. Historical baseline counters
+ * reset per fragment; reservations span the complete assembled document. */
+export function createMarkdownAnchors() {
+  const nonce = randomNonce();
+  const bases: string[] = [];
+  const baselines: string[] = [];
+  return {
+    render(src: string, path: string) {
+      const { title, body, frontMatter } = markdownSource(src, path);
+      const html = markedFor(nonce, bases, baselines).parse(body) as string;
+      return { title, html, frontMatter };
+    },
+    resolve(html: string, boundary = ""): string {
+      if (!bases.length) return html;
+      // The suffix participates only in interpretation. Never add bytes to
+      // sanitized content: viewer chrome already supplies this boundary.
+      const finals = assignIds(scanProbe(html + boundary, nonce), bases, baselines);
+      return html.replace(new RegExp(`kofra-md-${nonce}-(\\d+)`, "g"), (_match, index: string) => escapeHtml(finals[Number(index)]!));
+    },
+  };
+}
+
 /**
  * Render Markdown (GFM: tables, task lists, strikethrough, autolinks) to HTML,
  * with highlighted code blocks and linkable headings. The output is NOT
  * sanitized: pass it through sanitizeHtml() before serving it (the viewer does).
+ * This synchronous fragment helper has true EOF; viewers plan with their own
+ * final wrapper boundary instead.
  */
 export function renderMarkdown(src: string, path: string): { title: string; html: string; frontMatter: string | null } {
-  const { title: fmTitle, body, frontMatter } = splitFrontMatter(src.replace(/^\uFEFF/, ""));
-  const h1 = /^#\s+(.+?)\s*#*\s*$/m.exec(body);
-  const title = fmTitle ?? (h1 ? h1[1]!.replace(/[*_`]/g, "") : (path.split("/").pop() ?? path));
   // Without "<" no raw tag can exist: baselines are final after one pass.
-  if (!body.includes("<")) {
-    return { title, html: markedFor("final", "", null, null).parse(body) as string, frontMatter };
+  if (!src.includes("<")) {
+    const { title, body, frontMatter } = markdownSource(src, path);
+    return { title, html: markedFor("", null, null).parse(body) as string, frontMatter };
   }
-  // Two passes over the real output bytes. The probe carries an unforgeable
-  // sentinel per generated heading; the probe scan reads served order (raw
-  // ids that survive the sanitizer, interleaved with generated headings);
-  // the final pass assigns the collision-safe ids.
-  const nonce = randomNonce();
-  const bases: string[] = [];
-  const probe = markedFor("probe", nonce, null, bases).parse(body) as string;
-  const finals = assignIds(scanProbe(probe, nonce), bases);
-  return { title, html: markedFor("final", nonce, finals, null).parse(body) as string, frontMatter };
+  const anchors = createMarkdownAnchors();
+  const out = anchors.render(src, path);
+  return { ...out, html: anchors.resolve(out.html) };
 }
 
 export const markdownViewer: Viewer = {
@@ -418,12 +472,13 @@ export const markdownViewer: Viewer = {
   async render(vc) {
     let title = vc.file.path;
     const r = await cachedRender(vc.dw, `markdown@${MD_VERSION}/${vc.file.sha256}`, async () => {
-      const out = renderMarkdown(await vc.readText(), vc.file.path);
+      const anchors = createMarkdownAnchors();
+      const out = anchors.render(await vc.readText(), vc.file.path);
       const fm = out.frontMatter
         ? `<details class="dw-fm"><summary>Front matter</summary><pre><code>${escapeHtml(out.frontMatter)}</code></pre></details>`
         : "";
       // The title travels with the cached fragment so a hit needs no re-parse.
-      return `<!--title:${escapeHtml(out.title)}-->${fm}${await sanitizeHtml(out.html)}`;
+      return `<!--title:${escapeHtml(out.title)}-->${fm}${await sanitizeHtml(anchors.resolve(out.html, "</article>"))}`;
     });
     const m = /^<!--title:(.*?)-->/.exec(r.html);
     if (m) title = m[1]!.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
