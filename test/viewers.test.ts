@@ -11,6 +11,14 @@ import { notebookViewer, renderNotebook } from "../packages/server/src/viewers/n
 import { looksLikeText } from "../packages/server/src/viewers/binary";
 import { form, freshInstance, ORIGIN, type Instance } from "./helpers";
 
+// The viewer bar has its own Phone <details>. Fold assertions read only
+// content after the bar's header, never a <main> close tag: hostile output
+// fixtures deliberately contain their own </main>.
+function pageContent(html: string): string {
+  const end = html.indexOf("</header>");
+  return end < 0 ? html : html.slice(end + "</header>".length);
+}
+
 const NAV = { Accept: "text/html,application/xhtml+xml,*/*;q=0.8", "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate" };
 const IFRAME = { Accept: "text/html,*/*", "Sec-Fetch-Dest": "iframe", "Sec-Fetch-Mode": "navigate" };
 
@@ -483,7 +491,7 @@ describe("notebook output folding", () => {
     "nb/broken.ipynb": "{not json",
   };
 
-  const detailsBlocks = (html: string) => Array.from(html.matchAll(/<details\b[^>]*>[\s\S]*?<\/details>/g), (m) => m[0]);
+  const detailsBlocks = (html: string) => Array.from(pageContent(html).matchAll(/<details\b[^>]*>[\s\S]*?<\/details>/g), (m) => m[0]);
   // Text extraction for assertions only: scan out <...> spans character by
   // character instead of stripping tags with a regex replace.
   const stripTags = (html: string) => {
@@ -649,6 +657,7 @@ describe("notebook output folding", () => {
     const sourceHtml = await source.text();
     expect(sourceHtml).toContain("mixed-stream-sentinel");
     expect(detailsBlocks(sourceHtml)).toEqual([]);
+    expect(pageContent(sourceHtml)).not.toMatch(/<details\b[^>]*class="[^"]*\bdw-out\b/);
   });
 
   it("renderNotebook folds rendered outputs only (plain text, JPEG and SVG included)", () => {
@@ -1163,8 +1172,9 @@ describe("notebook output fold containment", () => {
 
   /** The cell's fold as a browser sees it in the viewer's <main> wrapper. */
   const expectContained = (html: string) => {
-    expect(countOf(html, "<details"), html).toBe(1);
-    const doc = parse(html);
+    const content = pageContent(html);
+    expect(countOf(content, "<details"), html).toBe(1);
+    const doc = parse(content);
     expect(all(doc, (e) => e.name === "details"), html).toHaveLength(1);
     const folds = all(doc, isFold);
     expect(folds, html).toHaveLength(1);
@@ -1173,9 +1183,9 @@ describe("notebook output fold containment", () => {
     expect(summaries.map((s) => textOf(s).trim()), html).toEqual(["Outputs (2)"]);
     expect(textOf(fold), html).toContain(SENTINEL);
     expect(textOf(doc).split(SENTINEL), html).toHaveLength(2);
-    const close = html.toLowerCase().indexOf("</details>");
-    expect(html.indexOf(SENTINEL), html).toBeGreaterThan(html.toLowerCase().indexOf("<details"));
-    expect(html.indexOf(SENTINEL), html).toBeLessThan(close);
+    const close = content.toLowerCase().indexOf("</details>");
+    expect(content.indexOf(SENTINEL), html).toBeGreaterThan(content.toLowerCase().indexOf("<details"));
+    expect(content.indexOf(SENTINEL), html).toBeLessThan(close);
     return fold;
   };
   const render = async (first: Record<string, unknown>) =>
