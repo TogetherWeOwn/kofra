@@ -45,12 +45,14 @@ function tagNameAt(html: string, from: number): string {
   return html.slice(from, j).replace(/[A-Z]/g, (c) => c.toLowerCase());
 }
 
-/** Index just past the ">" that ends the tag whose attributes start at `from`, honouring quoted values; -1 if unterminated. */
-function tagEnd(html: string, from: number): number {
+/** End and self-closing syntax of a tag, honouring attribute values; null if unterminated. */
+function tagEnd(html: string, from: number): { end: number; selfClosing: boolean } | null {
   let j = from;
   while (j < html.length) {
     const c = html[j]!;
-    if (c === ">") return j + 1;
+    if (c === ">") return { end: j + 1, selfClosing: false };
+    // Only a slash outside an attribute value can enter the self-closing state.
+    if (c === "/" && html[j + 1] === ">") return { end: j + 2, selfClosing: true };
     if (isSpace(c) || c === "/") {
       j++;
       continue;
@@ -64,13 +66,13 @@ function tagEnd(html: string, from: number): number {
     const q = html[j];
     if (q === '"' || q === "'") {
       const close = html.indexOf(q, j + 1);
-      if (close < 0) return -1;
+      if (close < 0) return null;
       j = close + 1;
     } else {
       while (j < html.length && !isSpace(html[j]!) && html[j] !== ">") j++;
     }
   }
-  return -1;
+  return null;
 }
 
 /** `html.indexOf(needle, from)` for scan positions that only move forward: a hit stays valid, a miss is final. */
@@ -203,8 +205,8 @@ class Open {
  * spells out the end tags of what it closes), what a start tag closes
  * implicitly (p, li/dd/dt, headings, table parts) is spelled out, and
  * whatever the fragment leaves open is closed. Content the sanitizer drops
- * (script, svg, template, comments...) gets every end tag escaped and is
- * closed, so a hidden tag is never matched against a live one and an unclosed
+ * (script, svg, template, comments...) keeps matching end tags live, escapes
+ * unrelated end tags and is closed, so a hidden tag never matches a live one and an unclosed
  * one cannot swallow the rest of the notebook. One linear character scan, no
  * tag-strip regex.
  */
@@ -235,7 +237,7 @@ export function containOutputMarkup(html: string): string {
           break;
         }
       }
-      const end = term < 0 ? -1 : tagEnd(html, term + 2 + region.length);
+      const end = term < 0 ? -1 : (tagEnd(html, term + 2 + region.length)?.end ?? -1);
       const stop = end < 0 ? html.length : term;
       out.push(html.slice(i, stop).split("<").join(esc));
       if (end >= 0) out.push(html.slice(term, end));
@@ -274,12 +276,13 @@ export function containOutputMarkup(html: string): string {
     }
     const nameStart = i + (closing ? 2 : 1);
     const name = tagNameAt(html, nameStart);
-    const end = tagEnd(html, nameStart + name.length);
-    if (end < 0) {
+    const token = tagEnd(html, nameStart + name.length);
+    if (token === null) {
       // An unterminated tag swallows the rest of the input; none of it may become markup.
       out.push(html.slice(i).split("<").join(esc));
       break;
     }
+    const { end, selfClosing } = token;
     // Unwrap disclosure tags to prevent them from forging or closing our fold.
     if (name === "details" || name === "summary") {
       i = end;
@@ -296,8 +299,9 @@ export function containOutputMarkup(html: string): string {
       } else if (!foreign && !closing && RAW_TEXT.has(name) && name !== region) {
         regions.push({ name, depth: 1 }); // raw text inside a dropped element: its content is not markup
       } else {
-        if (name === region && !(foreign && !closing && html[end - 2] === "/")) top.depth += closing ? -1 : 1;
-        if (closing && !(name === region && top.depth === 0)) literal = true;
+        if (name === region && !(foreign && !closing && selfClosing)) top.depth += closing ? -1 : 1;
+        // Every matching end tag must stay live, including an inner same-name close.
+        if (closing && name !== region) literal = true;
         if (top.depth === 0) regions.pop();
       }
     } else if (!literal && closing) {
@@ -317,10 +321,10 @@ export function containOutputMarkup(html: string): string {
     } else if (!literal) {
       if (DROPPED.has(name)) {
         // Foreign elements honour "/>"; every other dropped element stays open, whatever the sanitizer's own tokenizer thinks.
-        if ((name === "svg" || name === "math") && html[end - 2] === "/") {
+        if ((name === "svg" || name === "math") && selfClosing) {
           out.push(html.slice(i, end));
         } else {
-          out.push(html[end - 2] === "/" ? html.slice(i, end - 2) + ">" : html.slice(i, end));
+          out.push(selfClosing ? html.slice(i, end - 2) + ">" : html.slice(i, end));
           regions.push({ name, depth: 1 });
         }
         i = end;
