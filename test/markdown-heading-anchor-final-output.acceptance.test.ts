@@ -80,6 +80,22 @@ const cases = [
 
 type Case = (typeof cases)[number];
 type Consumer = "cell" | "markdown-output" | "html-output";
+type Expected = { headings: readonly (readonly string[])[]; links: readonly string[] };
+
+// Notebook outputs are contained per output before the page is sanitized:
+// an ancestor end tag inside a dropped template is escaped there, so it
+// cannot end the template the way it does in a Markdown cell. In a Markdown
+// output the generated heading therefore stays inside the dropped template;
+// in an HTML output the raw heading is dropped with it and only the
+// following Markdown cell remains. Only these output rows differ from the
+// shared expectation above; the cell rows keep it unchanged.
+const notebookOutputExpectations: Record<string, Expected> = {
+  "distinct-unicode-names:markdown-output": { headings: [], links: [] },
+  "matching-unicode-control:markdown-output": { headings: [], links: [] },
+  "ascii-case-control:markdown-output": { headings: [], links: [] },
+  "matching-unicode-control:html-output": { headings: [["install", "Install#"]], links: ["#install"] },
+  "ascii-case-control:html-output": { headings: [["install", "Install#"]], links: ["#install"] },
+};
 
 function source(fixture: Case) {
   return `${fixture.raw}\n\n${MARKDOWN}`;
@@ -109,7 +125,7 @@ for (const fixture of cases) {
   }
 }
 
-async function expectFinalDestinations(html: string, scope: string, fixture: Case) {
+async function expectFinalDestinations(html: string, scope: string, fixture: Expected) {
   const headings: Array<[string | null, string]> = [];
   const links: string[] = [];
   // This is a NEW parse of already-sanitized, fully wrapped output, not a
@@ -170,7 +186,8 @@ describe("Markdown anchors follow final output interpretation", () => {
 
     describe.each(["cell", "markdown-output", "html-output"] as const)("notebook %s", (consumer) => {
       it.each(cases)("keeps notebook HTTP destinations after final reparse for $name", async (fixture) => {
-        await expectFinalDestinations(await page(`${fixture.name}-${consumer}.ipynb`, "notebook"), "main.dw-nb", fixture);
+        const expected = notebookOutputExpectations[`${fixture.name}:${consumer}`] ?? fixture;
+        await expectFinalDestinations(await page(`${fixture.name}-${consumer}.ipynb`, "notebook"), "main.dw-nb", expected);
       });
     });
   });
