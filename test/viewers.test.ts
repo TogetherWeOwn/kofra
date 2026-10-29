@@ -1388,6 +1388,78 @@ describe("notebook output fold containment", () => {
     },
   );
 
+  describe("dropped-element tokenizer boundaries", () => {
+    it.each([
+      "<svg a=/>",
+      "<svg width=100/>",
+      "<math a=/>",
+    ])("an unclosed foreign element %j cannot consume later outputs or cells", async (payload) => {
+      expectNextCellFree(await renderTwo({ "text/html": payload }));
+    });
+
+    it.each([
+      "<svg a=/></svg>",
+      "<svg width=100/></svg>",
+      "<math a=/></math>",
+      "<math data-note=value/></math>",
+    ])("an unquoted slash-bearing attribute in %j preserves markup after the group", async (payload) => {
+      const html = await renderTwo({ "text/html": `${payload}<p>after-foreign-group-sentinel</p>` });
+      expectNextCellFree(html);
+      const fold = all(parse(html), isFold)[0]!;
+      expect(textOf(fold)).toContain("after-foreign-group-sentinel");
+    });
+
+    it.each([
+      '<svg data-note="value/"></svg>',
+      "<math data-note='value/'></math>",
+    ])("a quoted slash-bearing attribute in %j leaves following markup outside the group", async (payload) => {
+      const html = await renderTwo({ "text/html": `${payload}<p>after-foreign-group-sentinel</p>` });
+      expectNextCellFree(html);
+      const fold = all(parse(html), isFold)[0]!;
+      expect(textOf(fold)).toContain("after-foreign-group-sentinel");
+    });
+
+    it.each([
+      "<svg data-note=value />",
+      "<math data-note=value />",
+      '<svg data-note="value/"/>',
+      "<math data-note='value/'/>",
+      "<svg><g data-note=value /></svg>",
+      "<math><mrow data-note=value /></math>",
+    ])("a truly self-closing foreign element in %j leaves following markup outside it", async (payload) => {
+      const html = await renderTwo({ "text/html": `${payload}<p>after-foreign-group-sentinel</p>` });
+      expectNextCellFree(html);
+      const fold = all(parse(html), isFold)[0]!;
+      expect(textOf(fold)).toContain("after-foreign-group-sentinel");
+    });
+
+    it.each([
+      "<template><template>inner-dropped-text</template>outer-dropped-text</template>",
+      "<template><template><template>inner-dropped-text</template>middle-dropped-text</template>outer-dropped-text</template>",
+      "<svg><svg>inner-dropped-text</svg>outer-dropped-text</svg>",
+      "<math><math>inner-dropped-text</math>outer-dropped-text</math>",
+      "<svg><g><g>inner-dropped-text</g>outer-dropped-text</g></svg>",
+      "<math><mrow><mrow>inner-dropped-text</mrow>outer-dropped-text</mrow></math>",
+    ])("a matched same-name dropped group %j preserves following output and cell boundaries", async (payload) => {
+      const html = await renderTwo({ "text/html": `<p>before-dropped-group-sentinel</p>${payload}<p>after-dropped-group-sentinel</p>` });
+      expectNextCellFree(html);
+      const fold = all(parse(html), isFold)[0]!;
+      const text = textOf(fold);
+      expect(text).toContain("before-dropped-group-sentinel");
+      expect(text).toContain("after-dropped-group-sentinel");
+      expect(text).not.toContain("inner-dropped-text");
+      expect(text).not.toContain("outer-dropped-text");
+    });
+
+    it.each([
+      "<template><template>inner-dropped-text</template>outer-dropped-text",
+      "<svg><svg>inner-dropped-text</svg>outer-dropped-text",
+      "<math><math>inner-dropped-text</math>outer-dropped-text",
+    ])("an incomplete outer same-name dropped group %j cannot consume later outputs or cells", async (payload) => {
+      expectNextCellFree(await renderTwo({ "text/html": payload }));
+    });
+  });
+
   it.each([
     ["quote-paired stray end tags", '</x a="'.repeat(16_000) + 'x">'],
     ["quote-paired tags inside svg", '<svg>' + '<g a="'.repeat(16_000) + 'x">'],
