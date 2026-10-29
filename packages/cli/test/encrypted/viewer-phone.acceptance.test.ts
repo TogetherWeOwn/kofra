@@ -25,6 +25,7 @@ const slug = "viewer-phone-public";
 const gatedSlug = "viewer-phone-locked";
 const hostilePath = 'folder/雪 & <phone> "quote" #?.md';
 const longPath = `${"雪".repeat(190)}.md`;
+const supportedLongPath = `${"雪".repeat(60)}.md`;
 // With the local origin and site prefix this is 157 canonical ASCII bytes:
 // large enough to expose subpixel module sizing in the displayed QR.
 const screenDecodePath = `${"screen-".repeat(15)}scan.md`;
@@ -79,6 +80,7 @@ beforeAll(async () => {
       { path: hostilePath, content: "# Hostile but inert filename\n" },
       { path: longPath, content: "# Long public URL\n" },
       { path: screenDecodePath, content: "# Decode the on-screen public URL\n" },
+      { path: supportedLongPath, content: "# Supported long public URL\n" },
     ] });
   }
   await api(`/api/v1/sites/${gatedSlug}/access`, { mode: "password", password }, "PUT");
@@ -330,39 +332,72 @@ it("decodes a 150–160-byte canonical URL from the actual displayed QR at DPR 1
   } finally { await view.context.close(); }
 });
 
-it.each([[568, 320], [480, 240]])("exposes the whole no-script QR inside a %i×%i panel scrollport", async (width, height) => {
-  const clean = fileUrl(slug, screenDecodePath);
-  const view = await visit(`${clean}?view=1`, { js: false, width, height });
+it.each([
+  { name: "short public URL", path: "notes.md", width: 480, height: 240 },
+  { name: "screen-decode URL", path: screenDecodePath, width: 568, height: 320 },
+  { name: "screen-decode URL", path: screenDecodePath, width: 480, height: 240 },
+  { name: "supported long Unicode URL", path: supportedLongPath, width: 480, height: 240 },
+])("native scrolling exposes the complete no-script $name QR at $width×$height", async ({ path, width, height }) => {
+  const clean = fileUrl(slug, path);
+  const urlBytes = Buffer.byteLength(clean, "utf8");
+  expect(urlBytes).toBeLessThan(1273);
+  if (path === supportedLongPath) expect(urlBytes).toBeGreaterThanOrEqual(580);
+  const view = await visit(`${clean}?view=1&token=not-public`, { js: false, width, height });
   try {
     const svg = await openPhone(view.page);
-    const geometry = await svg.evaluate(el => {
-      const image = el as unknown as { viewBox: { baseVal: { width: number } }; getBoundingClientRect(): { width: number; height: number }; closest(selector: string): any };
-      const panel = image.closest(".dw-phone-panel");
-      const box = image.getBoundingClientRect();
-      return { width: box.width, height: box.height, modules: image.viewBox.baseVal.width, clientHeight: panel.clientHeight };
-    });
-    expect(geometry.clientHeight).toBeGreaterThan(0);
-    expect(geometry.height, "a QR taller than the scrollport can never be exposed in full").toBeLessThanOrEqual(geometry.clientHeight);
-    const pixelsPerModule = geometry.width / geometry.modules;
-    expect(pixelsPerModule).toBeGreaterThanOrEqual(1);
-    expect(pixelsPerModule, "viewport fitting must not blur modules through fractional sizing").toBe(Math.floor(pixelsPerModule));
-    // Native scrolling must be able to expose the complete code, including
-    // its quiet zone; DOM presence alone cannot prove it fits the clip.
+    expect(await view.page.evaluate(() => (globalThis as any).devicePixelRatio)).toBe(1);
+    const markup = await svg.evaluate(el => (el as any).outerHTML as string);
+    const svgBytes = Buffer.byteLength(markup, "utf8");
+    expect(svgBytes).toBeLessThanOrEqual(128 * 1024);
+    await assertPlainLink(view.page, clean);
+    expect(view.errors).toEqual([]);
+    expect(view.wire.every(url => new URL(url).origin === origin)).toBe(true);
+
+    // Let the browser scroll any ancestors, including the document. Do not
+    // assume a panel selector, fixed position, max-height or scroll container.
     await svg.scrollIntoViewIfNeeded();
     const exposure = await svg.evaluate(el => {
       const g = globalThis as any;
-      const panel = el.closest(".dw-phone-panel") as any;
-      const image = el.getBoundingClientRect();
-      const box = panel.getBoundingClientRect();
-      return { top: image.top, bottom: image.bottom, panelTop: box.top + panel.clientTop, panelBottom: box.top + panel.clientTop + panel.clientHeight, viewportHeight: g.innerHeight };
+      const rect = el.getBoundingClientRect();
+      const image = { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
+      const clips = [{ name: "viewport", x: true, y: true, left: 0, top: 0, right: g.document.documentElement.clientWidth, bottom: g.document.documentElement.clientHeight }];
+      const rootStyle = g.getComputedStyle(g.document.documentElement);
+      for (let ancestor = el.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        // Root scrolling clips at the viewport, not its scrolled DOM rect.
+        if (ancestor === g.document.scrollingElement || ancestor === g.document.documentElement) continue;
+        const style = g.getComputedStyle(ancestor);
+        const paint = /\b(?:paint|strict|content)\b/.test(style.contain);
+        const bodyViewport = ancestor === g.document.body && rootStyle.overflowX === "visible" && rootStyle.overflowY === "visible";
+        const x = paint || (!bodyViewport && /^(?:auto|scroll|hidden|clip|overlay)$/.test(style.overflowX));
+        const y = paint || (!bodyViewport && /^(?:auto|scroll|hidden|clip|overlay)$/.test(style.overflowY));
+        if (!x && !y) continue;
+        const box = ancestor.getBoundingClientRect();
+        const left = box.left + ancestor.clientLeft;
+        const top = box.top + ancestor.clientTop;
+        clips.push({ name: `${ancestor.tagName}.${ancestor.className}`, x, y, left, top, right: left + ancestor.clientWidth, bottom: top + ancestor.clientHeight });
+      }
+      return { image, clips, modules: (el as unknown as { viewBox: { baseVal: { width: number } } }).viewBox.baseVal.width };
     });
-    // Native scroll offsets and clientHeight round to integer CSS pixels;
-    // fractional panel coordinates can differ by less than one edge pixel.
-    expect(exposure.top).toBeGreaterThanOrEqual(exposure.panelTop - 1);
-    expect(exposure.bottom).toBeLessThanOrEqual(exposure.panelBottom + 1);
-    expect(exposure.bottom).toBeLessThanOrEqual(exposure.viewportHeight);
-    await assertPlainLink(view.page, clean);
-    expect(view.errors).toEqual([]);
+    expect(exposure.modules).toBeGreaterThan(0);
+    const pixelsPerModule = exposure.image.width / exposure.modules;
+    expect(pixelsPerModule).toBeGreaterThanOrEqual(1);
+    expect(pixelsPerModule, "viewport fitting must not blur modules through fractional sizing").toBe(Math.floor(pixelsPerModule));
+    expect(exposure.image.height).toBe(exposure.image.width);
+    // The entire SVG includes its quiet zone. client metrics/native scroll
+    // offsets round to CSS pixels, so tolerate only one edge pixel of rounding.
+    for (const clip of exposure.clips) {
+      const where = `${clip.name}: ${JSON.stringify({ urlBytes, svgBytes, image: exposure.image, clip, modules: exposure.modules })}`;
+      if (clip.x) {
+        expect(exposure.image.width, `the complete QR must fit horizontally within ${where}`).toBeLessThanOrEqual(clip.right - clip.left + 1);
+        expect(exposure.image.left, where).toBeGreaterThanOrEqual(clip.left - 1);
+        expect(exposure.image.right, where).toBeLessThanOrEqual(clip.right + 1);
+      }
+      if (clip.y) {
+        expect(exposure.image.height, `the complete QR must fit vertically within ${where}`).toBeLessThanOrEqual(clip.bottom - clip.top + 1);
+        expect(exposure.image.top, where).toBeGreaterThanOrEqual(clip.top - 1);
+        expect(exposure.image.bottom, where).toBeLessThanOrEqual(clip.bottom + 1);
+      }
+    }
   } finally { await view.context.close(); }
 });
 
