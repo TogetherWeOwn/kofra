@@ -8,7 +8,8 @@ import type { Viewer } from "./index";
 import { DROP, KEEP, sanitizeHtml } from "./sanitize";
 
 // Bump whenever the rendered output changes: this retires cached fragments
-// and render ETags keyed `markdown@<version>/...`.
+// and render ETags keyed `markdown@<version>/...`. 4 adds the Phone disclosure
+// to the viewer bar; 9 fixes foreign-content heading reservations.
 const MD_VERSION = 9;
 
 const MD_CSS = `

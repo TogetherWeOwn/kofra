@@ -2,18 +2,33 @@
 
 ## Unreleased
 
+### Viewer phone handoff
+
+- File viewer bars offer a keyboard-operable Phone disclosure without JavaScript.
+  Its inline SVG QR and full link use the public file address without query or
+  fragment; opening a password-protected file on a phone still requires its password.
+  Embeds, folder listings and version-preview addresses omit the control.
+- Over-capacity URLs retain the full link without a QR. Server rendering and the
+  dashboard share the existing vendored encoder; dashboard QR pixels are unchanged.
+  Built-in viewer versions advance to refresh cached validators. The QR displays
+  at whole CSS pixels per module; native document scrolling exposes larger
+  grids in short viewports without clipping or fractional scaling.
+
 ### Markdown viewer
 
 - A Markdown heading that would duplicate an earlier raw-HTML heading id now takes a free
   `-1`-style suffix without taking an existing heading's fragment destination. Raw-HTML ids
   are never rewritten; Markdown-before-raw and raw-vs-raw duplicates remain as authored.
   Comments and sanitizer-dropped content reserve no ids, and documents without the collision
-  render byte-identical output. Cached renders and ETags move from `markdown@3` to `markdown@7`
+  render byte-identical output. Cached renders and ETags move from `markdown@3` to `markdown@9`
   with the change. Notebook reservations span Markdown cells and Markdown/HTML outputs while
   keeping per-fragment baseline numbering; notebook fragments and ETags move from `notebook@2`
-  to `notebook@4`. Raw ids are compared by decoded DOM value in served output order, including
+  to `notebook@6`. Raw ids are compared by decoded DOM value in served output order, including
   dropped elements, script escapes, comments and tags completed by generated markup or viewer
   wrappers. Suffix allocation and scanner inner searches advance without repeated rescanning.
+  SVG and MathML content is read by the sanitizer's own foreign-content rules, so `<style>`
+  or `<title>` inside dropped foreign markup reserves no phantom id and cannot swallow a
+  later raw heading.
 
 ### Resumable large uploads and URL archive sources
 
@@ -250,6 +265,11 @@
 
 ### Extension API
 
+- Bump `EXTENSION_API_VERSION` to 6: `ViewerContext` and `ServeMode` gain an
+  optional `preview` flag (set only by version-preview serving), and every
+  full-page viewer ETag gains a `-chrome<N>` shared-chrome revision segment, so
+  a `viewerPage` chrome change also retires extension viewers' cached pages.
+  A viewer's own `version` now only tracks its own output.
 - Bump `EXTENSION_API_VERSION` to 5: `Viewer` gains an optional `etagExtra(file, live)` that adds render
   identity (for example linked neighbours) to the viewer ETag. The server percent-encodes the viewer id
   and this value in the ETag, so any string is safe; built-in viewers' ETags are unchanged.

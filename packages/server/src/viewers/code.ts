@@ -21,8 +21,8 @@ export const SHOW_MAX_BYTES = 1024 * 1024;
 
 // 3 rotates the merged line-range selection and report print treatment:
 // both changed codePage output after branching from 1, so neither parent's 2
-// identifies the merged bytes.
-const CODE_VERSION = 3;
+// identifies the merged bytes. 4 adds the Phone disclosure to the viewer bar.
+const CODE_VERSION = 4;
 
 /** The highlighting language for a file of this kind, or null for plain text. */
 export function codeLanguage(path: string, kind: FileKind): string | null {

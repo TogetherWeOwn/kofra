@@ -10,7 +10,9 @@ import type { Viewer } from "./index";
  * key counts and typed values, plus a pretty-printed, highlighted view.
  * Invalid JSON shows the parse error above the highlighted source.
  */
-const JSON_VERSION = 3;
+// 4 = Phone disclosure in the viewer bar plus the Tree/Pretty focus ring; 3 was
+// issued separately by each of those, so neither may revalidate to this markup.
+const JSON_VERSION = 4;
 /** Nodes rendered in the tree before the rest is summarised. */
 const MAX_NODES = 20_000;
 /** Strings longer than this are cut in the tree (the pretty view has them whole). */
