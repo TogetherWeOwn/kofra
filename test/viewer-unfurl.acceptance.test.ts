@@ -26,12 +26,12 @@
  *   injects, duplicates or overwrites an author's own tags. The ?view=1
  *   HTML frame is a viewer page and does carry the platform tags.
  * - Raw, download and sub-resource responses stay byte-identical; source
- *   view and &embed=1 keep working (their <head> tags are deliberately not
- *   pinned either way).
+ *   view and &embed=1 keep working and carry the same head metadata.
  * - All 15 viewers, including source, HTML frame, binary and embedded views,
- *   reject the tag-less main validators from 9431d2b. Historical versions are
+ *   reject the tag-less main validators from 923ac4b. Historical versions are
  *   fixed independently of the implementation; current validators still earn
- *   a 304. Viewer CSP is unchanged.
+ *   a 304. Shared chrome retirement also covers extension-owned viewer versions.
+ *   Viewer CSP is unchanged.
  * - Hostile/unicode file names are attribute-escaped in every emitted tag
  *   and percent-encoded in every emitted URL.
  *
@@ -39,9 +39,12 @@
  * presence in the first response also pins the no-JavaScript behavior;
  * the viewport meta that narrow layouts rely on must remain.
  */
-import { beforeAll, describe, expect, it } from "vitest";
+import { env } from "cloudflare:test";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { zipSync } from "fflate";
+import { viewerPage, type Viewer } from "@dropway/server";
 import { form, freshInstance, jsonBody, ORIGIN, type Instance } from "./helpers";
+import { expectVersionedBadge } from "./site-badge.helpers";
 
 const NAV = { Accept: "text/html,application/xhtml+xml,*/*;q=0.8", "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate" };
 
@@ -59,14 +62,10 @@ function sizeRe(n: number): RegExp {
 }
 
 function decodeEntities(s: string): string {
-  return s
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
-    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(parseInt(d, 10)))
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&");
+  const named: Record<string, string> = { amp: "&", quot: '"', apos: "'", lt: "<", gt: ">" };
+  // One pass: a literal filename such as "&#38;quot;" must not decode twice.
+  return s.replace(/&(?:#x([0-9a-f]+)|#(\d+)|(amp|quot|apos|lt|gt));/gi, (_, hex, decimal, name) =>
+    name ? named[name.toLowerCase()]! : String.fromCodePoint(parseInt(hex ?? decimal, hex ? 16 : 10)));
 }
 
 function headOf(html: string): string {
@@ -79,16 +78,20 @@ function headOf(html: string): string {
 
 interface Meta { key: string; content: string; raw: string }
 
-function metasIn(head: string): Meta[] {
+async function metasIn(html: string): Promise<Meta[]> {
   const out: Meta[] = [];
-  for (const tag of head.matchAll(/<meta\b[^>]*>/g)) {
-    const attrs = new Map<string, string>();
-    for (const a of tag[0].matchAll(/([a-zA-Z][\w:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
-      attrs.set(a[1]!.toLowerCase(), decodeEntities(a[2] ?? a[3] ?? ""));
-    }
-    const key = attrs.get("property") ?? attrs.get("name");
-    if (key && attrs.has("content")) out.push({ key, content: attrs.get("content")!, raw: tag[0] });
-  }
+  // Parse the real document in workerd: comments, script text and body decoys
+  // are not head metadata. HTMLRewriter exposes attribute entities verbatim.
+  await new HTMLRewriter().on("head meta", {
+    element(element) {
+      const key = element.getAttribute("property") ?? element.getAttribute("name");
+      const content = element.getAttribute("content");
+      if (key && content !== null) {
+        const raw = `<meta ${[...element.attributes].map(([name, value]) => `${name}="${value}"`).join(" ")}>`;
+        out.push({ key: decodeEntities(key), content: decodeEntities(content), raw });
+      }
+    },
+  }).transform(new Response(html)).text();
   return out;
 }
 
@@ -99,15 +102,21 @@ function titleOf(head: string): string {
 }
 
 /**
- * Tag-less main 9431d2b: fixed historical facts, NOT read from VIEWERS or the
- * implementation under test. Notebook folding (#74) already shipped @3 there,
- * so unfurl must advance notebook past 3, not reuse that cached render identity.
+ * Tag-less main 923ac4bbcfa616368f0f180552d527b52baf55bd, independently pinned:
+ * serve.ts:500-521 includes chrome1, full-page folder version (except image/SVG),
+ * and image/SVG navigation even for embeds. Never graft a current ETag suffix.
+ * Retirement is behavioral: advancing shared chrome can invalidate these tags
+ * without advancing an extension's or individual viewer's numeric version.
+ * Exact current registry versions remain separately pinned in viewers.test.ts
+ * and viewer-phone.acceptance.test.ts.
  */
 const TAGLESS_MAIN_VERSION = {
-  source: 3, "html-frame": 2, markdown: 3, notebook: 3, json: 3, csv: 3,
-  svg: 4, image: 4, pdf: 2, video: 2, audio: 2, font: 3, archive: 2,
-  code: 3, binary: 3,
+  source: 4, "html-frame": 3, markdown: 4, notebook: 3, json: 4, csv: 4,
+  svg: 4, image: 4, pdf: 3, video: 3, audio: 3, font: 3, archive: 3,
+  code: 4, binary: 4,
 } as const;
+// Historical media.ts:109-164, FNV-1a over "img/icon.svg\nimg/logo.png".
+const TAGLESS_IMAGE_NAV = "-nav15sxmfs";
 
 interface UnfurlExpect {
   /** Exact og:url (and og:image when `image` is set). */
@@ -120,16 +129,16 @@ interface UnfurlExpect {
 }
 
 /** Assert the full head contract and return the parsed metas. */
-function expectUnfurl(html: string, want: UnfurlExpect): Meta[] {
+async function expectUnfurl(html: string, want: UnfurlExpect): Promise<Meta[]> {
   const head = headOf(html);
-  const metas = metasIn(head);
+  const metas = await metasIn(html);
   const one = (key: string): string | undefined => {
     const found = metas.filter((m) => m.key === key);
     expect(found.length, `exactly one <meta> for ${key} (found ${found.length}: ${found.map((f) => f.raw).join(" ")})`).toBeLessThanOrEqual(1);
     return found[0]?.content;
   };
   expect(one("robots"), "existing noindex meta stays").toContain("noindex");
-  expect(head, "viewport meta stays for narrow layouts").toContain('name="viewport"');
+  expect(one("viewport"), "viewport meta stays for narrow layouts").toBeTruthy();
 
   expect(one("og:title"), "og:title is the existing page title").toBe(titleOf(head));
   expect(one("og:type")).toBe("website");
@@ -156,6 +165,80 @@ function expectUnfurl(html: string, want: UnfurlExpect): Meta[] {
   return metas;
 }
 
+async function expectRevalidated(dw: Instance, path: string, etag: string) {
+  const get = vi.spyOn(env.FILES, "get");
+  const head = vi.spyOn(env.FILES, "head");
+  try {
+    const response = await dw.call(path, { headers: { ...NAV, "If-None-Match": etag } });
+    expect(response.status, "the current representation still earns 304").toBe(304);
+    expect(response.headers.get("etag")).toBe(etag);
+    expect(await response.text()).toBe("");
+    expect(get.mock.calls.length, "304 needs no blob read").toBe(0);
+    expect(head.mock.calls.length, "304 needs no blob metadata read").toBe(0);
+  } finally {
+    get.mockRestore();
+    head.mockRestore();
+  }
+}
+
+describe("unfurl head metadata oracle", () => {
+  it("ignores commented tags, script literals and body decoys but preserves real duplicates", async () => {
+    const html = '<!doctype html><html><head><!--<meta property="og:title" content="comment">-->'
+      + '<script>const decoy = \'<meta property="og:title" content="script">\';</script>'
+      + '<meta property="og:title" content="first"><meta property="og:title" content="second">'
+      + '</head><body><meta property="og:title" content="body"></body></html>';
+    expect((await metasIn(html)).map(({ key, content }) => ({ key, content }))).toEqual([
+      { key: "og:title", content: "first" }, { key: "og:title", content: "second" },
+    ]);
+  });
+
+  it("decodes attribute entities exactly once, including literal entity-looking names", async () => {
+    const html = '<!doctype html><html><head><meta property="og:title" content="&quot; &lt;tag&gt; &#x2615; &#233; &amp;quot; &amp;#34; &#38;quot;"></head><body></body></html>';
+    expect((await metasIn(html)).map((meta) => meta.content)).toEqual(['" <tag> ☕ é &quot; &#34; &quot;']);
+  });
+});
+
+describe("unfurl shared chrome retires extension validators", () => {
+  it.each([false, true])("refreshes an extension fixed at version 7 from chrome1 (embed=%s)", async (embed) => {
+    const viewer: Viewer = {
+      id: "extension-unfurl", version: 7, maxBytes: 1024,
+      matches: (file) => file.path === "fixture.txt",
+      etagExtra: () => "-layout-2",
+      async render(context) {
+        return viewerPage(context, { tabs: [], body: "<main>Extension fixture</main>" });
+      },
+    };
+    const dw = await freshInstance({}, { viewers: [viewer] });
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey,
+      body: form({ "fixture.txt": "hello" }, { slug: "unfurl-extension" }),
+    });
+    expect(published.status).toBe(201);
+    const path = `/s/unfurl-extension/fixture.txt?view=1${embed ? "&embed=1" : ""}`;
+    // Complete 923ac4b validator: fixed extension version, known SHA-256("hello"),
+    // extension extra, historical folder rule and chrome1; no current-tag bytes.
+    const folder = embed ? "" : `-folder${published.body.version.id}`;
+    const legacy = `W/"extension-unfurl@7-2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824-layout-2${folder}-chrome1${embed ? "-e" : ""}"`;
+    const current = await dw.call(path, { headers: NAV });
+    expect(current.status).toBe(200);
+    expect(current.headers.get("x-kofra-viewer")).toBe("extension-unfurl");
+    const html = await current.text();
+    await expectUnfurl(html, { url: `${ORIGIN}/s/unfurl-extension/fixture.txt`, kind: /text/i, sizes: [sizeRe(5)] });
+    const etag = current.headers.get("etag");
+    expect(etag).toMatch(/^W\/"extension-unfurl@7-/);
+    const refreshed = await dw.call(path, { headers: { ...NAV, "If-None-Match": legacy } });
+    expect.soft(refreshed.status, "shared metadata changes must retire chrome1 without changing the extension's version 7").toBe(200);
+    const freshHtml = await refreshed.text();
+    if (refreshed.status === 200) {
+      expect(refreshed.headers.get("etag")).toBe(etag);
+      expect(freshHtml).toBe(html);
+      await expectUnfurl(freshHtml, { url: `${ORIGIN}/s/unfurl-extension/fixture.txt`, kind: /text/i, sizes: [sizeRe(5)] });
+    }
+    expect.soft(etag, "the extension's predecessor identity must be retired").not.toBe(legacy);
+    await expectRevalidated(dw, path, etag!);
+  });
+});
+
 describe("unfurl head tags: file viewers (path mode on the app origin)", () => {
   let dw: Instance;
   let slug: string;
@@ -167,34 +250,46 @@ describe("unfurl head tags: file viewers (path mode on the app origin)", () => {
   const MD = "# Field Notes\n\nSome body text.\n";
   const AUTHORED = '<!doctype html><html><head><title>Authored</title><meta property="og:title" content="Author Title"><meta name="description" content="Author desc"></head><body><p>mine</p></body></html>';
 
+  const files: Record<string, string | Uint8Array> = {
+    "src/app.ts": CODE,
+    "notes/big.txt": BIG,
+    "notes/guide.md": MD,
+    "data.json": JSON_TEXT,
+    "data.csv": "name,value\nalpha,1\n",
+    "notebooks/analysis.ipynb": JSON.stringify({
+      nbformat: 4, nbformat_minor: 5, metadata: {},
+      cells: [{ cell_type: "markdown", metadata: {}, source: ["# Cache identity\n", "Notebook body.\n"] }],
+    }),
+    "media/clip.mp4": new Uint8Array([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70]),
+    "media/song.mp3": new Uint8Array([0x49, 0x44, 0x33, 3]),
+    "fonts/sample.woff2": new Uint8Array([0x77, 0x4f, 0x46, 0x32, 0, 1]),
+    "archives/bundle.zip": zipSync({ "entry.txt": new TextEncoder().encode("cache-entry\n") }, { level: 0 }),
+    "img/logo.png": PNG,
+    "img/icon.svg": SVG,
+    "docs/report.pdf": PDF,
+    "bin/data.bin": new Uint8Array([0, 1, 2, 3]),
+    "page.html": AUTHORED,
+  };
+  const hashes = new Map<string, string>();
+  let versionId: string;
+
   beforeAll(async () => {
     dw = await freshInstance();
     const res = await dw.json("/api/v1/publish", {
-      method: "POST",
-      key: dw.ownerKey,
-      body: form({
-        "src/app.ts": CODE,
-        "notes/big.txt": BIG,
-        "notes/guide.md": MD,
-        "data.json": JSON_TEXT,
-        "data.csv": "name,value\nalpha,1\n",
-        "notebooks/analysis.ipynb": JSON.stringify({
-          nbformat: 4, nbformat_minor: 5, metadata: {},
-          cells: [{ cell_type: "markdown", metadata: {}, source: ["# Cache identity\n", "Notebook body.\n"] }],
-        }),
-        "media/clip.mp4": new Uint8Array([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70]),
-        "media/song.mp3": new Uint8Array([0x49, 0x44, 0x33, 3]),
-        "fonts/sample.woff2": new Uint8Array([0x77, 0x4f, 0x46, 0x32, 0, 1]),
-        "archives/bundle.zip": zipSync({ "entry.txt": new TextEncoder().encode("cache-entry\n") }, { level: 0 }),
-        "img/logo.png": PNG,
-        "img/icon.svg": SVG,
-        "docs/report.pdf": PDF,
-        "bin/data.bin": new Uint8Array([0, 1, 2, 3]),
-        "page.html": AUTHORED,
-      }),
+      method: "POST", key: dw.ownerKey, body: form(files),
     });
     expect(res.status).toBe(201);
     slug = res.body.slug;
+    expect(res.body.version.id).toEqual(expect.any(String));
+    versionId = res.body.version.id;
+    // Hash the exact bytes we uploaded, including this one ZIP allocation.
+    // Historical validators must not obtain any part of their suffix from a
+    // response header or from the current viewer/chrome implementation.
+    for (const [path, content] of Object.entries(files)) {
+      const bytes = typeof content === "string" ? new TextEncoder().encode(content) : Uint8Array.from(content);
+      const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+      hashes.set(path, [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join(""));
+    }
   });
 
   const canonical = (path: string) => `${ORIGIN}/s/${slug}/${path}`;
@@ -217,13 +312,13 @@ describe("unfurl head tags: file viewers (path mode on the app origin)", () => {
       expect(res.status).toBe(200);
       expect(res.headers.get("x-kofra-viewer")).toBe(c.viewer);
       const html = await res.text();
-      expectUnfurl(html, { ...c.want, url: canonical(c.path) });
+      await expectUnfurl(html, { ...c.want, url: canonical(c.path) });
     });
   }
 
   it("the human-readable size is not a raw byte count for larger files", async () => {
     const html = await (await dw.call(`/s/${slug}/notes/big.txt`, { headers: NAV })).text();
-    const desc = metasIn(headOf(html)).find((m) => m.key === "og:description")?.content ?? "";
+    const desc = (await metasIn(html)).find((m) => m.key === "og:description")?.content ?? "";
     expect(desc).toMatch(sizeRe(2048));
     expect(desc).not.toContain("2048");
   });
@@ -237,7 +332,7 @@ describe("unfurl head tags: file viewers (path mode on the app origin)", () => {
       const res = await dw.call(`/s/${slug}/${req}`, { headers: NAV });
       expect(res.status).toBe(200);
       const html = await res.text();
-      const metas = expectUnfurl(html, { url: canonical(path), kind: image ? /image/i : /code|typescript/i, sizes: [image ? sizeRe(32) : sizeRe(100)], image });
+      const metas = await expectUnfurl(html, { url: canonical(path), kind: image ? /image/i : /code|typescript/i, sizes: [image ? sizeRe(32) : sizeRe(100)], image });
       for (const m of metas) expect(m.content).not.toMatch(/PREVIEWSECRET|CLAIMSECRET|UNLOCKSECRET|SHARESECRET|TOKENSECRET/);
       expect(headOf(html)).not.toMatch(/PREVIEWSECRET|CLAIMSECRET|UNLOCKSECRET|SHARESECRET|TOKENSECRET/);
     }
@@ -249,7 +344,7 @@ describe("unfurl head tags: file viewers (path mode on the app origin)", () => {
     expect(res.headers.get("x-kofra-viewer")).toBeNull();
     const html = await res.text();
     expect(html).toContain("<p>mine</p>");
-    const metas = metasIn(headOf(html));
+    const metas = await metasIn(html);
     expect(metas.filter((m) => m.key === "og:title").map((m) => m.content)).toEqual(["Author Title"]);
     expect(metas.find((m) => m.key === "description")?.content).toBe("Author desc");
     for (const key of ["og:type", "og:url", "og:image", "og:description", "twitter:card"]) {
@@ -263,7 +358,7 @@ describe("unfurl head tags: file viewers (path mode on the app origin)", () => {
       expect(res.status).toBe(404);
       const html = await res.text();
       expect(html).not.toContain("og:");
-      const metas = metasIn(headOf(html));
+      const metas = await metasIn(html);
       for (const key of ["og:title", "og:description", "description", "twitter:card"]) {
         expect(metas.find((m) => m.key === key), `404 carries no ${key}`).toBeUndefined();
       }
@@ -308,22 +403,22 @@ describe("unfurl head tags: file viewers (path mode on the app origin)", () => {
     await code.text();
   });
 
-  const cacheCases: Array<{ viewer: keyof typeof TAGLESS_MAIN_VERSION; path: string; query?: string }> = [
-    { viewer: "source", path: "src/app.ts", query: "?view=source" },
-    { viewer: "html-frame", path: "page.html" },
-    { viewer: "markdown", path: "notes/guide.md" },
-    { viewer: "notebook", path: "notebooks/analysis.ipynb" },
-    { viewer: "json", path: "data.json" },
-    { viewer: "csv", path: "data.csv" },
-    { viewer: "svg", path: "img/icon.svg" },
-    { viewer: "image", path: "img/logo.png" },
-    { viewer: "pdf", path: "docs/report.pdf" },
-    { viewer: "video", path: "media/clip.mp4" },
-    { viewer: "audio", path: "media/song.mp3" },
-    { viewer: "font", path: "fonts/sample.woff2" },
-    { viewer: "archive", path: "archives/bundle.zip" },
-    { viewer: "code", path: "src/app.ts" },
-    { viewer: "binary", path: "bin/data.bin" },
+  const cacheCases: Array<{ viewer: keyof typeof TAGLESS_MAIN_VERSION; path: string; query?: string; kind: RegExp }> = [
+    { viewer: "source", path: "src/app.ts", query: "?view=source", kind: /code|typescript/i },
+    { viewer: "html-frame", path: "page.html", kind: /html/i },
+    { viewer: "markdown", path: "notes/guide.md", kind: /markdown/i },
+    { viewer: "notebook", path: "notebooks/analysis.ipynb", kind: /notebook/i },
+    { viewer: "json", path: "data.json", kind: /json/i },
+    { viewer: "csv", path: "data.csv", kind: /csv/i },
+    { viewer: "svg", path: "img/icon.svg", kind: /svg|image/i },
+    { viewer: "image", path: "img/logo.png", kind: /image/i },
+    { viewer: "pdf", path: "docs/report.pdf", kind: /pdf/i },
+    { viewer: "video", path: "media/clip.mp4", kind: /video/i },
+    { viewer: "audio", path: "media/song.mp3", kind: /audio/i },
+    { viewer: "font", path: "fonts/sample.woff2", kind: /font/i },
+    { viewer: "archive", path: "archives/bundle.zip", kind: /archive|zip/i },
+    { viewer: "code", path: "src/app.ts", kind: /code|typescript/i },
+    { viewer: "binary", path: "bin/data.bin", kind: /binary/i },
   ];
 
   for (const c of cacheCases) {
@@ -334,32 +429,214 @@ describe("unfurl head tags: file viewers (path mode on the app origin)", () => {
         expect(res.status).toBe(200);
         expect(res.headers.get("x-kofra-viewer")).toBe(c.viewer);
         const html = await res.text();
+        const content = files[c.path]!;
+        const size = typeof content === "string" ? byteLen(content) : content.byteLength;
+        const want = { url: canonical(c.path), kind: c.kind, sizes: [sizeRe(size)], image: c.viewer === "image" };
+        await expectUnfurl(html, want);
         const etag = res.headers.get("etag") ?? "";
-        const parsed = etag.match(new RegExp(`^W/"${c.viewer}@(\\d+)(-[^"]+)"$`));
-        expect(parsed, `${c.viewer} ETag keeps its versioned identity (got ${etag})`).not.toBeNull();
+        expect(etag, `${c.viewer} ETag keeps its versioned identity`).toMatch(new RegExp(`^W/"${c.viewer}@\\d+-[^"]+"$`));
         if (embed) expect(etag, "embedded validator keeps its own discriminator").toMatch(/-e"$/);
+        await expectRevalidated(dw, path, etag);
 
-        const hit = await dw.call(path, { headers: { ...NAV, "If-None-Match": etag } });
-        expect(hit.status, `${c.viewer} current validator still revalidates`).toBe(304);
-        expect(await hit.text()).toBe("");
-
-        // Only the historical version is fixed. Preserve the opaque identity
-        // suffix (file hash, live manifest and embed variant): dropping it would
-        // trivially miss even if a regressed viewer reused the tag-less version.
         const baseline = TAGLESS_MAIN_VERSION[c.viewer];
-        const legacyEtag = `W/"${c.viewer}@${baseline}${parsed![2]}"`;
+        const imageFamily = c.viewer === "image" || c.viewer === "svg";
+        const navigation = imageFamily ? TAGLESS_IMAGE_NAV : "";
+        const folder = !embed && !imageFamily ? `-folder${versionId}` : "";
+        const hash = hashes.get(c.path);
+        expect(hash, "historical validator hashes the original uploaded fixture").toMatch(/^[0-9a-f]{64}$/);
+        const legacyEtag = `W/"${c.viewer}@${baseline}-${hash}${navigation}${folder}-chrome1${embed ? "-e" : ""}"`;
         const stale = await dw.call(path, { headers: { ...NAV, "If-None-Match": legacyEtag } });
-        expect.soft(stale.status, `${c.viewer} tag-less main @${baseline} validator must get a fresh body, not 304 (${legacyEtag})`).toBe(200);
+        expect.soft(stale.status, `${c.viewer} actual 923ac4b @${baseline}/chrome1 validator must get a fresh body, not 304 (${legacyEtag})`).toBe(200);
         const fresh = await stale.text();
         if (stale.status === 200) {
           expect(stale.headers.get("x-kofra-viewer")).toBe(c.viewer);
           expect(stale.headers.get("etag")).toBe(etag);
           expect(fresh, "stale validator receives the current complete page").toBe(html);
+          await expectUnfurl(fresh, want);
         }
-        expect.soft(Number(parsed![1]), `${c.viewer} render version advances past tag-less main @${baseline}`).toBeGreaterThan(baseline);
       });
     }
   }
+});
+
+describe("unfurl metadata identity survives identical-byte republishes", () => {
+  it.each([false, true])("refreshes a root image renamed from a.png to b.png (embed=%s)", async (embed) => {
+    const dw = await freshInstance();
+    const slug = "unfurl-root-rename";
+    const base = `/s/${slug}/`;
+    const path = `${base}?view=1${embed ? "&embed=1" : ""}`;
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey, body: form({ "a.png": PNG }, { slug }),
+    });
+    expect(published.status).toBe(201);
+    const first = await dw.call(path, { headers: NAV });
+    expect(first.status).toBe(200);
+    expect(first.headers.get("x-kofra-viewer")).toBe("image");
+    await expectUnfurl(await first.text(), { url: `${ORIGIN}${base}a.png`, kind: /image/i, sizes: [sizeRe(32)], image: true });
+    const oldEtag = first.headers.get("etag");
+    expect(oldEtag).toEqual(expect.any(String));
+
+    const updated = await dw.json("/api/v1/publish", { key: dw.ownerKey, ...jsonBody({
+      site: slug, files: [{ path: "b.png", content: b64(PNG), encoding: "base64" }],
+    }) });
+    expect(updated.status).toBe(200);
+    expect(updated.body.version.id).not.toBe(published.body.version.id);
+    const removed = await dw.call(`${base}a.png`, { headers: NAV });
+    expect(removed.status, "the old canonical file really disappeared").toBe(404);
+    await removed.text();
+
+    const refreshed = await dw.call(path, { headers: { ...NAV, "If-None-Match": oldEtag! } });
+    expect.soft(refreshed.status, "renaming identical bytes changes root unfurl metadata, so the old validator must not return 304").toBe(200);
+    const refreshedHtml = await refreshed.text();
+    const current = await dw.call(path, { headers: NAV });
+    expect(current.status).toBe(200);
+    const html = await current.text();
+    const metas = await expectUnfurl(html, { url: `${ORIGIN}${base}b.png`, kind: /image/i, sizes: [sizeRe(32)], image: true });
+    expect(metas.find((meta) => meta.key === "og:title")?.content).toContain("b.png");
+    expect(metas.find((meta) => meta.key === "og:title")?.content).not.toContain("a.png");
+    const etag = current.headers.get("etag");
+    expect(etag).toEqual(expect.any(String));
+    expect.soft(etag, "the validator covers the resolved filename, not only its content hash").not.toBe(oldEtag);
+    if (refreshed.status === 200) {
+      expect(refreshed.headers.get("etag")).toBe(etag);
+      expect(refreshedHtml).toBe(html);
+    }
+    const raw = await dw.call(`${base}?raw=1`, { headers: NAV });
+    expect(new Uint8Array(await raw.arrayBuffer())).toEqual(PNG);
+    await expectRevalidated(dw, path, etag!);
+  });
+
+  it("refreshes embedded data.json when only application/json changes to application/geo+json", async () => {
+    const dw = await freshInstance();
+    const slug = "unfurl-mime-change";
+    const content = '{"a":1}';
+    const path = `/s/${slug}/data.json?view=1&embed=1`;
+    const published = await dw.json("/api/v1/publish", { key: dw.ownerKey, ...jsonBody({
+      slug, files: [{ path: "data.json", content, contentType: "application/json" }],
+    }) });
+    expect(published.status).toBe(201);
+    const first = await dw.call(path, { headers: NAV });
+    expect(first.status).toBe(200);
+    const before = await expectUnfurl(await first.text(), { url: `${ORIGIN}/s/${slug}/data.json`, kind: /json/i, sizes: [sizeRe(7)] });
+    for (const key of ["description", "og:description"]) {
+      expect(before.find((meta) => meta.key === key)?.content).toContain("application/json");
+    }
+    const oldEtag = first.headers.get("etag");
+    expect(oldEtag).toEqual(expect.any(String));
+
+    const updated = await dw.json("/api/v1/publish", { key: dw.ownerKey, ...jsonBody({
+      site: slug, files: [{ path: "data.json", content, contentType: "application/geo+json" }],
+    }) });
+    expect(updated.status).toBe(200);
+    expect(updated.body.version.id).not.toBe(published.body.version.id);
+    const refreshed = await dw.call(path, { headers: { ...NAV, "If-None-Match": oldEtag! } });
+    expect.soft(refreshed.status, "a changed MIME description must refresh even in an embed").toBe(200);
+    const refreshedHtml = await refreshed.text();
+    const current = await dw.call(path, { headers: NAV });
+    expect(current.status).toBe(200);
+    expect(current.headers.get("x-kofra-viewer")).toBe("json");
+    const html = await current.text();
+    const after = await expectUnfurl(html, { url: `${ORIGIN}/s/${slug}/data.json`, kind: /json/i, sizes: [sizeRe(7)] });
+    for (const key of ["description", "og:description"]) {
+      expect(after.find((meta) => meta.key === key)?.content).toContain("application/geo+json");
+    }
+    const etag = current.headers.get("etag");
+    expect(etag).toEqual(expect.any(String));
+    expect.soft(etag, "embedded metadata is part of the HTTP identity").not.toBe(oldEtag);
+    if (refreshed.status === 200) {
+      expect(refreshed.headers.get("etag")).toBe(etag);
+      expect(refreshedHtml).toBe(html);
+    }
+    expect(await (await dw.call(`/s/${slug}/data.json?raw=1`)).text()).toBe(content);
+    await expectRevalidated(dw, path, etag!);
+  });
+});
+
+describe("unfurl canonical reachability for a reserved root name", () => {
+  it("canonicalizes sole uploaded badge.svg artwork to a reachable artwork viewer, not the provider badge", async () => {
+    const dw = await freshInstance();
+    const slug = "unfurl-badge-artwork";
+    const base = `/s/${slug}/`;
+    const artwork = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><text>UNFURL_ARTWORK_ONLY</text></svg>';
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey, body: form({ "badge.svg": artwork }, { slug }),
+    });
+    expect(published.status).toBe(201);
+    const provider = await dw.call(`${base}badge.svg`, { headers: NAV });
+    expect(provider.status).toBe(200);
+    expect(provider.headers.get("x-kofra-viewer")).toBeNull();
+    const providerSvg = await provider.text();
+    expectVersionedBadge(providerSvg, 1);
+    expect(providerSvg).not.toContain("UNFURL_ARTWORK_ONLY");
+
+    const root = await dw.call(base, { headers: NAV });
+    expect(root.status).toBe(200);
+    expect(root.headers.get("x-kofra-viewer")).toBe("svg");
+    const html = await root.text();
+    const url = (await metasIn(html)).find((meta) => meta.key === "og:url")?.content;
+    expect(url).toEqual(expect.any(String));
+    const canonical = new URL(url!);
+    expect(canonical.origin).toBe(ORIGIN);
+    expect(canonical.pathname.startsWith(base)).toBe(true);
+    expect(canonical.search).toBe("");
+    expect(canonical.hash).toBe("");
+    expect.soft(canonical.pathname, "reserved badge.svg serves provider status, not the uploaded artwork").not.toBe(`${base}badge.svg`);
+    await expectUnfurl(html, { url: canonical.href, kind: /svg|image/i, sizes: [sizeRe(byteLen(artwork))] });
+
+    // Reachability and bytes, not a preferred alias spelling, identify the file.
+    const navigation = await dw.call(canonical.href, { headers: NAV });
+    expect(navigation.status).toBe(200);
+    expect.soft(navigation.headers.get("x-kofra-viewer"), "the canonical must navigate to the artwork viewer").toBe("svg");
+    await navigation.text();
+    const canonicalRaw = new URL(canonical);
+    canonicalRaw.search = "?raw=1";
+    expect.soft(await (await dw.call(canonicalRaw.href, { headers: NAV })).text(), "the canonical identifies the uploaded artwork bytes").toBe(artwork);
+    expect(await (await dw.call(`${base}?raw=1`, { headers: NAV })).text()).toBe(artwork);
+
+    const stillProvider = await dw.call(`${base}badge.svg`, { headers: NAV });
+    expect(stillProvider.headers.get("x-kofra-viewer")).toBeNull();
+    const stillProviderSvg = await stillProvider.text();
+    expectVersionedBadge(stillProviderSvg, 1);
+    expect(stillProviderSvg).not.toContain("UNFURL_ARTWORK_ONLY");
+    expect(stillProvider.headers.get("content-type")).toBe(provider.headers.get("content-type"));
+  });
+});
+
+describe("unfurl metadata is absent from authored 404 fallbacks", () => {
+  let dw: Instance;
+  const slug = "unfurl-authored-404";
+  const authored = '<!doctype html><html><head><title>Authored missing page</title><meta name="robots" content="noindex"></head><body><p>AUTHORED_MISSING_PAGE</p></body></html>';
+
+  beforeAll(async () => {
+    dw = await freshInstance();
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey, body: form({ "index.html": "<p>home</p>", "404.html": authored }, { slug }),
+    });
+    expect(published.status).toBe(201);
+  });
+
+  it("preserves the ordinary authored fallback bytes and noindex", async () => {
+    const direct = await dw.call(`/s/${slug}/404.html`, { headers: NAV });
+    expect(direct.status).toBe(200);
+    const missing = await dw.call(`/s/${slug}/missing`, { headers: NAV });
+    expect(missing.status).toBe(404);
+    expect(missing.headers.get("x-kofra-viewer")).toBeNull();
+    const html = await missing.text();
+    expect(html).toBe(await direct.text());
+    expect(html).toContain("AUTHORED_MISSING_PAGE");
+    expect((await metasIn(html)).find((meta) => meta.key === "robots")?.content).toContain("noindex");
+    expect(await (await dw.call(`/s/${slug}/404.html?raw=1`)).text()).toBe(authored);
+  });
+
+  it.each(["1", "source"])("keeps missing?view=%s at 404 without generated file metadata", async (mode) => {
+    const response = await dw.call(`/s/${slug}/missing?view=${mode}`, { headers: NAV });
+    expect(response.status).toBe(404);
+    const html = await response.text();
+    const metas = await metasIn(html);
+    expect(metas.find((meta) => meta.key === "robots")?.content, "404 still carries noindex").toContain("noindex");
+    expect(metas.filter((meta) => meta.key.startsWith("og:") || meta.key.startsWith("twitter:") || meta.key === "description"),
+      "an authored fallback is an error, not a file to unfurl").toEqual([]);
+  });
 });
 
 describe("unfurl head tags: folder listings", () => {
@@ -392,7 +669,7 @@ describe("unfurl head tags: folder listings", () => {
     const html = await res.text();
     // Immediate entries only: 2 files (100+200 B) and 2 folders, mirroring the
     // visible listing summary; nested bytes are not rolled into the total.
-    const metas = expectUnfurl(html, {
+    const metas = await expectUnfurl(html, {
       url: `${ORIGIN}/s/${slug}/`,
       kind: /folder|director|listing|files?/i,
       sizes: [/\b2\s*folders?\b/i, /\b2\s*files?\b/i, sizeRe(300)],
@@ -405,7 +682,7 @@ describe("unfurl head tags: folder listings", () => {
   it("subfolder listings scope counts and size to that folder", async () => {
     const photos = await dw.call(`/s/${slug}/photos/`, { headers: NAV });
     expect(photos.headers.get("x-kofra-viewer")).toBe("listing");
-    expectUnfurl(await photos.text(), {
+    await expectUnfurl(await photos.text(), {
       url: `${ORIGIN}/s/${slug}/photos/`,
       kind: /folder|director|listing|files?/i,
       sizes: [/\b2\s*files?\b/i, sizeRe(64)],
@@ -415,7 +692,7 @@ describe("unfurl head tags: folder listings", () => {
     expect(docs.headers.get("x-kofra-viewer")).toBe("listing");
     // 1 immediate file (50 B) + 1 immediate folder; the nested 70 B file is
     // the deep folder's own listing total, not this one's.
-    const metas = expectUnfurl(await docs.text(), {
+    const metas = await expectUnfurl(await docs.text(), {
       url: `${ORIGIN}/s/${slug}/docs/`,
       kind: /folder|director|listing|files?/i,
       sizes: [/\b1\s*folders?\b/i, /\b1\s*files?\b/i, sizeRe(50)],
@@ -456,7 +733,7 @@ describe("unfurl head tags: hostile and unicode file names", () => {
     const html = await res.text();
     const head = headOf(html);
     expect(head, "no injected element survives in the head").not.toContain("<svg");
-    const metas = expectUnfurl(html, {
+    const metas = await expectUnfurl(html, {
       url: `${ORIGIN}/s/${slug}/${encPath(HOSTILE)}`,
       kind: /text/i,
       sizes: [sizeRe(byteLen("hostile text body"))],
@@ -477,7 +754,7 @@ describe("unfurl head tags: hostile and unicode file names", () => {
     const res = await dw.call(`/s/${slug}/${encPath(NESTED)}`, { headers: NAV });
     expect(res.status).toBe(200);
     const html = await res.text();
-    expectUnfurl(html, {
+    await expectUnfurl(html, {
       url: `${ORIGIN}/s/${slug}/my%20dir/semi%3Bcolon%23hash%3Fplus%2B.ts`,
       kind: /code|typescript/i,
       sizes: [sizeRe(byteLen("export const y = 2;\n"))],
@@ -490,7 +767,7 @@ describe("unfurl head tags: hostile and unicode file names", () => {
     expect(res.headers.get("x-kofra-viewer")).toBe("image");
     const html = await res.text();
     expect(headOf(html)).not.toContain("<cat>");
-    expectUnfurl(html, {
+    await expectUnfurl(html, {
       url: `${ORIGIN}/s/${slug}/${encPath(HOSTILE_PNG)}`,
       kind: /image/i,
       sizes: [sizeRe(32)],
@@ -528,7 +805,7 @@ describe("unfurl head tags: password-gated sites leak nothing new", () => {
       const html = await res.text();
       expect(html).not.toContain("og:");
       expect(html).not.toContain("top secret body bytes");
-      const metas = metasIn(headOf(html));
+      const metas = await metasIn(html);
       for (const key of ["og:title", "og:description", "og:image", "description", "twitter:card"]) {
         expect(metas.find((m) => m.key === key), `gate for ${path} carries no ${key}`).toBeUndefined();
       }
@@ -548,7 +825,7 @@ describe("unfurl head tags: password-gated sites leak nothing new", () => {
     const res = await dw.call(`/s/${slug}/secret-notes.txt`, { headers: { ...NAV, Cookie: cookie } });
     expect(res.status).toBe(200);
     expect(res.headers.get("x-kofra-viewer")).toBe("code");
-    expectUnfurl(await res.text(), {
+    await expectUnfurl(await res.text(), {
       url: `${ORIGIN}/s/${slug}/secret-notes.txt`,
       kind: /text/i,
       sizes: [sizeRe(byteLen("top secret body bytes"))],
@@ -569,15 +846,15 @@ describe("unfurl head tags: canonical URLs follow the serving mode", () => {
 
     const code = await sub.call(`${base}/dir/code.ts?view=1&share=SHARESECRET`, { headers: NAV });
     expect(code.headers.get("x-kofra-viewer")).toBe("code");
-    expectUnfurl(await code.text(), { url: `${base}/dir/code.ts`, kind: /code|typescript/i, sizes: [sizeRe(11)] });
+    await expectUnfurl(await code.text(), { url: `${base}/dir/code.ts`, kind: /code|typescript/i, sizes: [sizeRe(11)] });
 
     const pic = await sub.call(`${base}/dir/pic.png`, { headers: NAV });
     expect(pic.headers.get("x-kofra-viewer")).toBe("image");
-    expectUnfurl(await pic.text(), { url: `${base}/dir/pic.png`, kind: /image/i, sizes: [sizeRe(32)], image: true });
+    await expectUnfurl(await pic.text(), { url: `${base}/dir/pic.png`, kind: /image/i, sizes: [sizeRe(32)], image: true });
 
     const listing = await sub.call(`${base}/dir/`, { headers: NAV });
     expect(listing.headers.get("x-kofra-viewer")).toBe("listing");
-    expectUnfurl(await listing.text(), {
+    await expectUnfurl(await listing.text(), {
       url: `${base}/dir/`,
       kind: /folder|director|listing|files?/i,
       sizes: [/\b2\s*files?\b/i, sizeRe(11 + 32)],
@@ -585,7 +862,7 @@ describe("unfurl head tags: canonical URLs follow the serving mode", () => {
 
     const root = await sub.call(`${base}/`, { headers: NAV });
     expect(root.headers.get("x-kofra-viewer")).toBe("listing");
-    expectUnfurl(await root.text(), {
+    await expectUnfurl(await root.text(), {
       url: `${base}/`,
       kind: /folder|director|listing|files?/i,
       sizes: [/\b1\s*folders?\b/i, /\b1\s*files?\b/i, sizeRe(9)],
@@ -605,10 +882,10 @@ describe("unfurl head tags: canonical URLs follow the serving mode", () => {
     const code = await two.call(`${base}/code.ts`, { headers: NAV });
     expect(code.headers.get("x-kofra-viewer")).toBe("code");
     expect(code.headers.get("content-security-policy") ?? "").toContain("sandbox");
-    expectUnfurl(await code.text(), { url: `${base}/code.ts`, kind: /code|typescript/i, sizes: [sizeRe(11)] });
+    await expectUnfurl(await code.text(), { url: `${base}/code.ts`, kind: /code|typescript/i, sizes: [sizeRe(11)] });
 
     const pic = await two.call(`${base}/pic.png`, { headers: NAV });
     expect(pic.headers.get("x-kofra-viewer")).toBe("image");
-    expectUnfurl(await pic.text(), { url: `${base}/pic.png`, kind: /image/i, sizes: [sizeRe(32)], image: true });
+    await expectUnfurl(await pic.text(), { url: `${base}/pic.png`, kind: /image/i, sizes: [sizeRe(32)], image: true });
   });
 });
