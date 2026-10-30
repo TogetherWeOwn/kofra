@@ -5,8 +5,9 @@
 .sys>main{flex:1 0 auto;width:100%;max-width:calc(46rem + 36px);padding:10vh 18px var(--s9)}
 .sys>.guilloche-band{margin-top:var(--s7)}
 .sys .foot{padding-bottom:28px}
-/* Keyboard focus and #L links scroll clear of the sticky bar (it wraps to more rows on narrow screens). */
-html:has(.vbar){scroll-padding-top:8.5rem}
+/* Keyboard focus and #L links scroll clear of the sticky bar (it wraps to more rows on narrow screens).
+   At 720px and below the bar is static, so padding would only shrink short viewports. */
+@media (min-width:721px){html:has(.vbar){scroll-padding-top:8.5rem}}
 @media (min-width:1000px){html:has(.vbar){scroll-padding-top:6rem}}
 .vbar{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between;padding:8px 18px;border-bottom:1px solid var(--rule);background:color-mix(in srgb,var(--paper) 92%,transparent);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);font-size:13.5px;line-height:1.3}
 .vbar .wm{font-size:15px}
