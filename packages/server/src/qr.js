@@ -7,36 +7,33 @@
 // in byte mode, and draws the modules to its own canvas, so no image
 // endpoint or third-party request is needed at runtime.
 //
-// The MIT copyright + permission notice lives inside the function body below,
-// not here: assets.ts ships `createQrEncoder.toString()` as the dashboard
-// script, and Function.prototype.toString serializes the body only. A
-// file-level notice would not reach the browser, which would redistribute
-// this code without the notice its licence requires. Keep it inside.
+// Explicit data: bundlers can relocate legal comments out of the factory,
+// so assets.ts prepends this notice to the serialized dashboard script.
+export const QR_LICENSE = `/*!
+ * QR Code Generator for JavaScript (qrcode-generator 2.0.4) matrix core
+ * Copyright (c) 2009 Kazuhiko Arase
+ *
+ * MIT License: Permission is hereby granted, free of charge, to any person
+ * obtaining a copy of this software and associated documentation files (the
+ * "Software"), to deal in the Software without restriction, including
+ * without limitation the rights to use, copy, modify, merge, publish,
+ * distribute, sublicense, and/or sell copies of the Software, and to permit
+ * persons to whom the Software is furnished to do so, subject to the
+ * following conditions: The above copyright notice and this permission
+ * notice shall be included in all copies or substantial portions of the
+ * Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+ * NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+ * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+ * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+ * USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */`;
 
 // Closure-free: assets.ts serializes this same factory for the dashboard.
 // Do not close over module scope from the function below: it is also run as
 // standalone script text.
 export function createQrEncoder() {
-  /*!
-   * QR Code Generator for JavaScript (qrcode-generator 2.0.4) matrix core
-   * Copyright (c) 2009 Kazuhiko Arase
-   *
-   * MIT License: Permission is hereby granted, free of charge, to any person
-   * obtaining a copy of this software and associated documentation files (the
-   * "Software"), to deal in the Software without restriction, including
-   * without limitation the rights to use, copy, modify, merge, publish,
-   * distribute, sublicense, and/or sell copies of the Software, and to permit
-   * persons to whom the Software is furnished to do so, subject to the
-   * following conditions: The above copyright notice and this permission
-   * notice shall be included in all copies or substantial portions of the
-   * Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-   * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-   * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   * NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
-   * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   * USE OR OTHER DEALINGS IN THE SOFTWARE.
-   */
 
   //---------------------------------------------------------------------
   // qrcode

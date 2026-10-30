@@ -6,4 +6,5 @@ export interface QrMatrix {
   getModuleCount(): number;
 }
 
+export const QR_LICENSE: string;
 export function createQrEncoder(): (version: number, correction: "L" | "M" | "Q" | "H") => QrMatrix;
