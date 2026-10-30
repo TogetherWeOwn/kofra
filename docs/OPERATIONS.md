@@ -80,7 +80,14 @@ remediation hint; both transports preserve it.
 - For declarative destructive confirmation, set `confirm: "name"` (or `slug`,
   `email`, `domain`) and include required string `confirm` and target fields in
   the input schema. Both generated transports reject a mismatch before execution.
-  Existing legacy REST destructive routes retain their original wire contract.
+  Legacy REST destructive routes otherwise retain their original wire contract.
+  Version deletion is an explicit breaking exception: HTTP
+  `DELETE /api/v1/sites/{slug}/versions/{id}` requires a JSON body
+  `{"confirm":"<canonical-site-slug>"}`. Its compatibility handler resolves the
+  site before comparing confirmation, so an ID/URL reference is not itself a
+  valid confirmation value. CLI, dashboard and generated SDK callers send the
+  same field; missing input fails schema validation and a mismatch returns
+  `confirm_mismatch` before any deletion.
 - An operation appears as an MCP tool unless `mcp: { exclude: "reason" }` is set.
   Raw request-body operations require an exclusion. `mcp.alwaysLoad` is available
   for essential tools. Tool filtering and the existing MCP idempotency behavior

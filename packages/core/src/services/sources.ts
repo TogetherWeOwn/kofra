@@ -10,7 +10,7 @@ import type { Principal } from "../principal";
 import { blobScope, putVerifiedBlob } from "./blobs";
 import { createDeploy, deployWarnings, finalizeDeploy, parseDeployOptions, versionConflict, versionWarnings, type Warning } from "./deploys";
 import { discardNewSite, findSite, getVersion, serializeSite, serializeVersion, type SiteRow, type VersionRow } from "./sites";
-import { resolvePublishTarget } from "./publish";
+import { resolvePublishTarget, unzipFiles, validateInlineFiles } from "./publish";
 import { getSiteByRef, resolveSiteSlug, resolveVersionRef } from "./site-ops";
 import { PENDING_VERSION_TTL_MS } from "./upload-tokens";
 import { versionPreviewUrl } from "./previews";
@@ -23,6 +23,8 @@ export type { UploadItem } from "./uploads";
  * - `content` (+ `encoding: "utf8" | "base64"`): bytes inline in the call;
  * - `url` (+ optional `headers`): the server fetches it (https, public hosts only);
  * - `sha256` (+ `size`): bytes already stored, or uploaded afterwards with PUT /api/v1/blobs/{sha256};
+ * - `download_url` (+ `file_name`, optional `headers`): a chat-client attachment,
+ *   normalized to the same guarded fetch as `url` with `file_name` as the path;
  * - `copyFrom: { site?, version?, path? }`: a file of a site version the caller can read.
  *
  * publishSources() and updateSiteFiles() turn these into a version. Bytes the
@@ -31,10 +33,14 @@ export type { UploadItem } from "./uploads";
  */
 
 export interface FileInput {
-  path: string;
+  /** Site path; an attachment's `file_name` takes this role instead. */
+  path?: string;
   content?: string;
   encoding?: "utf8" | "base64";
   url?: string;
+  /** Chat-client attachment source; `file_name` becomes the path and `download_url` the guarded fetch URL. */
+  download_url?: string;
+  file_name?: string;
   headers?: Record<string, string>;
   sha256?: string;
   size?: number;
@@ -68,7 +74,7 @@ function invalid(fields: FieldProblem[]): ApiError {
   return badRequest(
     "invalid_request",
     fields.length === 1 ? `${first.field}: ${first.problem}` : `${fields.length} problems with the request; the first is ${first.field}: ${first.problem}`,
-    "Fix every field listed in details.fields and call again. Each file needs a path and exactly one of content, url, sha256 or copyFrom.",
+    "Fix every field listed in details.fields and call again. Each file needs a path (or an attachment file_name) and exactly one of content, url, sha256, copyFrom or download_url.",
     { fields },
   );
 }
@@ -288,11 +294,26 @@ export async function resolveFileInputs(
       return;
     }
     const r = raw as Record<string, unknown>;
-    const rawPath = stringField(r.path ?? "", `${field}.${i}.path`);
+    // Chat-client attachments name the same url+path pair as download_url+file_name.
+    const attachment = r.download_url != null || r.file_name != null;
+    if (attachment) {
+      const before = problems.length;
+      if (r.download_url == null || r.file_name == null) problems.push({ field: f, problem: "an attachment needs both download_url and file_name" });
+      if (r.path != null) problems.push({ field: `${f}.path`, problem: "conflicts with file_name; give one file name" });
+      const conflicting = (["content", "url", "sha256", "copyFrom"] as const).filter((k) => r[k] !== undefined && r[k] !== null);
+      if (conflicting.length) problems.push({ field: f, problem: `has download_url and ${conflicting.join(" and ")}; give exactly one source` });
+      if (r.download_url != null && typeof r.download_url !== "string") problems.push({ field: `${f}.download_url`, problem: "must be a string" });
+      if (problems.length > before) return;
+    }
+    const rawPath = stringField(attachment ? r.file_name ?? "" : r.path ?? "", `${field}.${i}.${attachment ? "file_name" : "path"}`);
     let path: string;
     try {
+      if (attachment && /^[\\/]/.test(rawPath.trim())) throw badRequest("invalid_path", `File path "${rawPath}" is an absolute path.`, "Use a relative file name inside the site root.");
       path = normaliseFilePath(rawPath);
     } catch (e) {
+      // Attachment names keep the settled invalid_path error; ordinary paths
+      // are collected into invalid_request's field list as before.
+      if (attachment && e instanceof ApiError) throw e;
       problems.push({ field: `${f}.path`, problem: (e as ApiError).message });
       return;
     }
@@ -300,9 +321,15 @@ export async function resolveFileInputs(
     if (seen.has(path)) problems.push({ field: `${f}.path`, problem: `"${path}" appears more than once` });
     seen.add(path);
     const contentType = r.contentType == null ? undefined : stringField(r.contentType, `${field}.${i}.contentType`);
+    if (attachment) {
+      const headers = cleanHeaders(r.headers, `${f}.headers`, problems);
+      urlCount++;
+      plans.push({ kind: "url", path, url: r.download_url as string, headers, contentType });
+      return;
+    }
     const sources = (["content", "url", "sha256", "copyFrom"] as const).filter((k) => r[k] !== undefined && r[k] !== null);
     if (sources.length !== 1) {
-      problems.push({ field: f, problem: sources.length ? `has ${sources.join(" and ")}; give exactly one source` : "needs one source: content, url, sha256 or copyFrom" });
+      problems.push({ field: f, problem: sources.length ? `has ${sources.join(" and ")}; give exactly one source` : "needs one source: content, url, sha256, copyFrom or download_url+file_name" });
       return;
     }
     const src = sources[0]!;
@@ -355,8 +382,12 @@ export async function resolveFileInputs(
   });
   if (urlCount > MAX_URL_SOURCES) problems.push({ field, problem: `has ${urlCount} url sources; at most ${MAX_URL_SOURCES} per call` });
   if (problems.length) throw invalid(problems);
-  if (plans.some((x) => x.kind === "stored" || x.kind === "copy") && !opts.scope) {
-    throw forbidden("sha256 and copyFrom sources need an API key.", "Send the bytes inline (content) or as a url.");
+  // A stored source with an explicit size resolves without a scope (a brand
+  // new anonymous site's scope is itself, and its manifest check still uses
+  // that scope, so no other owner's blobs are ever revealed). Looking a size
+  // up, or copying, needs the caller's proven scope.
+  if (plans.some((x) => x.kind === "copy" || (x.kind === "stored" && x.size === null)) && !opts.scope) {
+    throw forbidden("copyFrom sources, and sha256 sources without a size, need an API key.", "Send the bytes inline (content) or as a url, or add size to the sha256 source.");
   }
 
   const versionCache = new Map<string, Promise<{ site: SiteRow; version: VersionRow }>>();
@@ -549,7 +580,9 @@ async function completeVersion(
 // ---------------------------------------------------------------- publish
 
 export interface PublishSourcesInput {
-  files: unknown;
+  files?: unknown;
+  /** Public https URL of a .zip to publish instead of `files`; fetched and unpacked like an uploaded zip. */
+  archiveUrl?: unknown;
   /** Existing site to replace (slug, id or URL), or the slug for a new site. Omit for a generated name. */
   site?: unknown;
   /** Legacy REST JSON alias for a site slug. */
@@ -577,7 +610,48 @@ export interface PublishSourcesInput {
  * of an existing one) and makes the new version live, unless some sha256-only
  * files still need uploading (status "awaiting_upload" with upload links).
  */
+/**
+ * Fetch a zip from archiveUrl through the guarded URL fetcher and unpack it
+ * with the zip publisher's own extractor (common root stripped, expanded
+ * bytes held to the one-shot budget; per-file/site/count caps still apply to
+ * the extracted manifest).
+ */
+async function resolveArchiveUrl(dc: DropwayContext, archiveUrl: string, lim: Limits, fetcher?: typeof fetch): Promise<{ files: ResolvedFile[]; fetched: number }> {
+  let fetchedBytes = 0;
+  const got = await fetchUrlSource(archiveUrl, {
+    maxBytes: dc.config.urlFetchMaxBytes,
+    fetcher,
+    consumeBytes: (bytes) => {
+      fetchedBytes += bytes;
+      if (fetchedBytes > lim.oneShotMaxBytes) {
+        throw tooLarge("request_too_large", `Fetched archive bytes in one call may total ${lim.oneShotMaxBytes} bytes.`, "Publish a smaller zip, or upload big files with sha256 + size and the returned upload links.", { limit: lim.oneShotMaxBytes });
+      }
+    },
+  });
+  const extracted = unzipFiles(got.bytes, lim.oneShotMaxBytes);
+  if (extracted.length > lim.maxFiles) {
+    throw badRequest("too_many_files", `A version can have at most ${lim.maxFiles} files.`, "Split the content across sites or trim build output. Never drop files silently.", { limit: lim.maxFiles });
+  }
+  validateInlineFiles(extracted, lim);
+  const files = await Promise.all(extracted.map(async (f): Promise<ResolvedFile> => ({
+    path: f.path,
+    size: f.bytes.length,
+    sha256: await sha256Hex(f.bytes),
+    contentType: f.contentType,
+    bytes: f.bytes,
+    source: "url",
+  })));
+  return { files, fetched: 1 };
+}
+
 export async function publishSources(dc: DropwayContext, p: Principal, input: PublishSourcesInput) {
+  if (input.archiveUrl != null && input.files != null) {
+    throw invalid([{ field: "archiveUrl", problem: "send either files or archiveUrl, not both" }]);
+  }
+  if (input.archiveUrl != null && (typeof input.archiveUrl !== "string" || !input.archiveUrl)) {
+    throw invalid([{ field: "archiveUrl", problem: "must be a non-empty URL string" }]);
+  }
+  const archiveUrl = typeof input.archiveUrl === "string" ? input.archiveUrl : null;
   const metadata = parseDeployOptions({ message: input.message, baseVersionId: input.baseVersionId });
   const tenantId = p.kind === "member" ? p.tenantId : null;
   const siteRef = input.site ?? (input.slug == null ? undefined : stringField(input.slug, "slug"));
@@ -590,7 +664,9 @@ export async function publishSources(dc: DropwayContext, p: Principal, input: Pu
     if (found && found.tenant_id === p.tenantId) existing = found;
   }
   const lim = await dc.adapters.policy.limits(p, { siteId: existing?.id ?? null, tenantId: existing ? existing.tenant_id : tenantId }, dc);
-  const resolved = await resolveFileInputs(dc, p, input.files, { lim, scope: callerBlobScope(p, existing), site: existing, fetcher: input.fetcher });
+  const resolved = archiveUrl
+    ? await resolveArchiveUrl(dc, archiveUrl, lim, input.fetcher)
+    : await resolveFileInputs(dc, p, input.files, { lim, scope: callerBlobScope(p, existing), site: existing, fetcher: input.fetcher });
 
   const fields: Record<string, unknown> = { slug };
   for (const k of ["title", "description", "spa", "renderMarkdown", "crossOriginIsolation", "noindex", "viewers", "ttlSeconds", "password"] as const) if (input[k] !== undefined) fields[k] = input[k];

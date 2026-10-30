@@ -20,7 +20,7 @@ Kofra turns files into a live URL. Every publish is an immutable version you can
 
 ## Publish
 
-MCP: `publish_site` with `files`, each `{ path, content }` (text; base64 only for small binaries), `{ path, url }` (the server downloads a public https file), `{ path, sha256, size }` (then PUT the bytes to the returned upload link and call `finalize_version`) or `{ path, copyFrom }`.
+MCP: `publish_site` with `files`, each `{ path, content }` (text; base64 only for small binaries), `{ path, url }` (the server downloads a public https file), `{ path, sha256, size }` (then PUT the bytes to the returned upload link and call `finalize_version`), `{ path, copyFrom }` or a chat attachment `{ download_url, file_name }`; or `archiveUrl` alone for a public https .zip.
 
 REST, one call (form field name = file path):
 

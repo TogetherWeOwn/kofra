@@ -442,7 +442,12 @@ export function findSiteRedirect(
     const target = substituteSitePattern(rule.to, match);
     let destination = target.startsWith("/") ? `${request.base}${target.replace(/^\/+/, "")}` : target;
     if (!target.includes("?") && request.url.search) destination += request.url.search;
-    if (new URL(destination, request.url).href === request.url.href) continue;
+    try {
+      if (new URL(destination, request.url).href === request.url.href) continue;
+    } catch {
+      // A valid template can become invalid after capture substitution.
+      continue;
+    }
     return { rule, destination };
   }
   return null;

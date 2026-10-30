@@ -310,26 +310,40 @@ confirmation UX unchanged (CLI `--yes`/prompt, restore gains none, MCP
 ordered exception is P2's HTTP DELETE wire field below, which ships atomically
 with every caller — never as a server-only change.
 
-Each prerequisite is its own bounded card, merged in order before an
-implementation card starts:
+P1 and the complete P2 ship together as one integrated prerequisite: restoring
+and deleting must preserve the same live-pointer invariant. Both retain their
+acceptance requirements; after the combined merge and P2 acceptance, P3 then P4
+must merge before a historical-action implementation card starts:
 
 - **P1 — atomic restore.** Existence, site ownership and expected-live
   compare-and-swap in one batch, reusing the `finalizeDeploy` conditional-update
   and conflict pattern (`packages/core/src/services/deploys.ts`). The expected-live
-  anchor is the service-loaded site row's live pointer, not a CLI-supplied token.
-  A live pointer that moved returns 409 (CLI exit 5, no retry); a target deleted
-  between check and flip must fail, never leave a dangling pointer.
-- **P2 — atomic delete and confirm parity.** Move the non-live fence inside the
-  mutating batch. Enforce server-side `confirm` (canonical site slug, same
-  `requireConfirm` semantics as the MCP handler) on HTTP
-  `DELETE /sites/{slug}/versions/{id}`. This is a breaking HTTP-contract change:
-  today the HTTP handler skips confirm, the CLI and dashboard send bodyless
-  DELETEs, the generated `DeleteVersionInput` declares `{slug, id}` with no
-  `confirm` field, and the REST-parity test pins `confirm` as MCP-only — so the
-  P2 card MUST update the
-  handler, HTTP schema, CLI, dashboard, generated SDK and parity test in one
-  merge. A server-only P2 would fail every current caller with `confirm_mismatch`;
-  implementation stays stopped until the atomic P2 merges.
+  anchor is the freshly service-loaded site row's live pointer, not a CLI-supplied
+  token. Compare its **value at the atomic fence**, including exact NULL: a value
+  different from the anchor returns 409 (CLI exit 5, no retry), even if it equals
+  the requested target. The achieved state is not this request's replay receipt;
+  the caller makes a fresh intentional invocation instead. **A→B→A may succeed**
+  when the value is back at the anchor and all other predicates hold. This is not
+  mutation-generation/history-sensitive fencing or proof that no writer ran;
+  timestamps are not a generation substitute. Entry already-live stays write-free.
+  Preserve the incoming service site ID through normal authorized reload, refusing
+  a replacement identity with a non-disclosing 404 before target lookup or no-op
+  metadata. This guard binds one service invocation, not separate CLI requests or
+  raw-ID resolution end to end; it does not add slug CAS or rename/event receipt
+  guarantees. A target deleted between check and flip must fail, never leave a
+  dangling pointer.
+- **P2 — atomic delete and confirm parity.** Fence the entire deleting batch
+  on the target still being non-live and belonging to the authorized original
+  active site. Refusal leaves manifest rows, version rows and usage unchanged,
+  including when restore or pending finalization makes the target live after
+  preflight. Enforce server-side `confirm` (canonical site slug, same
+  `requireConfirm` semantics as MCP) on HTTP `DELETE /sites/{slug}/versions/{id}`
+  with JSON body `{"confirm":"<canonical-site-slug>"}`. This breaks the prior
+  bodyless HTTP contract: the handler, HTTP schema, CLI, dashboard, generated
+  SDK `DeleteVersionInput` and REST-parity tests MUST change in the same combined
+  P1+P2 merge. A server-only change would break existing callers. CLI prompt/`--yes`
+  behavior and restore confirmation stay unchanged; historical-action
+  implementation stays stopped until all four prerequisites are complete.
 - **P3 — retry proof.** Show every layer that can emit 429/5xx on these routes
   is strictly pre-commit, or drop automatic retry on mutating POST/DELETE (429
   surfaces as exit 7, explicit re-run) and add idempotency-key replay. The two
