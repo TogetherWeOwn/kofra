@@ -8,9 +8,12 @@ import type { Viewer } from "./index";
 import { DROP, KEEP, sanitizeHtml } from "./sanitize";
 
 // Bump whenever the rendered output changes: this retires cached fragments
-// and render ETags keyed `markdown@<version>/...`. 4 adds the Phone disclosure
-// to the viewer bar; 9 fixes foreign-content heading reservations.
-const MD_VERSION = 9;
+// and render ETags keyed `markdown@<version>/...`. 4 was issued separately for
+// the report print treatment plus shared-link head tags and for the Phone
+// disclosure; 5 adds shared-link unfurl metadata; 9 fixes foreign-content
+// heading reservations. No single parent number identifies these merged
+// bytes, so the merged render moves to 10.
+const MD_VERSION = 10;
 
 const MD_CSS = `
 .dw-md{max-width:48rem;margin:0 auto;padding:2.5rem 1.25rem 5rem}
@@ -312,6 +315,21 @@ function scanHtml(html: string, nonce: string, projecting: boolean) {
     }
     const lt = html.indexOf("<", i);
     if (lt < 0) return finish();
+    // `context` is the parsing context of the children of the innermost open
+    // element: HTML rules apply until an <svg>/<math> root switches to foreign
+    // content, and an integration point switches its own children back.
+    const context = open.length ? open[open.length - 1]!.childCtx : "html";
+    // Inside foreign content `<![CDATA[` opens a text run that ends only at
+    // `]]>`; every `<` in it is content. Reading it as an HTML bogus comment
+    // (through the first `>`) would end the dropped foreign subtree early and
+    // register headings the parser keeps as text. Only the exact uppercase
+    // spelling matches; any other `<![` there is an ordinary bogus comment.
+    if (context !== "html" && html.startsWith("<![CDATA[", lt)) {
+      const close = html.indexOf("]]>", lt + 9);
+      if (close < 0) return finish();
+      i = close + 3;
+      continue;
+    }
     if (html.startsWith("<!--", lt)) {
       // Abrupt closings complete immediately: <!--> and <!--->.
       if (html[lt + 4] === ">") { i = lt + 5; if (dropped === 0) omit(lt, i); continue; }
@@ -347,7 +365,6 @@ function scanHtml(html: string, nonce: string, projecting: boolean) {
     // Inside SVG/MathML there is no HTML raw-text mode, so <style> and <title>
     // are ordinary elements whose children stay markup. Only an integration
     // point hands its children back to HTML rules.
-    const context = open.length ? open[open.length - 1]!.childCtx : "html";
     const foreign = context !== "html";
     const isDrop = projecting && (DROP.has(tag.name) || (tag.name === "input" && (tag.inputType ?? "").toLowerCase() !== "checkbox"));
     const removed = projecting && (isDrop || !KEEP.has(tag.name));
