@@ -66,8 +66,10 @@ export const binaryViewer: Viewer = {
   id: "binary",
   // Bumped with the code viewer's line-range selection and report print
   // treatment: the as-text branch renders through codePage, so its output
-  // changed with both. 4 adds the Phone disclosure to the viewer bar.
-  version: 4,
+  // changed with both. 4 was then issued separately for the shared-link head
+  // tags and for the Phone disclosure in the viewer bar, so the merged
+  // render moves to 5.
+  version: 5,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => mode === "view" && BINARY_KINDS.has(file.kind),
   async render(vc) {

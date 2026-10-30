@@ -149,13 +149,12 @@ describe("viewer Phone: served public-file contract", () => {
 
   // Old versions are the validators the pre-Phone build issued, so a cached
   // page carrying one must refresh (200) instead of revalidating (304)
-  // against markup that now includes the Phone disclosure. The @3 json, svg
-  // and image rows are the validators main issues for its focus-fix markup
-  // without Phone: merged markup differs from both parents, so it needs @4.
+  // against markup that now includes the Phone disclosure. New versions pin
+  // the merged Phone/unfurl render; historical pre-Phone validators stay fixed.
   it.each([
-    ["notes.md", "markdown", 3, 4], ["data.json", "json", 2, 4], ["data.json", "json", 3, 4],
-    ["table.csv", "csv", 3, 4], ["plain.txt", "code", 3, 4], ["page.html", "html-frame", 1, 3],
-    ["vector/shape.svg", "svg", 3, 4], ["raster/pixel.png", "image", 3, 4],
+    ["notes.md", "markdown", 3, 5], ["data.json", "json", 2, 5], ["data.json", "json", 3, 5],
+    ["table.csv", "csv", 3, 5], ["plain.txt", "code", 3, 5], ["page.html", "html-frame", 1, 4],
+    ["vector/shape.svg", "svg", 3, 5], ["raster/pixel.png", "image", 3, 5],
   ] as const)("invalidates the pre-Phone %s %s@%i validator, then correctly revalidates refreshed markup", async (path, id, oldVersion, newVersion) => {
     const hash = await sha256Hex(new TextEncoder().encode(fixtures[path]));
     const legacy = `W/"${id}@${oldVersion}-${hash}"`;
@@ -180,8 +179,8 @@ describe("viewer Phone: served public-file contract", () => {
     const first = await dw.call(`${root}${path}?view=1`, { headers: NAV });
     expect(first.status).toBe(200);
     const current = first.headers.get("etag")!;
-    expect(current).toMatch(new RegExp(`^W/"${id}@3-`));
-    const legacy = current.replace(`${id}@3-`, `${id}@2-`);
+    expect(current).toMatch(new RegExp(`^W/"${id}@4-`));
+    const legacy = current.replace(`${id}@4-`, `${id}@2-`);
     const refreshed = await dw.call(`${root}${path}?view=1`, { headers: { ...NAV, "If-None-Match": legacy } });
     expect(refreshed.status).toBe(200);
     await expectPhone(await refreshed.text(), `${ORIGIN}${root}${path}`);
@@ -294,13 +293,13 @@ describe("viewer Phone: site-origin topology", () => {
 describe("viewer Phone: validator versions", () => {
   // Every viewer's rendered page gained the Phone disclosure, so every
   // viewer's ETag version must sit above the validator the pre-Phone build
-  // issued; pinning the exact new versions means reverting any single bump
-  // (which would strand cached pre-Phone pages on a 304) fails here.
+  // issued; these exact versions also reserve the merged unfurl render identity.
+  // Reverting a bump could strand cached pages from either parent on a 304.
   it("pins every built-in viewer at its exact post-Phone version", () => {
     const expected: Record<string, number> = {
-      source: 4, "html-frame": 3, markdown: 4, notebook: 3, json: 4, csv: 4,
-      svg: 4, image: 4, pdf: 3, video: 3, audio: 3, font: 3, archive: 3,
-      code: 4, binary: 4,
+      source: 5, "html-frame": 4, markdown: 5, notebook: 4, json: 5, csv: 5,
+      svg: 5, image: 5, pdf: 4, video: 4, audio: 4, font: 4, archive: 4,
+      code: 5, binary: 5,
     };
     expect(VIEWERS.map((v) => v.id).sort()).toEqual(Object.keys(expected).sort());
     for (const viewer of VIEWERS) expect(viewer.version ?? 1, viewer.id).toBe(expected[viewer.id]);

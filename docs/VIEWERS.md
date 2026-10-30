@@ -40,8 +40,10 @@ URL-specific chrome is generated outside cached body fragments; built-in
 viewer versions advance so conditional responses refresh the markup, and every
 full-page ETag also carries the shared-chrome revision (`-chrome<N>`), so a
 chrome change retires cached pages of extension viewers using `viewerPage`
-without a version bump of their own. Whether a page is an authorized version
-preview comes from the router's preview state (`ViewerContext.preview`), never
+without a version bump of their own. Every full-page validator, including images
+and embeds, also carries the manifest version: identical bytes can acquire a new
+path or MIME description. Content-only cached fragments remain independent.
+Whether a page is an authorized version preview comes from the router's preview state (`ViewerContext.preview`), never
 from matching the address or deployment labels.
 
 ## At a glance
