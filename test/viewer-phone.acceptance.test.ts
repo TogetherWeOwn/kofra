@@ -304,13 +304,13 @@ describe("viewer Phone: site-origin topology", () => {
 describe("viewer Phone: validator versions", () => {
   // Every viewer's rendered page gained the Phone disclosure, so every
   // viewer's ETag version must sit above the validator the pre-Phone build
-  // issued; these exact versions also reserve the merged unfurl render identity.
+  // issued; these exact versions also reserve the merged unfurl and redesign identities.
   // Reverting a bump could strand cached pages from either parent on a 304.
-  it("pins every built-in viewer at its exact post-Phone version", () => {
+  it("pins every built-in viewer at its exact current render version", () => {
     const expected: Record<string, number> = {
-      source: 5, "html-frame": 4, markdown: 5, notebook: 4, json: 5, csv: 5,
-      svg: 5, image: 5, pdf: 4, video: 4, audio: 4, font: 4, archive: 4,
-      code: 5, binary: 5,
+      source: 6, "html-frame": 4, markdown: 6, notebook: 5, json: 6, csv: 6,
+      svg: 5, image: 5, pdf: 4, video: 4, audio: 4, font: 4, archive: 5,
+      code: 6, binary: 5,
     };
     expect(VIEWERS.map((v) => v.id).sort()).toEqual(Object.keys(expected).sort());
     for (const viewer of VIEWERS) expect(viewer.version ?? 1, viewer.id).toBe(expected[viewer.id]);

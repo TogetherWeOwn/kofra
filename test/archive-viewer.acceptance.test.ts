@@ -255,10 +255,10 @@ describe("archive viewer selection", () => {
     expect(pick("a.bin", "document")).toBeNull();
   });
 
-  it("pins id, version 4, and fallback-through matching past the size cap", () => {
+  it("pins id, version 5, and fallback-through matching past the size cap", () => {
     const archive = VIEWERS.find((v) => v.id === "archive");
     expect(archive).toBeDefined();
-    expect(archive!.version).toBe(4);
+    expect(archive!.version).toBe(5);
     // Over-cap files still match: the fallback info page renders through the
     // archive viewer itself (x-kofra-viewer stays "archive").
     const huge = toViewerFile("big.zip", "0".repeat(64), 100 * 1024 * 1024, contentTypeFor("big.zip"));

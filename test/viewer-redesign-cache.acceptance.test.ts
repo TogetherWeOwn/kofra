@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { strToU8, zipSync } from "fflate";
 import { sha256Hex } from "@dropway/core";
 import type { ServerBindings } from "@dropway/server";
+import { SITE_CSS_HASH } from "../packages/server/src/ui/design.generated";
 import { cachedRender, clearRenderMemoryCache } from "../packages/server/src/viewers/cache";
 import { form, freshInstance, ORIGIN, type Instance } from "./helpers";
 
@@ -108,15 +109,11 @@ describe("shared-shell redesign cache retirement", () => {
     });
   }
 
-  it("binds viewer validators to the shared design stylesheet hash", async () => {
+  it("binds viewer validators to the site design stylesheet hash", async () => {
     const dw = await freshInstance();
-    const home = await dw.call("/");
-    expect(home.status).toBe(200);
-    const cssHash = (await home.text()).match(/\/__dropway\/ui\/kofra-([0-9a-f]{8})\.css/)?.[1];
-    expect(cssHash, "the shared shell advertises its content-addressed design stylesheet").toBeDefined();
     const { url } = await publish(dw, fixtures[0]!, "FRESH_CSS_IDENTITY");
     const response = await dw.call(url, { headers: NAV });
     expect(response.status).toBe(200);
-    expect(response.headers.get("etag"), "changing the design stylesheet must retire cached viewer pages").toMatch(new RegExp(`-chrome\\d+\\.${cssHash}"$`));
+    expect(response.headers.get("etag"), "changing the site stylesheet, including the viewer bar, must retire cached viewer pages").toMatch(new RegExp(`-chrome\\d+\\.${SITE_CSS_HASH}"$`));
   });
 });
