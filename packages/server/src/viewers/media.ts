@@ -182,7 +182,7 @@ function folderNavHtml(vc: ViewerContext): string {
 
 export const imageViewer: Viewer = {
   id: "image",
-  version: 4,
+  version: 5,
   etagExtra: folderNavEtag,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "image" && topLevelOnly(mode),
@@ -207,7 +207,7 @@ ${IMAGE_BACKGROUNDS}
 
 export const svgViewer: Viewer = {
   id: "svg",
-  version: 4,
+  version: 5,
   etagExtra: folderNavEtag,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "svg" && topLevelOnly(mode),
@@ -228,7 +228,9 @@ ${IMAGE_BACKGROUNDS}
 
 export const pdfViewer: Viewer = {
   id: "pdf",
-  version: 3,
+  // 3 was issued separately for the shared-link head tags and for the Phone
+  // disclosure, so the merged render moves to 4.
+  version: 4,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "pdf" && topLevelOnly(mode),
   async render(vc) {
@@ -260,7 +262,9 @@ function subtitleTracks(vc: ViewerContext): string {
 
 export const videoViewer: Viewer = {
   id: "video",
-  version: 3,
+  // 3 was issued separately for the shared-link head tags and for the Phone
+  // disclosure, so the merged render moves to 4.
+  version: 4,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "video" && topLevelOnly(mode),
   async render(vc) {
@@ -275,7 +279,9 @@ export const videoViewer: Viewer = {
 
 export const audioViewer: Viewer = {
   id: "audio",
-  version: 3,
+  // 3 was issued separately for the shared-link head tags and for the Phone
+  // disclosure, so the merged render moves to 4.
+  version: 4,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "audio" && topLevelOnly(mode),
   async render(vc) {
@@ -293,7 +299,7 @@ const FONT_FORMATS: Record<string, string> = { woff2: "woff2", woff: "woff", ttf
 
 export const fontViewer: Viewer = {
   id: "font",
-  version: 3,
+  version: 4,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "font" && topLevelOnly(mode),
   async render(vc) {

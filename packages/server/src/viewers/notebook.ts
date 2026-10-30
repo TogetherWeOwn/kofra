@@ -14,7 +14,11 @@ import { sanitizeHtml } from "./sanitize";
  * native initially-open <details> so a reader can fold a long result without
  * hiding the code that produced it. Nothing executes.
  */
-const NB_VERSION = 6;
+// 4: output folding with containment and report print treatment with
+// shared-link head tags each changed the page after branching. 6 fixes
+// foreign-content heading reservations; 7 merges both, because neither
+// parent number identifies the merged bytes.
+const NB_VERSION = 7;
 const MAX_OUTPUT_TEXT = 100_000;
 
 const NB_CSS = `

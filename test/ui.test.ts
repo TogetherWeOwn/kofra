@@ -4,6 +4,7 @@ import { createDropway, renderAppPage, type ServerBindings } from "@dropway/serv
 import { CLIENT_SCRIPT, CLIENT_HASH, fnv1a } from "../packages/server/src/ui/assets";
 import { jsonForScript, navItems } from "../packages/server/src/ui/shell";
 import { form, freshInstance } from "./helpers";
+import { normalizeQrNotice, QR_COPYRIGHT, QR_MIT_TERMS } from "./qr-license.fixture";
 
 const scriptSrc = (html: string) => /<script src="(\/__dropway\/ui\/app-[0-9a-f]{8}\.js)" defer><\/script>/.exec(html)?.[1];
 const boot = (html: string) => JSON.parse(/<script type="application\/json" id="dw-boot">(.*?)<\/script>/s.exec(html)![1]!);
@@ -63,6 +64,17 @@ describe("app pages", () => {
     expect(CLIENT_SCRIPT).toMatch(/\(function dropwayClient\(\) \{/);
     expect(CLIENT_SCRIPT).not.toMatch(/\brequire\(|^\s*import\s/m);
     expect(CLIENT_SCRIPT).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
+  });
+
+  // The browser receives a redistributed copy of the encoder. Its complete
+  // notice must survive on that HTTP asset, regardless of how it is assembled.
+  it("the HTTP-served client script carries the complete original QR MIT notice", async () => {
+    const dw = await freshInstance();
+    const res = await dw.call(`/__dropway/ui/app-${CLIENT_HASH}.js`);
+    expect(res.status).toBe(200);
+    const notice = normalizeQrNotice(await res.text());
+    expect(notice).toContain(QR_COPYRIGHT);
+    expect(notice.includes(normalizeQrNotice(QR_MIT_TERMS)), "complete original MIT permission, inclusion condition and disclaimer").toBe(true);
   });
 
   it("sign-in and dashboard pages are shells the script fills in", async () => {

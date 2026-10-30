@@ -4,6 +4,7 @@ import type { ViewerContext } from "./index";
 import { viewerPhone } from "./phone";
 import { compareNames } from "./listing";
 import { REPORT_PRINT_CSS } from "./print";
+import { unfurlHead } from "./unfurl";
 
 /**
  * The shared frame of every viewer page: one slim bar (kind, path, size, type;
@@ -17,7 +18,7 @@ import { REPORT_PRINT_CSS } from "./print";
  * extension viewers using viewerPage() too, not just the built-ins whose own
  * `version` is bumped by hand. Bump it whenever the shared output changes.
  */
-export const VIEWER_CHROME_VERSION = 1;
+export const VIEWER_CHROME_VERSION = 2;
 
 /** CSP for viewer pages: no scripts, so user-authored markup inside e.g. Markdown cannot execute. */
 export const VIEWER_CSP =
@@ -155,10 +156,17 @@ export function viewerPage(
   vc: ViewerContext,
   opts: { title?: string; body: string; css?: string; print?: boolean; tabs: ViewerTab[]; barExtra?: string; csp?: string; script?: string; headers?: Record<string, string> },
 ): Response {
+  const title = opts.title ?? `${vc.file.path.split("/").pop()} · ${vc.live.slug}`;
   const page = htmlPage({
-    title: opts.title ?? `${vc.file.path.split("/").pop()} · ${vc.live.slug}`,
+    title,
     css: VIEWER_CSS + (opts.css ?? "") + (opts.print ? REPORT_PRINT_CSS : ""),
-    head: '<meta name="robots" content="noindex">',
+    head: unfurlHead({
+      title,
+      description: `${KIND_LABELS[vc.file.kind] ?? "File"} · ${formatBytes(vc.file.size)} · ${vc.file.contentType.split(";")[0]}`,
+      // Live badge.svg is reserved for provider status; previews serve the uploaded path directly.
+      url: vc.url.origin + vc.siteBase + (!vc.preview && vc.file.path === "badge.svg" ? "" : encodePath(vc.file.path)),
+      image: vc.file.kind === "image",
+    }),
     // File path only: never copy request/capability URLs into printed context, even when embedded.
     body: viewerBar(vc, opts.tabs, opts.barExtra) + (opts.print ? `<p class="dw-print-title">${escapeHtml(vc.file.path)}</p>` : "") + opts.body + (opts.script ? `<script>${opts.script}</script>` : ""),
   });

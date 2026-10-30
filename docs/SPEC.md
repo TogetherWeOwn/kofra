@@ -1587,6 +1587,7 @@ CLI hashes and uploads from disk. Credentials as for the CLI.
 8. Per site: `renderMarkdown: false` serves `.md` raw; `viewers: false` turns every viewer off.
 9. `Accept: text/markdown` on a navigation returns a Markdown rendering instead of HTML (R-34).
 10. Light and dark themes follow `prefers-color-scheme`; tables, headings and controls are accessible by keyboard.
+11. Shipped: viewer and folder-listing heads carry escaped Open Graph/description tags with name, kind and size (listings: immediate counts and size), query-free canonical URLs and Twitter summary cards; only image-kind files use their own raw URL as `og:image`, never generated thumbnails. Password gates and error pages carry no file metadata.
 
 ### 10.2 Matrix
 
