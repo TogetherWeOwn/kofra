@@ -9,7 +9,8 @@
  *   exactly ONE fetch for 429 (including Retry-After), 5xx, network loss
  *   and 409, even when a retry would succeed. They honor an explicit
  *   `RequestOptions.idempotencyKey` / `CallOptions.idempotencyKey` on that
- *   single fetch.
+ *   single fetch. An explicit empty key must be rejected, not omitted as
+ *   though the caller intended a successful unkeyed mutation.
  * - Low-level transport supports `retry: 'none'` = one fetch including 429
  *   (with Retry-After). Safe/rate-limit and GET default behavior is
  *   preserved (those tests stay green).
@@ -246,6 +247,64 @@ describe.each(["restoreVersion", "deleteVersion"] as const)("%s overrides caller
     expect(s.requests[0]!.headers.get("Idempotency-Key")).toBe(key);
     expect(s.requests[0]!.method).toBe(method === "restoreVersion" ? "POST" : "DELETE");
     expect(new URL(s.requests[0]!.url).pathname).toBe(`/api/v1/sites/s/versions/ver_1${method === "restoreVersion" ? "/restore" : ""}`);
+  });
+});
+
+describe.each(["restoreVersion", "deleteVersion"] as const)("%s distinguishes empty and omitted replay keys", method => {
+  const success = method === "restoreVersion" ? { restored: true } : { deleted: true };
+  const invoke = (client: DropwayClient, opts?: CallOptions) => method === "restoreVersion"
+    ? client.restoreVersion({ slug: "s", id: "ver_1" }, opts)
+    : client.deleteVersion({ slug: "s", id: "ver_1", confirm: "s" }, opts);
+
+  // Model the server boundary, not a fixed rejection: omission really succeeds.
+  // Dropping a supplied empty header therefore executes an unkeyed mutation.
+  function requestAwareMutation() {
+    const requests: Request[] = [];
+    let mutations = 0;
+    const fetch = (async (request: Request) => {
+      requests.push(request);
+      if (request.headers.has("Idempotency-Key") && request.headers.get("Idempotency-Key") === "") {
+        return json({ error: {
+          code: "invalid_idempotency_key", message: "The key must not be empty.", hint: "Supply a non-empty key or omit it.",
+        } }, 400);
+      }
+      mutations++;
+      return json(success);
+    }) as FetchLike;
+    return { fetch, requests, mutations: () => mutations };
+  }
+
+  it.each([
+    { label: "omitted", key: undefined },
+    { label: "valid", key: "explicit-version-intent-01" },
+  ])("preserves $label-key success with the same header-aware server", async ({ key }) => {
+    const s = requestAwareMutation();
+    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch });
+    await expect(invoke(c, key === undefined ? undefined : { idempotencyKey: key }))
+      .resolves.toEqual(success);
+    expect(s.requests).toHaveLength(1);
+    expect(s.requests[0]!.headers.get("Idempotency-Key")).toBe(key ?? null);
+    expect(s.mutations()).toBe(1);
+  });
+
+  it.each([
+    { label: "default", retry: undefined },
+    { label: "safe", retry: "safe" },
+    { label: "rate-limit", retry: "rate-limit" },
+  ] as const)("rejects an explicit empty key without unkeyed execution or retry ($label)", async ({ retry }) => {
+    const s = requestAwareMutation();
+    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, attempts: 3, backoffMs: 1 });
+    const error: unknown = await invoke(c, { idempotencyKey: "", retry }).then(() => null, error => error);
+    expect(s.requests.length, "validation may be local, but it must never retry").toBeLessThanOrEqual(1);
+    expect(s.mutations(), "an explicit empty key must not silently execute as an omitted key").toBe(0);
+    expect(error, "an explicit empty key must reject, not succeed unkeyed").toBeInstanceOf(DropwayError);
+    expect(error).toMatchObject({ code: "invalid_idempotency_key" });
+    if (s.requests.length > 0) {
+      expect(s.requests[0]!.headers.get("Idempotency-Key"), "a supplied empty key is not omission").toBe("");
+      expect(error, "preserve the server rejection when validation reaches fetch").toMatchObject({
+        status: 400, message: "The key must not be empty.", hint: "Supply a non-empty key or omit it.",
+      });
+    }
   });
 });
 

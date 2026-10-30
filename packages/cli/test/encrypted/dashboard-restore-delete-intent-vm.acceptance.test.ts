@@ -403,7 +403,7 @@ async function beginIntent(view: Mounted, action: "restore" | "delete") {
   const confirm = dialog.querySelectorAll("button").find(button => /^delete version$/i.test(button.textContent.trim()))!;
   expect(confirm, "explicit version-delete confirmation").toBeTruthy();
   submitDialog(dialog, confirm);
-  return () => submitDialog(dialog, confirm);
+  return () => deleteButtonFor(view, 1).click();
 }
 
 it.each(["restore", "delete"] as const)("%s uses real CSPRNG intents without randomUUID, retaining cancellation, lock and selection", async action => {
@@ -440,9 +440,12 @@ it.each(["restore", "delete"] as const)("%s uses real CSPRNG intents without ran
     expect(view.writes, `getRandomValues-only ${action}; toasts: ${toastTexts(view).join(" | ")}`).toHaveLength(1);
     const first = view.writes[0]!;
     expectFreshUuid(first.idempotencyKey, `getRandomValues-only ${action}`);
-    expect(view.entropyCalls(), "the real CSPRNG supplies the UUID entropy").toBeGreaterThan(0);
+    const firstEntropyCalls = view.entropyCalls();
+    expect(firstEntropyCalls, "the real CSPRNG supplies the UUID entropy").toBeGreaterThan(0);
+    expect(view.doc.querySelectorAll("dialog[open]").length, "the first confirmation is closed before re-entry").toBe(0);
     repeat();
     await quiet(100);
+    expect(view.doc.querySelectorAll("dialog[open]").length, `pending ${action}: row trigger must not reopen a confirmation dialog`).toBe(0);
     expect(view.writes, "an in-flight intent cannot be submitted twice").toHaveLength(1);
     expect(view.reads, "the pending action cannot probe or replace the selection").toHaveLength(baselineReads);
     expect(selection()).toEqual(selected);
@@ -460,6 +463,7 @@ it.each(["restore", "delete"] as const)("%s uses real CSPRNG intents without ran
     await expect.poll(() => view.writes.length, { timeout: 5000 }).toBe(2);
     const second = view.writes[1]!;
     expectFreshUuid(second.idempotencyKey, `later getRandomValues-only ${action}`);
+    expect(view.entropyCalls(), "a later deliberate intent draws fresh CSPRNG entropy").toBeGreaterThan(firstEntropyCalls);
     expect(second.idempotencyKey, "a deliberate later click creates a distinct intent").not.toBe(first.idempotencyKey);
     for (const write of view.writes) {
       expect(write.method).toBe(action === "restore" ? "POST" : "DELETE");
