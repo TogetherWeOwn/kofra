@@ -79,14 +79,14 @@ with a wrong outcome. Investigate:
   origin; otherwise report a Warning that names the untraced hop.
 - **Authorization and keys** (`packages/core/src/principal.ts`,
   `packages/core/src/lib/crypto.ts`, `packages/core/src/lib/secrets.ts`):
-  every service operation checks the principal's scope for the target site.
-  Issuing a key is additive: other valid keys (owner, other integrations)
-  stay usable by design. Expiry, reset, revocation, or replacement must leave
-  the specific credential they target unusable, and an empty/missing key is
-  never accepted as a replay credential. A newly minted secret may be
-  delivered once to its authorized creator (issuance response, explicit CLI
-  display); it must never reach logs, error hints, unrelated responses, or a
-  replayed response.
+  every operation enforces the authorization its documented contract defines
+  (principal scopes, or a validated capability such as a signed preview link).
+  Issuing a key is additive: other valid keys stay usable by design. Expiry,
+  reset, revocation, or replacement must leave the targeted credential
+  unusable, and an empty/missing key is never accepted as a credential.
+  Secrets never reach logs or error hints. Delivery and idempotent replay of
+  newly minted secrets follow the documented contracts and their tests; flag
+  only a deviation from those contracts.
 - **Publish pipeline** (manifest `{path, size, sha256}`, finalize, versions):
   content addressing must verify size and digest of what was actually
   uploaded; finalize is atomic; `baseVersionId` stale-write protection and
