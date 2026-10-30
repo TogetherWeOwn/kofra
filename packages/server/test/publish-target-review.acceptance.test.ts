@@ -4,8 +4,14 @@
  * Tests were authored from the regression spec before consulting implementation.
  *
  * Run: LD_LIBRARY_PATH=<Chromium libraries> npm run test:browser-code -- test/publish-target-review.acceptance.test.ts
- * Also run npm run check. Expected RED on the reviewed head: late-list reselection
- * and raw dot-only references. Never skip/weaken those tests to make checks green.
+ * Also run npm run check. Every test here is expected GREEN on main; a failure
+ * is a real publisher regression (or a lost test synchronization barrier).
+ * Never skip/weaken those tests to make checks green.
+ *
+ * Synchronization: forcedPublishIsInert waits for actual initial site-list
+ * application (Loading replaced by the 200-option first page) before it
+ * observes DOM work, and the dot-only cases hold that list back deliberately.
+ * List rendering must never be attributed to a forced Publish dispatch.
  *
  * Reset: rerun. TargetWorld gives EACH test a disposable local Worker/Chromium,
  * isolated migrated D1/R2/KV and synthetic principals. Teardown releases gates and
@@ -70,6 +76,76 @@ describe("Publisher destination review regressions", () => {
       await expect.poll(() => gate.delivered).toBe(true);
     });
   }
+
+  // Break: removing the helper's list-settlement await starts its observer and
+  // forced dispatch while the list is still held. Race causal checkpoints, not
+  // a driver-released response against Playwright's next command.
+  it("waits for actual list application before observing or dispatching forced Publish", async () => {
+    const listGate = deferred();
+    const lookupGate = deferred();
+    const f = await world.open({ target: older, listGate,
+      lookups: new Map([[`/api/v1/sites/${older}`, lookupGate]]) });
+    await chooseFiles(f);
+    await expect.poll(() => singleReads(f).length).toBe(1);
+    expect(await publishButton(f).isDisabled()).toBe(true);
+
+    let checkpoint!: (phase: string) => void;
+    const reached = new Promise<string>(resolve => { checkpoint = resolve; });
+    await f.page.exposeFunction("inertnessCheckpoint", checkpoint);
+    await publishButton(f).evaluate((button: any) => {
+      const g = globalThis as any;
+      const select = g.document.getElementById("dw-pub-site");
+      const root = button.closest("#dw-publish");
+      const options = Object.getOwnPropertyDescriptor(g.HTMLSelectElement.prototype, "options")!.get!;
+      const stages: string[] = g.inertnessStages = [];
+      // Delegate to the native getter/observer: the helper reads the real DOM
+      // and receives every real mutation record. Only report causal entry points.
+      Object.defineProperty(select, "options", { configurable: true, get() {
+        const result = options.call(this);
+        void g.inertnessCheckpoint("list snapshot");
+        return result;
+      } });
+      const stage = (phase: string) => {
+        const applied = select.children.length >= 200 && !select.textContent.includes("Loading sites…");
+        stages.push(phase + ":" + (applied ? "applied" : "loading"));
+        void g.inertnessCheckpoint(phase);
+      };
+      const observe = g.MutationObserver.prototype.observe;
+      g.MutationObserver.prototype.observe = function (this: any, target: any, options: any) {
+        if (target === root) stage("observe");
+        return observe.call(this, target, options);
+      };
+      button.addEventListener("click", () => stage("dispatch"), { capture: true });
+    });
+
+    let state = "pending";
+    const inert = forcedPublishIsInert(f);
+    const completed = inert.then(() => { state = "fulfilled"; return state; },
+      () => { state = "rejected"; return state; });
+    try {
+      expect(await Promise.race([reached, completed]),
+        "held list must reach a pending DOM snapshot, not observation, dispatch or completion").toBe("list snapshot");
+      expect(await selector(f).evaluate((select: any) => ({
+        loading: select.textContent.includes("Loading sites…"), count: select.children.length,
+        stages: (globalThis as any).inertnessStages,
+      }))).toEqual({ loading: true, count: 1, stages: [] });
+      expect(state, "the helper is still pending with the list held").toBe("pending");
+      expect(listGate.delivered).toBe(false);
+      expect(writes(f)).toEqual([]);
+      listGate.resolve();
+      await inert;
+      expect(await selector(f).evaluate((select: any) => ({
+        loading: select.textContent.includes("Loading sites…"), count: select.children.length,
+        stages: (globalThis as any).inertnessStages,
+      }))).toEqual({ loading: false, count: 200, stages: ["observe:applied", "dispatch:applied"] });
+      expect(state).toBe("fulfilled");
+      expect(await publishButton(f).isDisabled()).toBe(true);
+      expect(writes(f)).toEqual([]);
+    } finally {
+      listGate.resolve();
+      await completed;
+    }
+  });
 
   // Break: deleting only focus-handler invalidateDest() lets either stale result
   // announce a destination/error after focusing the new-site slug (no radio click).
@@ -157,14 +233,25 @@ describe("Publisher destination review regressions", () => {
   for (const reference of [".", ".."]) {
     for (const initial of [true, false]) {
       it(`rejects raw ${JSON.stringify(reference)} from ${initial ? "initial ?site" : "manual lookup"} without a lookup GET`, async () => {
-        const f = await world.open();
+        // Deliberately delay the site-list response: its rendering (Loading
+        // replaced by the 200-option first page) is DOM work inside
+        // #dw-publish, so the inertness check below must not attribute it to
+        // a forced Publish dispatch. A request-start count or two animation
+        // frames do not prove the list was applied.
+        const listGate = deferred();
+        const f = await world.open(initial ? {} : { listGate });
         await expect.poll(() => listReads(f).length).toBe(1);
         await trapDotEndpoints(f);
         const reads = observeDestinationReads(f);
         if (initial) {
           // Reload the actual served shell with the target, retaining the same
           // synthetic principal. Traps are installed BEFORE initial script runs.
+          // Gate only the reloaded page's list: the first page's list request
+          // was already routed above.
+          f.listGate = listGate;
+          f.gates.push(listGate);
           await f.page.goto(`${world.origin}/dashboard/publish?site=${encodeURIComponent(reference)}`);
+          await expect.poll(() => listReads(f).length).toBe(2);
         } else {
           await updateMode(f);
           await lookup(f, reference);
@@ -173,7 +260,12 @@ describe("Publisher destination review regressions", () => {
         await settle(f);
         expect(reads, "dot-only destination must be rejected before fetch can normalize it").toEqual([]);
         await lookupAlert(f);
-        await forcedPublishIsInert(f);
+        expect(await selector(f).locator("option", { hasText: "Loading" }).count(),
+          "delayed list has NOT been applied when the inertness check starts").toBe(1);
+        const inert = forcedPublishIsInert(f);
+        listGate.resolve();
+        await inert;
+        await expect.poll(() => listGate.delivered).toBe(true);
         await lookup(f, older, "button");
         await resolved(f, older);
         expect(await publishButton(f).isEnabled()).toBe(true);

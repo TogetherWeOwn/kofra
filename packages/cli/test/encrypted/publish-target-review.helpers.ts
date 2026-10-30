@@ -1,6 +1,6 @@
 import { expect } from "vitest";
 import {
-  deferred, publishAndWaitForFinalize, publishButton, settle, writes,
+  deferred, publishAndWaitForFinalize, publishButton, selector, settle, writes,
 } from "./publish-target.helpers.ts";
 import type { Fixture, TargetWorld } from "./publish-target.helpers.ts";
 
@@ -53,8 +53,27 @@ export async function lookupAlert(f: Fixture) {
   expect(writes(f)).toEqual([]);
 }
 
+/**
+ * Settlement barrier for the publisher's initial site list. TargetWorld's
+ * first page is exactly 200 sites (asserted in start()), rendered by one
+ * synchronous pass that replaces the single Loading option with those 200
+ * options (plus at most one preserved off-page destination). One atomic
+ * snapshot therefore distinguishes "list applied" from "list still Loading":
+ * a request-start count on the wire, or two animation frames, proves neither.
+ */
+export async function waitForSiteListApplied(f: Fixture) {
+  await expect.poll(() => selector(f).evaluate((select: any) => {
+    const options = [...select.options];
+    return options.length >= 200 && !options.some((option: any) => option.textContent === "Loading sites…");
+  }), { message: "initial site list applied: Loading replaced by the 200-option first page" }).toBe(true);
+}
+
 /** Native .click() suppresses disabled buttons: dispatch invokes the real listener. */
 export async function forcedPublishIsInert(f: Fixture) {
+  // Install the observer only after the initial list is applied: its
+  // rendering mutates this same subtree (201 childList records), and those
+  // mutations must never be attributed to the forced Publish dispatch.
+  await waitForSiteListApplied(f);
   expect(await publishButton(f).isDisabled()).toBe(true);
   const observed = await publishButton(f).evaluate(async (button: any) => {
     const root = button.closest("#dw-publish");
