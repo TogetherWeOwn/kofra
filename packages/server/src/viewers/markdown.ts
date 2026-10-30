@@ -9,7 +9,7 @@ import { DROP, KEEP, sanitizeHtml } from "./sanitize";
 
 // Bump whenever the rendered output changes: this retires cached fragments
 // and render ETags keyed `markdown@<version>/...`.
-const MD_VERSION = 8;
+const MD_VERSION = 9;
 
 const MD_CSS = `
 .dw-md{max-width:48rem;margin:0 auto;padding:2.5rem 1.25rem 5rem}
@@ -69,6 +69,13 @@ const RAWTEXT = new Set([
   "script", "style", "iframe", "noembed", "noframes", "noscript", "title", "textarea", "xmp", "plaintext",
 ]);
 
+// Foreign content (inside <svg>/<math>) has no raw-text elements of its own:
+// <style> and <title> there are ordinary elements whose children stay markup.
+// Only the HTML integration points switch the parser back to HTML rules.
+const SVG_INTEGRATION = new Set(["foreignobject", "desc", "title"]);
+const MATH_INTEGRATION = new Set(["mi", "mo", "mn", "ms", "mtext"]);
+const MATH_INTEGRATION_ENCODINGS = new Set(["text/html", "application/xhtml+xml"]);
+
 // After the initial ASCII letter, HTML tag names consume every non-space,
 // non-slash, non-">" character, including unfamiliar custom-element names.
 const TAG_OPEN = /<(\/?)([a-z][^\t\n\f\r />]*)/iy;
@@ -110,6 +117,8 @@ interface ParsedTag {
   name: string;
   id: string | undefined;
   inputType: string | undefined;
+  /** `annotation-xml[encoding]` decides whether its children are HTML. */
+  encoding: string | undefined;
   selfClosing: boolean;
   /** Index just past ">". */
   end: number;
@@ -128,6 +137,7 @@ function parseTag(html: string, start: number): ParsedTag | "eof" | null {
   let i = TAG_OPEN.lastIndex;
   let id: string | undefined;
   let inputType: string | undefined;
+  let encoding: string | undefined;
   let selfClosing = false;
   // Attribute values may contain '<' and '>'. Never restart at a heading
   // prefix within a value, or rescan an unterminated tag from each '<'.
@@ -161,14 +171,23 @@ function parseTag(html: string, start: number): ParsedTag | "eof" | null {
     // unquoted value, not a self-closing marker: id=install/ means install/.
     if (attr === "id" && id === undefined) id = value;
     if (attr === "type" && inputType === undefined) inputType = value;
+    if (attr === "encoding" && encoding === undefined) encoding = value;
   }
   if (i === html.length) return "eof";
-  return { closing, name, id, inputType, selfClosing, end: i + 1 };
+  return { closing, name, id, inputType, encoding, selfClosing, end: i + 1 };
 }
 
 type AnchorEvent = { kind: "md"; index: number } | { kind: "raw"; id: string };
 
 type RawHeading = { pos: number; id: string };
+
+/** SVG and MathML integration points: their children are parsed as HTML again. */
+function integrationPoint(name: string, root: "svg" | "math" | null, encoding: string | undefined): boolean {
+  if (root === "svg") return SVG_INTEGRATION.has(name);
+  if (root !== "math") return false;
+  if (MATH_INTEGRATION.has(name)) return true;
+  return name === "annotation-xml" && MATH_INTEGRATION_ENCODINGS.has(asciiLower(encoding ?? ""));
+}
 
 /** One tokenizer pass. Structural omissions describe comparison bytes only;
  * HTMLRewriter remains the sanitizer and authored output is never rewritten here. */
@@ -178,7 +197,10 @@ function scanHtml(html: string, nonce: string, projecting: boolean) {
   const omitted: Array<[number, number]> = [];
   let hiddenFrom: number | undefined;
   let commentFrom = 0;
-  const open: Array<{ name: string; dropped: boolean; removed: boolean }> = [];
+  // `childCtx` is the parsing context of an element's children: HTML rules
+  // apply until an <svg>/<math> root switches to foreign content, and an
+  // integration point switches its own children back to HTML rules.
+  const open: Array<{ name: string; dropped: boolean; removed: boolean; childCtx: "html" | "svg" | "math" }> = [];
   let dropped = 0;
   let rawText: string | null = null;
   // Script tokenizer states: data, escaped (`<!--` seen), double-escaped.
@@ -321,6 +343,11 @@ function scanHtml(html: string, nonce: string, projecting: boolean) {
       closeTag(tag, lt);
       continue;
     }
+    // Inside SVG/MathML there is no HTML raw-text mode, so <style> and <title>
+    // are ordinary elements whose children stay markup. Only an integration
+    // point hands its children back to HTML rules.
+    const context = open.length ? open[open.length - 1]!.childCtx : "html";
+    const foreign = context !== "html";
     const isDrop = projecting && (DROP.has(tag.name) || (tag.name === "input" && (tag.inputType ?? "").toLowerCase() !== "checkbox"));
     const removed = projecting && (isDrop || !KEEP.has(tag.name));
     const hasContent = !VOID.has(tag.name) && !(tag.selfClosing && (tag.name === "svg" || tag.name === "math"));
@@ -333,9 +360,12 @@ function scanHtml(html: string, nonce: string, projecting: boolean) {
       const indices = openNames.get(tag.name) ?? [];
       indices.push(open.length);
       openNames.set(tag.name, indices);
-      open.push({ name: tag.name, dropped: isDrop, removed });
+      const childCtx: "html" | "svg" | "math" = !foreign
+        ? tag.name === "svg" ? "svg" : tag.name === "math" ? "math" : "html"
+        : integrationPoint(tag.name, context, tag.encoding) ? "html" : context;
+      open.push({ name: tag.name, dropped: isDrop, removed, childCtx });
       if (isDrop) dropped++;
-      if (RAWTEXT.has(tag.name)) { rawText = tag.name; escaped = 0; }
+      if (!foreign && RAWTEXT.has(tag.name)) { rawText = tag.name; escaped = 0; }
     }
     if (/^h[1-6]$/.test(tag.name) && tag.id && !tag.id.startsWith(prefix) && dropped === 0) {
       rawAt.push({ pos: lt, id: headingKey(tag.id) });
