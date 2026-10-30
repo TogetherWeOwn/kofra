@@ -17,6 +17,7 @@ import {
 import type { DropwayEnv } from "./env";
 import type { McpToolDefinition } from "./extensions";
 import { readJson } from "./routes/api";
+import { isReplayReceipt, markReplayReceipt } from "./replay-receipt";
 
 export interface OperationContext {
   dw: DropwayContext;
@@ -212,7 +213,8 @@ async function runOperation(op: OperationDefinition, parsed: unknown, ctx: Opera
     throw new ApiError(500, "invalid_operation_output", `The ${op.id} handler returned an invalid result.`, "Report the requestId to the instance operator.");
   }
   // JSON omits optional undefined fields; MCP's schema adapter rejects them before serialization.
-  return JSON.parse(JSON.stringify(output.data));
+  const normalized = JSON.parse(JSON.stringify(output.data));
+  return isReplayReceipt(result) ? markReplayReceipt(normalized) : normalized;
 }
 
 export function operationTools(operations: readonly OperationDefinition[]): McpToolDefinition[] {

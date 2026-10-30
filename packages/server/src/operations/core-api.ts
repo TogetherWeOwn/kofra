@@ -33,6 +33,7 @@ import {
 import { CONFIRM_SLUG, FILE_INPUT, PUBLISH_OUT, SETTINGS_INPUT, SITE_OUT, SITE_REF, VERSION_OUT, VERSION_REF, obj } from "../mcp/schemas";
 import { readJson } from "../routes/api";
 import { defineOperation, rawRequestInput } from "../operations";
+import { markReplayReceipt } from "../replay-receipt";
 import { fromSchema, ANY, ANY_OR_NULL, RO, WRITE, DESTROY, siteOut, str, settingsFrom, publishSummary, whoamiPrincipal, P, D } from "./shared";
 
 export const CORE_API_OPERATIONS = [
@@ -856,9 +857,12 @@ export const CORE_API_OPERATIONS = [
       ),
     ),
     annotations: WRITE,
-    handler: (a, { dw, principal }) => restoreVersionByRef(dw, principal, a.site, a.version, {
-      transport: "mcp", idempotencyKey: a.idempotencyKey,
-    }),
+    async handler(a, { dw, principal }) {
+      const result = await restoreVersionByRef(dw, principal, a.site, a.version, {
+        transport: "mcp", idempotencyKey: a.idempotencyKey,
+      });
+      return "replayed" in result && result.replayed === true ? markReplayReceipt(result) : result;
+    },
     http: {
       input: fromSchema({
         type: "object",

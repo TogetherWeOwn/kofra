@@ -2,6 +2,7 @@ import { HTTP_UPLOAD, HTTP_UPLOAD_ITEM, HTTP_VERSION } from "./http-schemas";
 import { deleteVersionByRef, exportVersionZip, getVersionStatus, getSiteByRef, resolveVersionRef } from "@dropway/core";
 import { CONFIRM_SLUG, SITE_REF, VERSION_OUT, VERSION_REF, obj } from "../mcp/schemas";
 import { defineOperation } from "../operations";
+import { markReplayReceipt } from "../replay-receipt";
 import { fromSchema, RO, DESTROY, P, D } from "./shared";
 import { attachmentDisposition } from "../content-disposition";
 import { readJson } from "../routes/api";
@@ -104,9 +105,12 @@ export const VERSION_OPERATIONS = [
     }),
     output: fromSchema(obj({ deleted: { type: "boolean" }, id: { type: "string" }, replayed: { type: "boolean" } }, ["deleted", "id"])),
     annotations: DESTROY,
-    handler: (a, { dw, principal }) => deleteVersionByRef(dw, principal, a.site, a.version, a.confirm, {
-      transport: "mcp", idempotencyKey: a.idempotencyKey,
-    }),
+    async handler(a, { dw, principal }) {
+      const result = await deleteVersionByRef(dw, principal, a.site, a.version, a.confirm, {
+        transport: "mcp", idempotencyKey: a.idempotencyKey,
+      });
+      return "replayed" in result && result.replayed === true ? markReplayReceipt(result) : result;
+    },
     http: {
       input: fromSchema({
         type: "object",
