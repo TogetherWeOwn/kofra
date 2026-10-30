@@ -9,7 +9,6 @@ import {
   getMember,
   getSiteByRef,
   getTenant,
-  isLiveVersionRef,
   listFiles,
   listSites,
   listVersions,
@@ -19,7 +18,7 @@ import {
   requireConfirm,
   resolveSiteSlug,
   resolveVersionRef,
-  restoreVersion,
+  restoreVersionByRef,
   serializeMember,
   serializeTenant,
   setSiteAccess,
@@ -34,6 +33,7 @@ import {
 import { CONFIRM_SLUG, FILE_INPUT, PUBLISH_OUT, SETTINGS_INPUT, SITE_OUT, SITE_REF, VERSION_OUT, VERSION_REF, obj } from "../mcp/schemas";
 import { readJson } from "../routes/api";
 import { defineOperation, rawRequestInput } from "../operations";
+import { markReplayReceipt } from "../replay-receipt";
 import { fromSchema, ANY, ANY_OR_NULL, RO, WRITE, DESTROY, siteOut, str, settingsFrom, publishSummary, whoamiPrincipal, P, D } from "./shared";
 
 export const CORE_API_OPERATIONS = [
@@ -829,20 +829,24 @@ export const CORE_API_OPERATIONS = [
     id: "restore_version",
     method: "POST",
     path: "/api/v1/sites/{slug}/versions/{id}/restore",
-    summary: "Restore a version",
+    summary: "Restore version",
     toolset: "core",
     scopes: ["sites:write"],
     description:
       'Make an older version live again (instant rollback; nothing is copied). version accepts "v3", "3" or a version id. Restoring the version that is already live is a harmless no-op.',
     input: fromSchema({
       type: "object",
-      properties: { site: SITE_REF, version: VERSION_REF },
+      properties: {
+        site: SITE_REF, version: VERSION_REF,
+        idempotencyKey: { type: "string", minLength: 1 },
+      },
       required: ["site", "version"],
       additionalProperties: false,
     }),
     output: fromSchema(
       obj(
         {
+          replayed: { type: "boolean" },
           restored: { type: "boolean" },
           alreadyLive: { type: "boolean" },
           version: VERSION_OUT,
@@ -854,11 +858,10 @@ export const CORE_API_OPERATIONS = [
     ),
     annotations: WRITE,
     async handler(a, { dw, principal }) {
-      const site = await getSiteByRef(dw, principal, a.site, "sites:write");
-      const symbolicLive = isLiveVersionRef(a.version);
-      const versionId = symbolicLive ? "live" : (await resolveVersionRef(dw, site, a.version)).id;
-      const out = await restoreVersion(dw, principal, site, versionId, { symbolicLive });
-      return { ...out, slug: site.slug, url: siteUrl(dw, site.slug) };
+      const result = await restoreVersionByRef(dw, principal, a.site, a.version, {
+        transport: "mcp", idempotencyKey: a.idempotencyKey,
+      });
+      return "replayed" in result && result.replayed === true ? markReplayReceipt(result) : result;
     },
     http: {
       input: fromSchema({
@@ -868,12 +871,10 @@ export const CORE_API_OPERATIONS = [
       }),
       output: fromSchema({ type: "object" }),
       handler: async (c) => {
-        const dw = D(c);
-        const site = await getSiteByRef(dw, P(c), c.req.param("slug")!, "sites:write");
-        const symbolicLive = isLiveVersionRef(c.req.param("id"));
-        const versionId = symbolicLive ? "live" : (await resolveVersionRef(dw, site, c.req.param("id")!)).id;
-        const out = await restoreVersion(dw, P(c), site, versionId, { symbolicLive });
-        return c.json({ ...out, url: siteUrl(dw, site.slug) });
+        const { slug: _slug, ...out } = await restoreVersionByRef(D(c), P(c), c.req.param("slug")!, c.req.param("id")!, {
+          transport: "rest", idempotencyKey: c.req.header("idempotency-key"),
+        });
+        return c.json(out);
       },
     },
     tool: {

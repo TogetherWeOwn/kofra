@@ -111,6 +111,15 @@ export function dropwayClient() {
     }
   }
 
+  function versionIntentKey() {
+    // getRandomValues also works on HTTP self-hosts, unlike randomUUID.
+    var random = crypto.getRandomValues(new Uint8Array(16));
+    random[6] = (random[6] & 15) | 64;
+    random[8] = (random[8] & 63) | 128;
+    var hex = Array.from(random, function (value) { return value.toString(16).padStart(2, "0"); }).join("");
+    return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join("-");
+  }
+
   async function api(path, opts) {
     opts = opts || {};
     var headers = new Headers(opts.headers || {});
@@ -2163,7 +2172,7 @@ export function dropwayClient() {
                     if (siteMutationPending) return;
                     setSiteMutationPending(true);
                     try {
-                      await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id) + "/restore", { method: "POST" });
+                      await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id) + "/restore", { method: "POST", headers: { "Idempotency-Key": versionIntentKey() } });
                       toast("v" + v.number + " is live again.");
                       pages.site();
                     } catch (e) {
@@ -2189,7 +2198,7 @@ export function dropwayClient() {
                     try {
                       var ok = await confirmBox({ title: "Delete v" + v.number + "?", message: "The version and its file list are removed for good (use this for a version that leaked something). Other versions are not affected.", confirmText: "Delete version" });
                       if (!ok) return;
-                      await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id), { method: "DELETE", body: { confirm: site.slug } });
+                      await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id), { method: "DELETE", body: { confirm: site.slug }, headers: { "Idempotency-Key": versionIntentKey() } });
                       toast("v" + v.number + " deleted.");
                       // A successful deletion must not reload its now-invalid
                       // explicit link; unrelated inspected versions stay put.

@@ -1142,6 +1142,11 @@ are sampled, not written one by one. Reads use the SQL API when the operator set
   Anonymous JSON publishing scopes replay by client IP, operation and key; use an unpredictable UUID
   per logical operation and reuse it only on retry. IP scoping is not authentication: clients sharing
   a network must not share keys. Without a client IP, anonymous replay is disabled.
+  Restore POST and version DELETE also accept the header under the
+  [version-action replay contract](OPERATIONS.md#version-action-replay): fresh site
+  authorization, immutable site/ref input binding and conservative pending-claim
+  retention after uncertain errors. CLI/dashboard/typed SDK version actions never
+  automatically retry, including on 429; later reads are not proof of success.
 - `X-Kofra-Client: <harness>/<detail>` (attribution). `X-Request-Id` on every response.
 - Rate limits (R-36): `RateLimit-Policy` and `RateLimit` headers (IETF draft format), `Retry-After` on 429/503.
 - URLs in responses: `url` (live), `versionUrl` (exact version), per file `url`, `viewUrl`, `rawUrl`,

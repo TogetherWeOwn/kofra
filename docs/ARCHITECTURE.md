@@ -352,7 +352,14 @@ through the list refresh after a successful publish.
 
 - `idempotency_keys` (`0005_publish_idempotency.sql`): authorization/operation/key
   hashes, request hashes, an owner fence and the first result. D1 arbitrates
-  concurrent claims; failed operations release only their own pending claim.
+  concurrent claims; failed callbacks normally release only their own pending claim.
+  Restore/version-delete workflows opt into `retainOnError` because an exception
+  need not prove rollback: their pending claims survive uncertain outcomes.
+  `services/version-actions.ts` authorizes the current site and canonical delete
+  confirmation before replay, binding it to the immutable site ID. It resolves
+  the submitted version reference
+  only for the claim owner. REST/MCP use separate namespaces; CLI/dashboard generate
+  per-intent UUID keys without automatically retrying these mutations.
   Unknown outcomes fail closed until the 24-hour key expiry, rather than stealing
   a live or interrupted operation's claim. Anonymous JSON publishing uses an
   IP-scoped key (no replay when the IP is unavailable), so clients must choose

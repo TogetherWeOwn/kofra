@@ -1,7 +1,8 @@
 import { HTTP_UPLOAD, HTTP_UPLOAD_ITEM, HTTP_VERSION } from "./http-schemas";
-import { deleteVersion, exportVersionZip, getVersionStatus, getSiteByRef, requireConfirm, resolveVersionRef } from "@dropway/core";
+import { deleteVersionByRef, exportVersionZip, getVersionStatus, getSiteByRef, resolveVersionRef } from "@dropway/core";
 import { CONFIRM_SLUG, SITE_REF, VERSION_OUT, VERSION_REF, obj } from "../mcp/schemas";
 import { defineOperation } from "../operations";
+import { markReplayReceipt } from "../replay-receipt";
 import { fromSchema, RO, DESTROY, P, D } from "./shared";
 import { attachmentDisposition } from "../content-disposition";
 import { readJson } from "../routes/api";
@@ -86,28 +87,29 @@ export const VERSION_OPERATIONS = [
     id: "delete_version",
     method: "DELETE",
     path: "/api/v1/sites/{slug}/versions/{id}",
-    summary: "Delete a version",
+    summary: "Delete version",
     toolset: "versions",
     scopes: ["sites:delete"],
     description:
-      "Permanently delete one version that is not live (for example one that leaked a secret). The live version cannot be deleted: restore or publish another first. Set confirm to the site's slug.",
+      "Permanently delete one version that is not live (for example one that leaked a secret). The live version cannot be deleted: restore or publish another first. Set confirm to the site's slug. REST accepts an optional Idempotency-Key header (1-255 printable ASCII characters without spaces) to replay the original receipt for the same request and current authorization within 24 hours. Changed input returns 422; pending or unknown outcomes return 409 without another mutation.",
     input: fromSchema({
       type: "object",
       properties: {
         site: SITE_REF,
         version: VERSION_REF,
         confirm: CONFIRM_SLUG,
+        idempotencyKey: { type: "string", minLength: 1 },
       },
       required: ["site", "version", "confirm"],
       additionalProperties: false,
     }),
-    output: fromSchema(obj({ deleted: { type: "boolean" }, id: { type: "string" } }, ["deleted", "id"])),
+    output: fromSchema(obj({ deleted: { type: "boolean" }, id: { type: "string" }, replayed: { type: "boolean" } }, ["deleted", "id"])),
     annotations: DESTROY,
     async handler(a, { dw, principal }) {
-      const site = await getSiteByRef(dw, principal, a.site, "sites:delete");
-      requireConfirm(a.confirm, site.slug);
-      const v = await resolveVersionRef(dw, site, a.version);
-      return deleteVersion(dw, principal, site, v.id);
+      const result = await deleteVersionByRef(dw, principal, a.site, a.version, a.confirm, {
+        transport: "mcp", idempotencyKey: a.idempotencyKey,
+      });
+      return "replayed" in result && result.replayed === true ? markReplayReceipt(result) : result;
     },
     http: {
       input: fromSchema({
@@ -117,11 +119,10 @@ export const VERSION_OPERATIONS = [
       }),
       output: fromSchema({ type: "object" }),
       handler: async (c) => {
-        const site = await getSiteByRef(D(c), P(c), c.req.param("slug")!, "sites:delete");
         const body = await readJson(c);
-        requireConfirm(body.confirm, site.slug);
-        const v = await resolveVersionRef(D(c), site, c.req.param("id")!);
-        return c.json(await deleteVersion(D(c), P(c), site, v.id));
+        return c.json(await deleteVersionByRef(D(c), P(c), c.req.param("slug")!, c.req.param("id")!, body.confirm, {
+          transport: "rest", idempotencyKey: c.req.header("idempotency-key"),
+        }));
       },
     },
     tool: { summarize: (r) => `Deleted version ${r.id}.` },
