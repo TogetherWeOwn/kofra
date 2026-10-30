@@ -4082,6 +4082,7 @@ export function dropwayClient() {
         var tb = h("tbody");
         res.keys.forEach(function (k) {
           var expires = expiry(k.expiresAt);
+          var exactExpiry = expires ? h("span", { id: "dw-key-expiry-" + k.id, class: "dw-sub", hidden: true }) : null;
           tb.appendChild(
             h(
               "tr",
@@ -4091,7 +4092,20 @@ export function dropwayClient() {
                 return h("span", { class: "dw-badge", style: "margin:0 .2rem .2rem 0", text: sc });
               }), k.siteId ? h("span", { class: "dw-sub", text: "One site only" }) : null),
               h("td", { class: "num dw-small dw-muted dw-hide-sm" }, h("span", { title: k.createdAt, text: "Created " + ago(k.createdAt) }), h("span", { class: "dw-sub", text: k.lastUsedAt ? "Used " + ago(k.lastUsedAt) : "Never used" })),
-              h("td", { class: "num dw-small dw-hide-sm", title: expires ? k.expiresAt : null, text: k.expiresAt ? expires : "No expiry" }),
+              h("td", { class: "num dw-small dw-hide-sm", title: expires ? k.expiresAt : null }, expires ? [
+                h("button", {
+                  type: "button", class: "dw-btn small ghost", text: expires,
+                  "aria-label": "Expiry details for " + (k.name || k.prefix) + ": " + expires,
+                  "aria-expanded": "false", "aria-controls": exactExpiry.id,
+                  onclick: function (e) {
+                    var show = e.currentTarget.getAttribute("aria-expanded") !== "true";
+                    exactExpiry.textContent = show ? new Date(k.expiresAt).toLocaleString() : "";
+                    exactExpiry.hidden = !show;
+                    e.currentTarget.setAttribute("aria-expanded", String(show));
+                  },
+                }),
+                exactExpiry,
+              ] : k.expiresAt ? "" : "No expiry"),
               h(
                 "td",
                 { class: "act" },
