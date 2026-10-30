@@ -24,7 +24,7 @@ export const SHOW_MAX_BYTES = 1024 * 1024;
 // identifies the merged bytes. 4 was then issued separately for the
 // shared-link head tags and for the Phone disclosure in the viewer bar, so
 // the merged render moves to 5.
-const CODE_VERSION = 5;
+const CODE_VERSION = 6;
 
 /** The highlighting language for a file of this kind, or null for plain text. */
 export function codeLanguage(path: string, kind: FileKind): string | null {

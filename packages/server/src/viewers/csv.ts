@@ -12,7 +12,7 @@ import type { Viewer } from "./index";
 // 4 was issued separately for the report print treatment plus shared-link
 // head tags and for the Phone disclosure in the viewer bar; neither 4
 // identifies the merged bytes, so the merged render moves to 5.
-const CSV_VERSION = 5;
+const CSV_VERSION = 6;
 export const MAX_ROWS = 2_000;
 const READ_MAX_BYTES = 4 * 1024 * 1024;
 const MAX_CELL = 1_000;

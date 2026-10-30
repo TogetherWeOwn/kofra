@@ -25,6 +25,7 @@ import {
 import { escapeHtml, siteSystemCsp, systemPage } from "./html";
 import { urlCode } from "./ui/code";
 import { safeNext, themeOf } from "./ui/theme";
+import { SITE_CSS_HASH } from "./ui/design.generated";
 import { findViewer, toViewerFile, VIEWER_CHROME_VERSION, VIEWER_CSP, VIEWERS, type ViewMode, type Viewer } from "./viewers";
 import { OPEN_PATH } from "./viewers/links";
 import { renderListing } from "./viewers/listing";
@@ -641,8 +642,9 @@ async function serveFile(
     const theme = themeOf(dw);
     // The shared chrome revision retires every full-page validator when
     // viewerPage markup/CSS changes, including extension viewers whose own
-    // version cannot know about an internal chrome change.
-    const etag = `W/"${etagSegment(viewer.id)}@${viewer.version ?? 1}-${sha256}${etagSegment(viewer.etagExtra?.(file, live) ?? "")}${folderVariant}-chrome${VIEWER_CHROME_VERSION}${embed ? "-e" : ""}${theme === "auto" ? "" : `-t${theme[0]}`}${reportVariant}"`;
+    // version cannot know about an internal chrome change. The site CSS hash
+    // does the same for design stylesheet edits that change no markup.
+    const etag = `W/"${etagSegment(viewer.id)}@${viewer.version ?? 1}-${sha256}${etagSegment(viewer.etagExtra?.(file, live) ?? "")}${folderVariant}-chrome${VIEWER_CHROME_VERSION}.${SITE_CSS_HASH}${embed ? "-e" : ""}${theme === "auto" ? "" : `-t${theme[0]}`}${reportVariant}"`;
     const h = new Headers();
     if (status === 200 && etagMatches(req, etag)) {
       h.set("ETag", etag);

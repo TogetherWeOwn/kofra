@@ -10,7 +10,7 @@ import { RESERVED_NAME, sanitizeHtml } from "./sanitize";
 // 4 was issued separately for the report print treatment plus shared-link
 // head tags and for the Phone disclosure in the viewer bar; neither 4
 // identifies the merged bytes, so the merged render moves to 5.
-const MD_VERSION = 5;
+const MD_VERSION = 6;
 
 export const MD_CSS = `
 .k-doc{max-width:46em;margin:0 auto;padding:var(--s7) var(--s7) var(--s10);font-size:17px;line-height:1.6;color:var(--ink);overflow-wrap:break-word}

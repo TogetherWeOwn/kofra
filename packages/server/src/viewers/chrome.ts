@@ -22,7 +22,7 @@ import { unfurlHead } from "./unfurl";
  * extension viewers using viewerPage() too, not just the built-ins whose own
  * `version` is bumped by hand. Bump it whenever the shared output changes.
  */
-export const VIEWER_CHROME_VERSION = 2;
+export const VIEWER_CHROME_VERSION = 3;
 
 /** CSP for viewer pages: no scripts, so user-authored markup inside e.g. Markdown cannot execute. */
 export const VIEWER_CSP =
