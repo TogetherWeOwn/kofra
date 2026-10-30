@@ -115,7 +115,7 @@ export async function serveTransfer(request: Request, dc: DropwayContext, slug: 
     const disposition = attachmentDisposition(filename, { alwaysExtended: true });
     return new Response(out.body, { status: out.ranged ? 206 : 200, headers: {
       ...headers, "Content-Type": out.file.content_type, "Content-Disposition": disposition,
-      "Content-Length": String(out.length), "Accept-Ranges": "bytes",
+      "Content-Length": String(out.length), "Accept-Ranges": "bytes", "ETag": out.etag,
       ...(out.continuationCookie ? { "Set-Cookie": out.continuationCookie } : {}),
       ...(out.ranged ? { "Content-Range": `bytes ${out.offset}-${out.offset + out.length - 1}/${out.file.size}` } : {}),
     } });

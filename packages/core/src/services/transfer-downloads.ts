@@ -43,6 +43,13 @@ function transferRange(range: string | null, size: number) {
   return { offset, length: last - offset + 1 };
 }
 
+const transferEtag = (file: TransferFile) => `"${file.sha256}"`;
+function downloadRange(request: Request, file: TransferFile): string | null {
+  const ifRange = request.headers.get("If-Range");
+  // Without a matching strong validator, HTTP resumption is a new full GET.
+  return ifRange !== null && ifRange !== transferEtag(file) ? null : request.headers.get("Range");
+}
+
 const continuationLifetime = 15 * 60_000;
 const continuationCookieName = async (t: TransferRow, file: TransferFile) => `__Host-dw_resume_${await sha256Hex(JSON.stringify([t.id, file.path]))}`;
 function continuationMessage(t: PublicTransfer, file: TransferFile, request: Request, until: string) {
@@ -51,7 +58,7 @@ function continuationMessage(t: PublicTransfer, file: TransferFile, request: Req
 }
 async function validContinuation(dc: DropwayContext, t: PublicTransfer, file: TransferFile, request: Request): Promise<boolean> {
   if (request.method !== "GET") return false;
-  try { if (transferRange(request.headers.get("Range"), file.size).offset === 0) return false; }
+  try { if (transferRange(downloadRange(request, file), file.size).offset === 0) return false; }
   catch { return false; }
   const name = await continuationCookieName(t, file);
   const cookie = (request.headers.get("Cookie") ?? "").split(";").map((v) => v.trim()).find((v) => v.startsWith(`${name}=`));
@@ -118,11 +125,13 @@ export async function recordTransferDownload(dc: DropwayContext, t: PublicTransf
   if (recipientToken && index < 0) throw transferMissing();
   if (!count) {
     const fresh = await publicTransfer(dc, t.slug);
+    if (fresh.id !== t.id || fresh.site_id !== t.site_id) throw transferMissing();
     const freshFile = await publicTransferFile(dc, fresh, file.path);
-    // Revalidate the actual credential against live state after opening R2,
-    // not just the decision made before the asynchronous blob read.
+    // Revalidate the credential and the immutable representation opened from R2,
+    // not a replacement that acquired the same slug or path during the read.
     await checkDownloadGate(dc, fresh, freshFile, request);
     if (fresh.password_hash !== t.password_hash) throw forbidden("Password required.", "Unlock the delivery again.", "transfer_locked");
+    if (fresh.revision !== t.revision || freshFile.sha256 !== file.sha256 || freshFile.size !== file.size || freshFile.content_type !== file.content_type) throw transferConflict();
     return;
   }
   const mutation = newSecret("dwd_");
@@ -133,14 +142,18 @@ export async function recordTransferDownload(dc: DropwayContext, t: PublicTransf
       recipients_json = CASE WHEN ? IS NULL THEN recipients_json ELSE json_set(recipients_json, ?, json_extract(recipients_json, ?) + 1) END
       WHERE id = ? AND revision = ? AND deleted_at IS NULL AND revoked_at IS NULL AND expired_at IS NULL
         AND takedown_at IS NULL AND purged_at IS NULL AND expires_at >= ? AND (download_limit IS NULL OR downloads < download_limit)
-        AND EXISTS (SELECT 1 FROM sites WHERE id = site_id AND deleted_at IS NULL AND password_hash IS ?)`)
-      .bind(increment, mutation, recipientPath, recipientPath, recipientPath, t.id, t.revision, Date.now(), t.password_hash),
+        AND EXISTS (SELECT 1 FROM sites WHERE id = transfers.site_id AND id = ? AND slug = ?
+          AND mode = 'transfer' AND current_version_id IS NOT NULL AND deleted_at IS NULL AND password_hash IS ?)
+        AND EXISTS (SELECT 1 FROM transfer_files WHERE transfer_id = transfers.id AND path = ? AND sha256 = ? AND size = ? AND content_type = ?)`)
+      .bind(increment, mutation, recipientPath, recipientPath, recipientPath, t.id, t.revision, Date.now(), t.site_id, t.slug, t.password_hash,
+        file.path, file.sha256, file.size, file.content_type),
     dc.env.DB.prepare(`UPDATE transfer_files SET downloads = downloads + ? WHERE transfer_id = ? AND path = ?
       AND EXISTS (SELECT 1 FROM transfers WHERE id = ? AND mutation_id = ?)`)
       .bind(increment, t.id, file.path, t.id, mutation),
   ]);
   if (!updated?.meta.changes) {
     const fresh = await publicTransfer(dc, t.slug);
+    if (fresh.id !== t.id || fresh.site_id !== t.site_id) throw transferMissing();
     await publicTransferFile(dc, fresh, file.path);
     checkTransferGate(fresh);
     if (fresh.password_hash !== t.password_hash) throw forbidden("Password required.", "Unlock the delivery again.", "transfer_locked");
@@ -158,7 +171,7 @@ export async function openTransferDownload(dc: DropwayContext, request: Request,
   if (!await transferUnlocked(dc, t, request)) return { locked: true as const, transfer: t };
   const recipient = new URL(request.url).searchParams.get("recipient");
   if (recipient && !transferRecipients(t).some((r) => r.token === recipient)) throw transferMissing();
-  const range = request.headers.get("Range");
+  const range = downloadRange(request, file);
   const { offset, length } = transferRange(range, file.size);
   const body = range ? await readBlobRange(dc, file.sha256, { offset, length }) : (await readBlob(dc, file.sha256, file.size))?.body;
   if (!body) throw transferMissing();
@@ -174,5 +187,5 @@ export async function openTransferDownload(dc: DropwayContext, request: Request,
     throw error;
   }
   if (request.method === "HEAD") await body.cancel();
-  return { locked: false as const, transfer: t, file, body: request.method === "HEAD" ? null : body, offset, length, ranged: !!range, continuationCookie };
+  return { locked: false as const, transfer: t, file, body: request.method === "HEAD" ? null : body, offset, length, ranged: !!range, etag: transferEtag(file), continuationCookie };
 }
