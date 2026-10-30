@@ -5,11 +5,11 @@ import { standardTabs, viewerPage } from "./chrome";
 import { HEADING_REFERENCES } from "./heading-references";
 import { HIGHLIGHT_CSS, highlight, hljsLanguage } from "./highlight";
 import type { Viewer } from "./index";
-import { DROP, sanitizeHtml } from "./sanitize";
+import { DROP, KEEP, sanitizeHtml } from "./sanitize";
 
 // Bump whenever the rendered output changes: this retires cached fragments
 // and render ETags keyed `markdown@<version>/...`.
-const MD_VERSION = 7;
+const MD_VERSION = 8;
 
 const MD_CSS = `
 .dw-md{max-width:48rem;margin:0 auto;padding:2.5rem 1.25rem 5rem}
@@ -100,10 +100,16 @@ function headingKey(value: string): string {
   );
 }
 
+/** HTML names fold ASCII capitals only, not Unicode lookalikes. */
+function asciiLower(value: string): string {
+  return value.replace(/[A-Z]/g, (c) => c.toLowerCase());
+}
+
 interface ParsedTag {
   closing: boolean;
   name: string;
   id: string | undefined;
+  inputType: string | undefined;
   selfClosing: boolean;
   /** Index just past ">". */
   end: number;
@@ -118,9 +124,10 @@ function parseTag(html: string, start: number): ParsedTag | "eof" | null {
   const m = TAG_OPEN.exec(html);
   if (!m) return null;
   const closing = m[1] === "/";
-  const name = m[2]!.toLowerCase();
+  const name = asciiLower(m[2]!);
   let i = TAG_OPEN.lastIndex;
   let id: string | undefined;
+  let inputType: string | undefined;
   let selfClosing = false;
   // Attribute values may contain '<' and '>'. Never restart at a heading
   // prefix within a value, or rescan an unterminated tag from each '<'.
@@ -132,7 +139,7 @@ function parseTag(html: string, start: number): ParsedTag | "eof" | null {
     // than being discarded: =id and id are distinct attributes.
     if (html[i] === "=") i++;
     while (i < html.length && !/[\t\n\f\r />=]/.test(html[i]!)) i++;
-    const attr = html.slice(attrStart, i).toLowerCase();
+    const attr = asciiLower(html.slice(attrStart, i));
     while (i < html.length && HTML_SPACE.test(html[i]!)) i++;
     let value = "";
     if (html[i] === "=") {
@@ -153,35 +160,25 @@ function parseTag(html: string, start: number): ParsedTag | "eof" | null {
     // HTML keeps the first duplicate attribute. A slash is part of an
     // unquoted value, not a self-closing marker: id=install/ means install/.
     if (attr === "id" && id === undefined) id = value;
+    if (attr === "type" && inputType === undefined) inputType = value;
   }
   if (i === html.length) return "eof";
-  return { closing, name, id, selfClosing, end: i + 1 };
+  return { closing, name, id, inputType, selfClosing, end: i + 1 };
 }
 
 type AnchorEvent = { kind: "md"; index: number } | { kind: "raw"; id: string };
 
-/**
- * Read a probe fragment in served order: Markdown-generated headings (found by
- * their sentinel prefix wherever they appear, so headings swallowed by raw
- * markup can never shift later indices) interleaved with the raw-HTML heading
- * ids the sanitizer actually serves (outside comments, raw-text elements and
- * sanitizer-dropped subtrees). The per-render nonce keeps authored markup
- * from forging a sentinel occurrence.
- */
-function scanProbe(html: string, nonce: string): AnchorEvent[] {
-  const prefix = `kofra-md-${nonce}-`;
-  const digits = /\d+/y;
-  const mdAt: Array<{ pos: number; index: number }> = [];
-  let at = html.indexOf(prefix);
-  while (at >= 0) {
-    digits.lastIndex = at + prefix.length;
-    const num = digits.exec(html);
-    if (num) mdAt.push({ pos: at, index: Number(num[0]) });
-    at = html.indexOf(prefix, at + prefix.length);
-  }
+type RawHeading = { pos: number; id: string };
 
-  const rawAt: Array<{ pos: number; id: string }> = [];
-  const open: Array<{ name: string; dropped: boolean }> = [];
+/** One tokenizer pass. Structural omissions describe comparison bytes only;
+ * HTMLRewriter remains the sanitizer and authored output is never rewritten here. */
+function scanHtml(html: string, nonce: string, projecting: boolean) {
+  const prefix = `kofra-md-${nonce}-`;
+  const rawAt: RawHeading[] = [];
+  const omitted: Array<[number, number]> = [];
+  let hiddenFrom: number | undefined;
+  let commentFrom = 0;
+  const open: Array<{ name: string; dropped: boolean; removed: boolean }> = [];
   let dropped = 0;
   let rawText: string | null = null;
   // Script tokenizer states: data, escaped (`<!--` seen), double-escaped.
@@ -191,22 +188,13 @@ function scanProbe(html: string, nonce: string): AnchorEvent[] {
   let scriptEscapeEnd: number | undefined;
   const openNames = new Map<string, number[]>();
 
-  const finish = (): AnchorEvent[] => {
-    // Both scans advance monotonically; merge their already-ordered events.
-    const seenMd = new Set<number>();
-    const events: AnchorEvent[] = [];
-    let m = 0;
-    let r = 0;
-    while (m < mdAt.length || r < rawAt.length) {
-      if (r < rawAt.length && (m === mdAt.length || rawAt[r]!.pos < mdAt[m]!.pos)) {
-        events.push({ kind: "raw", id: rawAt[r++]!.id });
-      } else {
-        const index = mdAt[m++]!.index;
-        // Each generated heading carries two occurrences (id and href).
-        if (!seenMd.has(index)) { seenMd.add(index); events.push({ kind: "md", index }); }
-      }
-    }
-    return events;
+  const omit = (start: number, end: number): void => {
+    if (projecting && end > start) omitted.push([start, end]);
+  };
+  const finish = () => {
+    if (hiddenFrom !== undefined) omit(hiddenFrom, html.length);
+    if (comment && dropped === 0) omit(commentFrom, html.length);
+    return { rawAt, omitted };
   };
 
   /** Successful pops are amortized; missing names never scan the stack. */
@@ -222,6 +210,19 @@ function scanProbe(html: string, nonce: string): AnchorEvent[] {
       if (el.name === rawText) { rawText = null; escaped = 0; }
     }
   };
+  const closeTag = (tag: ParsedTag, start: number): void => {
+    const found = openNames.get(tag.name)?.at(-1);
+    const removed = found !== undefined && open[found]!.removed;
+    popTo(tag.name);
+    if (hiddenFrom !== undefined) {
+      if (dropped === 0) {
+        omit(hiddenFrom, removed ? tag.end : start);
+        hiddenFrom = undefined;
+      }
+    } else if (removed) {
+      omit(start, tag.end);
+    }
+  };
 
   let i = 0;
   for (;;) {
@@ -230,6 +231,7 @@ function scanProbe(html: string, nonce: string): AnchorEvent[] {
       commentEnd.lastIndex = i;
       if (!commentEnd.exec(html)) return finish();
       i = commentEnd.lastIndex;
+      if (dropped === 0) omit(commentFrom, i);
       comment = false;
       continue;
     }
@@ -245,7 +247,7 @@ function scanProbe(html: string, nonce: string): AnchorEvent[] {
         const tag = parseTag(html, lt);
         if (tag === "eof" || tag === null) return finish();
         i = tag.end;
-        popTo(rawText);
+        closeTag(tag, lt);
       } else {
         i = lt + 1;
       }
@@ -261,7 +263,9 @@ function scanProbe(html: string, nonce: string): AnchorEvent[] {
       const dd = escaped !== 0 ? scriptEscapeEnd! : -1;
       if (dd >= 0 && (lt < 0 || dd < lt)) { escaped = 0; i = dd + 3; continue; }
       if (lt < 0) return finish();
-      if (html.startsWith("<!--", lt)) { if (escaped === 0) escaped = 1; i = lt + 4; continue; }
+      // Reconsume the opener's dashes: <!--> and <!---> already contain
+      // the --> that returns an escaped script to data.
+      if (html.startsWith("<!--", lt)) { if (escaped === 0) escaped = 1; i = lt + 2; continue; }
       const slash = html[lt + 1] === "/";
       const nm = html.slice(lt + (slash ? 2 : 1), lt + (slash ? 2 : 1) + 6).toLowerCase();
       const after = html[lt + (slash ? 2 : 1) + 6] ?? ">";
@@ -276,7 +280,7 @@ function scanProbe(html: string, nonce: string): AnchorEvent[] {
           const tag = parseTag(html, lt);
           if (tag === "eof" || tag === null) return finish();
           i = tag.end;
-          popTo("script");
+          closeTag(tag, lt);
         }
       } else {
         i = lt + 1;
@@ -287,16 +291,23 @@ function scanProbe(html: string, nonce: string): AnchorEvent[] {
     if (lt < 0) return finish();
     if (html.startsWith("<!--", lt)) {
       // Abrupt closings complete immediately: <!--> and <!--->.
-      if (html[lt + 4] === ">") { i = lt + 5; continue; }
-      if (html[lt + 4] === "-" && html[lt + 5] === ">") { i = lt + 6; continue; }
+      if (html[lt + 4] === ">") { i = lt + 5; if (dropped === 0) omit(lt, i); continue; }
+      if (html[lt + 4] === "-" && html[lt + 5] === ">") { i = lt + 6; if (dropped === 0) omit(lt, i); continue; }
       comment = true;
+      commentFrom = lt;
       i = lt + 4;
       continue;
     }
-    if (html[lt + 1] === "!" || html[lt + 1] === "?") {
+    // A nonletter after "</" starts a bogus comment through the next ">",
+    // except for the empty end tag "</>". Embedded '<' markers are content.
+    const bogusEnd = html[lt + 1] === "/" && html[lt + 2] !== ">" && !/[a-z]/i.test(html[lt + 2] ?? "");
+    if (html[lt + 1] === "!" || html[lt + 1] === "?" || bogusEnd) {
       const gt = html.indexOf(">", lt + 2);
+      const end = gt < 0 ? html.length : gt + 1;
+      // Doctypes are retained; bogus comments are removed by onDocument.comments.
+      if (dropped === 0 && !/^<!doctype(?:[\t\n\f\r >]|$)/i.test(html.slice(lt, lt + 10))) omit(lt, end);
       if (gt < 0) return finish();
-      i = gt + 1;
+      i = end;
       continue;
     }
     const tag = parseTag(html, lt);
@@ -307,16 +318,22 @@ function scanProbe(html: string, nonce: string): AnchorEvent[] {
     if (tag === "eof") return finish();
     i = tag.end;
     if (tag.closing) {
-      popTo(tag.name);
+      closeTag(tag, lt);
       continue;
     }
-    if (!VOID.has(tag.name) && !(tag.selfClosing && (tag.name === "svg" || tag.name === "math"))) {
+    const isDrop = projecting && (DROP.has(tag.name) || (tag.name === "input" && (tag.inputType ?? "").toLowerCase() !== "checkbox"));
+    const removed = projecting && (isDrop || !KEEP.has(tag.name));
+    const hasContent = !VOID.has(tag.name) && !(tag.selfClosing && (tag.name === "svg" || tag.name === "math"));
+    if (dropped === 0 && removed) {
+      if (isDrop && hasContent) hiddenFrom = lt;
+      else omit(lt, tag.end);
+    }
+    if (hasContent) {
       // A self-closing slash on HTML elements is ignored: <template/> stays open.
-      const isDrop = DROP.has(tag.name);
       const indices = openNames.get(tag.name) ?? [];
       indices.push(open.length);
       openNames.set(tag.name, indices);
-      open.push({ name: tag.name, dropped: isDrop });
+      open.push({ name: tag.name, dropped: isDrop, removed });
       if (isDrop) dropped++;
       if (RAWTEXT.has(tag.name)) { rawText = tag.name; escaped = 0; }
     }
@@ -324,6 +341,67 @@ function scanProbe(html: string, nonce: string): AnchorEvent[] {
       rawAt.push({ pos: lt, id: headingKey(tag.id) });
     }
   }
+}
+
+/**
+ * Merge original Markdown sentinel order with raw headings in the final output.
+ * Removing comments, dropped subtrees or unwrapped tags can join text into new
+ * markup. Apply those structural omissions once, then reparse the comparison
+ * bytes without sanitizing them again. Positions map monotonically back to the
+ * original probe, so swallowed headings cannot shift later Markdown indices.
+ */
+function scanProbe(html: string, nonce: string): AnchorEvent[] {
+  const prefix = `kofra-md-${nonce}-`;
+  const digits = /\d+/y;
+  const mdAt: Array<{ pos: number; index: number }> = [];
+  let at = html.indexOf(prefix);
+  while (at >= 0) {
+    digits.lastIndex = at + prefix.length;
+    const num = digits.exec(html);
+    if (num) mdAt.push({ pos: at, index: Number(num[0]) });
+    at = html.indexOf(prefix, at + prefix.length);
+  }
+
+  const first = scanHtml(html, nonce, true);
+  let rawAt = first.rawAt;
+  if (first.omitted.length) {
+    const parts: string[] = [];
+    const spans: Array<{ offset: number; start: number }> = [];
+    let from = 0;
+    let offset = 0;
+    const append = (end: number): void => {
+      if (end <= from) return;
+      spans.push({ offset, start: from });
+      parts.push(html.slice(from, end));
+      offset += end - from;
+    };
+    for (const [start, end] of first.omitted) {
+      append(start);
+      from = end;
+    }
+    append(html.length);
+    rawAt = scanHtml(parts.join(""), nonce, false).rawAt;
+    let span = 0;
+    for (const raw of rawAt) {
+      while (span + 1 < spans.length && spans[span + 1]!.offset <= raw.pos) span++;
+      raw.pos += spans[span]!.start - spans[span]!.offset;
+    }
+  }
+
+  const seenMd = new Set<number>();
+  const events: AnchorEvent[] = [];
+  let m = 0;
+  let r = 0;
+  while (m < mdAt.length || r < rawAt.length) {
+    if (r < rawAt.length && (m === mdAt.length || rawAt[r]!.pos < mdAt[m]!.pos)) {
+      events.push({ kind: "raw", id: rawAt[r++]!.id });
+    } else {
+      const index = mdAt[m++]!.index;
+      // Each generated heading carries two occurrences (id and href).
+      if (!seenMd.has(index)) { seenMd.add(index); events.push({ kind: "md", index }); }
+    }
+  }
+  return events;
 }
 
 /** Probe ids embed a per-render nonce so authored markup can never forge one. */

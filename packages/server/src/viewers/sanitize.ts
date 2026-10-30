@@ -18,7 +18,7 @@ export const DROP = new Set([
 ]);
 
 /** Kept (with filtered attributes). Anything else is unwrapped: the tag goes, its content stays. */
-const KEEP = new Set([
+export const KEEP = new Set([
   "a", "abbr", "address", "article", "aside", "audio", "b", "bdi", "bdo", "blockquote", "br", "caption", "center", "cite", "code",
   "col", "colgroup", "data", "dd", "del", "details", "dfn", "div", "dl", "dt", "em", "figcaption", "figure", "footer", "h1", "h2",
   "h3", "h4", "h5", "h6", "header", "hr", "i", "img", "input", "ins", "kbd", "li", "main", "mark", "nav", "ol", "p", "picture",
