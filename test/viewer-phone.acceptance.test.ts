@@ -153,7 +153,7 @@ describe("viewer Phone: served public-file contract", () => {
   // and image rows are the validators main issues for its focus-fix markup
   // without Phone: merged markup differs from both parents, so it needs @4.
   it.each([
-    ["notes.md", "markdown", 3, 4], ["data.json", "json", 2, 4], ["data.json", "json", 3, 4],
+    ["notes.md", "markdown", 3, 9], ["data.json", "json", 2, 4], ["data.json", "json", 3, 4],
     ["table.csv", "csv", 3, 4], ["plain.txt", "code", 3, 4], ["page.html", "html-frame", 1, 3],
     ["vector/shape.svg", "svg", 3, 4], ["raster/pixel.png", "image", 3, 4],
   ] as const)("invalidates the pre-Phone %s %s@%i validator, then correctly revalidates refreshed markup", async (path, id, oldVersion, newVersion) => {
@@ -298,7 +298,7 @@ describe("viewer Phone: validator versions", () => {
   // (which would strand cached pre-Phone pages on a 304) fails here.
   it("pins every built-in viewer at its exact post-Phone version", () => {
     const expected: Record<string, number> = {
-      source: 4, "html-frame": 3, markdown: 4, notebook: 3, json: 4, csv: 4,
+      source: 4, "html-frame": 3, markdown: 9, notebook: 6, json: 4, csv: 4,
       svg: 4, image: 4, pdf: 3, video: 3, audio: 3, font: 3, archive: 3,
       code: 4, binary: 4,
     };

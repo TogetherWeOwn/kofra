@@ -87,17 +87,17 @@ const unchangedCases = [
   ["unterminated-headings.md", ["report-title", null]],
 ] as const;
 
-// SHA-256 of complete served version-3 bodies, normalizing only the freshly
-// allocated site slug to "kofra-golden-slug". Filled from disposable baseline
-// Worker output, never from the new implementation.
+// Complete served-body SHA-256, captured independently from main 923ac4b
+// with Phone chrome and matched against integrated feature a8b6cdd. Removing
+// only that chrome recovers all seven original version-3 body digests.
 const BASELINE_BODY_SHA256: Record<string, string> = {
-  "raw-unquoted-slash.md": "53165bfac9dab0ed205c84f8b17588420999145b684282a7b4e56e54bf850df9",
-  "comment-heading.md": "2c47f838b532db6cc504ec743268720fca10ff62c393e496a4ba792fc3e18439",
-  "template-heading.md": "f794f205fd19c7da5aad30e45395bc3c42ae982d4e647dcbf9dd957f2dd7082e",
-  "textarea-heading.md": "1e8e7a168d73341ec376f92847a268f53ea29c16d69d2870f881ea1e10294d46",
-  "script-heading.md": "777f15dee7f2ef989953a7c4c70522954853eff4b294a026536c3a4150a6fef7",
-  "markdown-slug-overlap.md": "6389982d3e70f7ded65a991b1014aee75cb69f20f846f97668af4e4978c8104f",
-  "unterminated-headings.md": "c08c51b64cf0c4be0de657939532f27955ea7a43f782ec96eebcbc1b9816d42b",
+  "raw-unquoted-slash.md": "bf8446c8eebe28a3131daa82ce06e7586868a84dcf349713fc889457c00cd6ed",
+  "comment-heading.md": "257d07fe29e6237bdf60e83f688a004ee5fb5505f8a5d839e2f2f7ed635b7eb2",
+  "template-heading.md": "3a839fdf7d67e6665f9358deb65ad7c0cca9807983eba26a03d9177b99b20944",
+  "textarea-heading.md": "3db9762e13938fa1266adce18d3612efbff9a7d2048a5fe43e6869bd1c44ca6a",
+  "script-heading.md": "e0ba0ce00cdf246603ee3d0343a98b6d3742f5f3dd4f67c16a993002cc01922f",
+  "markdown-slug-overlap.md": "d61e1ec704cea5c5f947d73d174e9824bb9d57ab465649fdfb96aad5f430170b",
+  "unterminated-headings.md": "654f3fe7dad790d714499d0ade2fa06de6937f081b02aa28b833f23ccd4e5100",
 };
 
 describe("Markdown anchor compatibility follow-up in workerd", () => {
@@ -106,7 +106,9 @@ describe("Markdown anchor compatibility follow-up in workerd", () => {
 
   beforeAll(async () => {
     dw = await freshInstance();
-    const published = await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, body: form(fixtures) });
+    // Phone's QR encodes the URL in SVG geometry; text replacement cannot
+    // normalize a random slug there. A fixed fixture URL keeps all bytes pinned.
+    const published = await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, body: form(fixtures, { slug: "kofra-golden-slug" }) });
     expect(published.status).toBe(201);
     slug = published.body.slug;
   });
