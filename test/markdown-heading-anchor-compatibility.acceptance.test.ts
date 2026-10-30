@@ -87,17 +87,17 @@ const unchangedCases = [
   ["unterminated-headings.md", ["report-title", null]],
 ] as const;
 
-// Complete served-body SHA-256, captured independently from main 923ac4b
-// with Phone chrome and matched against integrated feature a8b6cdd. Removing
-// only that chrome recovers all seven original version-3 body digests.
+// Complete served-body SHA-256, captured independently from main c46e539
+// with Phone/unfurl chrome at the fixed fixture URL. Removing only its six
+// unfurl metadata lines recovers all seven prior Phone baseline digests.
 const BASELINE_BODY_SHA256: Record<string, string> = {
-  "raw-unquoted-slash.md": "bf8446c8eebe28a3131daa82ce06e7586868a84dcf349713fc889457c00cd6ed",
-  "comment-heading.md": "257d07fe29e6237bdf60e83f688a004ee5fb5505f8a5d839e2f2f7ed635b7eb2",
-  "template-heading.md": "3a839fdf7d67e6665f9358deb65ad7c0cca9807983eba26a03d9177b99b20944",
-  "textarea-heading.md": "3db9762e13938fa1266adce18d3612efbff9a7d2048a5fe43e6869bd1c44ca6a",
-  "script-heading.md": "e0ba0ce00cdf246603ee3d0343a98b6d3742f5f3dd4f67c16a993002cc01922f",
-  "markdown-slug-overlap.md": "d61e1ec704cea5c5f947d73d174e9824bb9d57ab465649fdfb96aad5f430170b",
-  "unterminated-headings.md": "654f3fe7dad790d714499d0ade2fa06de6937f081b02aa28b833f23ccd4e5100",
+  "raw-unquoted-slash.md": "c56457527718469a9e789b276d34e0c70c8e80b60da15347ba4980bfaf3df078",
+  "comment-heading.md": "8a804ec2064a03090973c119d028623432e269a13e919c65cf43d530a35019cf",
+  "template-heading.md": "aa411002091e60f43a9a0b58e386c025ef446963180fff1cd15dfab6d24afb59",
+  "textarea-heading.md": "e8561d26c492b7e57c3ec50cafa2edb40d0a83c977bb96f40967e868d42e2c35",
+  "script-heading.md": "fbb35e99a0ca93678be486cd9fbc9526688a47afd88f53fa9ec8cfd6a3d2adeb",
+  "markdown-slug-overlap.md": "b65c904063be0b39c10262da33f1d2a1d41469b97f56cfba3f53c14c5fc6fd3a",
+  "unterminated-headings.md": "e18cc3a026a15574ca94cfd9a5404c497aa17a809a34f078759fa3d8d8321cb6",
 };
 
 describe("Markdown anchor compatibility follow-up in workerd", () => {
