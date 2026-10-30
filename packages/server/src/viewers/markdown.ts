@@ -8,12 +8,9 @@ import type { Viewer } from "./index";
 import { DROP, KEEP, sanitizeHtml } from "./sanitize";
 
 // Bump whenever the rendered output changes: this retires cached fragments
-// and render ETags keyed `markdown@<version>/...`. 4 was issued separately for
-// the report print treatment plus shared-link head tags and for the Phone
-// disclosure; 5 adds shared-link unfurl metadata; 9 fixes foreign-content
-// heading reservations. No single parent number identifies these merged
-// bytes, so the merged render moves to 10.
-const MD_VERSION = 10;
+// and render ETags keyed `markdown@<version>/...`. 11 preserves non-heading
+// destinations and matches foreign content/removal lifetimes and tag policy.
+const MD_VERSION = 11;
 
 const MD_CSS = `
 .dw-md{max-width:48rem;margin:0 auto;padding:2.5rem 1.25rem 5rem}
@@ -79,6 +76,15 @@ const RAWTEXT = new Set([
 const SVG_INTEGRATION = new Set(["foreignobject", "desc", "title"]);
 const MATH_INTEGRATION = new Set(["mi", "mo", "mn", "ms", "mtext"]);
 const MATH_INTEGRATION_ENCODINGS = new Set(["text/html", "application/xhtml+xml"]);
+
+// These starts return foreign parsing to HTML. That context transition does
+// not end a removed element's content lifetime in the streaming sanitizer.
+const FOREIGN_BREAKOUT = new Set([
+  "b", "big", "blockquote", "body", "br", "center", "code", "dd", "div", "dl", "dt", "em", "embed",
+  "h1", "h2", "h3", "h4", "h5", "h6", "head", "hr", "i", "img", "li", "listing", "menu", "meta",
+  "nobr", "ol", "p", "pre", "ruby", "s", "small", "span", "strong", "strike", "sub", "sup", "table",
+  "tt", "u", "ul", "var",
+]);
 
 // After the initial ASCII letter, HTML tag names consume every non-space,
 // non-slash, non-">" character, including unfamiliar custom-element names.
@@ -181,9 +187,9 @@ function parseTag(html: string, start: number): ParsedTag | "eof" | null {
   return { closing, name, id, inputType, encoding, selfClosing, end: i + 1 };
 }
 
-type AnchorEvent = { kind: "md"; index: number } | { kind: "raw"; id: string };
+type AnchorEvent = { kind: "md"; index: number } | { kind: "raw"; id: string; heading: boolean };
 
-type RawHeading = { pos: number; id: string };
+type RawDestination = { pos: number; id: string; heading: boolean };
 
 /** SVG and MathML integration points: their children are parsed as HTML again. */
 function integrationPoint(name: string, root: "svg" | "math" | null, encoding: string | undefined): boolean {
@@ -197,13 +203,13 @@ function integrationPoint(name: string, root: "svg" | "math" | null, encoding: s
  * HTMLRewriter remains the sanitizer and authored output is never rewritten here. */
 function scanHtml(html: string, nonce: string, projecting: boolean) {
   const prefix = `kofra-md-${nonce}-`;
-  const rawAt: RawHeading[] = [];
+  const rawAt: RawDestination[] = [];
   const omitted: Array<[number, number]> = [];
   let hiddenFrom: number | undefined;
   let commentFrom = 0;
-  // `childCtx` is the parsing context of an element's children: HTML rules
-  // apply until an <svg>/<math> root switches to foreign content, and an
-  // integration point switches its own children back to HTML rules.
+  // Content/removal scopes survive a namespace breakout. Context is separate:
+  // even a self-closed root changes it without opening a removable subtree.
+  let context: "html" | "svg" | "math" = "html";
   const open: Array<{ name: string; dropped: boolean; removed: boolean; childCtx: "html" | "svg" | "math" }> = [];
   let dropped = 0;
   let rawText: string | null = null;
@@ -235,6 +241,7 @@ function scanHtml(html: string, nonce: string, projecting: boolean) {
       if (el.dropped) dropped--;
       if (el.name === rawText) { rawText = null; escaped = 0; }
     }
+    context = open.at(-1)?.childCtx ?? "html";
   };
   const closeTag = (tag: ParsedTag, start: number): void => {
     const found = openNames.get(tag.name)?.at(-1);
@@ -315,10 +322,6 @@ function scanHtml(html: string, nonce: string, projecting: boolean) {
     }
     const lt = html.indexOf("<", i);
     if (lt < 0) return finish();
-    // `context` is the parsing context of the children of the innermost open
-    // element: HTML rules apply until an <svg>/<math> root switches to foreign
-    // content, and an integration point switches its own children back.
-    const context = open.length ? open[open.length - 1]!.childCtx : "html";
     // Inside foreign content `<![CDATA[` opens a text run that ends only at
     // `]]>`; every `<` in it is content. Reading it as an HTML bogus comment
     // (through the first `>`) would end the dropped foreign subtree early and
@@ -362,37 +365,45 @@ function scanHtml(html: string, nonce: string, projecting: boolean) {
       closeTag(tag, lt);
       continue;
     }
-    // Inside SVG/MathML there is no HTML raw-text mode, so <style> and <title>
-    // are ordinary elements whose children stay markup. Only an integration
-    // point hands its children back to HTML rules.
-    const foreign = context !== "html";
-    const isDrop = projecting && (DROP.has(tag.name) || (tag.name === "input" && (tag.inputType ?? "").toLowerCase() !== "checkbox"));
-    const removed = projecting && (isDrop || !KEEP.has(tag.name));
-    const hasContent = !VOID.has(tag.name) && !(tag.selfClosing && (tag.name === "svg" || tag.name === "math"));
+    if (context !== "html" && FOREIGN_BREAKOUT.has(tag.name)) {
+      context = "html";
+      // Each foreign frame changes at most once: amortized linear work. Keep
+      // its removal scope open even though following tokens now parse as HTML.
+      for (let k = open.length - 1; k >= 0 && open[k]!.childCtx !== "html"; k--) open[k]!.childCtx = "html";
+    }
+    const namespace: "html" | "svg" | "math" = context === "html"
+      ? tag.name === "svg" ? "svg" : tag.name === "math" ? "math" : "html"
+      : context;
+    const foreign: boolean = namespace !== "html";
+    // Policy uses Unicode lowercasing, just like sanitizeHtml. Structural names
+    // above remain ASCII-folded: linK is dropped as link but is not HTML-void.
+    const policyName = tag.name.toLowerCase();
+    const isDrop = projecting && (DROP.has(policyName) || (policyName === "input" && (tag.inputType ?? "").toLowerCase() !== "checkbox"));
+    const removed = projecting && (isDrop || !KEEP.has(policyName));
+    const hasContent: boolean = foreign ? !tag.selfClosing : !VOID.has(tag.name);
     if (dropped === 0 && removed) {
       if (isDrop && hasContent) hiddenFrom = lt;
       else omit(lt, tag.end);
     }
+    // A foreign slash ends the token's content scope, including at integration
+    // points. A slash on an HTML non-void element is still ignored.
+    context = hasContent && integrationPoint(tag.name, namespace === "html" ? null : namespace, tag.encoding) ? "html" : namespace;
     if (hasContent) {
-      // A self-closing slash on HTML elements is ignored: <template/> stays open.
       const indices = openNames.get(tag.name) ?? [];
       indices.push(open.length);
       openNames.set(tag.name, indices);
-      const childCtx: "html" | "svg" | "math" = !foreign
-        ? tag.name === "svg" ? "svg" : tag.name === "math" ? "math" : "html"
-        : integrationPoint(tag.name, context, tag.encoding) ? "html" : context;
-      open.push({ name: tag.name, dropped: isDrop, removed, childCtx });
+      open.push({ name: tag.name, dropped: isDrop, removed, childCtx: context });
       if (isDrop) dropped++;
       if (!foreign && RAWTEXT.has(tag.name)) { rawText = tag.name; escaped = 0; }
     }
-    if (/^h[1-6]$/.test(tag.name) && tag.id && !tag.id.startsWith(prefix) && dropped === 0) {
-      rawAt.push({ pos: lt, id: headingKey(tag.id) });
+    if (tag.id && !tag.id.startsWith(prefix) && dropped === 0) {
+      rawAt.push({ pos: lt, id: headingKey(tag.id), heading: /^h[1-6]$/.test(tag.name) });
     }
   }
 }
 
 /**
- * Merge original Markdown sentinel order with raw headings in the final output.
+ * Merge original Markdown sentinel order with raw destinations in the final output.
  * Removing comments, dropped subtrees or unwrapped tags can join text into new
  * markup. Apply those structural omissions once, then reparse the comparison
  * bytes without sanitizing them again. Positions map monotonically back to the
@@ -442,7 +453,8 @@ function scanProbe(html: string, nonce: string): AnchorEvent[] {
   let r = 0;
   while (m < mdAt.length || r < rawAt.length) {
     if (r < rawAt.length && (m === mdAt.length || rawAt[r]!.pos < mdAt[m]!.pos)) {
-      events.push({ kind: "raw", id: rawAt[r++]!.id });
+      const raw = rawAt[r++]!;
+      events.push({ kind: "raw", id: raw.id, heading: raw.heading });
     } else {
       const index = mdAt[m++]!.index;
       // Each generated heading carries two occurrences (id and href).
@@ -466,7 +478,7 @@ function randomNonce(): string {
 /**
  * Final ids from probe order: a Markdown heading keeps its baseline id
  * unless an earlier raw heading already owns it; then it takes the first
- * free base-N suffix, skipping every raw id and every baseline destination
+ * free base-N suffix, skipping all surviving raw ids (not just headings) and baseline destinations
  * in the document (past and future) so no reachable fragment moves.
  */
 function assignIds(events: AnchorEvent[], bases: string[], baselines: string[]): string[] {
@@ -479,7 +491,7 @@ function assignIds(events: AnchorEvent[], bases: string[], baselines: string[]):
   const nextSuffix = new Map<string, number>();
   for (const e of events) {
     if (e.kind === "raw") {
-      rawSeen.add(e.id);
+      if (e.heading) rawSeen.add(e.id);
       continue;
     }
     if (e.index >= bases.length || finals[e.index] !== undefined) continue;
