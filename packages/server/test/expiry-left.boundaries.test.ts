@@ -5,8 +5,8 @@
  * fixtures read-only and never modifies them; the protected acceptance
  * contract in expiry-left.acceptance.test.ts remains the Test Author's.
  *
- * It pins two boundaries the acceptance table brackets but does not hit, each
- * of which a single-operator mutation of client.ts survives today:
+ * It pins two boundaries the whole-second acceptance table does not hit,
+ * distinguishing these single-operator mutations of client.ts:
  *
  *   1. `remaining < 0` -> `remaining <= 0` at client.ts:242. Exactly-at-expiry
  *      instants would render "Expired ..." though site/key expiry is strict `<`
@@ -17,6 +17,8 @@
  *      Whole-second fixture offsets cannot distinguish the two; sub-second
  *      remainders can. 44_500 ms must read "1 min" (floor reads "under a
  *      minute") and 89_500 ms must read "2 min" (floor reads "1 min").
+ *      Just below each transition, 44_499 ms stays "under a minute" and
+ *      89_499 ms stays "1 min", distinguishing round from Math.ceil.
  *
  * Run: npm run test:browser-code -- test/expiry-left.boundaries.test.ts
  */
@@ -34,10 +36,22 @@ const cases = [
     kills: "remaining <= 0 mutant would render Expired",
   },
   {
+    label: "44.499 s rounds down to under a minute",
+    offset: 44_499,
+    want: "Expires in under a minute",
+    kills: "Math.ceil mutant would render Expires in 1 min",
+  },
+  {
     label: "44.5 s rounds up to one minute",
     offset: 44_500,
     want: "Expires in 1 min",
     kills: "Math.floor mutant would render Expires in under a minute",
+  },
+  {
+    label: "89.499 s rounds down to one minute",
+    offset: 89_499,
+    want: "Expires in 1 min",
+    kills: "Math.ceil mutant would render Expires in 2 min",
   },
   {
     label: "89.5 s rounds up to two minutes",
