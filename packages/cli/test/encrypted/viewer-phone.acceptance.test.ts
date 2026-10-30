@@ -143,7 +143,7 @@ async function openPhone(page: Page) {
     await tabTo(page, checkbox);
     await page.keyboard.press("Space");
   }
-  const svg = page.locator(".dw-vbar svg");
+  const svg = page.locator(".dw-phone-panel svg");
   expect(await svg.count(), "Phone reveals an inline SVG, not a remote QR image").toBe(1);
   expect(await svg.isVisible()).toBe(true);
   expect(await svg.getAttribute("aria-label") || await svg.getAttribute("aria-labelledby") || await svg.locator("title").first().textContent().catch(() => null), "QR image must have an accessible label").toBeTruthy();
@@ -252,7 +252,7 @@ it.each([
 });
 
 async function assertPlainLink(page: Page, url: string) {
-  const link = page.locator(".dw-vbar a").filter({ hasText: url });
+  const link = page.locator(".dw-phone-panel a").filter({ hasText: url });
   expect(await link.count(), "full canonical URL must also be readable and keyboard-reachable").toBe(1);
   expect(await link.getAttribute("href")).toBe(url);
   expect(await link.isVisible()).toBe(true);
@@ -412,7 +412,7 @@ it("overflow has no QR but retains the full usable link on a narrow no-script pa
   const clean = fileUrl(slug, longPath);
   const view = await visit(`${clean}?view=1&token=not-public`, { width: 320 });
   try {
-    expect(await view.page.locator(".dw-vbar svg").count()).toBe(0);
+    expect(await view.page.locator(".dw-phone-panel svg").count()).toBe(0);
     const control = phoneControl(view.page);
     if (await control.count()) {
       const tag = await control.evaluate(el => (el as any).tagName.toLowerCase());
@@ -444,7 +444,7 @@ it("unlocked desktop encodes only the public URL and a fresh phone still encount
     const phone = await visit(decoded, { expectedStatus: 401 });
     try {
       expect(await phone.page.locator('input[type="password"]').count()).toBe(1);
-      expect(await phone.page.locator(".dw-vbar svg").count()).toBe(0);
+      expect(await phone.page.locator(".dw-phone-panel svg").count()).toBe(0);
     } finally { await phone.context.close(); }
   } finally { await view.context.close(); }
 });
@@ -454,7 +454,7 @@ it("embed mode and directory listings omit the Phone disclosure", async () => {
     const view = await visit(url);
     try {
       expect(await phoneControl(view.page).count()).toBe(0);
-      expect(await view.page.locator(".dw-vbar svg").count()).toBe(0);
+      expect(await view.page.locator(".dw-phone-panel svg").count()).toBe(0);
     } finally { await view.context.close(); }
   }
 });

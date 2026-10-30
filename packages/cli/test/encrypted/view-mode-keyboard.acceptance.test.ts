@@ -299,6 +299,7 @@ for (const separate of [false, true]) describe(`manual View mode tabs (${separat
     const view = await visit(fixture, "note.txt", 360, "source");
     try {
       await selected(view.page, "source");
+      await view.page.locator("details > summary").filter({ hasText: /^Files\s*\(\d+\)$/ }).click();
       const file = view.page.locator(`a[data-path="photo.png"]`);
       await file.focus(); await view.page.keyboard.press("Enter");
       await expect.poll(() => decodeURIComponent(new URL(view.page.url()).pathname)).toBe(viewerPath("photo.png"));

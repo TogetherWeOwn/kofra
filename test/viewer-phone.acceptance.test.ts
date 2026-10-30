@@ -32,9 +32,16 @@ const fixtures: Record<string, string> = { ...files, ...media,
   "sample.mp3": "audio fixture", "sample.woff2": "font fixture", "sample.zip": "invalid zip fixture",
 };
 
-// Extract an actual image, not an unrelated icon or a text mention of QR.
+// Scope Phone assertions away from the shared shell's checksum seal.
+function phonePanels(html: string): string[] {
+  return [...html.matchAll(/<div\b[^>]*\bclass="(?:[^"]*\s)?dw-phone-panel(?:\s[^"]*)?"[^>]*>([\s\S]*?)<\/div\s*>/gi)].map((m) => m[1]!);
+}
+
+// Extract an actual Phone image, not an unrelated icon or a text mention of QR.
 function qrSvg(html: string): string | undefined {
-  return Array.from(html.matchAll(/<svg\b[\s\S]*?<\/svg>/gi), (m) => m[0])
+  const scope = phonePanels(html).join("\n");
+  if (!scope) return undefined;
+  return Array.from(scope.matchAll(/<svg\b[\s\S]*?<\/svg>/gi), (m) => m[0])
     .find((svg) => /\b(?:aria-label|aria-labelledby)=|<title\b/i.test(svg));
 }
 
@@ -58,7 +65,8 @@ async function expectPhone(html: string, url: string) {
   expect(labels.some((label) => /\bPhone\b/i.test(label)), "a native no-script Phone disclosure must be served in the viewer bar").toBe(true);
   const svg = qrSvg(html);
   expect(svg, "Phone must include a labelled, server-rendered inline SVG").toBeDefined();
-  expect(html).toContain(`href="${url.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}"`);
+  const panelHtml = phonePanels(html).join("\n");
+  expect(panelHtml).toContain(`href="${url.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}"`);
   expect(svg!.length).toBeLessThanOrEqual(128 * 1024);
   expect(svg).toMatch(/\bviewBox=["']0 0 \d+ \d+["']/);
   expect(svg).not.toMatch(/<script\b|<foreignObject\b|<image\b|\bon\w+\s*=|(?:href|src)=["']https?:/i);
@@ -264,7 +272,7 @@ describe("viewer Phone: site-origin topology", () => {
     expect(html).toContain("Historical preview sentinel");
     expect(html).not.toContain("Current live sentinel");
     expect(qrSvg(html)).toBeUndefined();
-    expect(html).not.toContain('class="dw-phone"');
+    expect(html).not.toMatch(/class="(?:[^"]*\s)?dw-phone(?:\s|")/);
     expect((await elementTexts(html, "summary")).some(text => /\bPhone\b/i.test(text))).toBe(false);
     expect(html).not.toContain(capability.searchParams.get("dw_preview")!);
 
@@ -389,7 +397,7 @@ describe("viewer Phone: capacity degradation", () => {
     const html = await res.text();
     expect(html).toContain("Long public path");
     expect(qrSvg(html), "no truncated or substitute QR on encoder overflow").toBeUndefined();
-    expect(html, "capacity overflow must retain the complete canonical link")
+    expect(phonePanels(html).join("\n"), "capacity overflow must retain the complete canonical link")
       .toContain(`href="${ORIGIN}${path}"`);
     expect(html).not.toContain('href="https://api.qr');
   });

@@ -66,6 +66,13 @@ async function absoluteUrlsExceptSvgNamespace(html: string): Promise<string[]> {
   return markup.match(/https?:\/\/[^\s"'<>]+/g) ?? [];
 }
 
+// Inspect entry metadata, not the shared shell's checksum seal.
+function archiveListing(html: string): string {
+  const tables = [...html.matchAll(/<table\b[^>]*>[\s\S]*?<\/table\s*>/gi)].map((m) => m[0]);
+  expect(tables.length, "a real archive listing must contain its metadata table").toBeGreaterThan(0);
+  return tables.join("\n");
+}
+
 it.each<[string, string[]]>([
   ['<svg xmlns="http://www.w3.org/2000/svg"></svg>', []],
   ['<svg xmlns="http://www.w3.org/2000/svg"><image href="http://www.w3.org/2000/svg"/></svg>', ["http://www.w3.org/2000/svg"]],
@@ -371,9 +378,9 @@ describe("archive viewer pages", () => {
     expect(res.headers.get("x-kofra-viewer")).toBe("archive");
     const html = await res.text();
     expect(html).toMatch(/8 entries/i);
-    expect(html).toContain('class="dw-vbar"');
+    expect(html).toMatch(/class="(?:[^"]*\s)?dw-vbar(?:\s|")/);
     const embed = await get("archives/mixed.zip?view=1&embed=1");
-    expect(await embed.text()).not.toContain('class="dw-vbar"');
+    expect(await embed.text()).not.toMatch(/class="(?:[^"]*\s)?dw-vbar(?:\s|")/);
     expect(embed.headers.get("etag")).toMatch(/-e"$/);
   });
 
@@ -462,7 +469,7 @@ describe("archive viewer pages", () => {
     expect(html).toContain("directory-only.txt");
     expect(html).toContain("27 B");
     expect(html).toMatch(/deflated/i);
-    expect(html).not.toContain("SHA-256"); // A real listing, not the binary fallback.
+    expect(archiveListing(html)).not.toContain("SHA-256"); // A real listing, not the binary fallback.
   });
 
   it("decodes CP437 entry names when the UTF-8 flag bit is clear", async () => {
@@ -473,7 +480,7 @@ describe("archive viewer pages", () => {
     expect(html).toMatch(/1 entry\b/i);
     expect(html).toContain(CP437_NAME); // 0x81/0x82 decoded as ü/é, not raw U+0081/U+0082.
     expect(html).not.toContain("uber-cafe.txt");
-    expect(html).not.toContain("SHA-256"); // A real listing, not the binary fallback.
+    expect(archiveListing(html)).not.toContain("SHA-256"); // A real listing, not the binary fallback.
   });
 
   it("lists a ZIP exactly at the 2 MiB cap and falls back one byte over it", async () => {
@@ -484,7 +491,7 @@ describe("archive viewer pages", () => {
     expect(atHtml).toContain("at-cap-entry.txt");
     expect(atHtml).toMatch(/1 entry\b[^<]*uncompressed/i);
     expect(atHtml).not.toMatch(/too large/i);
-    expect(atHtml).not.toContain("SHA-256"); // Exactly at the cap still lists.
+    expect(archiveListing(atHtml)).not.toContain("SHA-256"); // Exactly at the cap still lists.
 
     const over = await get("archives/over-cap.zip");
     expect(over.status).toBe(200);
@@ -654,7 +661,7 @@ describe("archive viewer pages", () => {
       const secondHtml = await second.text();
       expect(secondHtml).toContain(entry);
       expect(secondHtml).toMatch(/1 entry\b[^<]*uncompressed/i);
-      expect(secondHtml).not.toContain("SHA-256");
+      expect(archiveListing(secondHtml)).not.toContain("SHA-256");
 
       const warm = await get(path);
       expect(warm.headers.get("x-kofra-render-cache")).toBe("memory");

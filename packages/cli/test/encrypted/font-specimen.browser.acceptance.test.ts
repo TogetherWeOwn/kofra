@@ -95,7 +95,8 @@ async function visit(width = 1100, javaScriptEnabled = false, embed = false, fon
       view.external.push(request.url());
       return route.abort("blockedbyclient");
     }
-    if (fontUnavailable && request.resourceType() === "font") return route.abort("failed");
+    if (fontUnavailable && request.resourceType() === "font"
+      && new URL(request.url()).pathname === new URL(specimen).pathname) return route.abort("failed");
     return route.continue();
   });
   try {
@@ -457,9 +458,11 @@ describe("font specimen browser contract", () => {
       const sample = await typeSample(view);
       for (const line of SAMPLE_LINES) expect(await text(sample)).toContain(line);
       expect(await sample.isVisible()).toBe(true);
-      const statuses = await view.page.evaluate(() => [...(globalThis as any).document.fonts].map((font: any) => font.status));
+      const statuses = await view.page.evaluate(() => [...(globalThis as any).document.fonts]
+        .filter((font: any) => font.family === "dw-specimen").map((font: any) => font.status));
       expect(statuses).toEqual(["error"]);
-      expect(view.requests.filter(request => request.type === "font")).toHaveLength(1);
+      expect(view.requests.filter(request => request.type === "font"
+        && new URL(request.url).pathname === new URL(specimen).pathname)).toHaveLength(1);
     } finally { await close(view); }
   });
 
@@ -467,12 +470,14 @@ describe("font specimen browser contract", () => {
     const view = await visit();
     try {
       expect(await view.page.locator("script, form").count()).toBe(0);
-      const fonts = view.requests.filter(request => request.type === "font");
+      const fonts = view.requests.filter(request => request.type === "font"
+        && new URL(request.url).pathname === new URL(specimen).pathname);
       expect(fonts, "one font resource path, not a font parser/service or per-size resources").toHaveLength(1);
       expect(new URL(fonts[0]!.url).origin).toBe(origin);
       expect(decodeURIComponent(new URL(fonts[0]!.url).pathname)).toBe(decodeURIComponent(new URL(specimen).pathname));
       expect(fonts[0]!.method).toBe("GET");
-      const loaded = await view.page.evaluate(() => [...(globalThis as any).document.fonts].map((font: any) => ({ family: font.family, status: font.status })));
+      const loaded = await view.page.evaluate(() => [...(globalThis as any).document.fonts]
+        .filter((font: any) => font.family === "dw-specimen").map((font: any) => ({ family: font.family, status: font.status })));
       expect(loaded).toEqual([{ family: "dw-specimen", status: "loaded" }]);
       expect(await editable(view).evaluate((node: any) => (globalThis as any).getComputedStyle(node).fontFamily)).toMatch(/serif|system-ui|monospace/i);
     } finally { await close(view); }
