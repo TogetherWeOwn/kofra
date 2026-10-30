@@ -276,8 +276,8 @@ describe("viewer pages", () => {
     expect(again.headers.get("x-kofra-render-cache")).toBe("memory");
     const etag = again.headers.get("etag")!;
     // Nonembedded pages include the live manifest identity as well as the file hash.
-    expect(etag).toMatch(/^W\/"code@5-[a-f0-9]{64}-[A-Za-z0-9_-]+"$/);
-    const hash = etag.match(/^W\/"code@5-([a-f0-9]{64})-/)![1];
+    expect(etag).toMatch(/^W\/"code@\d+-[a-f0-9]{64}-folder[A-Za-z0-9_-]+-chrome\d+(?:\.[0-9a-f]{8})?"$/);
+    const hash = etag.match(/^W\/"code@\d+-([a-f0-9]{64})-/)![1];
     expect((await get("src/app.ts", { ...NAV, "If-None-Match": `W/"code@3-${hash}"` })).status).toBe(200);
     expect((await get("src/app.ts", { ...NAV, "If-None-Match": etag })).status).toBe(304);
     // A validator from before the redesign (no page version) never revalidates the new page.
@@ -762,7 +762,7 @@ describe("notebook output folding", () => {
     expect(res.status).toBe(200);
     const etag = res.headers.get("etag")!;
     expect(etag).not.toBe(legacy);
-    expect(etag).toMatch(/^W\/"notebook@\d+-[a-f0-9]{64}(-[A-Za-z0-9_-]+)?"$/);
+    expect(etag).toMatch(/^W\/"notebook@\d+-[a-f0-9]{64}-folder[A-Za-z0-9_-]+-chrome\d+(?:\.[0-9a-f]{8})?"$/);
     expect(detailsBlocks(await res.text())).toHaveLength(3);
     const fresh = await get("nb/fold.ipynb", { ...NAV, "If-None-Match": etag });
     expect(fresh.status).toBe(304);

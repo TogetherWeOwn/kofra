@@ -63,20 +63,22 @@ describe("print stylesheet delivery", () => {
       expect(response.status, "a pre-print cached response must not survive as 304").toBe(200);
       const etag = response.headers.get("etag")!;
       expect(etag).not.toBe(legacy);
-      expect(etag).toMatch(new RegExp(`^W/"${viewer}@\\d+-[a-f0-9]{64}(?:-folder[A-Za-z0-9_-]+)?"$`));
+      expect(etag).toMatch(new RegExp(`^W/"${viewer}@\\d+-[a-f0-9]{64}(?:-folder[A-Za-z0-9_-]+)?-chrome\\d+(?:\\.[0-9a-f]{8})?"$`));
       const fresh = await get(path, { ...NAV, "If-None-Match": etag });
       expect(fresh.status).toBe(304);
       expect(await fresh.text()).toBe("");
     },
   );
 
-  it("binary text fallback is validator binary@5 and revalidates only the new representation", async () => {
+  it("binary text fallback retires pre-rotation validators and revalidates the current representation", async () => {
     const hash = await sha256Hex(new TextEncoder().encode(binaryTextContent));
     const response = await get("yarn.lock?view=1", { ...NAV, "If-None-Match": `W/"binary@3-${hash}"` });
     expect(response.headers.get("x-kofra-viewer")).toBe("binary");
     expect(response.status, "a pre-rotation binary cached response must not survive as 304").toBe(200);
     const etag = response.headers.get("etag")!;
-    expect(etag).toMatch(new RegExp(`^W/"binary@5-${hash}(?:-folder[A-Za-z0-9_-]+)?"$`));
+    const version = etag.match(/^W\/"binary@(\d+)-/)?.[1];
+    expect(Number(version)).toBeGreaterThan(3);
+    expect(etag).toMatch(new RegExp(`^W/"binary@\\d+-${hash}(?:-folder[A-Za-z0-9_-]+)?-chrome\\d+(?:\\.[0-9a-f]{8})?"$`));
     const html = await response.text();
     expect(html).toContain("it looks like text");
     expect(printStyles(html).length, "the binary as-text branch renders through the code page, so it must receive print CSS").toBeGreaterThan(0);

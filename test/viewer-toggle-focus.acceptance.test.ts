@@ -216,7 +216,7 @@ describe("viewer toggle focus (rendered contract)", () => {
     const res = await get(path);
     expect(res.status).toBe(200);
     const etag = res.headers.get("etag")!;
-    const m = new RegExp(`^W/"${viewerId}@(\\d+)-[a-f0-9]{64}(?:-nav[a-z0-9]+)?-folderver_[a-z0-9]+-chrome2"$`).exec(etag);
+    const m = new RegExp(`^W/"${viewerId}@(\\d+)-[a-f0-9]{64}(?:-nav[a-z0-9]+)?-folderver_[a-z0-9]+-chrome\\d+(?:\\.[0-9a-f]{8})?"$`).exec(etag);
     expect(m, `${viewerId} ETag shape: ${etag}`).not.toBeNull();
     // Viewer ETags derive from the viewer version. The pre-change pages were
     // version 2 for all three viewers (image/SVG gained folder navigation at

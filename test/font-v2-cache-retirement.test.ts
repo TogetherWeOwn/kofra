@@ -21,7 +21,7 @@ describe("deployed font@2 cache retirement", () => {
       const current = await dw.call(url + suffix, { headers: NAV });
       expect(current.status).toBe(200);
       const tag = current.headers.get("etag");
-      const match = tag?.match(/^W\/"font@(\d+)-([a-f0-9]{64})(-folder[A-Za-z0-9_-]+)?-chrome\d+(-e)?"$/);
+      const match = tag?.match(/^W\/"font@(\d+)-([a-f0-9]{64})(-folder[A-Za-z0-9_-]+)?-chrome\d+(?:\.[0-9a-f]{8})?(-e)?"$/);
       expect(match).not.toBeNull();
       expect(match![2]).toBe(FONT_SPECIMEN_SHA256);
       expect(match![4] ?? "").toBe(variant === "embed" ? "-e" : "");
