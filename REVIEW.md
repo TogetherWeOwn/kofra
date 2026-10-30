@@ -52,7 +52,9 @@ Try to prove your own candidate wrong first:
 
 ## Test rigor
 
-A missing test alone is not a runtime bug. These are blocking findings:
+A missing test alone is not a runtime bug. Treat test gaps and test
+weakening as blocking only when they conceal a reachable concrete regression
+with a wrong outcome. Investigate:
 
 - A changed behavior with no test that would fail if the change were
   reverted (name the assertion that should turn red, or show the test checks
