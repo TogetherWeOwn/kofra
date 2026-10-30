@@ -80,7 +80,7 @@ beforeAll(async () => {
       { path: hostilePath, content: "# Hostile but inert filename\n" },
       { path: longPath, content: "# Long public URL\n" },
       { path: screenDecodePath, content: "# Decode the on-screen public URL\n" },
-      { path: supportedLongPath, content: "# Supported long public URL\n" },
+      { path: supportedLongPath, content: "# Supported long public URL\n\n" + "An ordinary Markdown paragraph keeps this document tall enough to scroll.\n\n".repeat(200) },
     ] });
   }
   await api(`/api/v1/sites/${gatedSlug}/access`, { mode: "password", password }, "PUT");
@@ -344,6 +344,13 @@ it.each([
   if (path === supportedLongPath) expect(urlBytes).toBeGreaterThanOrEqual(580);
   const view = await visit(`${clean}?view=1&token=not-public`, { js: false, width, height });
   try {
+    if (path === supportedLongPath) {
+      const document = await view.page.evaluate(() => {
+        const scroll = (globalThis as any).document.scrollingElement;
+        return { height: scroll.scrollHeight, viewport: scroll.clientHeight };
+      });
+      expect(document.height, "the long-URL fixture must be scrollable before opening Phone").toBeGreaterThan(document.viewport);
+    }
     const svg = await openPhone(view.page);
     expect(await view.page.evaluate(() => (globalThis as any).devicePixelRatio)).toBe(1);
     const markup = await svg.evaluate(el => (el as any).outerHTML as string);
