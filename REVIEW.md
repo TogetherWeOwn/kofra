@@ -45,7 +45,7 @@ Try to prove your own candidate wrong first:
    stripped by the build is a defect; the reverse claim needs build-output
    evidence too.
 3. Check pinned dependency behavior actually used, and documented
-   compatibility behavior: legacy `dropway` command/variable/header names
+   compatibility behavior: legacy pre-rename command/variable/header names (see scripts/rebrand.mjs)
    working alongside `X-Kofra-*` is intentional, not drift.
 4. Pre-existing issues are out of scope unless this PR makes them newly
    reachable or worse; if so, explain the new reachability.
@@ -94,7 +94,7 @@ A missing test alone is not a runtime bug. These are blocking findings:
   add a new numbered file, backward-compatible with the deployed code.
 - **Errors as contract:** services throw `ApiError` with a stable snake_case
   `code` and `hint`; renaming a code, changing an HTTP status, or dropping a
-  header (including legacy `X-Dropway-*`) is a compatibility finding only
+  header (including legacy pre-rename `X-*` headers) is a compatibility finding only
   with the consuming client/CLI path shown.
 - **Open-core boundary:** this repo is the single-tenant open-source product.
   New billing, pricing, payment, signup-quota, or hosted-layer code here is a
