@@ -1,9 +1,11 @@
 # Explicit historical version actions (proposed)
 
-**Design only — not implemented or approved for activation.** This is the
-canonical proposal for selecting an explicit version in CLI restore/delete,
-including a version older than the newest 500. It changes no runtime, endpoint,
-permission, confirmation or storage in this documentation change. The consumer
+**Historical CLI selection remains design only — not implemented or approved
+for activation.** This is the canonical proposal for selecting an explicit version
+in CLI restore/delete, including a version older than the newest 500. The separate
+P1–P4 server prerequisites in §5.1 may be implemented without activating that CLI
+selection change. In particular, §3.4 describes P3's implemented retry/replay
+prerequisite, not approval to bypass the remaining STOP/H15 gates. The consumer
 is an agent performing an already-authorized action, not discovering authority.
 
 ## 1. Current behavior and evidence

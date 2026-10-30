@@ -90,7 +90,7 @@ export const VERSION_OPERATIONS = [
     toolset: "versions",
     scopes: ["sites:delete"],
     description:
-      "Permanently delete one version that is not live (for example one that leaked a secret). The live version cannot be deleted: restore or publish another first. Set confirm to the site's slug.",
+      "Permanently delete one version that is not live (for example one that leaked a secret). The live version cannot be deleted: restore or publish another first. Set confirm to the site's slug. REST accepts an optional Idempotency-Key header (1-255 printable ASCII characters without spaces) to replay the original receipt for the same request and current authorization within 24 hours. Changed input returns 422; pending or unknown outcomes return 409 without another mutation.",
     input: fromSchema({
       type: "object",
       properties: {

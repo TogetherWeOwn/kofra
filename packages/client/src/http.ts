@@ -234,6 +234,16 @@ export class DropwayHttpClient {
     headers: Record<string, string>,
     opts: RequestOptions,
   ): Promise<Response> {
+    const key = opts.idempotencyKey;
+    // Refuse invalid options before they can erase a caller-retained replay header.
+    if (key !== undefined && (typeof key !== "string" || key.length === 0 || key.length > 255 || /[^\x21-\x7e]/.test(key))) {
+      throw new DropwayError({
+        code: "invalid_idempotency_key",
+        message: "The idempotency key must be 1-255 printable ASCII characters without spaces.",
+        hint: "Use a fresh UUID per logical operation, and reuse it only for that same operation.",
+        retryable: false,
+      });
+    }
     const token = opts.token === undefined ? this.token : opts.token;
     const retry = opts.retry ?? (method === "GET" || method === "HEAD" ? "safe" : "rate-limit");
     let lastError: DropwayError | null = null;
@@ -245,9 +255,7 @@ export class DropwayHttpClient {
       sent.set("X-Kofra-Client", this.clientName);
       sent.set(`${LEGACY_HEADER_PREFIX}Client`, this.clientName); // instances from before the rename
       if (token) sent.set("Authorization", `Bearer ${token}`);
-      // Presence, not truthiness: a supplied empty key is a caller error the server refuses
-      // (invalid_idempotency_key). Dropping it would silently run an unkeyed mutation.
-      if (typeof opts.idempotencyKey === "string") sent.set("Idempotency-Key", opts.idempotencyKey);
+      if (key !== undefined) sent.set("Idempotency-Key", key);
       let res: Response;
       try {
         res = await this.doFetch(new Request(url, { method, headers: sent, body, redirect: "follow" }));

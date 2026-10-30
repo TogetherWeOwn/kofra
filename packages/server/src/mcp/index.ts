@@ -254,15 +254,16 @@ function buildServer(compiled: CompiledTool[], ctx: { dw: DropwayContext; princi
           if (replayed) await def.beforeReplay?.(args, toolCtx);
           const data: Record<string, unknown> = result && typeof result === "object" && !Array.isArray(result) ? { ...(result as Record<string, unknown>) } : { result };
           if (replayed) data.replayed = true;
+          const historical = replayed || data.replayed === true;
           let line: string;
           try {
             line = def.summarize ? def.summarize(data, args) : `${def.name}: done.`;
           } catch {
             line = `${def.name}: done.`;
           }
-          if (replayed) line = `Replayed the first result for this idempotencyKey. ${line}`;
+          if (historical) line = `Replayed the first result for this idempotencyKey. This is a historical receipt, not current site state. ${line}`;
           const content: Array<Record<string, unknown>> = [{ type: "text", text: `${line}\n${JSON.stringify(data)}` }];
-          if (typeof data.url === "string") {
+          if (!historical && typeof data.url === "string") {
             content.push({ type: "resource_link", uri: data.url, name: typeof data.slug === "string" ? data.slug : data.url, description: "Live URL. Share it exactly as returned." });
           }
           return { content, structuredContent: data } as never;

@@ -135,8 +135,8 @@ budget. New definitions should not need adapters. Notably:
 
 ### Version-action replay
 
-Restore (`POST /sites/{slug}/versions/{id}/restore`) and version delete
-(`DELETE /sites/{slug}/versions/{id}` with canonical-slug `confirm`) accept an
+Restore (`POST /api/v1/sites/{slug}/versions/{id}/restore`) and version delete
+(`DELETE /api/v1/sites/{slug}/versions/{id}` with canonical-slug `confirm`) accept an
 optional REST `Idempotency-Key`; their MCP tools accept `idempotencyKey`.
 Keys are 1–255 printable ASCII characters without spaces. An explicitly empty key
 is rejected; omitting the key remains compatible but has no result-replay guarantee.
@@ -148,8 +148,9 @@ is scoped to the credential's current restrictions and operation; REST and MCP
 have independent namespaces. No target is re-resolved on a completed replay, even
 when it has since been deleted or `live`/a number now names something different.
 The original result is returned with `replayed: true`; current URLs/pointers do not
-replace the stored receipt. Another site's acquisition of an old slug cannot replay
-its previous holder's result.
+replace the stored receipt. MCP labels replayed results as historical receipts and
+omits live resource links: a saved URL may no longer identify the same site.
+Another site's acquisition of an old slug cannot replay its previous holder's result.
 
 Changed input under the same key returns 422 `idempotency_key_reused`. Concurrent
 or unknown outcomes return 409 `idempotency_in_progress`, without another action.
@@ -164,8 +165,10 @@ After expiry a key may be reclaimed; this is not unlimited exactly-once executio
 Never infer a replay receipt from a later 404 or live-pointer read. CLI and dashboard
 version actions generate a new UUID per deliberate invocation/click, do not persist
 it, and never auto-retry; a later action is fresh intent. Typed SDK actions also
-never auto-retry and can carry a caller-retained key. In particular, 429 is surfaced,
-not presumed to prove a pre-effect refusal.
+never auto-retry and can carry a caller-retained key. The SDK rejects invalid
+`idempotencyKey` options before transport, rather than replacing a valid raw header
+with an empty key; omitting the option preserves a raw `Idempotency-Key` header.
+In particular, 429 is surfaced, not presumed to prove a pre-effect refusal.
 
 Run `npm run check` and `npm run openapi:lint`. CI validates the emitted OpenAPI
 3.1 document with Redocly and requires ids, summaries, descriptions, successful
