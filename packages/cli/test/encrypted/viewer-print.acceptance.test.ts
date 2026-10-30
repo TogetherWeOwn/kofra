@@ -223,7 +223,7 @@ describe("print disclosure and application boundaries", () => {
   it.each(["report.md", "report.json", "report.ipynb"])("%s preserves both folded and disclosed details", async (path) => {
     const view = await visit(path);
     try {
-      const details = view.page.locator("details").first();
+      const details = view.page.locator("body > :not(header.dw-vbar) details").first();
       expect(await details.count(), "fixture must exercise real rendered disclosure markup").toBe(1);
       for (const open of [false, true]) {
         await details.evaluate((element: any, value: boolean) => { element.open = value; }, open);

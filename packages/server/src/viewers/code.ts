@@ -19,10 +19,12 @@ import type { Viewer, ViewerContext } from "./index";
 /** At most this much text is shown; the rest is one click away (Raw, Download). */
 export const SHOW_MAX_BYTES = 1024 * 1024;
 
-// 4 rotates the merged line-range selection, report print treatment and
-// shared-link head tags: each changed codePage output after branching, so
-// none of the parents' 3 identifies the merged bytes.
-const CODE_VERSION = 4;
+// 3 rotates the merged line-range selection and report print treatment:
+// both changed codePage output after branching from 1, so neither parent's 2
+// identifies the merged bytes. 4 was then issued separately for the
+// shared-link head tags and for the Phone disclosure in the viewer bar, so
+// the merged render moves to 5.
+const CODE_VERSION = 5;
 
 /** The highlighting language for a file of this kind, or null for plain text. */
 export function codeLanguage(path: string, kind: FileKind): string | null {

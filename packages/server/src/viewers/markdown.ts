@@ -6,9 +6,10 @@ import { HIGHLIGHT_CSS, highlight, hljsLanguage } from "./highlight";
 import type { Viewer } from "./index";
 import { sanitizeHtml } from "./sanitize";
 
-// 4: report print treatment and shared-link head tags each changed the page after
-// branching; neither parent's 3 identifies the merged bytes.
-const MD_VERSION = 4;
+// 4 was issued separately for the report print treatment plus shared-link
+// head tags and for the Phone disclosure in the viewer bar; neither 4
+// identifies the merged bytes, so the merged render moves to 5.
+const MD_VERSION = 5;
 
 const MD_CSS = `
 .dw-md{max-width:48rem;margin:0 auto;padding:2.5rem 1.25rem 5rem}

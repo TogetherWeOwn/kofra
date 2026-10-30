@@ -9,9 +9,10 @@ import type { Viewer } from "./index";
  * numeric columns, and row/column counts. Shows the first 2,000 rows; reads at
  * most the first 4 MB of the file, so even very large files open fast.
  */
-// 4: report print treatment and shared-link head tags each changed the page after
-// branching; neither parent's 3 identifies the merged bytes.
-const CSV_VERSION = 4;
+// 4 was issued separately for the report print treatment plus shared-link
+// head tags and for the Phone disclosure in the viewer bar; neither 4
+// identifies the merged bytes, so the merged render moves to 5.
+const CSV_VERSION = 5;
 export const MAX_ROWS = 2_000;
 const READ_MAX_BYTES = 4 * 1024 * 1024;
 const MAX_CELL = 1_000;

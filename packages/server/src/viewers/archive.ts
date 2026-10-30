@@ -115,7 +115,10 @@ async function archiveListing(vc: ViewerContext): Promise<string | null> {
 
 export const archiveViewer: Viewer = {
   id: "archive",
-  version: 3,
+  // 3 was issued separately for the shared-link head tags (with shared-bar
+  // sibling navigation) and for the Phone disclosure, so the merged render
+  // moves to 4.
+  version: 4,
   // Large and unsupported archives still get an info page, but are never parsed.
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "archive" && mode !== "source",
