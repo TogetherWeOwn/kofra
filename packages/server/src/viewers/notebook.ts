@@ -1,10 +1,11 @@
 import { escapeHtml } from "../html";
 import { cachedRender } from "./cache";
-import { standardTabs, viewerPage } from "./chrome";
+import { standardTabs, viewerCarry, viewerPage } from "./chrome";
 import { containOutputMarkup } from "./contain";
 import { HIGHLIGHT_CSS, highlight, hljsLanguage } from "./highlight";
 import type { Viewer } from "./index";
-import { renderMarkdown } from "./markdown";
+import { carryDocLinks } from "./links";
+import { MD_CSS, renderMarkdown } from "./markdown";
 import { sanitizeHtml } from "./sanitize";
 
 /**
@@ -17,24 +18,25 @@ import { sanitizeHtml } from "./sanitize";
 // 4: output folding with containment and report print treatment with
 // shared-link head tags each changed the page after branching; neither
 // parent's 3 identifies the merged bytes.
-const NB_VERSION = 4;
+const NB_VERSION = 5;
 const MAX_OUTPUT_TEXT = 100_000;
 
 const NB_CSS = `
-.dw-nb{max-width:60rem;margin:0 auto;padding:1.5rem 1.25rem 5rem}
-.dw-cell{display:grid;grid-template-columns:5.5rem 1fr;gap:.5rem;margin:0 0 1rem}
-.dw-prompt{font:.75rem/1.9 ui-monospace,monospace;color:var(--muted);text-align:right;padding-top:.45rem}
-.dw-cell pre{margin:0;background:var(--code);border-radius:8px;padding:.7rem .9rem;overflow:auto;font-size:.84rem;line-height:1.5}
-.dw-out{margin-top:.4rem}
-.dw-out>summary{cursor:pointer;color:var(--muted);font-size:.8rem;padding:.2rem 0}
-.dw-out pre{background:transparent;border-left:3px solid var(--line);border-radius:0}
-.dw-out pre.err{border-left-color:#cf222e;color:#cf222e}
-.dw-out img{max-width:100%;height:auto;background:#fff;border-radius:4px}
+.k-doc .anchor-link{margin-left:.35em;color:var(--muted);opacity:0;text-decoration:none;font:400 .7em var(--sans)}
+.k-doc :is(h1,h2,h3,h4,h5,h6):hover .anchor-link,.k-doc .anchor-link:focus-visible{opacity:1}
+.dw-cell{display:grid;grid-template-columns:5.5rem minmax(0,1fr);gap:.5rem;margin:0 0 1rem}
+.dw-prompt{font:400 12px/1.9 var(--mono);color:var(--muted);text-align:right;padding-top:.45rem}
+.dw-cell pre{margin:0;background:var(--paper-3);border:1px solid var(--rule-soft);padding:12px 14px;overflow:auto;font-size:13px;line-height:1.55}
+.dw-out{margin-top:.4rem;background:var(--surface);border-top:1px solid var(--rule-soft)}
+.dw-out>summary{cursor:pointer;color:var(--muted);font:400 12px/1.4 var(--mono);padding:6px 0}
+.dw-out>summary:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.dw-out pre{background:transparent;border:0;border-left:3px solid var(--rule-soft)}
+.dw-out pre.err{border-left-color:var(--danger);color:var(--danger)}
+.dw-out img{display:block;max-width:100%;height:auto;margin:10px 0;background:#fff}
 .dw-mdcell{min-width:0}
 .dw-mdcell :is(h1,h2,h3){line-height:1.25}
-.dw-mdcell table{border-collapse:collapse}.dw-mdcell th,.dw-mdcell td{border:1px solid var(--line);padding:.3rem .6rem}
-.dw-out table{border-collapse:collapse;font-size:.85rem}.dw-out th,.dw-out td{border:1px solid var(--line);padding:.25rem .55rem}
-@media (max-width:640px){.dw-cell{grid-template-columns:1fr}.dw-prompt{text-align:left;padding:0}}
+.dw-out table{border-collapse:collapse;font-size:14px}.dw-out th,.dw-out td{border:1px solid var(--rule-soft);padding:.25rem .55rem}
+@media (max-width:640px){.dw-cell{grid-template-columns:minmax(0,1fr)}.dw-prompt{text-align:left;padding:0}}
 `;
 
 type Json = Record<string, unknown>;
@@ -98,15 +100,15 @@ export const notebookViewer: Viewer = {
       try {
         nb = JSON.parse(await vc.readText()) as Json;
       } catch (e) {
-        return `<p class="dw-note">This notebook is not valid JSON (${escapeHtml((e as Error).message)}). Use Source or Raw.</p>`;
+        return `<p class="k-banner k-notebar" role="note">This notebook is not valid JSON (${escapeHtml((e as Error).message)}). Use Source or Raw.</p>`;
       }
       return sanitizeHtml(renderNotebook(nb));
     });
     return viewerPage(vc, {
       tabs: standardTabs(vc, { rendered: "Notebook", source: true }),
       print: true,
-      css: NB_CSS + HIGHLIGHT_CSS,
-      body: `<main class="dw-nb">${r.html}</main>`,
+      css: MD_CSS + NB_CSS + HIGHLIGHT_CSS,
+      body: `<div class="k-doc dw-nb">${await carryDocLinks(r.html, vc.url.pathname, vc.siteBase, viewerCarry(vc))}</div>`,
       headers: { "X-Kofra-Render-Cache": r.cache },
     });
   },

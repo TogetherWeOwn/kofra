@@ -155,7 +155,10 @@ export class TargetWorld {
           finally { gate.delivered = true; }
         }
       } else if (method !== "GET" || (!['/login', '/dashboard/publish', '/', '/favicon.ico'].includes(url.pathname)
-        && !/^\/__dropway\/ui\/app-[a-f0-9]{8}\.js$/.test(url.pathname))) {
+        && !/^\/__dropway\/ui\/app-[a-f0-9]{8}\.js$/.test(url.pathname)
+        && !/^\/__dropway\/ui\/kofra-[a-f0-9]{8}\.css$/.test(url.pathname)
+        && !/^\/__dropway\/fonts\/[a-z0-9.-]+\.woff2$/.test(url.pathname)
+        && !/^\/__dropway\/ui\/art\/[a-z0-9.-]+\.svg$/.test(url.pathname))) {
         f.violations.push(`unexpected ${method} ${url.pathname}`);
         return route.abort("blockedbyclient");
       }

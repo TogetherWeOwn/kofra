@@ -1,0 +1,26 @@
+/* Landing and self-host home: hero with plate art, numbered sections, stat tiles. */
+.lede{font-size:19px;max-width:33em;color:var(--ink-2);margin:0}
+.hero{padding:var(--s10) 0 var(--s9)}
+.hero>.wrap{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(0,.92fr);gap:var(--s9);align-items:center}
+.hero h1{margin:var(--s4) 0 22px;overflow-wrap:anywhere}
+.hero .lede{margin:0 0 var(--s6)}
+.sec{padding:var(--s10) 0;border-top:1px solid var(--rule)}
+.sec-h{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 18px;align-items:baseline;margin-bottom:30px}
+.sec-h .num{font-family:var(--mono);font-size:12px;color:var(--accent-2)}
+.sec-h p{grid-column:2;margin:4px 0 0;color:var(--ink-2);max-width:42em}
+.blocks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--s6);align-items:start}
+.blocks>.blk{margin:0}
+.stat{display:block;font-family:var(--serif);font-size:34px;line-height:1.1;color:var(--accent);margin-top:6px}
+.per{font-family:var(--sans);font-size:14px;color:var(--ink-2);margin-left:4px}
+@media (max-width:1000px){
+  .hero>.wrap{grid-template-columns:minmax(0,1fr)}
+  /* One column: the plate spans the content width, as on phones (never a short plate with a gutter beside it). */
+  .hero .plate{max-width:none}
+  .blocks{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:720px){
+  .hero{padding:var(--s8) 0 40px}
+  .sec{padding:var(--s8) 0}
+  .sec-h{grid-template-columns:minmax(0,1fr)}
+  .sec-h p{grid-column:1}
+}

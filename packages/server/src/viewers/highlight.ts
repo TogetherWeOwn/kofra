@@ -67,25 +67,8 @@ export function splitHighlightedLines(html: string): string[] {
   return out;
 }
 
-/** Token colours for hljs classes (GitHub-like), light and dark. */
-export const HIGHLIGHT_CSS = `
-.hljs-comment,.hljs-quote{color:#6a737d;font-style:italic}
-.hljs-keyword,.hljs-selector-tag,.hljs-literal,.hljs-doctag,.hljs-meta .hljs-keyword,.hljs-template-tag{color:#cf222e}
-.hljs-string,.hljs-regexp,.hljs-addition,.hljs-attribute .hljs-string,.hljs-meta .hljs-string{color:#0a3069}
-.hljs-number,.hljs-symbol,.hljs-bullet,.hljs-variable.constant_,.hljs-attr,.hljs-attribute,.hljs-selector-attr,.hljs-selector-pseudo,.hljs-link{color:#0550ae}
-.hljs-title,.hljs-title.function_,.hljs-section,.hljs-selector-id,.hljs-selector-class{color:#8250df}
-.hljs-title.class_,.hljs-type,.hljs-built_in,.hljs-params .hljs-type{color:#953800}
-.hljs-name,.hljs-tag{color:#116329}.hljs-variable,.hljs-template-variable,.hljs-property{color:#24292f}
-.hljs-meta,.hljs-meta .hljs-meta{color:#57606a}.hljs-deletion{color:#82071e;background:#ffebe9}.hljs-addition{background:#dafbe1}
-.hljs-emphasis{font-style:italic}.hljs-strong{font-weight:700}
-@media (prefers-color-scheme:dark){
-.hljs-comment,.hljs-quote{color:#8b949e}
-.hljs-keyword,.hljs-selector-tag,.hljs-literal,.hljs-doctag,.hljs-meta .hljs-keyword,.hljs-template-tag{color:#ff7b72}
-.hljs-string,.hljs-regexp,.hljs-attribute .hljs-string,.hljs-meta .hljs-string{color:#a5d6ff}
-.hljs-number,.hljs-symbol,.hljs-bullet,.hljs-variable.constant_,.hljs-attr,.hljs-attribute,.hljs-selector-attr,.hljs-selector-pseudo,.hljs-link{color:#79c0ff}
-.hljs-title,.hljs-title.function_,.hljs-section,.hljs-selector-id,.hljs-selector-class{color:#d2a8ff}
-.hljs-title.class_,.hljs-type,.hljs-built_in,.hljs-params .hljs-type{color:#ffa657}
-.hljs-name,.hljs-tag{color:#7ee787}.hljs-variable,.hljs-template-variable,.hljs-property{color:#e6edf3}
-.hljs-meta,.hljs-meta .hljs-meta{color:#8b949e}.hljs-deletion{color:#ffdcd7;background:#67060c}.hljs-addition{color:#aff5b4;background:#033a16}
-}
-`;
+/**
+ * Token colours for hljs classes now ship in the design bundles (design/css/80-syntax.css, from the
+ * syn-* tokens, in both modes). Kept as an export so viewers that still append it keep working.
+ */
+export const HIGHLIGHT_CSS = "";

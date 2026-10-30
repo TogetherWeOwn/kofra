@@ -1,0 +1,49 @@
+/* App file viewer (/v/<site>/...): file tree beside a toolbar and the framed preview. Breadcrumbs are shared
+   with the site-origin viewer bar. */
+.page.wide{height:100vh;height:100dvh;min-height:0;overflow:hidden}
+.page.wide>main{min-height:0}
+/* The file workspace is full-bleed, header included: the wordmark sits over the file list's edge. */
+.page.wide .top>.wrap{max-width:none;padding-inline:18px}
+.vapp{display:flex;flex:1;min-height:0;width:100%}
+.vside{width:18rem;flex:none;border-right:1px solid var(--rule);background:var(--paper-2);overflow:auto;display:flex;flex-direction:column;gap:12px;padding:16px 14px}
+.vside .find{width:100%}
+.vside-h{display:flex;flex-direction:column;gap:2px;padding:0 4px}
+.vcenter{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--paper)}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;justify-content:space-between;padding:10px 18px;border-bottom:1px solid var(--rule-soft);background:var(--paper)}
+.toolbar .vfile{display:flex;align-items:center;gap:10px;min-width:0;flex:1 1 16rem;flex-wrap:wrap}
+.toolbar .tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.toolbar .vfile .sum{flex:1 1 100%}
+.toolbar .vfile .crumbs{overflow-wrap:anywhere;min-width:0}
+.vcenter>.trust{padding:6px 18px;border-bottom:1px solid var(--rule-soft);background:var(--paper-2)}
+/* The frame's own backing is the mode's paper (white in Light, as a browser's canvas; Midnight paper in Dark), so a
+   navigation inside it (a file or folder in the tree, the password gate, an in-place switch) never flashes white in
+   Dark while the next page loads. The site's own HTML still gets a white canvas in Dark (E2): the browser paints an
+   opaque canvas for a light-scheme document in a dark-scheme frame. */
+.frame{flex:1;width:100%;min-height:0;border:0;background:light-dark(#fff,var(--paper));display:block}
+.vpanel{flex:1;min-height:0;display:flex;flex-direction:column}
+/* The file list folds into a "Files (n)" disclosure on phones; from 761px it is always open and its summary hidden. */
+.treebox>summary{display:none}
+.treebox>.find{margin:0 0 12px}
+.tree{font-size:14px;line-height:1.35}
+.tree ul{list-style:none;margin:0;padding:0 0 0 12px}
+.tree>ul{padding-left:0}
+.tree li{margin:0}
+.tree summary{padding:4px 6px;font-weight:600;color:var(--ink);list-style:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tree summary::-webkit-details-marker{display:none}
+.tree summary::before{content:"\25B8";display:inline-block;width:1.1em;color:var(--muted)}
+.tree details[open]>summary::before{content:"\25BE"}
+.tree summary:hover,.tree a:hover{background:var(--accent-wash)}
+.tree a{display:block;padding:4px 6px 4px 1.45em;color:var(--ink);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tree a[aria-current]{background:var(--accent-tint);color:var(--accent);font-weight:600;box-shadow:inset 3px 0 0 var(--accent)}
+@media (max-width:760px){
+  .page.wide{height:auto;min-height:100vh;overflow:visible}
+  .vapp{flex-direction:column}
+  /* Let page scrolling reach both the complete tree and a usable, separately scrolling preview. */
+  .vside{width:auto;overflow:visible;flex:none;border-right:0;border-bottom:1px solid var(--rule)}
+  .treebox>summary{display:list-item;padding:6px 4px;font-weight:600}
+  .treebox[open]>summary{margin-bottom:10px}
+  .vcenter{min-height:70vh}
+  .frame{flex:none;height:80vh;min-height:30rem}
+  .toolbar{padding:10px 14px}
+  .vcenter>.trust{padding:6px 14px}
+}

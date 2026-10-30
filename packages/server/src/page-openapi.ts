@@ -225,6 +225,40 @@ export const PAGE_PATHS: Json = {
       responses: { "200": { description: "JavaScript", content: { "text/javascript": { schema: { type: "string" } } } } },
     }),
   },
+  "/__dropway/ui/art/{file}": {
+    get: page("design_art", "Plate art for the page design, one SVG per colour mode (content-hashed name, cached immutable)", {
+      tags: ["pages"],
+      parameters: [{ name: "file", in: "path", required: true, schema: { type: "string" }, description: "Art file name, e.g. plate-home-dark.<hash>.svg" }],
+      security: [],
+      "x-mcp-exclude": "static asset",
+      responses: { "200": { description: "SVG", content: { "image/svg+xml": { schema: { type: "string" } } } } },
+    }),
+  },
+  "/__dropway/fonts/{file}": {
+    get: page("design_font", "Self-hosted fonts (SIL OFL 1.1; licences at /__dropway/fonts/OFL.txt), CORS-readable for site origins", {
+      tags: ["pages"],
+      parameters: [{ name: "file", in: "path", required: true, schema: { type: "string" }, description: "Font file name (<family>-<subset>-<style>.<hash>.woff2) or OFL.txt" }],
+      security: [],
+      "x-mcp-exclude": "static asset",
+      responses: { "200": { description: "woff2 font or the licence text", content: { "font/woff2": { schema: { type: "string", format: "binary" } }, "text/plain": { schema: { type: "string" } } } } },
+    }),
+  },
+  "/__dropway/theme": {
+    post: page("theme_choice", "Colour mode switch (Auto, Light, Dark): sets or clears the __Host-dw_theme cookie and redirects back. Same-origin form posts only", {
+      tags: ["pages"],
+      security: [],
+      "x-mcp-exclude": "browser preference",
+      requestBody: {
+        required: true,
+        content: {
+          "application/x-www-form-urlencoded": {
+            schema: { type: "object", properties: { theme: { type: "string", enum: ["auto", "light", "dark"] }, next: { type: "string", description: "Same-origin path to return to." } } },
+          },
+        },
+      },
+      responses: { "303": { description: "Redirect to next (or / for a cross-origin post), with Set-Cookie when the choice was valid." } },
+    }),
+  },
   "/openapi.json": {
     get: page("openapi", "This document", {
       tags: ["agents"],

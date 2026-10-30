@@ -1,0 +1,17 @@
+/* Reduced motion, forced colours and print for the app-only components (PORT-SPEC 3.5). */
+@media (prefers-reduced-motion:reduce){
+  .skel,.toast{animation:none}
+}
+@media (forced-colors:active){
+  .mode-switch button[aria-pressed=true],.nav a[aria-current=page],.tree a[aria-current],.chip.solid{forced-color-adjust:none;background:Highlight;color:HighlightText}
+  .tabs [role=tab][aria-selected=true]{border-bottom-color:Highlight}
+  .meter>i,.prog>i{forced-color-adjust:none;background:Highlight}
+  /* Plates are raster-like CSS images that cannot follow the system colours: decorative, so they go. */
+  .plate{display:none}
+  .toast{border:2px solid CanvasText}
+  .skel{forced-color-adjust:none;background:GrayText}
+  input:is([type=checkbox],[type=radio]){-webkit-appearance:auto;appearance:auto}
+}
+@media print{
+  .mode-switch,.top .nav,.toasts,.skip{display:none}
+}

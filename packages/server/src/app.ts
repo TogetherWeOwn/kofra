@@ -7,6 +7,8 @@ import { buildOpenApi } from "./openapi";
 import type { OperationDefinition } from "./operations";
 import { agentSkillsIndex, apiCatalog, connectMarkdown, connectSections, legacySkillsIndex, llmsFullTxt, llmsTxt, robotsTxt, skillInstance, skillMarkdown, SKILL_NAME } from "./discovery";
 import { homePage, installUi } from "./ui";
+import { nameCode, tok } from "./ui/code";
+import { appStatePage, uiSlotsOf } from "./ui/shell";
 import { installTransferPages } from "./transfers";
 import { installEncrypted } from "./encrypted";
 import { LEGACY_SKILL_NAME } from "./legacy-brand";
@@ -20,7 +22,7 @@ import { LEGACY_SKILL_NAME } from "./legacy-brand";
  */
 
 function pageHeaders(): Record<string, string> {
-  return { "Content-Security-Policy": APP_PAGE_CSP, "X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "strict-origin-when-cross-origin" };
+  return { "Content-Security-Policy": APP_PAGE_CSP, "X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "strict-origin-when-cross-origin", Vary: "Cookie" };
 }
 
 /** /llms.txt lives in ./discovery; re-exported here for compatibility. */
@@ -39,11 +41,11 @@ function connectHtml(origin: string, instanceName: string): string {
         .join("")}</section>`,
     )
     .join("");
-  const css = `.dw-connect{max-width:46rem;margin:0 auto;padding:2.5rem 1.25rem 4rem}.dw-connect .dw-code{display:inline-block;font:600 .8rem/1 ui-monospace,monospace;letter-spacing:.06em;color:var(--accent);margin-bottom:.75rem}.dw-connect h1{font-size:1.7rem;margin:0 0 .5rem}.dw-connect h2{font-size:1.15rem;margin:2rem 0 .25rem;padding-top:1rem;border-top:1px solid var(--line)}.dw-connect h3{font-size:.95rem;margin:1.25rem 0 .4rem;color:var(--muted)}.dw-connect p{margin:.25rem 0 .75rem}.dw-connect pre{background:var(--code);padding:1rem;border-radius:8px;overflow-x:auto;margin:0}.dw-connect section:first-of-type h2{border-top:none;padding-top:0}`;
+  const css = `.dw-connect{max-width:46rem;margin:0 auto;padding:2.5rem 1.25rem 4rem}.dw-connect .dw-connect-kicker{display:inline-block;font:600 .8rem/1 ui-monospace,monospace;letter-spacing:.06em;color:var(--accent);margin-bottom:.75rem}.dw-connect h1{font-size:1.7rem;margin:0 0 .5rem}.dw-connect h2{font-size:1.15rem;margin:2rem 0 .25rem;padding-top:1rem;border-top:1px solid var(--rule-soft)}.dw-connect h3{font-size:.95rem;margin:1.25rem 0 .4rem;color:var(--muted)}.dw-connect p{margin:.25rem 0 .75rem}.dw-connect pre{background:var(--paper-3);padding:1rem;border-radius:8px;overflow-x:auto;margin:0}.dw-connect section:first-of-type h2{border-top:none;padding-top:0}`;
   return htmlPage({
     title: `Connect an agent to ${instanceName}`,
     css,
-    body: `<main class="dw-connect"><div class="dw-code">SETUP</div><h1>Connect an agent to ${escapeHtml(instanceName)}</h1><p>One API key (<code>$KOFRA_API_KEY</code>, starts with <code>dw_</code>; the instance owner creates keys) works for MCP, REST and the CLI. Keep it secret: anyone holding it can publish as you.</p>${sections}<section><h2>Reference</h2><ul><li><a href="/llms.txt">/llms.txt</a>: how to publish, update and roll back</li><li><a href="/llms-full.txt">/llms-full.txt</a>: every endpoint, MCP tool and error code</li><li><a href="/skill.md">/skill.md</a>: the Agent Skill for this instance</li><li><a href="/openapi.json">/openapi.json</a>: every REST operation</li></ul></section></main>`,
+    body: `<main class="dw-connect"><div class="dw-connect-kicker">SETUP</div><h1>Connect an agent to ${escapeHtml(instanceName)}</h1><p>One API key (<code>$KOFRA_API_KEY</code>, starts with <code>dw_</code>; the instance owner creates keys) works for MCP, REST and the CLI. Keep it secret: anyone holding it can publish as you.</p>${sections}<section><h2>Reference</h2><ul><li><a href="/llms.txt">/llms.txt</a>: how to publish, update and roll back</li><li><a href="/llms-full.txt">/llms-full.txt</a>: every endpoint, MCP tool and error code</li><li><a href="/skill.md">/skill.md</a>: the Agent Skill for this instance</li><li><a href="/openapi.json">/openapi.json</a>: every REST operation</li></ul></section></main>`,
   });
 }
 
@@ -104,13 +106,23 @@ export function createAppRouter(opts: { app: Hono<DropwayEnv>; uiSlots: UiSlots;
   app.get("/robots.txt", (c) => c.body(robotsTxt(), 200, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=3600" }));
   app.get("/claim", (c) => {
     const slug = c.req.query("slug") ?? "";
-    const o = appOrigin(c.get("dw"));
-    const body = `<main class="dw-system"><div class="dw-code">CLAIM</div><h1>Keep this site</h1>
-<p>Anonymous sites expire. To keep <code>${escapeHtml(slug)}</code>, call the API with an API key of this instance and the claim token (the part of this link after <code>#token=</code>):</p>
-<pre style="white-space:pre-wrap;word-break:break-all;background:var(--code);padding:1rem;border-radius:8px">curl -X POST ${escapeHtml(o)}/api/v1/sites/${escapeHtml(slug)}/claim \\
+    const dw = c.get("dw");
+    const o = appOrigin(dw);
+    const curl = `curl -X POST ${o}/api/v1/sites/${slug}/claim \\
   -H "Authorization: Bearer $KOFRA_API_KEY" -H "Content-Type: application/json" \\
-  -d '{"claimToken":"dwc_..."}'</pre></main>`;
-    return c.html(htmlPage({ title: "Claim a site", body }), 200, pageHeaders());
+  -d '{"claimToken":"dwc_..."}'`;
+    const html = appStatePage(dw, c.req.url, {
+      title: "Claim a site",
+      code: "CLAIM",
+      heading: "Keep this site",
+      // The site name and "#token=" are code.k-tok: each moves to the next line whole, never split at a hyphen.
+      message: `Anonymous sites expire. To keep ${nameCode(slug)}, call the API with an API key of this instance and the claim token (the part of this link after ${tok("#token=")}):`,
+      // No script on this page, so no Copy button: the command wraps (all of it shows) and one click selects it.
+      extra: `<div class="k-codeblock"><div class="k-codeblock-h"><span class="k-k">Claim with curl</span><span class="k-small">One click selects the command</span></div><pre class="k-wrapped k-pick" tabindex="0" role="region" aria-label="Claim with curl">${escapeHtml(curl)}</pre></div>`,
+      signIn: uiSlotsOf(c).session?.signInPath,
+      footerLinks: uiSlotsOf(c).footerLinks,
+    });
+    return c.html(html, 200, pageHeaders());
   });
 
   const mcpHandler = opts.mcp?.(opts.mcpTools);

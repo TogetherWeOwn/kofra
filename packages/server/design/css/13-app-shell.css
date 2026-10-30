@@ -1,0 +1,95 @@
+/* App page frame and the dashboard extensions (PORT-SPEC 8.1): main column, page head, blocks, groups,
+   loading rows, key-value lists, URLs with copy, secrets shown once, toasts. */
+/* Text tones only app pages use (kept out of the inlined site bundle). */
+.muted{color:var(--muted)}
+.ok{color:var(--success);font-weight:600}
+.page{min-height:100vh;display:flex;flex-direction:column}
+.page>main{flex:1 0 auto}
+/* Dashboard pages draw their content after fetching it: the footer starts below the fold, so it is never
+   pushed down in view while they do. */
+.page:is([data-page=sites],[data-page=site],[data-page=publish],[data-page=keys],[data-page=settings])>main{min-height:100vh}
+.main{width:100%;max-width:1200px;margin:0 auto;padding:var(--s7) var(--s7) var(--s10)}
+.main-wide{flex:1;display:flex;min-height:0}
+.narrow{max-width:34rem;margin:0 auto}
+.pagehead{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px 20px;margin:0 0 var(--s6)}
+.pagehead>div{min-width:0}
+.pagehead h1{font-size:clamp(30px,3.4vw,44px);overflow-wrap:anywhere}
+.pagehead p{margin:8px 0 0;color:var(--ink-2);font-size:14.5px;max-width:46em}
+.blk{background:var(--paper-2);border:1px solid var(--rule);margin:0 0 var(--s6);min-width:0}
+.blk-h{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 16px;padding:14px 20px;border-bottom:1px solid var(--rule-soft)}
+.blk-h h2{font-size:23px;line-height:1.2}
+.blk-h .tools{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+.blk-h .small{max-width:40em}
+.pad{padding:20px}
+.blk>.table-wrap{border-top:0}
+@media (min-width:720.02px){
+  .blk .table th:first-child,.blk .table td:first-child{padding-left:20px}
+  .blk .table th:last-child,.blk .table td:last-child{padding-right:20px}
+}
+.blk .table tr:last-child>*{border-bottom:0}
+/* An empty list keeps its dashed frame inside a block (the same treatment everywhere: J14, J18, C32). */
+.blk .empty{margin:var(--s5)}
+.group{margin:0 0 16px;min-width:0}
+.group .hint{margin-top:6px}
+.inline{display:flex;flex-wrap:wrap;gap:12px 16px;align-items:flex-end}
+.inline>.group{flex:1 1 13rem;margin:0}
+.inline>.btn{flex:none}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,16rem),1fr));gap:0 20px}
+fieldset.plain{border:0;padding:0;margin:0 0 16px;min-width:0}
+fieldset.plain>legend{padding:0}
+.toggles{display:flex;flex-wrap:wrap;gap:8px 22px}
+.find{width:16rem;max-width:100%;padding:8px 12px;font-size:14px}
+.skel{height:2.6rem;margin:10px 20px;background:linear-gradient(90deg,var(--paper-3),var(--paper-2),var(--paper-3));background-size:200% 100%;animation:k-shimmer 1.2s linear infinite}
+@keyframes k-shimmer{to{background-position:-200% 0}}
+.title{font-weight:600;color:var(--ink);text-decoration:none;overflow-wrap:anywhere}
+a.title:hover{color:var(--accent);text-decoration:underline}
+.sub{display:block;font-size:13px;color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
+.url{display:inline-flex;align-items:center;gap:8px;max-width:100%;min-width:0}
+.url a{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.keyout{border:1px solid var(--accent);background:var(--surface);padding:16px 18px;margin:12px 0}
+.keyout .k{display:block;margin-bottom:6px}
+.keyout-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0}
+.keyout-row code{flex:1 1 16rem;min-width:0;white-space:normal;word-break:break-all;padding:10px 12px;font-size:13px;background:var(--paper-3);border:1px dashed var(--edge)}
+.keyout .small{margin:6px 0 0}
+pre.select-all{user-select:all;-webkit-user-select:all;white-space:pre-wrap;word-break:break-all;margin:8px 0;padding:12px 14px;background:var(--paper-3);border:1px dashed var(--edge);font-size:13px;color:var(--ink)}
+/* While a toast shows, keyboard focus scrolls clear of it (WCAG 2.4.11). */
+html:has(.toast){scroll-padding-bottom:7rem}
+.toasts{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:8px;z-index:60;width:max-content;max-width:calc(100vw - 32px);pointer-events:none}
+.toast{background:var(--accent);color:var(--accent-ink);padding:13px 18px;font-size:14.5px;box-shadow:var(--shadow-3);pointer-events:auto;animation:k-toast-in var(--t-med) var(--ease)}
+.toast.danger{background:var(--danger);color:var(--paper)}
+@keyframes k-toast-in{from{opacity:0;transform:translateY(20px)}}
+.noscript{margin:0}
+@media (max-width:720px){
+  .hide-sm{display:none!important}
+  .main{padding:var(--s6) var(--s4) var(--s8)}
+  .blk-h{padding:12px 14px}
+  .pad{padding:14px}
+  .skel{margin:10px 14px}
+  .find{width:100%}
+  .blk .empty{margin:14px}
+}
+@media print{.toasts{display:none}}
+.stack>*+*{margin-top:var(--s5)}
+.stack>.pagehead{margin-bottom:0}
+.bare{display:block}
+.banner .btnrow{margin-top:10px}
+.panel form>.btnrow,.panel form>.btn{margin-top:18px}
+.pubbar{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:flex-start;justify-content:space-between;margin-top:14px}
+.pubbar>.small{min-width:0;flex:1 1 16rem}
+.pubbar .fwarn{margin:6px 0 0}
+.rowchips{margin-top:6px}
+.center{text-align:center}
+/* A phrase that must stay on one line (a kicker segment, an address, a date with its zone). */
+.nowrap{white-space:nowrap}
+.spread{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;justify-content:space-between}
+.spread>p{margin:0;max-width:44em}
+.pwrow{margin-top:18px}
+.pwrow .field{margin-top:0}
+.scopes{display:grid;grid-template-columns:repeat(auto-fill,minmax(12rem,1fr));gap:8px 18px;margin:4px 0 0}
+.pad-flush{padding-top:0}
+.pad-flush:empty{display:none}
+.toggles{margin:4px 0 4px}
+.toggles .tog{flex:1 1 16rem}
+.main>.crumbs{margin:0 0 10px}
+/* A panel's closing note (who to ask, what agents do instead), under a soft rule. */
+.panel>.panel-note{margin:22px 0 0;padding-top:14px;border-top:1px solid var(--rule-soft)}

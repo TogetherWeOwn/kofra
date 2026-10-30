@@ -80,7 +80,7 @@ export const binaryViewer: Viewer = {
         ...shown,
         lang: null,
         tabs: standardTabs(vc, { rendered: "Text" }),
-        note: `<p class="dw-note">This file has no known type, but it looks like text, so it is shown as text.</p>`,
+        note: `<p class="k-banner k-notebar" role="note">This file has no known type, but it looks like text, so it is shown as text.</p>`,
       });
     }
     return binaryInfoPage(vc, head);
@@ -98,14 +98,18 @@ export function binaryInfoPage(vc: ViewerContext, head: Uint8Array, note?: strin
     ...(magic ? ([["Looks like", magic]] as Array<[string, string]>) : []),
     ["SHA-256", vc.file.sha256],
   ];
-  const body = `<main style="max-width:52rem;margin:0 auto;padding:2rem 1.25rem 4rem">
-<h1 style="font-size:1.35rem;margin:0 0 1rem;word-break:break-all">${escapeHtml(vc.file.path.split("/").pop() ?? vc.file.path)}</h1>
-${note ? `<p class="dw-note">${escapeHtml(note)}</p>` : ""}
-<table style="border-collapse:collapse;width:100%;font-size:.9rem;margin-bottom:1.25rem">${rows
-      .map(([k, v]) => `<tr><th scope="row" style="text-align:left;padding:.4rem 1rem .4rem 0;color:var(--muted);font-weight:500;width:8rem;vertical-align:top">${escapeHtml(k)}</th><td style="padding:.4rem 0;word-break:break-all;font-family:${k === "SHA-256" ? "ui-monospace,monospace" : "inherit"}">${escapeHtml(v)}</td></tr>`)
-      .join("")}</table>
-<p><a class="dw-btn" href="${escapeHtml(vc.downloadUrl)}" rel="nofollow" download>Download</a></p>
-<h2 style="font-size:.95rem;margin:2rem 0 .5rem;color:var(--muted)">First ${Math.min(256, head.byteLength)} bytes</h2>
-<pre style="background:var(--code);padding:1rem;border-radius:8px;overflow:auto;font-size:.8rem;line-height:1.5">${escapeHtml(hexDump(head.subarray(0, 256)))}</pre></main>`;
-  return viewerPage(vc, { tabs: standardTabs(vc, { rendered: "Info", raw: false }), body, headers });
+  const body = `<div class="k-listing">
+${note ? `<p class="k-banner k-notebar" role="note">${escapeHtml(note)}</p>` : ""}
+<div class="k-empty"><h1 class="k-binh">${escapeHtml(vc.file.path.split("/").pop() ?? vc.file.path)}</h1><p>No preview for this type yet. Download it to open it with an app you trust.</p><a class="k-btn" href="${escapeHtml(vc.downloadUrl)}" rel="nofollow" download>Download</a></div>
+<div class="k-table-wrap k-bintable"><table class="k-table">${rows
+    .map(([k, v]) => `<tr><th scope="row">${escapeHtml(k)}</th><td class="k-break">${k === "SHA-256" ? `<code class="k-sha">${escapeHtml(v)}</code>` : escapeHtml(v)}</td></tr>`)
+    .join("")}</table></div>
+<h2 class="k-binh2">First ${Math.min(256, head.byteLength)} bytes</h2>
+<pre class="k-hex" tabindex="0" role="region" aria-label="First bytes, hexadecimal">${escapeHtml(hexDump(head.subarray(0, 256)))}</pre></div>`;
+  return viewerPage(vc, {
+    tabs: standardTabs(vc, { rendered: "Info", raw: false }),
+    body,
+    headers,
+    css: ".k-binh{font-size:clamp(24px,3vw,32px);margin:0 0 10px;overflow-wrap:anywhere}.k-bintable{margin-top:24px}.k-bintable th{width:8rem}.k-break{overflow-wrap:anywhere;word-break:break-all}.k-listing>.k-empty p{max-width:30em;min-height:4.65em;margin-left:auto;margin-right:auto}.k-sha{display:inline-block;width:12rem;max-width:100%;font:inherit;font-family:var(--mono);font-size-adjust:ch-width .7;background:none;padding:0;word-break:break-all}.k-binh2{font:500 10.5px/1.3 var(--mono);letter-spacing:.11em;text-transform:uppercase;color:var(--accent-2);margin:32px 0 8px}.k-hex{margin:0;padding:16px 18px;background:var(--paper-3);border:1px solid var(--rule-soft);overflow:auto;font-size:12.5px;line-height:1.6;color:var(--ink)}",
+  });
 }

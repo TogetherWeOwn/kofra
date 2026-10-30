@@ -1,0 +1,70 @@
+/* Kofra Security Print: type, space, derived colour tokens and base elements.
+   Source for scripts/build-design.mjs, which adds the k- prefix to every class (".btn" ships as ".k-btn").
+   Colour comes ONLY from the custom properties generated from design/themes.json (light, dark via
+   prefers-color-scheme, and the [data-theme] overrides), plus system colours inside forced-colors. */
+:root{
+  --serif:'Newsreader','Newsreader Fallback','Newsreader Fallback B',Georgia,'Times New Roman',serif;
+  --sans:'Public Sans','Public Sans Fallback','Public Sans Fallback B','Public Sans Fallback C',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:'Martian Mono','Martian Mono Fallback','Martian Mono Fallback B',ui-monospace,'SFMono-Regular',Menlo,monospace;
+  --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:20px;--s6:24px;--s7:32px;--s8:44px;--s9:56px;--s10:64px;--s11:72px;
+  --r-doc:0;--r-stamp:3px;--r-ctl:4px;--r-card:10px;--r-chrome:12px;
+  --ease:cubic-bezier(.4,0,.2,1);--t-fast:.15s;--t-med:.2s;--t-draw:.6s;
+}
+/* Derived colours are declared wherever a mode applies, so nested [data-theme] blocks recolour correctly
+   and they follow a live prefers-color-scheme switch. */
+:root,[data-theme]{
+  --rule-soft:color-mix(in srgb,var(--rule) 55%,transparent);
+  --rule-faint:color-mix(in srgb,var(--rule) 25%,transparent);
+  --accent-wash:color-mix(in srgb,var(--accent) 7%,transparent);
+  --accent-tint:color-mix(in srgb,var(--accent) 13%,transparent);
+  --accent-line:color-mix(in srgb,var(--accent) 30%,transparent);
+  --signal-wash:color-mix(in srgb,var(--signal) 9%,var(--surface));
+  --danger-wash:color-mix(in srgb,var(--danger) 8%,var(--surface));
+  --shadow-1:0 18px 40px -26px color-mix(in srgb,var(--shadow) 40%,transparent);
+  --shadow-2:0 30px 60px -42px color-mix(in srgb,var(--shadow) 55%,transparent);
+  --shadow-3:0 12px 30px -10px color-mix(in srgb,var(--shadow) 40%,transparent);
+  --scrim:color-mix(in srgb,var(--shadow) 50%,transparent);
+  --emboss-hi:color-mix(in srgb,var(--paper-2) 80%,transparent);
+  --emboss-lo:color-mix(in srgb,var(--accent) 28%,transparent);
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%;scroll-behavior:smooth;background:var(--paper)}
+body{margin:0;background:var(--paper);color:var(--ink);font:400 16px/1.55 var(--sans)}
+a{color:var(--accent);text-underline-offset:3px}
+a:hover{color:var(--accent-hover)}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+::selection{background:var(--accent);color:var(--accent-ink)}
+img,svg{max-width:100%}
+h1,h2,h3,h4{font-family:var(--serif);color:var(--accent);font-weight:500;line-height:1.1;margin:0}
+h1{font-size:clamp(40px,5.2vw,74px);letter-spacing:-.01em}
+h1 em,h2 em{font-weight:400}
+h2{font-size:clamp(28px,3.2vw,42px)}
+h3{font-size:clamp(22px,2.2vw,27px)}
+h4{font-size:25px}
+p{margin:0 0 var(--s3)}
+/* Martian Mono has a .7em character width. Match that on any monospace fallback, not a local font name. */
+code,kbd,samp,pre{font-family:var(--mono);font-size:.86em;font-size-adjust:ch-width .7}
+/* Inline code wraps only when a token is longer than the line, and a wrapped fragment keeps its padding. */
+:not(pre)>code{background:var(--paper-3);color:var(--ink);padding:2px 6px;overflow-wrap:break-word;border-radius:2px;-webkit-box-decoration-break:clone;box-decoration-break:clone}
+/* A short token never wraps (ui/code.ts tok); a URL or command wraps only between its parts (urlCode), on app and
+   site-origin pages alike. */
+code.tok,code.brk span,a.brk span{white-space:nowrap}
+kbd{border:1px solid var(--edge);border-bottom-width:2px;border-radius:3px;padding:1px 5px;background:var(--surface)}
+summary{cursor:pointer;color:var(--accent)}
+input[type=checkbox],input[type=radio]{accent-color:var(--accent)}
+[hidden]{display:none!important}
+.wrap{max-width:1200px;margin:0 auto;padding:0 var(--s7)}
+.mono{font-family:var(--mono);font-size:.84em;letter-spacing:.01em}
+.k{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.11em;color:var(--accent-2);font-weight:500}
+.small{font-size:13.5px;color:var(--ink-2)}
+.num{font-variant-numeric:tabular-nums}
+.wm{font-family:var(--serif);font-weight:600;color:var(--accent);letter-spacing:.05em;text-shadow:0 1px 0 var(--emboss-hi),0 -1px 0 var(--emboss-lo);text-decoration:none;text-transform:lowercase}
+a.wm:hover{color:var(--accent)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
+.skip{position:absolute;left:-999px;top:8px;z-index:70;background:var(--accent);color:var(--accent-ink);padding:8px 12px;text-decoration:none;font-weight:600}
+.skip:focus{left:8px;color:var(--accent-ink)}
+@media (max-width:720px){
+  .wrap{padding:0 var(--s4)}
+}

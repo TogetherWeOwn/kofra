@@ -4,49 +4,48 @@ import type { DropwayEnv } from "../env";
 import type { UiSlots } from "../extensions";
 import { mcpJsonSnippets } from "../discovery";
 import { escapeHtml, formatBytes } from "../html";
+import { TRUST_LINE } from "./chrome";
+import { SHORT_CODE, tok, urlCode } from "./code";
 import { renderAppPage, sitesCspSource, uiSlotsOf } from "./shell";
+import { themeOf, type ThemePref } from "./theme";
+import { SOURCE_REPO } from "../repo";
 
 const e = escapeHtml;
 
+/** Page title row: serif h1, optional one-line subline, actions on the right. `sub` is trusted HTML. */
 function pageHead(title: string, sub: string, actions = ""): string {
-  return `<div class="dw-pagehead"><div><h1 class="dw-h1">${e(title)}</h1>${sub ? `<p id="dw-sub">${sub}</p>` : ""}</div>${actions ? `<div class="dw-row">${actions}</div>` : ""}</div>`;
+  return `<div class="k-pagehead"><div><h1>${e(title)}</h1>${sub ? `<p id="dw-sub">${sub}</p>` : ""}</div>${actions ? `<div class="k-btnrow">${actions}</div>` : ""}</div>`;
 }
 
-const NOSCRIPT = `<noscript><p class="dw-muted">The dashboard loads its data with JavaScript.</p></noscript>`;
+/** A dashboard block: paper surface, serif h2 header with optional tools, then the content (trusted HTML). */
+function block(opts: { id?: string; title: string; titleId?: string; tools?: string; body: string }): string {
+  const hid = opts.titleId ?? (opts.id ? `${opts.id}-h` : "");
+  return `<section class="k-blk"${opts.id ? ` id="${e(opts.id)}"` : ""}${hid ? ` aria-labelledby="${e(hid)}"` : ""}><div class="k-blk-h"><h2${hid ? ` id="${e(hid)}"` : ""}>${e(opts.title)}</h2>${opts.tools ? `<div class="k-tools">${opts.tools}</div>` : ""}</div>${opts.body}</section>`;
+}
+
+const NOSCRIPT = `<noscript><p class="k-pad k-small">The dashboard loads its data with JavaScript.</p></noscript>`;
+
+// Inline code helpers live in ./code (site-origin pages use them too); urlCode and SHORT_CODE stay exported here.
+export { SHORT_CODE, urlCode };
 
 /** Where sites are served, in words. */
 function sitesWhere(dw: DropwayContext): string {
   const c = dw.config;
   const example = siteUrl(dw, "SITE");
-  if (c.sitesMode === "subdomain") return `Each site on its own origin: <code>${e(example)}</code>`;
-  if (c.sitesOrigin) return `On a separate sites origin, one folder per site: <code>${e(example)}</code>`;
-  return `On this origin under <code>${e(c.sitesPathPrefix)}/</code>, sandboxed: <code>${e(example)}</code>`;
+  if (c.sitesMode === "subdomain") return `Each site on its own origin: ${urlCode(example)}`;
+  if (c.sitesOrigin) return `On a separate sites origin, one folder per site: ${urlCode(example)}`;
+  return `On this origin under ${tok(`${c.sitesPathPrefix}/`)}, sandboxed: ${urlCode(example)}`;
+}
+
+/**
+ * A code block with a kicker and a Copy button (shown once the dashboard script runs). The commands and settings on
+ * the home page wrap (`k-wrapped`), so the whole of each shows at every width; Copy copies the text as written.
+ */
+function codeblock(id: string, label: string, text: string): string {
+  return `<div class="k-codeblock"><div class="k-codeblock-h"><span class="k-k">${e(label)}</span><button type="button" class="k-btn k-sm k-ghost" data-copy="#${id}" aria-label="Copy: ${e(label)}" hidden>Copy</button></div><pre id="${id}" class="k-wrapped" tabindex="0" role="region" aria-label="${e(label)}">${e(text)}</pre></div>`;
 }
 
 // ------------------------------------------------------------------ home
-
-const HOME_CSS = `
-.dw-hero{padding:1.5rem 0 1.75rem;max-width:46rem}
-.dw-hero h1{font-size:clamp(2rem,4.5vw,2.8rem);line-height:1.08;letter-spacing:-.025em;margin:.35rem 0 .75rem}
-.dw-hero .lede{font-size:1.1rem;color:var(--muted);margin:0 0 1.4rem;max-width:40rem}
-.dw-eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);margin:0}
-.dw-home{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:1.25rem;align-items:start}
-.dw-home .dw-section{margin:0}
-.dw-points{display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:1rem 1.5rem;margin:2rem 0 0;padding:0;list-style:none}
-.dw-points li{border-top:1px solid var(--line);padding-top:.75rem;font-size:.92rem;color:var(--muted)}
-.dw-points strong{display:block;color:var(--fg);margin-bottom:.2rem}
-.dw-panel[hidden]{display:none}
-.dw-panel p{font-size:.88rem;color:var(--muted);margin:.75rem 0 .4rem}
-.dw-snipwrap{position:relative}
-.dw-snipwrap .dw-snippet{padding-right:4.75rem}
-.dw-snipwrap .dw-btn{position:absolute;top:.45rem;right:.45rem}
-.dw-foot{margin-top:2.5rem;padding-top:1rem;border-top:1px solid var(--line);color:var(--muted);font-size:.88rem;display:flex;flex-wrap:wrap;gap:.5rem 1.5rem;justify-content:space-between}
-@media (max-width:860px){.dw-home{grid-template-columns:1fr}}
-`;
-
-function snippet(id: string, text: string): string {
-  return `<div class="dw-snipwrap"><pre class="dw-snippet" id="${id}">${e(text)}</pre><button type="button" class="dw-btn small" data-copy="#${id}" hidden>Copy</button></div>`;
-}
 
 export async function homePage(c: Context<DropwayEnv>): Promise<Response> {
   const dw = c.get("dw");
@@ -58,108 +57,125 @@ export async function homePage(c: Context<DropwayEnv>): Promise<Response> {
     [
       "curl",
       "curl",
-      `<p>One call publishes a page; the form field name is the file path.</p>${snippet(
+      `<p class="k-small">One call publishes a page; the form field name is the file path.</p>${codeblock(
         "dw-s-curl",
+        "Publish files",
         `curl ${o}/api/v1/publish \\\n  -H "Authorization: Bearer $KOFRA_API_KEY" \\\n  -F "index.html=@index.html" -F "style.css=@style.css"`,
-      )}<p>A folder or build: zip it and send the zip.</p>${snippet(
+      )}<p class="k-small">A folder or build: zip it and send the zip.</p>${codeblock(
         "dw-s-zip",
+        "Publish a zip",
         `cd dist && zip -qr ../site.zip . && cd ..\ncurl ${o}/api/v1/publish -H "Authorization: Bearer $KOFRA_API_KEY" \\\n  -H "Content-Type: application/zip" --data-binary @site.zip`,
-      )}<p>Add <code>?slug=&lt;site&gt;</code> to publish a new version of the same site.</p>`,
+      )}<p class="k-small">Add ${tok("?slug=<site>")} to publish a new version of the same site.</p>`,
     ],
     [
       "cli",
       "CLI",
-      `<p>Hashes locally and uploads only files the server does not have.</p>${snippet(
+      `<p class="k-small">Hashes locally and uploads only files the server does not have.</p>${codeblock(
         "dw-s-cli",
+        "Publish with the CLI",
         `export KOFRA_API=${o}\nexport KOFRA_API_KEY=dw_...\nnpx kofra publish ./dist`,
       )}`,
     ],
     [
       "mcp",
       "MCP",
-      `<p>Claude Code:</p>${snippet(
+      `<p class="k-small">Claude Code:</p>${codeblock(
         "dw-s-mcp",
+        "Add the MCP server",
         `claude mcp add --transport http kofra ${o}/mcp \\\n  --header "Authorization: Bearer $KOFRA_API_KEY"`,
-      )}${mcpJsonSnippets(o).map((sn, i) => `<p>${e(sn.title)}:</p>${snippet(i === 0 ? "dw-s-mcpjson" : "dw-s-vscodejson", sn.code)}`).join("")}`,
+      )}${mcpJsonSnippets(o).map((sn, i) => `<p class="k-small">${e(sn.title)}:</p>${codeblock(i === 0 ? "dw-s-mcpjson" : "dw-s-vscodejson", sn.title, sn.code)}`).join("")}`,
     ],
     [
       "docs",
       "Agent docs",
-      `<p>Point an agent at these; they describe this instance, not a generic one.</p><ul class="dw-small"><li><a href="/connect">/connect</a>: one-line setup per agent client</li><li><a href="/llms.txt">/llms.txt</a>: how to publish, update and roll back</li><li><a href="/llms-full.txt">/llms-full.txt</a>: every endpoint, MCP tool and error code</li><li><a href="/skill.md">/skill.md</a>: Agent Skill (<code>npx skills add ${e(o)}</code>)</li><li><a href="/openapi.json">/openapi.json</a>: every REST operation</li><li><code>${e(o)}/mcp</code>: the MCP endpoint</li></ul>`,
+      `<p class="k-small">Point an agent at these; they describe this instance, not a generic one.</p><ul class="k-small"><li><a href="/connect">/connect</a>: one-line setup per agent client</li><li><a href="/llms.txt">/llms.txt</a>: how to publish, update and roll back</li><li><a href="/llms-full.txt">/llms-full.txt</a>: every endpoint, MCP tool and error code</li><li><a href="/skill.md">/skill.md</a>: Agent Skill (${urlCode(`npx skills add ${o}`)})</li><li><a href="/openapi.json">/openapi.json</a>: every REST operation</li><li>${urlCode(`${o}/mcp`)}: the MCP endpoint</li></ul>`,
     ],
   ];
   const tabList = tabs
     .map(([id, label], i) => `<button type="button" role="tab" id="dw-tab-${id}" aria-controls="dw-panel-${id}" aria-selected="${i === 0}" tabindex="${i === 0 ? 0 : -1}">${e(label)}</button>`)
     .join("");
-  const panels = tabs.map(([id, , html], i) => `<div class="dw-panel" role="tabpanel" id="dw-panel-${id}" aria-labelledby="dw-tab-${id}"${i === 0 ? "" : " hidden"}>${html}</div>`).join("");
+  const panels = tabs.map(([id, , html], i) => `<div role="tabpanel" id="dw-panel-${id}" aria-labelledby="dw-tab-${id}"${i === 0 ? "" : " hidden"}>${html}</div>`).join("");
   const lim = dw.config.limits;
-  const body = `<section class="dw-hero">
-<p class="dw-eyebrow">Self-hosted · single tenant · on Cloudflare</p>
-<h1>${e(name)}</h1>
-<p class="lede">Publish a file, a folder or a whole site to a live URL in one call. Every publish is a version you can roll back to, and every file opens in the browser as what it is: pages, Markdown, code, data, images, PDFs and media, with the raw file one click away.</p>
-<div class="dw-row" id="dw-home-cta"><a class="dw-btn primary" href="/login">Sign in</a><a class="dw-btn" href="#dw-agents">Connect an agent</a></div>
-</section>
-${
-  setUp
+  const points: Array<[string, string]> = [
+    ["Versions, not overwrites", "Each publish is immutable. Restoring an old one is instant: only the live pointer moves."],
+    ["Only new bytes travel", "Files are stored once by SHA-256. A republish uploads only what changed."],
+    ["Every file type viewable", `Add ${tok("?raw=1")} for the stored bytes, ${tok("?view=source")} for highlighted source.`],
+    // No full stop after the address: it would read as part of the URL.
+    ["Sites", sitesWhere(dw)],
+    [
+      "Publishing",
+      `${anon ? `With an API key, or anonymously (anonymous sites expire after ${Math.round(dw.config.anonymous.ttlMs / 3600_000)} hours).` : "With an API key from this instance's owner. Anonymous publishing is off."} Files up to ${formatBytes(lim.maxFileBytes)}, ${lim.maxFiles.toLocaleString("en-US")} files per version.`,
+    ],
+    ["Yours", `Runs on its owner's Cloudflare account. <a href="${SOURCE_REPO}">Open source</a>, MIT licensed.`],
+  ];
+  const setup = setUp
     ? ""
-    : `<div class="dw-callout"><strong>This instance is not set up yet.</strong> Create the owner with the <code>ADMIN_BOOTSTRAP_KEY</code> secret you configured: <a href="/login#setup">set it up in the browser</a>, or with curl:
-${snippet("dw-s-setup", `curl -X POST ${o}/api/v1/setup \\\n  -H "Authorization: Bearer $ADMIN_BOOTSTRAP_KEY" \\\n  -H "Content-Type: application/json" -d '{"email":"you@example.com"}'`)}</div>`
-}
-<div class="dw-home">
-<section class="dw-section" aria-labelledby="dw-quick-h"><header><h2 id="dw-quick-h">Publish from this browser</h2></header><div class="dw-pad" id="dw-quick"><p class="dw-muted dw-small">Sign in to drop a folder here.</p></div></section>
-<section class="dw-section" id="dw-agents" aria-labelledby="dw-agents-h"><header><h2 id="dw-agents-h">Publish from an agent</h2></header><div class="dw-pad"><div class="dw-tabs" role="tablist" aria-label="Ways to publish">${tabList}</div>${panels}</div></section>
-</div>
-<ul class="dw-points">
-<li><strong>Versions, not overwrites</strong>Each publish is immutable. Restoring an old one is instant: only the live pointer moves.</li>
-<li><strong>Only new bytes travel</strong>Files are stored once by SHA-256. A republish uploads only what changed.</li>
-<li><strong>Every file type viewable</strong>Add <code>?raw=1</code> for the stored bytes, <code>?view=source</code> for highlighted source.</li>
-<li><strong>Sites</strong>${sitesWhere(dw)}.</li>
-<li><strong>Publishing</strong>${anon ? `With an API key, or anonymously (anonymous sites expire after ${Math.round(dw.config.anonymous.ttlMs / 3600_000)} hours).` : "With an API key from this instance's owner. Anonymous publishing is off."} Files up to ${formatBytes(lim.maxFileBytes)}, ${lim.maxFiles.toLocaleString("en-US")} files per version.</li>
-<li><strong>Yours</strong>Runs on its owner's Cloudflare account. Open source, MIT licensed.</li>
-</ul>
-<footer class="dw-foot"><span>${e(name)} runs <a href="https://github.com/TogetherWeOwn/dropway">Kofra</a>, open source under the MIT license.</span><span><a href="/llms.txt">llms.txt</a> · <a href="/openapi.json">OpenAPI</a> · <a href="https://github.com/TogetherWeOwn/dropway/blob/main/docs/SELF_HOST.md">Host your own</a></span></footer>`;
-  return renderAppPage(c, { title: name, page: "home", body, css: HOME_CSS, nav: false });
+    : `<div class="k-banner k-warn" role="status"><div><strong>This instance is not set up yet.</strong> Create the owner with the ${tok("ADMIN_BOOTSTRAP_KEY")} secret you configured: <a href="/login#setup">set it up in the browser</a>, or with curl:${codeblock(
+        "dw-s-setup",
+        "Set up with curl",
+        `curl -X POST ${o}/api/v1/setup \\\n  -H "Authorization: Bearer $ADMIN_BOOTSTRAP_KEY" \\\n  -H "Content-Type: application/json" -d '{"email":"you@example.com"}'`,
+      )}</div></div>`;
+  const body = `<section class="k-hero" aria-labelledby="dw-home-h"><div class="k-wrap"><div>
+<p class="k-k"><span class="k-nowrap">Self-hosted</span> · <span class="k-nowrap">single tenant</span> · <span class="k-nowrap">on Cloudflare</span></p>
+<h1 id="dw-home-h">${e(name)}</h1>
+<p class="k-lede">Publish a file, a folder or a whole site to a live URL in one call. Every publish is a version you can roll back to, and every file opens in the browser as what it is: pages, Markdown, code, data, images, PDFs and media.</p>
+<div class="k-btnrow" id="dw-home-cta"><a class="k-btn" href="/login">Sign in</a><a class="k-btn k-ghost" href="#dw-agents">Connect an agent</a></div>
+</div><figure class="k-plate" aria-hidden="true"><span class="k-plate-art"></span></figure></div></section>
+<div class="k-guilloche-band" aria-hidden="true"></div>
+<section class="k-sec" aria-labelledby="dw-start-h"><div class="k-wrap">
+<div class="k-sec-h"><span class="k-num">01</span><h2 id="dw-start-h">Publish</h2><p>From this browser, or from an agent with one API call, the CLI or MCP.</p></div>
+${setup}
+<div class="k-blocks">
+${block({ title: "Publish from this browser", titleId: "dw-quick-h", body: `<div class="k-pad" id="dw-quick"><p class="k-small">Sign in to drop a folder here.</p></div>` })}
+${block({ id: "dw-agents", title: "Publish from an agent", body: `<div class="k-pad"><div class="k-tabs" role="tablist" aria-label="Ways to publish">${tabList}</div>${panels}</div>` })}
+</div></div></section>
+<section class="k-sec" aria-labelledby="dw-why-h"><div class="k-wrap">
+<div class="k-sec-h"><span class="k-num">02</span><h2 id="dw-why-h">How it works</h2></div>
+<ul class="k-notes">${points.map(([t, p]) => `<li class="k-note"><h3>${e(t)}</h3><p>${p}</p></li>`).join("")}</ul>
+</div></section>`;
+  return renderAppPage(c, { title: name, page: "home", body, nav: false, bare: true });
 }
 
 // ------------------------------------------------------------------ sign in
-
-const AUTH_CSS = `.dw-auth{max-width:30rem;margin:4vh auto 0}.dw-auth h1{margin-bottom:1.25rem}.dw-auth details{margin:1rem 0}.dw-auth summary{cursor:pointer;font-weight:600;font-size:.92rem}`;
 
 export async function loginPage(c: Context<DropwayEnv>): Promise<Response> {
   const dw = c.get("dw");
   const session = uiSlotsOf(c).session;
   const next = c.req.query("next");
   const sessionNote = session
-    ? `<p class="dw-callout">People sign in with their account: <a class="dw-btn primary small" href="${e(session.signInPath + (next && next.startsWith("/") && !next.startsWith("//") ? `${session.signInPath.includes("?") ? "&" : "?"}next=${encodeURIComponent(next)}` : ""))}">Sign in with your account</a> Agents and scripts can also sign in here with an API key.</p>`
+    ? `<div class="k-banner" role="note"><div>People sign in with their account. Agents and scripts can also sign in here with an API key.<div class="k-btnrow"><a class="k-btn k-sm" href="${e(session.signInPath + (next && next.startsWith("/") && !next.startsWith("//") ? `${session.signInPath.includes("?") ? "&" : "?"}next=${encodeURIComponent(next)}` : ""))}">Sign in with your account</a></div></div></div>`
     : "";
   const setUp = await isSetUp(dw).catch(() => true);
-  const bootstrapField = `<div class="dw-field"><label class="dw-label" for="%ID%">Bootstrap secret (ADMIN_BOOTSTRAP_KEY)</label><input class="dw-input" id="%ID%" name="secret" type="password" autocomplete="off" required><p class="dw-help">Sent once to this instance's API, never stored in the browser.</p></div>`;
+  const bootstrapField = `<div class="k-group"><label class="k-label" for="%ID%">Bootstrap secret (ADMIN_BOOTSTRAP_KEY)</label><input class="k-input k-mono" id="%ID%" name="secret" type="password" autocomplete="off" required><p class="k-hint">Sent once to this instance's API, never stored in the browser.</p></div>`;
+  const name = e(dw.config.instanceName);
+  // One panel per job, its heading inside it (the same pattern as the hosted sign-in page): the page h1 sits in
+  // the first panel, the setup panel when the instance is not set up yet, else the API-key panel.
   const setup = setUp
     ? ""
-    : `<section class="dw-section" id="setup"><header><h2>Set up this instance</h2></header><form class="dw-pad" id="dw-setup" method="post" action="/login">
+    : `<section class="k-panel" id="setup" aria-labelledby="dw-setup-h"><p class="k-k">First run</p><h1 id="dw-setup-h">Set up ${name}</h1><p>Create the owner of this instance with the bootstrap secret you configured.</p><form id="dw-setup" method="post" action="/login">
 ${bootstrapField.replaceAll("%ID%", "dw-setup-secret")}
-<div class="dw-grid2"><div class="dw-field"><label class="dw-label" for="dw-setup-email">Your email</label><input class="dw-input" id="dw-setup-email" name="email" type="email" autocomplete="email"></div>
-<div class="dw-field"><label class="dw-label" for="dw-setup-name">Name</label><input class="dw-input" id="dw-setup-name" name="name" autocomplete="name"></div></div>
-<button type="submit" class="dw-btn primary">Create the owner</button><div class="dw-out" aria-live="polite"></div></form></section>`;
-  const body = `<div class="dw-auth">
-<h1 class="dw-h1">Sign in to ${e(dw.config.instanceName)}</h1>
+<div class="k-two"><div class="k-group"><label class="k-label" for="dw-setup-email">Your email</label><input class="k-input" id="dw-setup-email" name="email" type="email" autocomplete="email"></div>
+<div class="k-group"><label class="k-label" for="dw-setup-name">Name</label><input class="k-input" id="dw-setup-name" name="name" autocomplete="name"></div></div>
+<button type="submit" class="k-btn">Create the owner</button><div data-out aria-live="polite"></div></form></section>`;
+  const keyHeading = setUp ? `<h1 id="dw-key-h">Sign in to ${name}</h1>` : `<h2 id="dw-key-h">Sign in with an API key</h2>`;
+  const body = `<div class="k-narrow k-stack">
 <div id="dw-login-note"></div>
 ${sessionNote}${setup}
-<section class="dw-section"><header><h2>API key</h2></header><form class="dw-pad" id="dw-signin" method="post" action="/login">
-<div class="dw-field"><label class="dw-label" for="dw-key">API key</label><input class="dw-input dw-mono" id="dw-key" name="key" type="password" autocomplete="current-password" placeholder="dw_…" required spellcheck="false"></div>
-<label class="dw-check"><input type="checkbox" name="remember"><span>Keep me signed in on this browser<span class="dw-sub">Otherwise the key is forgotten when this tab closes.</span></span></label>
-<div class="dw-row" style="margin-top:.75rem"><button type="submit" class="dw-btn primary">Sign in</button></div>
-<div id="dw-signin-out" aria-live="polite" style="margin-top:.75rem"></div>
-</form></section>
-<p class="dw-small dw-muted">Keys come from the instance owner: the owner key is created at setup, and anyone with the <code>keys:write</code> scope can create more under API keys. The key is only ever sent to this instance's API.</p>
+<section class="k-panel" aria-labelledby="dw-key-h">${keyHeading}<p>Use an API key of this instance. It is only ever sent to this instance's API.</p><form id="dw-signin" method="post" action="/login">
+<div class="k-group"><label class="k-label" for="dw-key">API key</label><input class="k-input k-mono" id="dw-key" name="key" type="password" autocomplete="current-password" placeholder="dw_…" required spellcheck="false"></div>
+<label class="k-tog"><input type="checkbox" name="remember"><span>Keep me signed in on this browser<span class="k-sub">Otherwise the key is forgotten when this tab closes.</span></span></label>
+<div class="k-btnrow"><button type="submit" class="k-btn">Sign in</button></div>
+<div id="dw-signin-out" aria-live="polite"></div>
+</form>
+<p class="k-small k-panel-note">Keys come from the instance owner: the owner key is created at setup, and anyone with the ${tok("keys:write")} scope can create more under API keys.</p></section>
 ${
   setUp
-    ? `<details><summary>Lost the owner key?</summary><form class="dw-section dw-pad" id="dw-recover" method="post" action="/login" style="margin-top:.6rem">${bootstrapField.replaceAll("%ID%", "dw-recover-secret")}<button type="submit" class="dw-btn">Create a new owner key</button><div class="dw-out" aria-live="polite"></div></form></details>`
+    ? `<details class="k-how"><summary>Lost the owner key?</summary><form class="k-panel" id="dw-recover" method="post" action="/login">${bootstrapField.replaceAll("%ID%", "dw-recover-secret")}<button type="submit" class="k-btn k-ghost">Create a new owner key</button><div data-out aria-live="polite"></div></form></details>`
     : ""
 }
 ${NOSCRIPT}
 </div>`;
-  return renderAppPage(c, { title: "Sign in", page: "login", body, css: AUTH_CSS, nav: false });
+  return renderAppPage(c, { title: "Sign in", page: "login", body, nav: false });
 }
 
 // ------------------------------------------------------------------ dashboard
@@ -169,7 +185,8 @@ export function sitesPage(c: Context<DropwayEnv>): Promise<Response> {
     title: "Sites",
     page: "sites",
     active: "/dashboard",
-    body: `${pageHead("Sites", '<span id="dw-sites-count">Loading…</span>', '<a class="dw-btn primary" href="/dashboard/publish">Publish</a>')}<div id="dw-sites">${NOSCRIPT}</div>`,
+    trust: true,
+    body: `${pageHead("Sites", '<span id="dw-sites-count">Loading…</span>', '<a class="k-btn" href="/dashboard/publish">Publish</a>')}<div id="dw-sites">${NOSCRIPT}</div>`,
   });
 }
 
@@ -180,7 +197,8 @@ export function sitePage(c: Context<DropwayEnv>): Promise<Response> {
     page: "site",
     active: "/dashboard",
     data: { slug },
-    body: `<nav class="dw-small" aria-label="Breadcrumb" style="margin:0 0 .75rem"><a href="/dashboard">Sites</a> / <span class="dw-mono">${e(slug)}</span></nav><div id="dw-site">${NOSCRIPT}</div>`,
+    trust: true,
+    body: `<nav class="k-crumbs" aria-label="Breadcrumb"><a href="/dashboard">Sites</a><span class="k-sep" aria-hidden="true">/</span><span aria-current="page">${e(slug)}</span></nav><div id="dw-site">${NOSCRIPT}</div>`,
   });
 }
 
@@ -189,7 +207,9 @@ export function publishPage(c: Context<DropwayEnv>): Promise<Response> {
     title: "Publish",
     page: "publish",
     active: "/dashboard/publish",
-    body: `${pageHead("Publish", "Drop a build folder, some files or a .zip. Agents do the same with one API call, the CLI or MCP.")}<section class="dw-section"><div class="dw-pad" id="dw-publish">${NOSCRIPT}</div></section>`,
+    // It lists the files chosen for publishing: the trust line goes in the footer (PORT-SPEC 6.0, A08-A13).
+    trust: true,
+    body: `${pageHead("Publish", "Drop a build folder, some files or a .zip. Agents do the same with one API call, the CLI or MCP.")}${block({ title: "The press", titleId: "dw-publish-h", body: `<div class="k-pad" id="dw-publish">${NOSCRIPT}</div>` })}`,
   });
 }
 
@@ -208,7 +228,7 @@ export async function settingsPage(c: Context<DropwayEnv>, slots: UiSlots): Prom
   const lim = cfg.limits;
   const rows: Array<[string, string]> = [
     ["Instance name", e(cfg.instanceName)],
-    ["App and API", `<code>${e(appOrigin(dw))}</code>`],
+    ["App and API", urlCode(appOrigin(dw))],
     ["Sites", sitesWhere(dw)],
     [
       "Sandbox on sites",
@@ -227,49 +247,38 @@ export async function settingsPage(c: Context<DropwayEnv>, slots: UiSlots): Prom
   ];
   const extra = await Promise.all(
     (slots.settingsSections ?? []).map(async (s) => {
-      const html = await Promise.resolve(s.render(c)).catch((err) => `<p class="dw-error">${e(String(err))}</p>`);
-      return `<section class="dw-section" id="${e(s.id)}"><header><h2>${e(s.title)}</h2></header><div class="dw-pad">${html}</div></section>`;
+      const html = await Promise.resolve(s.render(c)).catch((err) => `<p class="k-banner k-danger" role="alert">${e(String(err))}</p>`);
+      return block({ id: s.id, title: s.title, body: `<div class="k-pad">${html}</div>` });
     }),
   );
-  const body = `${pageHead("Settings", "How this instance is configured. Change these with Worker variables (wrangler.jsonc) and redeploy.")}
-<section class="dw-section"><header><h2>Your account</h2></header><div class="dw-pad" id="dw-me">${NOSCRIPT}</div></section>
-<section class="dw-section"><header><h2>Members</h2><span class="dw-small dw-muted">People and agents who can sign in. Each gets their own keys.</span></header><div id="dw-members">${NOSCRIPT}</div></section>
-<section class="dw-section"><header><h2>This instance</h2></header><div class="dw-pad"><dl class="dw-kv">${rows.map(([k, v]) => `<dt>${e(k)}</dt><dd>${v}</dd>`).join("")}</dl></div></section>
+  // Members are edited here; only the instance's own settings live in wrangler.jsonc (said on that block alone).
+  const body = `${pageHead("Settings", "Your account, the members who can sign in, and how this instance is set up.")}
+${block({ title: "Your account", titleId: "dw-me-h", body: `<div class="k-pad" id="dw-me">${NOSCRIPT}</div>` })}
+${block({ title: "Members", titleId: "dw-members-h", tools: '<span class="k-small">People and agents who can sign in. Each gets their own keys.</span>', body: `<div id="dw-members">${NOSCRIPT}</div>` })}
+${block({ title: "This instance", titleId: "dw-instance-h", tools: `<span class="k-small">Read-only here: change these in ${tok("wrangler.jsonc")} and redeploy.</span>`, body: `<div class="k-pad"><dl class="k-kv">${rows.map(([k, v]) => `<dt>${e(k)}</dt><dd>${v}</dd>`).join("")}</dl></div>` })}
 ${extra.join("")}`;
   return renderAppPage(c, { title: "Settings", page: "settings", active: "/dashboard/settings", body });
 }
 
 // ------------------------------------------------------------------ file viewer
 
-const VIEWER_PAGE_CSS = `
-body.dw-wide{height:100vh;min-height:0;overflow:hidden}
-.dw-side{width:17.5rem;flex:none;border-right:1px solid var(--line);background:var(--card);overflow:auto;display:flex;flex-direction:column;gap:.6rem;padding:.75rem}
-.dw-tree-head{display:flex;flex-direction:column;gap:.1rem;padding:0 .25rem}
-.dw-tree-note{font-size:.88rem;color:var(--muted);padding:.25rem}
-.dw-treebox{font-size:.86rem;line-height:1.35}
-.dw-treebox ul{list-style:none;margin:0;padding:0 0 0 .85rem}
-.dw-treebox>ul{padding-left:0}
-.dw-treebox li{margin:0}
-.dw-treebox summary{cursor:pointer;padding:.22rem .35rem;border-radius:5px;font-weight:600;color:var(--fg);list-style:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dw-treebox summary::-webkit-details-marker{display:none}
-.dw-treebox summary::before{content:"▸";display:inline-block;width:1em;color:var(--muted)}
-.dw-treebox details[open]>summary::before{content:"▾"}
-.dw-treebox summary:hover,.dw-treebox a:hover{background:var(--code)}
-.dw-treebox a{display:block;padding:.22rem .35rem .22rem 1.35rem;border-radius:5px;color:var(--fg);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dw-treebox a[aria-current]{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);font-weight:600}
-.dw-viewer{flex:1;min-width:0;display:flex;flex-direction:column}
-.dw-vtools{display:flex;flex-wrap:wrap;gap:.5rem .75rem;align-items:center;justify-content:space-between;padding:.5rem .9rem;border-bottom:1px solid var(--line);background:var(--bg);font-size:.85rem}
-.dw-vtools #dw-fileinfo{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dw-vtools #dw-tools{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
-.dw-vtabs{display:flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
-.dw-vtabs button,.dw-vtabs a{border:0;border-left:1px solid var(--line);background:var(--card);padding:.28rem .7rem;font:inherit;font-size:.82rem;color:var(--muted);cursor:pointer;text-decoration:none}
-.dw-vtabs :first-child{border-left:0}
-.dw-vtabs [aria-selected=true]{color:var(--fg);font-weight:600;box-shadow:inset 0 -2px 0 var(--accent)}
-.dw-vtabs [role=tab]:focus-visible{outline-offset:-3px}
-.dw-view-panel{flex:1;min-height:0;display:flex}
-.dw-frame{flex:1;width:100%;border:0;background:#fff}
-@media (max-width:760px){.dw-main-wide{flex-direction:column}.dw-side{width:auto;max-height:32vh;border-right:0;border-bottom:1px solid var(--line)}}
-`;
+/** Add &theme= to a viewer URL (only ?view=1 / ?view=source pages: Kofra-generated, never user files) for an explicit mode. */
+export function withViewerTheme(url: string, pref: string): string {
+  if (pref !== "light" && pref !== "dark") return url;
+  return /[?&]view=(1|source)\b/.test(url) ? `${url}&theme=${pref}` : url;
+}
+
+/**
+ * The frame address for a folder or raw file: through <site>/__dropway/open, which passes an explicit mode
+ * (?theme=) and, for folders, the embed (&embed=1: the listing or the password gate drawn without a header
+ * and footer of their own) on only to pages Kofra draws. Direct when there is nothing to pass on.
+ */
+export function openInFrameUrl(root: string, target: string, pref: ThemePref, embed = false): string {
+  const explicit = pref === "light" || pref === "dark";
+  if (!explicit && !embed) return target;
+  const t = new URL(target);
+  return `${root}__dropway/open?next=${encodeURIComponent(t.pathname + t.search)}${embed ? "&embed=1" : ""}${explicit ? `&theme=${pref}` : ""}`;
+}
 
 export function viewerPage(c: Context<DropwayEnv>): Response | Promise<Response> {
   const dw = c.get("dw");
@@ -279,22 +288,29 @@ export function viewerPage(c: Context<DropwayEnv>): Response | Promise<Response>
   const decoded = requestPathToFilePath(`/${raw}`);
   if (decoded === null) return c.notFound();
   const path = decoded;
+  const pref = themeOf(dw);
   const root = siteUrl(dw, slug);
   const fileUrl = root + encodePath(path.replace(/\/$/, "")) + (path.endsWith("/") ? "/" : "");
   const isDir = path === "" || path.endsWith("/");
   const mode = c.req.query("mode");
-  const src = isDir ? fileUrl : mode === "source" ? `${fileUrl}?view=source&embed=1` : mode === "raw" ? `${fileUrl}?raw=1` : `${fileUrl}?view=1&embed=1`;
+  // Folders and raw files may be the site's own bytes, so in an explicit mode they open through the site's
+  // __dropway/open address, which adds ?theme= only when the frame will show a page Kofra draws.
+  const target = isDir ? fileUrl : mode === "source" ? `${fileUrl}?view=source&embed=1` : mode === "raw" ? `${fileUrl}?raw=1` : `${fileUrl}?view=1&embed=1`;
+  const src = isDir ? openInFrameUrl(root, target, pref, true) : mode === "raw" ? openInFrameUrl(root, target, pref) : withViewerTheme(target, pref);
   const shared = sitesCspSource(dw) === "'self'";
   // A sandboxed frame. On a separate sites origin the page keeps that (different) origin so its own
   // storage works; on the shared origin it gets an opaque origin, like every site response there.
   const sandbox = `allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-presentation${shared ? "" : " allow-same-origin"}`;
+  const tab = (label: string, href: string, on: boolean) => `<a href="${e(href)}" target="dw-frame"${on ? ' aria-current="page"' : ""}>${label}</a>`;
   const tools = isDir
-    ? `<a class="dw-btn small" href="${e(fileUrl)}" target="_blank" rel="noopener">Open</a>`
-    : `<div class="dw-vtabs"><a href="${e(`${fileUrl}?view=1&embed=1`)}" target="dw-frame">Rendered</a><a href="${e(`${fileUrl}?view=source&embed=1`)}" target="dw-frame">Source</a><a href="${e(`${fileUrl}?raw=1`)}" target="dw-frame">Raw</a></div><a class="dw-btn small" href="${e(`${fileUrl}?download=1`)}">Download</a><a class="dw-btn small" href="${e(fileUrl)}" target="_blank" rel="noopener">Open</a>`;
-  const body = `<aside class="dw-side" id="dw-tree" aria-label="Files"><div class="dw-tree-note"><a class="dw-title" href="/dashboard/sites/${e(encodeURIComponent(slug))}">${e(slug)}</a>${NOSCRIPT}</div></aside>
-<section class="dw-viewer" aria-label="Preview">
-<div class="dw-vtools"><div id="dw-fileinfo"><span class="dw-mono">${e(path || "/")}</span></div><div id="dw-tools">${tools}</div></div>
-<div id="dw-view-panel" class="dw-view-panel"><iframe id="dw-frame" name="dw-frame" class="dw-frame" src="${e(src)}" sandbox="${sandbox}" allow="clipboard-write; fullscreen; autoplay; encrypted-media; picture-in-picture" referrerpolicy="no-referrer" title="${e(`Preview of ${path || slug}`)}"></iframe></div>
-</section>`;
-  return renderAppPage(c, { title: path ? `${path.split("/").filter(Boolean).pop()} · ${slug}` : slug, page: "viewer", active: "/dashboard", wide: true, data: { slug, path, siteUrl: root }, css: VIEWER_PAGE_CSS, body });
+    ? `<a class="k-btn k-sm k-ghost" href="${e(fileUrl)}" target="_blank" rel="noopener">Open</a>`
+    : `<nav class="k-seg" aria-label="View">${tab("Rendered", withViewerTheme(`${fileUrl}?view=1&embed=1`, pref), mode !== "source" && mode !== "raw")}${tab("Source", withViewerTheme(`${fileUrl}?view=source&embed=1`, pref), mode === "source")}${tab("Raw", `${fileUrl}?raw=1`, mode === "raw")}</nav><a class="k-btn k-sm k-ghost" href="${e(`${fileUrl}?download=1`)}">Download</a><a class="k-btn k-sm k-ghost" href="${e(fileUrl)}" target="_blank" rel="noopener">Open</a>`;
+  const body = `<div class="k-vapp"><aside class="k-vside" id="dw-tree" aria-label="Files"><div class="k-vside-h"><a class="k-title" href="/dashboard/sites/${e(encodeURIComponent(slug))}">${e(slug)}</a>${NOSCRIPT}</div></aside>
+<section class="k-vcenter" aria-label="Preview">
+<h1 class="k-sr" id="dw-vh">${e(path.split("/").filter(Boolean).pop() ?? slug)}</h1>
+<div class="k-toolbar"><div class="k-vfile" id="dw-fileinfo"><span class="k-crumbs"><span aria-current="page">${e(path || "/")}</span></span></div><div class="k-tools" id="dw-tools">${tools}</div></div>
+<p class="k-trust">${TRUST_LINE}</p>
+<div id="dw-view-panel" class="k-vpanel"><iframe id="dw-frame" name="dw-frame" class="k-frame" src="${e(src)}" sandbox="${sandbox}" allow="clipboard-write; fullscreen; autoplay; encrypted-media; picture-in-picture" referrerpolicy="no-referrer" title="${e(`Preview of ${path || slug}`)}"></iframe></div>
+</section></div>`;
+  return renderAppPage(c, { title: path ? `${path.split("/").filter(Boolean).pop()} · ${slug}` : slug, page: "viewer", active: "/dashboard", wide: true, data: { slug, path, siteUrl: root, theme: pref }, body });
 }

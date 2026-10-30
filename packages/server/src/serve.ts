@@ -22,8 +22,12 @@ import {
   type DropwayContext,
   type LiveSite,
 } from "@dropway/core";
-import { escapeHtml, systemPage } from "./html";
+import { escapeHtml, siteSystemCsp, systemPage } from "./html";
+import { urlCode } from "./ui/code";
+import { safeNext, themeOf } from "./ui/theme";
+import { SITE_CSS_HASH } from "./ui/design.generated";
 import { findViewer, toViewerFile, VIEWER_CHROME_VERSION, VIEWER_CSP, VIEWERS, type ViewMode, type Viewer } from "./viewers";
+import { OPEN_PATH } from "./viewers/links";
 import { renderListing } from "./viewers/listing";
 import { MAX_CSS_REWRITE_BYTES, rewriteCss, rewriteHtml, type PathRewrite } from "./path-rewrite";
 import { PATH_SHIM_VERSION, pathShimScript } from "./path-shim";
@@ -58,6 +62,10 @@ export const SITE_SANDBOX =
   "sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation allow-orientation-lock";
 
 const PASSWORD_PATH = "__dropway/password";
+/** The Report abuse link on anonymous sites (report-link.ts) opens this page on the site's own origin. */
+export const REPORT_PATH = "__dropway/report";
+/** The app's file viewer opens folders and a site's own pages in its frame through this address (see openInFrame). */
+export { OPEN_PATH };
 const PASSWORD_FORM_TTL = 15 * 60_000;
 /** Edges' clocks differ slightly: a form issued by one may look this far ahead to another. */
 const PASSWORD_FORM_CLOCK_SKEW = 60_000;
@@ -187,16 +195,88 @@ export function systemResponse(
   title: string,
   message: string,
   extra = "",
+  primary = "",
 ): Response {
   const h = new Headers({ "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
-  h.set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'");
+  h.set("Content-Security-Policy", siteSystemCsp(dw));
   securityHeaders(h, live, mode);
   const origin = appOrigin(dw);
+  // Inside the app's file viewer (&embed=1) the page has no header or footer of its own, and links to the
+  // app open a new tab: the app origin refuses to be framed, so they would leave a blank frame.
+  const embed = isEmbedded(req);
+  const out = embed ? ' target="_blank" rel="noopener"' : "";
   const body =
     req.method === "HEAD"
       ? null
-      : systemPage({ code, title, message: message.replace("{app}", `<a href="${escapeHtml(origin)}">${escapeHtml(dw.config.instanceName)}</a>`), extra });
+      : systemPage({
+          dw,
+          code,
+          title,
+          message: message.replace("{app}", `<a href="${escapeHtml(origin)}"${out}>${escapeHtml(dw.config.instanceName)}</a>`),
+          extra: extra + (code === "PASSWORD" ? "" : endStateActions(origin, req, live, status, code, embed, out, primary)),
+          // Only terminal lifecycle states get a stamp.
+          stamp: status === 410 ? { text: "Expired" } : undefined,
+          variant: code === "PASSWORD" ? "panel" : "state",
+          embed,
+        });
   return new Response(body, { status, headers: h });
+}
+
+/**
+ * The actions of a site-origin end state, in one order everywhere: the primary action first (filled), then Home as a
+ * ghost button; when Home is the only action it is the filled one (the same emphasis as the app's not-found page).
+ * "Publish files" on an empty site is for its owner, so it shows only inside the app's file viewer (&embed=1, where
+ * the person is signed in); a visitor gets Home.
+ */
+function endStateActions(origin: string, req: Request, live: LiveSite | null, status: number, code: string, embed: boolean, out: string, given = ""): string {
+  const primary =
+    given ||
+    (code === "EMPTY" && live && embed
+      ? `<a class="k-btn" href="${escapeHtml(origin)}/dashboard/publish?site=${escapeHtml(encodeURIComponent(live.slug))}"${out}>Publish files</a>`
+      : status === 502
+        ? // The path only: a request's query (preview, claim, unlock, tokens) never goes into the page.
+          `<a class="k-btn" href="${escapeHtml(new URL(req.url).pathname)}">Try again</a>`
+        : "");
+  return `<div class="k-acts">${primary}<a class="k-btn${primary ? " k-ghost" : ""}" href="${escapeHtml(origin)}"${out}>Home</a></div>`;
+}
+
+/**
+ * GET <site>/__dropway/report: how to report this site. Kofra does not review sites before they go live, so the page
+ * names the site's address and points at the instance's abuse contact (ABUSE_CONTACT: an email address, opened as a
+ * prefilled email, or an https form), else asks people to tell whoever runs the instance.
+ */
+function reportPage(dw: DropwayContext, req: Request, mode: ServeMode, live: LiveSite): Response {
+  const address = siteUrl(dw, live.slug);
+  const contact = dw.config.abuseContact;
+  const mail = contact && !contact.startsWith("https:") ? contact : null;
+  const primary = mail
+    ? `<a class="k-btn" href="${escapeHtml(`mailto:${mail}?subject=${encodeURIComponent(`Report: ${address}`)}&body=${encodeURIComponent(`Site: ${address}\nWhat is wrong with it:\n`)}`)}">Email a report</a>`
+    : contact
+      ? `<a class="k-btn" href="${escapeHtml(contact)}" rel="noopener">Report it</a>`
+      : "";
+  const how = contact ? "report it with its address:" : "tell the people who run {app}, with its address:";
+  return systemResponse(
+    dw,
+    req,
+    mode,
+    live,
+    200,
+    "REPORT",
+    "Report this site",
+    `Sites here are not reviewed before they go live. If this one is harmful (phishing, malware, someone's private data), ${how}`,
+    // The address wraps only after "/" and before "." (code.k-brk), never at a hyphen inside the site's name.
+    `<p>${urlCode(address)}</p>`,
+    primary,
+  );
+}
+
+/** `&embed=1` on the request: the page is drawn inside the app's file viewer frame. */
+function isEmbedded(req: Request): boolean {
+  try {
+    return flag(new URL(req.url).searchParams, "embed");
+  } catch {
+    return false;
+  }
 }
 
 async function passwordCookieValue(dw: DropwayContext, live: LiveSite): Promise<string> {
@@ -296,15 +376,55 @@ async function handlePassword(dw: DropwayContext, req: Request, live: LiveSite, 
   return passwordForm(dw, req, live, mode, u.pathname + u.search, false);
 }
 
+/**
+ * GET <base>__dropway/open?next=<path>&theme=light|dark: how the app's file viewer opens a folder, a raw file
+ * or a site's own page in its frame without handing ?theme= to the site's own HTML. It answers 303 to `next`,
+ * adding the mode only when `next` shows a page Kofra draws there (a listing, a file viewer, a system page).
+ * On a password-protected site the gate comes first (drawn in the mode, since this request carries it) and
+ * returns here once unlocked. `next` must be a path on this site; anything else opens the site root.
+ */
+function openInFrame(dw: DropwayContext, req: Request, url: URL, live: LiveSite, mode: ServeMode, viewers: readonly Viewer[]): Response {
+  const asked = url.searchParams.get("next") ?? "";
+  const candidate = safeNext(asked) === asked ? new URL(asked, url) : null;
+  const target = candidate && candidate.pathname.startsWith(mode.base) && !candidate.pathname.startsWith("//") ? candidate : new URL(mode.base, url);
+  // Only this route decides whether the mode goes along (and adds the embed of a framed Kofra page).
+  target.searchParams.delete("theme");
+  const theme = themeOf(dw);
+  const embed = flag(url.searchParams, "embed");
+  if (theme !== "auto" || embed) {
+    // Resolve `next` the way a frame navigation to it would be served.
+    const nav = new Request(target.href, { headers: { "Sec-Fetch-Dest": "iframe", Accept: "text/html" } });
+    const filePath = requestPathToFilePath(`/${target.pathname.slice(mode.base.length)}`);
+    const resolved = filePath === null ? null : resolvePath(live, filePath, nav, mode);
+    let kofra = resolved?.kind === "listing" || resolved?.kind === "not_found";
+    if (resolved?.kind === "file") {
+      const sp = target.searchParams;
+      const viewMode = flag(sp, "raw") || flag(sp, "download") ? null : requestedViewMode(nav, sp);
+      const [sha256, size, contentType] = live.files[resolved.path]!;
+      kofra = !!viewMode && !!findViewer(toViewerFile(resolved.path, sha256, size, contentType), live, viewers, viewMode);
+    }
+    if (kofra && theme !== "auto") target.searchParams.set("theme", theme);
+    if (kofra && embed && !target.searchParams.has("embed")) target.searchParams.set("embed", "1");
+  }
+  return new Response(null, { status: 303, headers: { Location: target.pathname + target.search, "Cache-Control": "no-store" } });
+}
+
 async function passwordForm(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, next: string, failed: boolean): Promise<Response> {
+  // The form posts with the same ?theme= as the page, so a wrong-password answer keeps the mode. No
+  // autofocus: browsers block it in the app's file viewer (a cross-origin frame) and it skips the page.
+  const theme = themeOf(dw);
   const until = Date.now() + PASSWORD_FORM_TTL;
-  const action = `${mode.base}${PASSWORD_PATH}?dw_form=${until}.${await passwordFormSignature(dw, req, live, mode, until)}`;
-  const extra = `<form method="post" action="${escapeHtml(action)}" style="display:flex;gap:.5rem">
+  const query = [`dw_form=${until}.${await passwordFormSignature(dw, req, live, mode, until)}`, theme === "auto" ? "" : `theme=${theme}`, isEmbedded(req) ? "embed=1" : ""].filter(Boolean).join("&");
+  const extra = `<form method="post" action="${escapeHtml(`${mode.base}${PASSWORD_PATH}?${query}`)}">
 <input type="hidden" name="next" value="${escapeHtml(next)}">
-<input type="password" name="password" placeholder="Password" required autofocus style="flex:1;padding:.6rem .8rem;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--fg)">
-<button style="padding:.6rem 1rem;border:0;border-radius:8px;background:var(--accent);color:#fff;cursor:pointer">Open</button></form>
-${failed ? '<p style="color:var(--accent)">That password is not right.</p>' : ""}`;
-  const r = systemResponse(dw, req, mode, live, 401, "PASSWORD", "This site is password protected", "Enter the password to view it.", extra);
+<label class="k-label" for="dw-pw">Password</label>
+<div class="k-field"><input class="k-input" id="dw-pw" type="password" name="password" autocomplete="current-password" required${failed ? ' aria-invalid="true" aria-describedby="dw-pw-err"' : ""}><button class="k-btn" type="submit">Open</button></div>
+${failed ? '<p class="k-msgline k-err" id="dw-pw-err" role="alert">That password is not right.</p>' : ""}</form>`;
+  // Inside the app's file viewer the owner sees the gate too: the preview shows the site as its visitors see it.
+  const message = isEmbedded(req)
+    ? "Enter the password to view it. This preview shows the site as visitors see it, so it asks you for the password too."
+    : "Enter the password to view it.";
+  const r = systemResponse(dw, req, mode, live, 401, "PASSWORD", "This site is password protected", message, extra);
   // Only the app (its file viewer) may frame the form; X-Frame-Options covers browsers without CSP 2.
   r.headers.set("Content-Security-Policy", `${r.headers.get("Content-Security-Policy")}; frame-ancestors ${appOrigin(dw)}`);
   r.headers.set("X-Frame-Options", "DENY");
@@ -452,13 +572,15 @@ export async function serveSiteContent(
       return systemResponse(dw, req, mode, live, 403, "403", "Not available here", "This site is password protected, so other sites cannot load it.");
     }
   }
+  if (filePath === REPORT_PATH && (method === "GET" || method === "HEAD")) return reportPage(dw, req, mode, live);
   const gate = await handlePassword(dw, req, live, mode, filePath);
   if (gate) return gate;
 
   if (method !== "GET" && method !== "HEAD") {
     return new Response("Method not allowed", { status: 405, headers: { Allow: "GET, HEAD, OPTIONS" } });
   }
-  if (!live.versionId) return systemResponse(dw, req, mode, live, 404, "EMPTY", "Nothing published yet", "This site exists but has no live version yet. See {app}.");
+  if (filePath === OPEN_PATH) return openInFrame(dw, req, url, live, mode, viewers);
+  if (!live.versionId) return systemResponse(dw, req, mode, live, 404, "EMPTY", "Nothing published yet", "The owner of this site has not published anything on it yet.");
 
   const resolved = resolvePath(live, filePath, req, mode);
   let response: Response;
@@ -477,7 +599,7 @@ export async function serveSiteContent(
       `</ul></nav>`;
     response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", `There is no file at <code>/${escapeHtml(filePath).replaceAll("{", "&#123;")}</code> on this site.`, recovery);
   } else if (resolved.kind === "listing") {
-    response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`, url.searchParams.get("sort"), url.origin);
+    response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`, url.searchParams.get("sort"), url.origin, { dw, theme: themeOf(dw), embed: flag(url.searchParams, "embed") });
     securityHeaders(response.headers, live, mode);
   } else {
     response = await serveFile(req, dw, url, live, mode, resolved.path, resolved.status, viewers);
@@ -516,10 +638,13 @@ async function serveFile(
     // A sole-file root can resolve to a new path with identical bytes, and MIME
     // can change independently too. Content-only render fragments stay reusable.
     const folderVariant = `-folder${live.versionId}`;
+    // ?theme= (from the app's file viewer) prints the page in one mode: a different body, so a different ETag.
+    const theme = themeOf(dw);
     // The shared chrome revision retires every full-page validator when
     // viewerPage markup/CSS changes, including extension viewers whose own
-    // version cannot know about an internal chrome change.
-    const etag = `W/"${etagSegment(viewer.id)}@${viewer.version ?? 1}-${sha256}${etagSegment(viewer.etagExtra?.(file, live) ?? "")}${folderVariant}-chrome${VIEWER_CHROME_VERSION}${embed ? "-e" : ""}${reportVariant}"`;
+    // version cannot know about an internal chrome change. The site CSS hash
+    // does the same for design stylesheet edits that change no markup.
+    const etag = `W/"${etagSegment(viewer.id)}@${viewer.version ?? 1}-${sha256}${etagSegment(viewer.etagExtra?.(file, live) ?? "")}${folderVariant}-chrome${VIEWER_CHROME_VERSION}.${SITE_CSS_HASH}${embed ? "-e" : ""}${theme === "auto" ? "" : `-t${theme[0]}`}${reportVariant}"`;
     const h = new Headers();
     if (status === 200 && etagMatches(req, etag)) {
       h.set("ETag", etag);
@@ -657,8 +782,8 @@ function blobMissing(dw: DropwayContext, req: Request, mode: ServeMode, live: Li
   console.error(JSON.stringify({ event: "blob_missing", slug: live.slug, version: live.versionId, url: req.url }));
   // Rebuild the retry href from the serving base and the manifest path only:
   // never copy the raw request URL or its query into the page.
-  const retry = `<p><a href="${escapeHtml(mode.base + encodePath(path))}">Try again</a></p>`;
-  return systemResponse(dw, req, mode, live, 502, "502", "File unavailable", "This file is listed in the site but its contents could not be read. Try again shortly.", retry);
+  const retry = `<a class="k-btn" href="${escapeHtml(mode.base + encodePath(path))}">Try again</a>`;
+  return systemResponse(dw, req, mode, live, 502, "502", "File unavailable", "This file is listed in the site but its contents could not be read. Try again shortly.", "", retry);
 }
 
 function recordHit(dw: DropwayContext, req: Request, live: LiveSite, path: string, status: number, bytes: number, ms: number) {

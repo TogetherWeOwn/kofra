@@ -1,0 +1,22 @@
+/* Reduced motion, forced colours and print (PORT-SPEC 3.5), for both bundles. App-only parts: 91-a11y-app.css. */
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{transition-duration:0s!important;transition-delay:0s!important;animation-duration:0s!important;animation-iteration-count:1!important}
+  .seal.draw path{animation:none;stroke-dashoffset:0}
+  .btn:active{transform:none}
+}
+@media (forced-colors:active){
+  :focus-visible{outline:2px solid CanvasText}
+  .seg>[aria-pressed=true],.seg>[aria-selected=true],.seg>[aria-current=page]{forced-color-adjust:none;background:Highlight;color:HighlightText}
+  .sp-svg{forced-color-adjust:none}
+  .sp-svg .e1,.sp-svg .e2,.sp-svg .em,.sp-svg .ef{stroke:CanvasText}
+  .sp-svg .e3{stroke:GrayText}
+  .sp-svg .fm,.sp-svg .ft{fill:CanvasText}
+  .sp-svg .fp{fill:Canvas}
+  .guilloche-band{forced-color-adjust:none;background:GrayText}
+  ::selection{background:Highlight;color:HighlightText}
+}
+@media print{
+  body{background:var(--paper)}
+  .vbar .btnrow{display:none}
+}

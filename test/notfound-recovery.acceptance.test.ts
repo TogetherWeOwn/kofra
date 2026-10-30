@@ -9,8 +9,8 @@
  * and must keep passing byte-for-byte.
  *
  * Contract (builder: implement exactly this):
- * - File-not-found page (post-password-gate 404): plain anchors, in this
- *   order, and no others:
+ * - File-not-found page (post-password-gate 404): plain recovery anchors,
+ *   in this order, followed only by the shared public instance Home action:
  *   1. the site's home: href is exactly the current serving-mode base
  *      (`mode.base`: `/s/<slug>/` on the shared origin, `/<slug>/` on a
  *      separate sites origin, `/` in subdomain mode);
@@ -26,11 +26,10 @@
  *      ancestor from (2), or "" (the site root) when there is none.
  *   Labels for (1) and (2) are any discernible text; all links are real
  *   anchors under the existing system-page styles, with no JavaScript.
- * - Empty-site page (site exists, no live version, 404): the one anchor is
- *   the existing `{app}` substitution: href is the app origin, text is the
- *   instance name. No dashboard/sign-in link, nothing promising owner access.
+ * - Empty-site page (site exists, no live version, 404): the only main-content
+ *   action is Home at the app origin. No dashboard/sign-in link or owner access.
  * - Unreadable-file page (manifest lists the file, its bytes cannot be
- *   read, 502): the one anchor is "Try again" (exact label), href rebuilt
+ *   read, 502): alongside Home, the recovery anchor is "Try again", href rebuilt
  *   as `mode.base + encodePath(path)` for the file that could not be read.
  *   Never copy the raw request URL: no query string at all, so preview,
  *   claim, unlock or bearer parameters can never leak into the page.
@@ -39,7 +38,8 @@
  *   and the SPA fallback serve exactly the bytes they serve today.
  *   Recovery links appear only after the password gate has passed, exactly
  *   as listings do today: the password form and the pre-gate 403 gain no
- *   anchors and reveal no file or folder names. Renamed slugs still 308.
+ *   site-recovery anchors or inventory; the 403 may offer only public Home.
+ *   Renamed slugs still 308.
  * - Every interpolated path segment is percent-encoded (encodePath) and
  *   HTML-escaped; hostile, Unicode and markup-bearing names render as
  *   inert text with correct hrefs, including folders named `__proto__`.
@@ -86,12 +86,15 @@ function innerText(inner: string): string {
   return out;
 }
 
-/** Every anchor on the page, in document order, with its visible text. */
+/** Recovery anchors inside main#dw-main, excluding skip/header/footer links. */
 function anchors(html: string): Anchor[] {
+  const main = /<main\b[^>]*\bid\s*=\s*["']dw-main["'][^>]*>([\s\S]*?)<\/main\s*>/i.exec(html);
+  expect(main, "the recovery page must expose its main content region").not.toBeNull();
+  const scope = main![1]!;
   const out: Anchor[] = [];
   const re = /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*>([\s\S]*?)<\/a>/gi;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(html)) !== null) {
+  while ((m = re.exec(scope)) !== null) {
     out.push({
       href: decodeEntities(m[1] ?? m[2] ?? ""),
       text: decodeEntities(innerText(m[3]!)).replace(/\s+/g, " ").trim(),
@@ -151,6 +154,7 @@ describe("file-not-found recovery links (path mode)", () => {
       "/s/recovery-site/",
       "/s/recovery-site/guides/deep/",
       `${ORIGIN}/v/recovery-site/guides/deep/`,
+      ORIGIN,
     ]);
     for (const link of links) expect(link.text.length, `discernible text for ${link.href}`).toBeGreaterThan(0);
     expect(links[2]!.text).toBe("Browse files");
@@ -166,6 +170,7 @@ describe("file-not-found recovery links (path mode)", () => {
       "/s/recovery-nested-only/",
       "/s/recovery-nested-only/only/",
       `${ORIGIN}/v/recovery-nested-only/only/`,
+      ORIGIN,
     ]);
   });
 
@@ -176,7 +181,7 @@ describe("file-not-found recovery links (path mode)", () => {
     for (const path of ["/s/recovery-flat/nope.txt", "/s/recovery-flat/nowhere/inner/missing.txt"]) {
       const html = await systemHtml(await dw.call(path, { headers: NAV }), 404);
       const links = anchors(html);
-      expect(links.map((a) => a.href), path).toEqual(["/s/recovery-flat/", `${ORIGIN}/v/recovery-flat/`]);
+      expect(links.map((a) => a.href), path).toEqual(["/s/recovery-flat/", `${ORIGIN}/v/recovery-flat/`, ORIGIN]);
       expect(links[1]!.text, path).toBe("Browse files");
     }
   });
@@ -199,6 +204,7 @@ describe("file-not-found recovery links (path mode)", () => {
       "/s/hostile-recovery/",
       `/s/hostile-recovery/${enc(folder)}/`,
       `${ORIGIN}/v/hostile-recovery/${enc(folder)}/`,
+      ORIGIN,
     ]);
     // The names survive as escaped text in the message, never as markup.
     expect(html).toContain("&lt;img");
@@ -212,6 +218,7 @@ describe("file-not-found recovery links (path mode)", () => {
       "/s/hostile-recovery/",
       "/s/hostile-recovery/__proto__/",
       `${ORIGIN}/v/hostile-recovery/__proto__/`,
+      ORIGIN,
     ]);
   });
 });
@@ -229,7 +236,7 @@ function codeText(html: string): string {
 }
 
 describe("file-not-found recovery links (names the page template must not interpret)", () => {
-  it("a requested name containing {app} stays inert text and adds no instance-home anchor", async () => {
+  it("a requested name containing {app} stays inert text and adds no extra instance-home anchor", async () => {
     const dw = await freshInstance();
     await publish(dw, "brace-recovery", { "guides/kept.txt": "kept", "{app}/kept.txt": "kept too" });
 
@@ -244,9 +251,10 @@ describe("file-not-found recovery links (names the page template must not interp
         "/s/brace-recovery/",
         `/s/brace-recovery/${dir}`,
         `${ORIGIN}/v/brace-recovery/${dir}`,
+        ORIGIN,
       ]);
       expect(links[2]!.text, path).toBe("Browse files");
-      expect(links.some((a) => a.href === ORIGIN), path).toBe(false);
+      expect(links.filter((a) => a.href === ORIGIN), "only the shared Home action, not an interpolated {app} link").toEqual([{ href: ORIGIN, text: "Home" }]);
       expect(codeText(html), path).toBe(shown);
     }
   });
@@ -262,7 +270,7 @@ describe("file-not-found recovery links (names the page template must not interp
     for (const path of ["/s/private-recovery/.dropway/config.json", "/s/private-recovery/.dropway/missing.json"]) {
       const html = await systemHtml(await dw.call(path, { headers: NAV }), 404);
       const links = anchors(html);
-      expect(links.map((a) => a.href), path).toEqual(["/s/private-recovery/", `${ORIGIN}/v/private-recovery/`]);
+      expect(links.map((a) => a.href), path).toEqual(["/s/private-recovery/", `${ORIGIN}/v/private-recovery/`, ORIGIN]);
       expect(links[1]!.text, path).toBe("Browse files");
       for (const link of links) {
         expect(link.href, path).not.toContain(".dropway");
@@ -285,6 +293,7 @@ describe("file-not-found recovery links (separate sites origin)", () => {
       "/recovery-sites-origin/",
       "/recovery-sites-origin/guides/deep/",
       `${ORIGIN}/v/recovery-sites-origin/guides/deep/`,
+      ORIGIN,
     ]);
   });
 });
@@ -296,22 +305,22 @@ describe("file-not-found recovery links (subdomain mode)", () => {
 
     const html = await systemHtml(await dw.call("https://recovery-sub.sites.test/guides/deep/missing.txt", { headers: NAV }), 404);
     const links = anchors(html);
-    expect(links.map((a) => a.href)).toEqual(["/", "/guides/deep/", "https://app.test/v/recovery-sub/guides/deep/"]);
+    expect(links.map((a) => a.href)).toEqual(["/", "/guides/deep/", "https://app.test/v/recovery-sub/guides/deep/", "https://app.test"]);
     expect(links[2]!.text).toBe("Browse files");
   });
 });
 
 describe("empty-site page", () => {
-  it("links the instance home through the {app} substitution and nothing else", async () => {
+  it("offers only the public instance Home action in the main content", async () => {
     const dw = await freshInstance();
     const created = await dw.json("/api/v1/sites", { key: dw.ownerKey, ...jsonBody({ slug: "empty-recovery" }) });
     expect(created.status, JSON.stringify(created.body)).toBe(201);
 
     const html = await systemHtml(await dw.call("/s/empty-recovery/", { headers: NAV }), 404);
     expect(html).toContain("Nothing published yet");
-    // The {app} substitution: href is the app origin, text is the instance
-    // name. No /dashboard or /login link promising owner access.
-    expect(anchors(html)).toEqual([{ href: ORIGIN, text: "Kofra" }]);
+    // The shared Home action still points only at the app origin, never an
+    // owner-only /dashboard or /login surface.
+    expect(anchors(html)).toEqual([{ href: ORIGIN, text: "Home" }]);
   });
 });
 
@@ -338,6 +347,7 @@ describe("unreadable-file page", () => {
     expect(html).toContain("File unavailable");
     expect(anchors(html)).toEqual([
       { href: `/s/unreadable-recovery/docs/${encodeURIComponent("résumé à lire.txt")}`, text: "Try again" },
+      { href: ORIGIN, text: "Home" },
     ]);
     for (const canary of ["preview-canary", "claim-canary", "unlock-canary", "bearer-canary", "dw_preview", "access_token"]) {
       expect(html, canary).not.toContain(canary);
@@ -354,7 +364,7 @@ describe("unreadable-file page", () => {
       await dw.call("https://unreadable-sub.sites.test/assets/page%20data.txt?token=sub-canary"),
       502,
     );
-    expect(anchors(html)).toEqual([{ href: "/assets/page%20data.txt", text: "Try again" }]);
+    expect(anchors(html)).toEqual([{ href: "/assets/page%20data.txt", text: "Try again" }, { href: "https://app.test", text: "Home" }]);
     expect(html).not.toContain("sub-canary");
   });
 });
@@ -398,10 +408,11 @@ describe("password gate: recovery links only after the gate", () => {
       "/s/locked-recovery/",
       "/s/locked-recovery/guides/deep/",
       `${ORIGIN}/v/locked-recovery/guides/deep/`,
+      ORIGIN,
     ]);
   });
 
-  it("the pre-gate 403 for other sites' sub-resources gains no links and reveals no inventory", async () => {
+  it("the pre-gate 403 offers only public Home, never recovery links or inventory", async () => {
     const dw = await freshInstance({ appOrigin: "https://app.test", sitesMode: "subdomain", sitesDomain: "sites.test" });
     await publish(dw, "locked-sub", { ...NESTED, "app.js": "window.x = 1;" });
     const lock = await dw.json("/api/v1/sites/locked-sub/access", {
@@ -419,7 +430,7 @@ describe("password gate: recovery links only after the gate", () => {
       403,
     );
     expect(html).toContain("Not available here");
-    expect(anchors(html)).toEqual([]);
+    expect(anchors(html)).toEqual([{ href: "https://app.test", text: "Home" }]);
     expect(html).not.toContain("Browse files");
     expect(html).not.toContain("guides");
     expect(html).not.toContain("kept.txt");

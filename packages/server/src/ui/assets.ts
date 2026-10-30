@@ -1,19 +1,22 @@
 import { createQrEncoder, QR_LICENSE } from "../qr.js";
 import { dropwayClient } from "./client";
+import { kofraMotifs } from "./motifs";
+import { SOURCE_REPO } from "../repo";
 
 /**
  * The dashboard script, served from the Worker itself at
  * /__dropway/ui/app-<hash>.js (immutable; the hash changes with the code).
  *
- * The source is the text of dropwayClient(), so packages stay "TypeScript
+ * The source is the text of dropwayClient() (given the seal generator, kofraMotifs() from
+ * ./motifs.ts, and the QR encoder from ../qr.ts as its arguments), so packages stay "TypeScript
  * source, no build step" and an embedding app gets the same script without
  * extra bundler config. The bundler may wrap inner functions in __name(...)
  * (esbuild keepNames, which wrangler turns on), so a no-op __name is defined
  * around it.
  */
-export const CLIENT_SCRIPT = `/*! Kofra dashboard (MIT) https://github.com/TogetherWeOwn/dropway */
+export const CLIENT_SCRIPT = `/*! Kofra dashboard (MIT) ${SOURCE_REPO} */
 ${QR_LICENSE}
-(function(){"use strict";var __name=function(t){return t};(${dropwayClient.toString()})(${createQrEncoder.toString()});})();
+(function(){"use strict";var __name=function(t){return t};(${dropwayClient.toString()})(${kofraMotifs.toString()}, ${createQrEncoder.toString()});})();
 `;
 
 /** 32-bit FNV-1a, hex: enough to bust caches when the script changes. */

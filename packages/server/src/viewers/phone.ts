@@ -50,5 +50,5 @@ export function viewerPhone(vc: ViewerContext): string {
   const url = vc.url.origin + vc.fileUrl;
   const link = escapeHtml(url);
   const svg = phoneSvg(url);
-  return `<details class="dw-phone"><summary>Phone</summary><div class="dw-phone-panel"><p>Open this file on your phone</p>${svg || '<p class="dw-muted">This URL is too long for a QR code. Use the link instead.</p>'}<a href="${link}" rel="nofollow">${link}</a></div></details>`;
+  return `<details class="dw-phone"><summary class="k-btn k-sm k-ghost">Phone</summary><div class="dw-phone-panel"><p>Open this file on your phone</p>${svg || '<p class="dw-muted">This URL is too long for a QR code. Use the link instead.</p>'}<a href="${link}" rel="nofollow">${link}</a></div></details>`;
 }

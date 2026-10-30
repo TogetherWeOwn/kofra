@@ -1,0 +1,17 @@
+/* Footer (ui/chrome.ts) and the site-origin page frame (minimal header, footer). */
+.foot{border-top:1px solid var(--rule);padding:26px 0 40px;font-size:13px;color:var(--ink-2)}
+.foot>.wrap{display:flex;gap:8px 14px;flex-wrap:wrap;align-items:baseline}
+.foot a{color:var(--ink-2)}
+.foot a:hover{color:var(--accent)}
+.foot .wm{font-size:16px}
+.foot .end{margin-left:auto;display:flex;gap:6px 14px;flex-wrap:wrap}
+.trust{color:var(--muted);font-size:13px;margin:0}
+.foot .trust{flex-basis:100%;margin-top:6px}
+.sitehead{border-bottom:1px solid var(--rule-soft);background:var(--paper)}
+.sitehead>.wrap{display:flex;align-items:center;min-height:44px}
+.sitehead .wm{font-size:16px}
+/* Site-origin pages are full-bleed, on the viewer bar's gutter: the wordmark and footer sit on the same left
+   edge on every site page (system pages, listings, viewers). */
+.sitehead>.wrap,.sitefoot>.wrap{max-width:none;padding:0 18px}
+/* Phones: the domains line is two fixed lines (app, then sites), so the footer's height never depends on the font. */
+@media (max-width:720px){.foot .end{margin-left:0;flex-basis:100%}.sitehead>.wrap,.sitefoot>.wrap{padding:0 12px}.foot .dom{flex-basis:100%}.foot .dom>span{display:block}.foot .dom>.dom-sep{display:none}}

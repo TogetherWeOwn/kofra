@@ -14,9 +14,9 @@ You need:
 
 ## Option 1: Deploy to Cloudflare button
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/TogetherWeOwn/dropway)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/TogetherWeOwn/kofra)
 
-Link: `https://deploy.workers.cloudflare.com/?url=https://github.com/TogetherWeOwn/dropway`
+Link: `https://deploy.workers.cloudflare.com/?url=https://github.com/TogetherWeOwn/kofra`
 
 What happens, per Cloudflare's [Deploy button docs](https://developers.cloudflare.com/workers/platform/deploy-buttons/):
 
@@ -41,7 +41,7 @@ ones in `wrangler.jsonc` unless you set `"keep_vars": true`. Secrets (`ADMIN_BOO
 ## Option 2: Command line
 
 ```sh
-git clone https://github.com/TogetherWeOwn/dropway && cd dropway
+git clone https://github.com/TogetherWeOwn/kofra && cd kofra
 npm install
 npx wrangler login
 npx wrangler secret put ADMIN_BOOTSTRAP_KEY   # paste a long random string (openssl rand -hex 32)
@@ -167,6 +167,7 @@ Variables go in `vars` in `wrangler.jsonc`; secrets with `npx wrangler secret pu
 | `ADMIN_BOOTSTRAP_KEY` (secret) | none | Creates the owner on first run; mints recovery owner keys |
 | `SIGNING_SECRET` (secret) | bootstrap key | HMAC secret for password cookies and IP hashing |
 | `INSTANCE_NAME` | `Kofra` | Shown in pages and API responses |
+| `ABUSE_CONTACT` | (none) | Where people report an abusive site: an email address or an https URL. The Report abuse link on anonymous sites opens a page that points here; without it, the page asks people to tell whoever runs the instance |
 | `APP_ORIGIN` | request origin | Public origin of the app and API |
 | `LEGACY_APP_ORIGINS` | empty | Former app origins (comma-separated), after a move to a new `APP_ORIGIN`. See [Moving the app](#moving-the-app-to-a-new-origin) |
 | `LEGACY_DEPRECATED_AT` | none | Date of that move (ISO 8601 or Unix seconds), sent as `Deprecation: @<seconds>`; unset = no `Deprecation` header (the successor `Link` is still sent) |

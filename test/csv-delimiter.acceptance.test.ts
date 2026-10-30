@@ -279,7 +279,7 @@ describe("CSV viewer rendered/raw compatibility in workerd", () => {
     expect(res.status).toBe(200);
     const etag = res.headers.get("etag")!;
     expect(etag).not.toBe(legacy);
-    expect(etag).toMatch(/^W\/"csv@5-[a-f0-9]{64}-[A-Za-z0-9_-]+"$/);
+    expect(etag).toMatch(new RegExp(`^W/"csv@${csvViewer.version}-[a-f0-9]{64}-folder[A-Za-z0-9_-]+-chrome\\d+(?:\\.[0-9a-f]{8})?"$`));
     expect(tableRows(await res.text())).toEqual([["last,name", "note"], ["Doe,Jane", "ok"]]);
     const fresh = await get("quoted.csv", { ...NAV, "If-None-Match": etag });
     expect(fresh.status).toBe(304);

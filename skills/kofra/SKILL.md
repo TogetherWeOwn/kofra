@@ -3,7 +3,7 @@ name: kofra
 description: Publish files, folders and static sites to a live URL with Kofra, then update, version, roll back and share them. Use when the user wants to publish, host, share, deploy or preview HTML pages, Markdown docs, reports, images, PDFs, demos or a built web app, or to change, check or roll back something already on Kofra.
 license: MIT
 metadata:
-  homepage: https://github.com/TogetherWeOwn/dropway
+  homepage: https://github.com/TogetherWeOwn/kofra
 ---
 
 # Kofra

@@ -58,7 +58,7 @@ describe("serving", () => {
     // Scripts inside Markdown can never run on the rendered page.
     expect(page.headers.get("content-security-policy")).toMatch(/default-src 'none'/);
     const html = await page.text();
-    expect(html).toMatch(/<h1 id="guide">Guide<a class="dw-anchor"/);
+    expect(html).toMatch(/<h1 id="guide">Guide<a class="md-anchor"/);
     expect(html).toContain("<em>markdown</em>");
     expect(html).not.toContain("<script>alert(1)</script>");
     expect(html).toContain(`href="/s/${slug}/docs/guide.md?raw=1"`);

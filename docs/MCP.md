@@ -32,7 +32,7 @@ npx @modelcontextprotocol/inspector --cli https://<app>/mcp --transport http \
   --header "Authorization: Bearer $KOFRA_API_KEY" --method tools/list
 ```
 
-The skill: `npx skills add TogetherWeOwn/dropway` (generic copy from this
+The skill: `npx skills add TogetherWeOwn/kofra` (generic copy from this
 repository) or `npx skills add https://<app>` (templated with that instance).
 
 ## How the server works

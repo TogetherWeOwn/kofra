@@ -14,7 +14,7 @@ import type { Viewer } from "./index";
 // for the Phone disclosure in the viewer bar (each also carrying the
 // Tree/Pretty keyboard-focus fix); neither 4 may revalidate to the merged
 // markup, so the merged render moves to 5.
-const JSON_VERSION = 5;
+const JSON_VERSION = 6;
 /** Nodes rendered in the tree before the rest is summarised. */
 const MAX_NODES = 20_000;
 /** Strings longer than this are cut in the tree (the pretty view has them whole). */
@@ -24,25 +24,25 @@ const MAX_PRETTY = 1024 * 1024;
 
 const JSON_CSS = `
 .dw-json{padding:.5rem .9rem 3rem}
-.dw-jtabs{display:flex;gap:.4rem;margin:.4rem 0 .6rem}
-.dw-jtabs label{padding:.28rem .7rem;border:1px solid var(--line);border-radius:7px;cursor:pointer;font-size:.82rem;color:var(--muted);background:var(--card)}
-#dw-jt-tree:checked~.dw-jtabs label[for=dw-jt-tree],#dw-jt-pretty:checked~.dw-jtabs label[for=dw-jt-pretty]{color:var(--fg);border-color:var(--accent);font-weight:600}
-#dw-jt-tree:focus-visible~.dw-jtabs label[for=dw-jt-tree],#dw-jt-pretty:focus-visible~.dw-jtabs label[for=dw-jt-pretty]{outline:2px solid var(--accent);outline-offset:2px}
+.dw-jtabs{display:inline-flex;margin:.4rem 0 .7rem;border:1px solid var(--rule)}
+.dw-jtabs label{padding:6px 12px;font-size:13.5px;line-height:1.2;color:var(--ink-2);cursor:pointer}
+.dw-jtabs label+label{border-left:1px solid var(--rule)}
+#dw-jt-tree:checked~.dw-jtabs label[for=dw-jt-tree],#dw-jt-pretty:checked~.dw-jtabs label[for=dw-jt-pretty]{background:var(--accent);color:var(--accent-ink);font-weight:600}
+#dw-jt-tree:focus-visible~.dw-jtabs label[for=dw-jt-tree],#dw-jt-pretty:focus-visible~.dw-jtabs label[for=dw-jt-pretty]{outline:2px solid var(--focus);outline-offset:2px}
 .dw-jpane{display:none}
 #dw-jt-tree:checked~.dw-jtree,#dw-jt-pretty:checked~.dw-jpretty{display:block}
 .dw-jpretty .dw-src{margin:0}
-.dw-jtree{font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;border:1px solid var(--line);border-radius:9px;background:var(--card);padding:.6rem .9rem;overflow:auto}
-.dw-jtree ul{list-style:none;margin:0;padding:0 0 0 1.3rem;border-left:1px dotted var(--line)}
+.dw-jtree{font:13px/24px var(--mono);border:1px solid var(--rule-soft);background:var(--paper-2);padding:.6rem .9rem;overflow:auto}
+.dw-jtree ul{list-style:none;margin:0;padding:0 0 0 1.3rem;border-left:1px dotted var(--rule-soft)}
 .dw-jtree li{margin:0;white-space:nowrap}
 .dw-jtree details>summary{cursor:pointer;list-style:none}
 .dw-jtree details>summary::-webkit-details-marker{display:none}
 .dw-jtree details>summary::before{content:"▸";display:inline-block;width:1em;color:var(--muted);transition:transform .1s}
 .dw-jtree details[open]>summary::before{transform:rotate(90deg)}
 .dw-jtree .leaf{padding-left:1em}
-.dw-jk{color:#0550ae}.dw-js{color:#0a3069;white-space:pre-wrap;word-break:break-word}.dw-jn{color:#953800}.dw-jb{color:#cf222e}.dw-jz{color:var(--muted)}
+.dw-jk{color:var(--syn-number)}.dw-js{color:var(--syn-string);white-space:pre-wrap;word-break:break-word}.dw-jn{color:var(--syn-type)}.dw-jb{color:var(--syn-keyword)}.dw-jz{color:var(--muted)}
 .dw-jc{color:var(--muted);font-size:.85em;margin-left:.4rem}
-.dw-jerr{margin:.75rem .9rem;padding:.6rem .9rem;border:1px solid #cf222e;border-radius:8px;color:#cf222e;background:color-mix(in srgb,#cf222e 8%,transparent);font-size:.88rem}
-@media (prefers-color-scheme:dark){.dw-jk{color:#79c0ff}.dw-js{color:#a5d6ff}.dw-jn{color:#ffa657}.dw-jb{color:#ff7b72}}
+.dw-jerr{margin:14px 18px;padding:12px 16px;border:1px solid var(--danger);border-left-width:3px;color:var(--ink);background:var(--danger-wash);font-size:14.5px}
 `;
 
 interface Budget {
@@ -110,7 +110,7 @@ export const jsonViewer: Viewer = {
         tabs,
         print: true,
         css: CODE_CSS + HIGHLIGHT_CSS + JSON_CSS,
-        body: `<p class="dw-jerr" role="alert">This file is not valid JSON: ${escapeHtml(error)}</p><main class="dw-codewrap"><div class="dw-src">${html}</div></main>`,
+        body: `<p class="dw-jerr" role="alert">This file is not valid JSON: ${escapeHtml(error)}</p><div class="dw-codewrap"><div class="dw-src" tabindex="0" role="region" aria-label="${escapeHtml(vc.file.path)}">${html}</div></div>`,
         headers: { "X-Kofra-Render-Cache": cache },
       });
     }
@@ -120,13 +120,13 @@ export const jsonViewer: Viewer = {
     // Without a Pretty pane there is no Pretty tab either, so the radio goes
     // too: otherwise arrowing to it shows no focus indicator (its label is
     // the indicator's target) and hides the tree with nothing to show.
-    const prettyInput = pretty ? '<input type="radio" name="dw-jt" id="dw-jt-pretty" class="dw-toggle">' : "";
-    const body = `<main class="dw-json">
-<input type="radio" name="dw-jt" id="dw-jt-tree" class="dw-toggle" checked>${prettyInput}
-<div class="dw-jtabs"><label for="dw-jt-tree">Tree</label>${pretty ? '<label for="dw-jt-pretty">Pretty</label>' : ""}</div>
+    const prettyInput = pretty ? '<input type="radio" name="dw-jt" id="dw-jt-pretty" class="k-toggle">' : "";
+    const body = `<div class="dw-json">
+<input type="radio" name="dw-jt" id="dw-jt-tree" class="k-toggle" checked>${prettyInput}
+<div class="dw-jtabs" role="group" aria-label="Tree view or pretty-printed"><label for="dw-jt-tree">Tree</label>${pretty ? '<label for="dw-jt-pretty">Pretty</label>' : ""}</div>
 <div class="dw-jpane dw-jtree">${tree.html}</div>
-${pretty ? `<div class="dw-jpane dw-jpretty"><div class="dw-src">${pretty}</div></div>` : ""}
-</main>`;
+${pretty ? `<div class="dw-jpane dw-jpretty"><div class="dw-src" tabindex="0" role="region" aria-label="Pretty-printed JSON">${pretty}</div></div>` : ""}
+</div>`;
     return viewerPage(vc, { tabs, print: true, css: CODE_CSS + HIGHLIGHT_CSS + JSON_CSS, body, headers: { "X-Kofra-Render-Cache": tree.cache } });
   },
 };

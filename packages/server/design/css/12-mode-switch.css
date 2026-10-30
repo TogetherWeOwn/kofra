@@ -1,0 +1,21 @@
+/* Colour mode switch: Auto / Light / Dark as three submit buttons with aria-pressed (POST /__dropway/theme),
+   so it works on pages with no script at all. The pressed button changes fill AND weight, never colour alone.
+   Labels always show; icons from 720px. At least 30px tall. Hidden in print. */
+/* After a no-script switch the page returns to the pressed button's marker (#dw-mode-dark, an empty span just before
+   the button, ui/chrome.ts), so the next Tab lands on the button that was pressed. scroll-margin: going there never
+   scrolls the page. */
+.mode-switch{margin:0;display:inline-flex;flex:none}
+.mode-switch,.mode-switch [id]{scroll-margin-top:100vh}
+.mode-switch>div{display:inline-flex;border:1px solid var(--edge);border-radius:var(--r-ctl);background:var(--paper-2)}
+.mode-switch button{display:inline-flex;align-items:center;gap:6px;min-height:30px;padding:5px 11px;border:0;border-left:1px solid var(--rule-soft);background:transparent;font:500 12.5px/1.2 var(--sans);color:var(--ink-2);transition:background-color var(--t-fast) var(--ease),color var(--t-fast) var(--ease)}
+.mode-switch button:first-of-type{border-left:0;border-radius:3px 0 0 3px}
+.mode-switch button:last-of-type{border-radius:0 3px 3px 0}
+.mode-switch svg{flex:none;width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+.mode-switch button:hover{color:var(--accent);background:var(--accent-wash)}
+.mode-switch button[aria-pressed=true]{background:var(--accent);color:var(--accent-ink);font-weight:600}
+/* Each label reserves its bold width, so pressing a button never moves the switch or what sits beside it. */
+.mode-switch button span{display:inline-flex;flex-direction:column}
+.mode-switch button span::after{content:attr(data-label);height:0;overflow:hidden;visibility:hidden;font-weight:600;pointer-events:none;user-select:none}
+.mode-switch button:focus-visible{outline:2px solid var(--focus);outline-offset:2px;position:relative;z-index:1}
+@media (max-width:720px){.mode-switch svg{display:none}.mode-switch button{padding:5px 10px}}
+@media print{.mode-switch{display:none}}

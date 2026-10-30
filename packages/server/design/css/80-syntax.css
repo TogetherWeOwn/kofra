@@ -1,0 +1,15 @@
+/* Syntax colours for highlight.js output (code, source, Markdown and notebook code), from the syn-* tokens.
+   Shipped without the k- prefix: highlight.js writes these class names. Every pair is at least 4.5:1 on
+   paper, paper-2 and paper-3 in both modes (test/design-contrast.test.ts). */
+.hljs-comment,.hljs-quote{color:var(--syn-comment);font-style:italic}
+.hljs-keyword,.hljs-selector-tag,.hljs-literal,.hljs-doctag,.hljs-meta .hljs-keyword,.hljs-template-tag{color:var(--syn-keyword)}
+.hljs-string,.hljs-regexp,.hljs-attribute .hljs-string,.hljs-meta .hljs-string{color:var(--syn-string)}
+.hljs-number,.hljs-symbol,.hljs-bullet,.hljs-variable.constant_,.hljs-attr,.hljs-attribute,.hljs-selector-attr,.hljs-selector-pseudo,.hljs-link{color:var(--syn-number)}
+.hljs-title,.hljs-title.function_,.hljs-section,.hljs-selector-id,.hljs-selector-class{color:var(--syn-title)}
+.hljs-title.class_,.hljs-type,.hljs-built_in,.hljs-params .hljs-type{color:var(--syn-type)}
+.hljs-name,.hljs-tag{color:var(--syn-tag)}
+.hljs-meta,.hljs-meta .hljs-meta,.hljs-variable,.hljs-template-variable,.hljs-property{color:var(--syn-meta)}
+.hljs-deletion{color:var(--syn-del);background:var(--syn-del-wash)}
+.hljs-addition{color:var(--syn-add);background:var(--syn-add-wash)}
+.hljs-emphasis{font-style:italic}
+.hljs-strong{font-weight:600}

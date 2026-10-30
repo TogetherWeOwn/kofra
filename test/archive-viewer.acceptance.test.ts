@@ -6,7 +6,7 @@
  * the builder makes them pass without editing this file.
  *
  * Viewer contract (builder: implement exactly this):
- * - id "archive", version 4 (Phone disclosure + unfurl head). Matches file.kind === "archive" for every view
+ * - id "archive", version from the viewer registry. Matches file.kind === "archive" for every view
  *   mode except "source" (document, frame, view). ?view=source on an archive
  *   keeps returning the raw bytes because no viewer matches it.
  * - Over-cap, corrupt and non-ZIP archives render THROUGH the archive viewer
@@ -23,8 +23,8 @@
  * - Caps: MAX_ARCHIVE_BYTES = 2 MiB parsed, MAX_ENTRIES = 1000 rows shown.
  *   Past the entry cap: "Showing the first 1,000 of N entries".
  * - Cache like every viewer: cachedRender keyed with id + version
- *   ("archive@4/..."), X-Kofra-Render-Cache header; ETag
- *   W/"archive@4-<sha>-folder<manifest>-chrome2" (with -e before the closing
+ *   ("archive@<version>/..."), X-Kofra-Render-Cache header; ETag
+ *   W/"archive@<version>-<sha>-folder<manifest>-chrome<chrome>.<css-hash>" (with -e before the closing
  *   quote for &embed=1) so a version bump invalidates old renders.
  * - Escape entry names as text; make no external requests (relative links
  *   plus the absolute app-origin Files link only).
@@ -64,6 +64,13 @@ async function absoluteUrlsExceptSvgNamespace(html: string): Promise<string[]> {
     },
   }).transform(new Response(html)).text();
   return markup.match(/https?:\/\/[^\s"'<>]+/g) ?? [];
+}
+
+// Inspect entry metadata, not the shared shell's checksum seal.
+function archiveListing(html: string): string {
+  const tables = [...html.matchAll(/<table\b[^>]*>[\s\S]*?<\/table\s*>/gi)].map((m) => m[0]);
+  expect(tables.length, "a real archive listing must contain its metadata table").toBeGreaterThan(0);
+  return tables.join("\n");
 }
 
 it.each<[string, string[]]>([
@@ -248,10 +255,10 @@ describe("archive viewer selection", () => {
     expect(pick("a.bin", "document")).toBeNull();
   });
 
-  it("pins id, version 4, and fallback-through matching past the size cap", () => {
+  it("pins id, version 5, and fallback-through matching past the size cap", () => {
     const archive = VIEWERS.find((v) => v.id === "archive");
     expect(archive).toBeDefined();
-    expect(archive!.version).toBe(4);
+    expect(archive!.version).toBe(5);
     // Over-cap files still match: the fallback info page renders through the
     // archive viewer itself (x-kofra-viewer stays "archive").
     const huge = toViewerFile("big.zip", "0".repeat(64), 100 * 1024 * 1024, contentTypeFor("big.zip"));
@@ -371,9 +378,9 @@ describe("archive viewer pages", () => {
     expect(res.headers.get("x-kofra-viewer")).toBe("archive");
     const html = await res.text();
     expect(html).toMatch(/8 entries/i);
-    expect(html).toContain('class="dw-vbar"');
+    expect(html).toMatch(/class="(?:[^"]*\s)?dw-vbar(?:\s|")/);
     const embed = await get("archives/mixed.zip?view=1&embed=1");
-    expect(await embed.text()).not.toContain('class="dw-vbar"');
+    expect(await embed.text()).not.toMatch(/class="(?:[^"]*\s)?dw-vbar(?:\s|")/);
     expect(embed.headers.get("etag")).toMatch(/-e"$/);
   });
 
@@ -462,7 +469,7 @@ describe("archive viewer pages", () => {
     expect(html).toContain("directory-only.txt");
     expect(html).toContain("27 B");
     expect(html).toMatch(/deflated/i);
-    expect(html).not.toContain("SHA-256"); // A real listing, not the binary fallback.
+    expect(archiveListing(html)).not.toContain("SHA-256"); // A real listing, not the binary fallback.
   });
 
   it("decodes CP437 entry names when the UTF-8 flag bit is clear", async () => {
@@ -473,7 +480,7 @@ describe("archive viewer pages", () => {
     expect(html).toMatch(/1 entry\b/i);
     expect(html).toContain(CP437_NAME); // 0x81/0x82 decoded as ü/é, not raw U+0081/U+0082.
     expect(html).not.toContain("uber-cafe.txt");
-    expect(html).not.toContain("SHA-256"); // A real listing, not the binary fallback.
+    expect(archiveListing(html)).not.toContain("SHA-256"); // A real listing, not the binary fallback.
   });
 
   it("lists a ZIP exactly at the 2 MiB cap and falls back one byte over it", async () => {
@@ -484,7 +491,7 @@ describe("archive viewer pages", () => {
     expect(atHtml).toContain("at-cap-entry.txt");
     expect(atHtml).toMatch(/1 entry\b[^<]*uncompressed/i);
     expect(atHtml).not.toMatch(/too large/i);
-    expect(atHtml).not.toContain("SHA-256"); // Exactly at the cap still lists.
+    expect(archiveListing(atHtml)).not.toContain("SHA-256"); // Exactly at the cap still lists.
 
     const over = await get("archives/over-cap.zip");
     expect(over.status).toBe(200);
@@ -536,7 +543,7 @@ describe("archive viewer pages", () => {
     expect(second.headers.get("x-kofra-render-cache")).toBe("memory");
 
     const etag = second.headers.get("etag")!;
-    expect(etag).toMatch(new RegExp(`^W/"archive@4-${sha}-[A-Za-z0-9_-]+"$`));
+    expect(etag).toMatch(new RegExp(`^W/"archive@\\d+-${sha}-folder${manifestVersion}-chrome\\d+(?:\\.[0-9a-f]{8})?"$`));
     expect((await get("archives/cache-probe.zip", { ...NAV, "If-None-Match": etag })).status).toBe(304);
     expect((await get("archives/cache-probe.zip", { ...NAV, "If-None-Match": `W/"archive@1-${sha}"` })).status).toBe(200);
     // This checks viewer identity, not a version bump (covered separately below).
@@ -562,7 +569,7 @@ describe("archive viewer pages", () => {
       const sha = await shaOf(files["archives/version-probe.zip"]!);
       const first = await get("archives/version-probe.zip");
       expect(first.status).toBe(200);
-      expect(first.headers.get("etag")).toMatch(new RegExp(`^W/"archive@4-${sha}-[A-Za-z0-9_-]+"$`));
+      expect(first.headers.get("etag")).toMatch(new RegExp(`^W/"archive@${version}-${sha}-folder${manifestVersion}-chrome\\d+(?:\\.[0-9a-f]{8})?"$`));
       expect(first.headers.get("x-kofra-render-cache")).toBe("miss");
       expect(await first.text()).toContain("version-probe.txt");
       const warm = await get("archives/version-probe.zip");
@@ -574,7 +581,7 @@ describe("archive viewer pages", () => {
       byteReads = 0;
       const bumped = await get("archives/version-probe.zip", { ...NAV, "If-None-Match": oldEtag });
       expect(bumped.status).toBe(200);
-      expect(bumped.headers.get("etag")).toMatch(new RegExp(`^W/"archive@${version + 1}-${sha}-[A-Za-z0-9_-]+"$`));
+      expect(bumped.headers.get("etag")).toMatch(new RegExp(`^W/"archive@${version + 1}-${sha}-folder${manifestVersion}-chrome\\d+(?:\\.[0-9a-f]{8})?"$`));
       expect(bumped.headers.get("x-kofra-render-cache")).toBe("miss");
       expect(await bumped.text()).toContain("version-probe.txt");
       expect(byteReads).toBeGreaterThan(0); // Not just a new header on the old fragment.
@@ -583,7 +590,7 @@ describe("archive viewer pages", () => {
       expect((await get("archives/version-probe.zip", { ...NAV, "If-None-Match": bumpedWarm.headers.get("etag")! })).status).toBe(304);
       const embed = await get("archives/version-probe.zip?view=1&embed=1", { ...NAV, "If-None-Match": `W/"archive@${version}-${sha}-chrome1-e"` });
       expect(embed.status).toBe(200);
-      expect(embed.headers.get("etag")).toBe(`W/"archive@${version + 1}-${sha}-folder${manifestVersion}-chrome2-e"`);
+      expect(embed.headers.get("etag")).toBe(bumped.headers.get("etag")!.replace(/"$/, '-e"'));
 
       // Drop only isolate memory: the bumped version must also have its own edge-cache fragment.
       clearRenderMemoryCache();
@@ -654,7 +661,7 @@ describe("archive viewer pages", () => {
       const secondHtml = await second.text();
       expect(secondHtml).toContain(entry);
       expect(secondHtml).toMatch(/1 entry\b[^<]*uncompressed/i);
-      expect(secondHtml).not.toContain("SHA-256");
+      expect(archiveListing(secondHtml)).not.toContain("SHA-256");
 
       const warm = await get(path);
       expect(warm.headers.get("x-kofra-render-cache")).toBe("memory");

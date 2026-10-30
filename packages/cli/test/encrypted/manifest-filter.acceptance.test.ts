@@ -124,8 +124,13 @@ describe("accessible matching / loaded inventory feedback", () => {
 // markup, resetting version/sort instead of only query, inaccessible recovery.
 describe("no matches, genuine emptiness and Clear recovery", () => {
   it.each([false, true])("offers keyboard Clear at a usable width (narrow=%s)", async narrow => {
-    const v = await fixture.open({ narrow });
+    const v = await fixture.open();
+    // Seed sorting before the responsive card layout hides the table header.
     await sort(v, "Size", "descending");
+    if (narrow) {
+      await v.page.setViewportSize({ ...v.page.viewportSize()!, width: 360 });
+      await v.page.waitForLoadState("networkidle");
+    }
     const before = await localState(v); v.requests.length = 0;
     const hostile = '<img src=x onerror="window.__manifestQueryExecuted=true">';
     await query(v, hostile);
@@ -153,7 +158,7 @@ describe("no matches, genuine emptiness and Clear recovery", () => {
     await v.page.keyboard.press("Enter"); await flush(v);
     expect(await filter(v).inputValue()).toBe("");
     await focusIsFilter(v); await selected(v, 1);
-    expect(await files(v).getByRole("columnheader", { name: /\bsize\b/i }).getAttribute("aria-sort")).toBe("descending");
+    expect(await files(v).locator("th[aria-sort]").filter({ hasText: /\bsize\b/i }).getAttribute("aria-sort")).toBe("descending");
     await expectPaths(v, sizeDescending);
     await feedback(v, 6, 6, 100);
     expect(await files(v).innerText()).not.toContain(hostile);

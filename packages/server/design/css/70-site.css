@@ -1,0 +1,56 @@
+/* Site-origin pages (<slug>.<sites domain>): system pages, the password gate, listings and viewer pages.
+   These ship inline in every response (the site bundle), so keep this file lean. */
+.sys{min-height:100vh;display:flex;flex-direction:column}
+/* The state panel starts on the site header's left edge (one grid on the sites origin, as the listing). */
+.sys>main{flex:1 0 auto;width:100%;max-width:calc(46rem + 36px);padding:10vh 18px var(--s9)}
+.sys>.guilloche-band{margin-top:var(--s7)}
+.sys .foot{padding-bottom:28px}
+/* Keyboard focus and #L links scroll clear of the sticky bar (it wraps to more rows on narrow screens).
+   At 720px and below the bar is static, so padding would only shrink short viewports. */
+@media (min-width:721px){html:has(.vbar){scroll-padding-top:8.5rem}}
+@media (min-width:1000px){html:has(.vbar){scroll-padding-top:6rem}}
+.vbar{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between;padding:8px 18px;border-bottom:1px solid var(--rule);background:color-mix(in srgb,var(--paper) 92%,transparent);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);font-size:13.5px;line-height:1.3}
+.vbar .wm{font-size:15px}
+/* The file row: the path wraps between its parts (and inside a name only when one is wider than the bar), never
+   cut off, so the whole name stays readable with any text spacing (WCAG 1.4.12). From 1000px the trust line has a
+   row of its own under the file, view and buttons. */
+.vfile{display:flex;align-items:center;gap:10px;min-width:0;flex:1 1 18rem}
+.vfile>*{flex:none}
+.vfile .crumbs{flex:0 1 auto;min-width:2.5rem}
+.vbar .btnrow{gap:6px;flex:0 1 auto;min-width:0}
+.vbar .trust{font-size:12px;margin:0;flex-basis:100%;order:3;text-align:right}
+.vtrust{max-width:60rem;margin:var(--s7) auto var(--s5);padding:12px var(--s5) 0;border-top:1px solid var(--rule-soft)}
+.show-lg{display:none}
+/* The note sits on the same left edge and width as the code or table under it. */
+p.notebar{display:block;margin:14px 18px 0;overflow-wrap:anywhere}
+.toggle{position:absolute;opacity:0;pointer-events:none;width:1px;height:1px}
+.toggle:focus-visible+*{outline:2px solid var(--focus);outline-offset:2px}
+.toggle:focus-visible~* .togglebtn,.toggle:focus-visible~.togglebtn{outline:2px solid var(--focus);outline-offset:2px}
+.checker{background-color:var(--paper-2);background-image:linear-gradient(45deg,var(--paper-3) 25%,transparent 25%),linear-gradient(-45deg,var(--paper-3) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,var(--paper-3) 75%),linear-gradient(-45deg,transparent 75%,var(--paper-3) 75%);background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0}
+/* On the site header's left edge (18px), at most 60rem of content. */
+.listing{max-width:calc(60rem + 36px);padding:var(--s7) 18px var(--s9)}
+.vhead{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:flex-end;justify-content:space-between;padding-bottom:16px;margin-bottom:6px}
+.vhead h1{font-size:clamp(28px,3.4vw,40px);overflow-wrap:anywhere}
+.listing .frow{grid-template-columns:40px minmax(0,1fr) auto auto}
+.listing .frow .num{font-size:13px;color:var(--ink-2);text-align:right;white-space:nowrap}
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(9rem,1fr));gap:12px;margin:var(--s6) 0 0;padding:0;list-style:none}
+.gallery a{display:block;border:1px solid var(--rule);background:var(--paper-2);text-decoration:none;color:var(--ink-2)}
+.gallery a:hover{border-color:var(--accent)}
+.gallery img{display:block;width:100%;aspect-ratio:1;object-fit:cover;background:var(--paper-3)}
+.gallery span{display:block;padding:6px 8px;font:400 12px/1.4 var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media (max-width:720px){
+  .sys>main{padding:6vh 12px var(--s8)}
+  .vbar{padding:8px 12px}
+  .listing{padding:var(--s6) 12px var(--s8)}
+  .listing .frow{grid-template-columns:40px minmax(0,1fr) auto}
+  .listing .frow .fkind{display:none}
+}
+@media (max-width:999.98px){
+  /* The file above the view and buttons; the path, the size and the checksum each on a row of their own. */
+  .vfile{flex:1 1 100%;display:grid;grid-template-columns:auto minmax(0,1fr);row-gap:6px}
+  .vfile .crumbs,.vfile .vmeta,.vfile .sum{grid-column:1/-1}
+  .vfile>.chip{justify-self:start}
+  .vmeta{white-space:normal;overflow-wrap:anywhere}
+}
+@media (max-width:720px){.vbar{position:static}}
+@media (min-width:1000px){.show-lg{display:block}.hide-lg{display:none}}

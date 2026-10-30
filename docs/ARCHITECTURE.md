@@ -41,7 +41,7 @@ packages/server           @dropway/server: createDropway() Hono app factory
   src/discovery.ts        /llms.txt, /llms-full.txt, /skill.md, /connect(.md), /.well-known/*, /robots.txt (generated)
   src/extensions.ts       Types for routes, MCP tools, UI slots, createDropway options
 packages/cli              `kofra` CLI (npm package "kofra", Node 20+, zero runtime dependencies)
-skills/kofra/SKILL.md   Agent Skill (`npx skills add TogetherWeOwn/dropway`); generated, `npm run skill:sync`
+skills/kofra/SKILL.md   Agent Skill (`npx skills add TogetherWeOwn/kofra`); generated, `npm run skill:sync`
 scripts/guard-open-core.mjs  CI guard: no billing, pricing, payment or hosted-service code in this repo
 test/                     vitest + @cloudflare/vitest-plugin (runs inside workerd)
 ```
@@ -286,10 +286,11 @@ Pages are server-rendered shells. One first-party script,
 `/__dropway/ui/app-<hash>.js`, fills in data from the public REST API, using the
 API key the person signed in with (sessionStorage, or localStorage when they tick
 "keep me signed in"; no cookies). The script calls the serialized
-`dropwayClient` from `ui/client.ts` with the serialized `createQrEncoder` factory
-from `qr.js`, so there is no build step and nothing for an embedding app to
-configure. Both functions must remain closure-free: the client receives the QR
-factory as its only external dependency. Build DOM with its `h()` helper, never
+`dropwayClient` from `ui/client.ts` with two serialized factories as arguments:
+`kofraMotifs` from `ui/motifs.ts` (checksum seals) and `createQrEncoder` from
+`qr.js`, so there is no build step and nothing for an embedding app to
+configure. All three functions must remain closure-free: the client reads the
+factories as `arguments[0]` and `arguments[1]` and depends on nothing else. Build DOM with its `h()` helper, never
 `innerHTML`.
 
 App pages use `appScriptCsp()`: scripts from `'self'` only, frames, images and

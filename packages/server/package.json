@@ -10,10 +10,13 @@
     "directory": "packages/server"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./e2e-design": "./test/e2e-design/shared.mjs"
   },
   "files": [
     "src",
+    "test/e2e-design/shared.mjs",
+    "test/e2e-design/shared.d.mts",
     "LICENSE"
   ],
   "publishConfig": {

@@ -2,8 +2,9 @@ import { applyD1Migrations, createExecutionContext, env, reset, waitOnExecutionC
 import { describe, expect, it } from "vitest";
 import { createDropway, renderAppPage, type ServerBindings } from "@dropway/server";
 import { CLIENT_SCRIPT, CLIENT_HASH, fnv1a } from "../packages/server/src/ui/assets";
+import { urlCode } from "../packages/server/src/ui/pages";
 import { jsonForScript, navItems } from "../packages/server/src/ui/shell";
-import { form, freshInstance } from "./helpers";
+import { form, freshInstance, ORIGIN } from "./helpers";
 import { normalizeQrNotice, QR_COPYRIGHT, QR_MIT_TERMS } from "./qr-license.fixture";
 
 const scriptSrc = (html: string) => /<script src="(\/__dropway\/ui\/app-[0-9a-f]{8}\.js)" defer><\/script>/.exec(html)?.[1];
@@ -62,6 +63,8 @@ describe("app pages", () => {
   it("the client script is self-contained and never writes API data as HTML", () => {
     expect(CLIENT_SCRIPT).toContain("var __name=function(t){return t};");
     expect(CLIENT_SCRIPT).toMatch(/\(function dropwayClient\(\) \{/);
+    // The seal generator is passed in as source text too (no module scope, no network).
+    expect(CLIENT_SCRIPT).toMatch(/\}\)\(function kofraMotifs\(\) \{/);
     expect(CLIENT_SCRIPT).not.toMatch(/\brequire\(|^\s*import\s/m);
     expect(CLIENT_SCRIPT).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
   });
@@ -99,7 +102,8 @@ describe("app pages", () => {
     // Settings shows the instance configuration, server-rendered.
     const settings = await (await dw.call("/dashboard/settings")).text();
     expect(settings).toContain("Anonymous publishing");
-    expect(settings).toContain("/s/SITE/");
+    // The example address is inline code that wraps only between its parts (urlCode: <wbr> after "/" and before ".").
+    expect(settings).toContain(urlCode(`${ORIGIN}/s/SITE/`));
   });
 
   it("escapes boot data so it cannot close its script tag", () => {
@@ -121,12 +125,12 @@ describe("app-origin file viewer (/v/:slug/*path)", () => {
     const sandbox = /sandbox="([^"]+)"/.exec(html)![1]!;
     expect(sandbox).toContain("allow-scripts");
     expect(sandbox).not.toContain("allow-same-origin");
-    expect(boot(html).page).toEqual({ name: "viewer", slug, path: "docs/a b.md", siteUrl: `https://dropway.test/s/${slug}/` });
+    expect(boot(html).page).toEqual({ name: "viewer", slug, path: "docs/a b.md", siteUrl: `https://dropway.test/s/${slug}/`, theme: "auto" });
     // The framed view really is the embed variant (no bar), served sandboxed.
     const framed = await dw.call(`/s/${slug}/docs/a%20b.md?view=1&embed=1`, { headers: { "Sec-Fetch-Dest": "iframe" } });
     expect(framed.headers.get("x-kofra-viewer")).toBe("markdown");
     expect(framed.headers.get("content-security-policy")).toContain("sandbox");
-    expect(await framed.text()).not.toContain('class="dw-vbar"');
+    expect(await framed.text()).not.toContain('class="k-vbar"');
   });
 
   it("separate sites origin: frames that origin and lets the page keep it", async () => {
@@ -134,7 +138,8 @@ describe("app-origin file viewer (/v/:slug/*path)", () => {
     const res = await dw.call("/v/bright-otter-x7k2/");
     expect(res.headers.get("content-security-policy")).toContain("frame-src 'self' https://sites.example");
     const html = await res.text();
-    expect(html).toContain('src="https://sites.example/bright-otter-x7k2/"');
+    // A folder opens through the site's __dropway/open with the embed (the listing draws no frame of its own there).
+    expect(html).toContain('src="https://sites.example/bright-otter-x7k2/__dropway/open?next=%2Fbright-otter-x7k2%2F&amp;embed=1"');
     expect(/sandbox="([^"]+)"/.exec(html)![1]).toContain("allow-same-origin");
   });
 
@@ -170,12 +175,12 @@ describe("UI slots for embedding apps", () => {
     const html = await page.text();
     expect(html).toContain("<p id=extra>extension page</p>");
     expect(html).toContain('<a href="/dashboard/extra" aria-current="page">Extra</a>');
-    expect(html).toContain('<div class="dw-banner" role="status">Maintenance tonight</div>');
-    const nav = /<nav class="dw-nav"[^>]*>(.*?)<\/nav>/.exec(html)![1]!;
+    expect(html).toContain('<div class="k-slotbanner" role="status"><div class="k-wrap">Maintenance tonight</div></div>');
+    const nav = /<nav class="k-nav"[^>]*>(.*?)<\/nav>/.exec(html)![1]!;
     expect(nav.indexOf(">API keys<")).toBeLessThan(nav.indexOf(">Docs<"));
     expect(nav.indexOf(">Docs<")).toBeLessThan(nav.indexOf(">Settings<"));
     expect(nav.indexOf(">Settings<")).toBeLessThan(nav.indexOf(">Extra<"));
-    expect(await (await dw.call("/dashboard/settings")).text()).toContain('<section class="dw-section" id="extra-settings"><header><h2>Extra settings</h2></header><div class="dw-pad"><p>from the extension</p></div></section>');
+    expect(await (await dw.call("/dashboard/settings")).text()).toContain('<section class="k-blk" id="extra-settings" aria-labelledby="extra-settings-h"><div class="k-blk-h"><h2 id="extra-settings-h">Extra settings</h2></div><div class="k-pad"><p>from the extension</p></div></section>');
     expect(await (await dw.call("/")).text()).toBe("custom home");
   });
 
@@ -183,7 +188,9 @@ describe("UI slots for embedding apps", () => {
     const dw = await freshInstance({}, { uiSlots: { session: { signInPath: "/signin", signOutPath: "/auth/signout" } } });
     const html = await (await dw.call("/dashboard")).text();
     expect(boot(html).session).toEqual({ signIn: "/signin", signOut: "/auth/signout" });
-    expect(html).toContain('<div class="dw-account" id="dw-account"><a class="dw-btn-link" href="/signin">Sign in</a></div>');
+    expect(html).toContain('<div class="k-acct" id="dw-account"><a class="k-btn k-sm k-quiet" href="/signin">Sign in</a></div>');
+    // One header everywhere: the tag beside the wordmark is filled by the dashboard script once someone is signed in.
+    expect(html).toContain('<a class="k-wm" href="/">Kofra</a><span class="k-tag" id="dw-tag"></span>');
     const login = await (await dw.call("/login?next=/dashboard/publish")).text();
     expect(login).toContain('href="/signin?next=%2Fdashboard%2Fpublish">Sign in with your account</a>');
     // Without the slot nothing changes.
@@ -197,7 +204,7 @@ describe("UI slots for embedding apps", () => {
   it("sign-in forms never put a key in a URL, even before the script loads", async () => {
     const dw = await freshInstance();
     const html = await (await dw.call("/login")).text();
-    expect(html).toContain('<form class="dw-pad" id="dw-signin" method="post" action="/login">');
+    expect(html).toContain('<form id="dw-signin" method="post" action="/login">');
     const res = await dw.call("/login", { method: "POST", body: form({ key: "dw_secret_value" }) });
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/login?retry=1");

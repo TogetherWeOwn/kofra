@@ -12,7 +12,7 @@ import type { Viewer } from "./index";
 // 4 was issued separately for the report print treatment plus shared-link
 // head tags and for the Phone disclosure in the viewer bar; neither 4
 // identifies the merged bytes, so the merged render moves to 5.
-const CSV_VERSION = 5;
+const CSV_VERSION = 6;
 export const MAX_ROWS = 2_000;
 const READ_MAX_BYTES = 4 * 1024 * 1024;
 const MAX_CELL = 1_000;
@@ -24,16 +24,16 @@ const DETECT_MAX_RECORDS = 5;
 const DELIMITER_CANDIDATES = [",", "\t", ";", "|"];
 
 const CSV_CSS = `
-.dw-csv{padding:.6rem .9rem 3rem}
-.dw-csvmeta{font-size:.82rem;color:var(--muted);margin:.2rem 0 .6rem}
-.dw-table{overflow:auto;max-height:calc(100vh - 7.5rem);border:1px solid var(--line);border-radius:9px;background:var(--card)}
-.dw-table table{border-collapse:separate;border-spacing:0;font-size:.84rem;min-width:100%}
-.dw-table th,.dw-table td{padding:.32rem .7rem;border-bottom:1px solid var(--line);border-right:1px solid var(--line);white-space:nowrap;max-width:28rem;overflow:hidden;text-overflow:ellipsis;vertical-align:top;text-align:left}
-.dw-table thead th{position:sticky;top:0;background:var(--code);font-weight:600;z-index:1}
-.dw-table td.n{text-align:right;font-variant-numeric:tabular-nums}
-.dw-table th.rn,.dw-table td.rn{position:sticky;left:0;background:var(--code);color:var(--muted);text-align:right;font-weight:400;font-variant-numeric:tabular-nums;user-select:none}
-.dw-table thead th.rn{z-index:2}
-.dw-table tbody tr:hover td{background:color-mix(in srgb,var(--accent) 6%,transparent)}
+.dw-csv{padding:12px 18px 48px}
+.dw-csvmeta{font:400 12.5px/1.4 var(--mono);color:var(--ink-2);margin:4px 0 10px}
+.dw-csvwrap{overflow:auto;max-height:calc(100vh - 8rem);border:1px solid var(--rule-soft);border-top:1px solid var(--accent);background:var(--paper-2)}
+.dw-csvwrap table{border-collapse:separate;border-spacing:0;font-size:14px;min-width:100%}
+.dw-csvwrap th,.dw-csvwrap td{padding:7px 12px;border-bottom:1px solid var(--rule-soft);border-right:1px solid var(--rule-faint);white-space:nowrap;max-width:28rem;overflow:hidden;text-overflow:ellipsis;vertical-align:top;text-align:left}
+.dw-csvwrap thead th{position:sticky;top:0;background:var(--paper-2);font:500 10.5px/1.3 var(--mono);text-transform:uppercase;letter-spacing:.11em;color:var(--accent-2);border-bottom:1px solid var(--rule);z-index:1}
+.dw-csvwrap td.n{text-align:right;font-variant-numeric:tabular-nums}
+.dw-csvwrap th.rn,.dw-csvwrap td.rn{position:sticky;left:0;background:var(--paper-3);color:var(--muted);text-align:right;font:400 12px/1.6 var(--mono);user-select:none}
+.dw-csvwrap thead th.rn{z-index:2}
+.dw-csvwrap tbody tr:hover td{background:var(--accent-wash)}
 `;
 
 /**
@@ -189,7 +189,7 @@ function cell(v: string): string {
 
 /** The table HTML and counts (exported for tests). */
 export function renderCsvTable(rows: string[][]): { html: string; columns: number } {
-  if (!rows.length) return { html: '<p class="dw-note">This file has no rows.</p>', columns: 0 };
+  if (!rows.length) return { html: '<p class="k-banner k-notebar" role="note">This file has no rows.</p>', columns: 0 };
   const columns = Math.max(...rows.map((r) => r.length));
   const [header, ...body] = rows;
   const numeric = Array.from({ length: columns }, (_, c) => {
@@ -229,7 +229,7 @@ export const csvViewer: Viewer = {
       const delim = delimiter === "\t" ? "tab" : delimiter === "," ? "comma" : delimiter === ";" ? "semicolon" : "pipe";
       return `<!--meta-->${dataRows.toLocaleString("en-US")}${more ? "+" : ""} rows · ${columns} columns · ${delim}-separated${
         more ? ` · showing the first ${Math.min(dataRows, MAX_ROWS).toLocaleString("en-US")} rows of ${formatBytes(vc.file.size)}` : ""
-      }<!--/meta--><div class="dw-table">${html}</div>`;
+      }<!--/meta--><div class="dw-csvwrap" tabindex="0" role="region" aria-label="${escapeHtml(`Table: ${vc.file.path}`)}">${html}</div>`;
     });
     const m = /^<!--meta-->(.*?)<!--\/meta-->/.exec(r.html);
     if (m) meta = m[1]!;
@@ -237,7 +237,7 @@ export const csvViewer: Viewer = {
       tabs: standardTabs(vc, { rendered: "Table", source: true }),
       print: true,
       css: CSV_CSS,
-      body: `<main class="dw-csv"><p class="dw-csvmeta">${meta}</p>${m ? r.html.slice(m[0].length) : r.html}</main>`,
+      body: `<div class="dw-csv"><p class="dw-csvmeta">${meta}</p>${m ? r.html.slice(m[0].length) : r.html}</div>`,
       headers: { "X-Kofra-Render-Cache": r.cache },
     });
   },

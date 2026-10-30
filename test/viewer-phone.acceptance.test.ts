@@ -32,9 +32,16 @@ const fixtures: Record<string, string> = { ...files, ...media,
   "sample.mp3": "audio fixture", "sample.woff2": "font fixture", "sample.zip": "invalid zip fixture",
 };
 
-// Extract an actual image, not an unrelated icon or a text mention of QR.
+// Scope Phone assertions away from the shared shell's checksum seal.
+function phonePanels(html: string): string[] {
+  return [...html.matchAll(/<div\b[^>]*\bclass="(?:[^"]*\s)?dw-phone-panel(?:\s[^"]*)?"[^>]*>([\s\S]*?)<\/div\s*>/gi)].map((m) => m[1]!);
+}
+
+// Extract an actual Phone image, not an unrelated icon or a text mention of QR.
 function qrSvg(html: string): string | undefined {
-  return Array.from(html.matchAll(/<svg\b[\s\S]*?<\/svg>/gi), (m) => m[0])
+  const scope = phonePanels(html).join("\n");
+  if (!scope) return undefined;
+  return Array.from(scope.matchAll(/<svg\b[\s\S]*?<\/svg>/gi), (m) => m[0])
     .find((svg) => /\b(?:aria-label|aria-labelledby)=|<title\b/i.test(svg));
 }
 
@@ -58,7 +65,8 @@ async function expectPhone(html: string, url: string) {
   expect(labels.some((label) => /\bPhone\b/i.test(label)), "a native no-script Phone disclosure must be served in the viewer bar").toBe(true);
   const svg = qrSvg(html);
   expect(svg, "Phone must include a labelled, server-rendered inline SVG").toBeDefined();
-  expect(html).toContain(`href="${url.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}"`);
+  const panelHtml = phonePanels(html).join("\n");
+  expect(panelHtml).toContain(`href="${url.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}"`);
   expect(svg!.length).toBeLessThanOrEqual(128 * 1024);
   expect(svg).toMatch(/\bviewBox=["']0 0 \d+ \d+["']/);
   expect(svg).not.toMatch(/<script\b|<foreignObject\b|<image\b|\bon\w+\s*=|(?:href|src)=["']https?:/i);
@@ -149,20 +157,22 @@ describe("viewer Phone: served public-file contract", () => {
 
   // Old versions are the validators the pre-Phone build issued, so a cached
   // page carrying one must refresh (200) instead of revalidating (304)
-  // against markup that now includes the Phone disclosure. New versions pin
-  // the merged Phone/unfurl render; historical pre-Phone validators stay fixed.
+  // against markup that now includes the Phone disclosure. Current render
+  // versions may advance; historical pre-Phone validators stay fixed.
   it.each([
-    ["notes.md", "markdown", 3, 5], ["data.json", "json", 2, 5], ["data.json", "json", 3, 5],
-    ["table.csv", "csv", 3, 5], ["plain.txt", "code", 3, 5], ["page.html", "html-frame", 1, 4],
-    ["vector/shape.svg", "svg", 3, 5], ["raster/pixel.png", "image", 3, 5],
-  ] as const)("invalidates the pre-Phone %s %s@%i validator, then correctly revalidates refreshed markup", async (path, id, oldVersion, newVersion) => {
+    ["notes.md", "markdown", 3], ["data.json", "json", 2], ["data.json", "json", 3],
+    ["table.csv", "csv", 3], ["plain.txt", "code", 3], ["page.html", "html-frame", 1],
+    ["vector/shape.svg", "svg", 3], ["raster/pixel.png", "image", 3],
+  ] as const)("invalidates the pre-Phone %s %s@%i validator, then correctly revalidates refreshed markup", async (path, id, oldVersion) => {
     const hash = await sha256Hex(new TextEncoder().encode(fixtures[path]));
     const legacy = `W/"${id}@${oldVersion}-${hash}"`;
     const refreshed = await dw.call(`${root}${path}?view=1`, { headers: { ...NAV, "If-None-Match": legacy } });
     expect(refreshed.status, "old cached viewer markup must refresh to include Phone").toBe(200);
     const etag = refreshed.headers.get("etag")!;
     expect(etag).not.toBe(legacy);
-    expect(etag, "refreshed markup must carry the exact post-Phone validator").toMatch(new RegExp(`^W/"${id}@${newVersion}-${hash}`));
+    const version = VIEWERS.find((viewer) => viewer.id === id)!.version;
+    expect(version).toBeGreaterThan(oldVersion);
+    expect(etag, "refreshed markup must carry the current viewer version").toMatch(new RegExp(`^W/"${id}@${version}-${hash}`));
     await expectPhone(await refreshed.text(), `${ORIGIN}${root}${path}`);
     const conditional = await dw.call(`${root}${path}?view=1`, { headers: { ...NAV, "If-None-Match": etag } });
     expect(conditional.status).toBe(304);
@@ -179,8 +189,9 @@ describe("viewer Phone: served public-file contract", () => {
     const first = await dw.call(`${root}${path}?view=1`, { headers: NAV });
     expect(first.status).toBe(200);
     const current = first.headers.get("etag")!;
-    expect(current).toMatch(new RegExp(`^W/"${id}@4-`));
-    const legacy = current.replace(`${id}@4-`, `${id}@2-`);
+    expect(current).toMatch(new RegExp(`^W/"${id}@\\d+-`));
+    const legacy = current.replace(/@\d+-/, "@2-");
+    expect(legacy).not.toBe(current);
     const refreshed = await dw.call(`${root}${path}?view=1`, { headers: { ...NAV, "If-None-Match": legacy } });
     expect(refreshed.status).toBe(200);
     await expectPhone(await refreshed.text(), `${ORIGIN}${root}${path}`);
@@ -264,7 +275,7 @@ describe("viewer Phone: site-origin topology", () => {
     expect(html).toContain("Historical preview sentinel");
     expect(html).not.toContain("Current live sentinel");
     expect(qrSvg(html)).toBeUndefined();
-    expect(html).not.toContain('class="dw-phone"');
+    expect(html).not.toMatch(/class="(?:[^"]*\s)?dw-phone(?:\s|")/);
     expect((await elementTexts(html, "summary")).some(text => /\bPhone\b/i.test(text))).toBe(false);
     expect(html).not.toContain(capability.searchParams.get("dw_preview")!);
 
@@ -293,13 +304,13 @@ describe("viewer Phone: site-origin topology", () => {
 describe("viewer Phone: validator versions", () => {
   // Every viewer's rendered page gained the Phone disclosure, so every
   // viewer's ETag version must sit above the validator the pre-Phone build
-  // issued; these exact versions also reserve the merged unfurl render identity.
+  // issued; these exact versions also reserve the merged unfurl and redesign identities.
   // Reverting a bump could strand cached pages from either parent on a 304.
-  it("pins every built-in viewer at its exact post-Phone version", () => {
+  it("pins every built-in viewer at its exact current render version", () => {
     const expected: Record<string, number> = {
-      source: 5, "html-frame": 4, markdown: 5, notebook: 4, json: 5, csv: 5,
-      svg: 5, image: 5, pdf: 4, video: 4, audio: 4, font: 4, archive: 4,
-      code: 5, binary: 5,
+      source: 6, "html-frame": 4, markdown: 6, notebook: 5, json: 6, csv: 6,
+      svg: 5, image: 5, pdf: 4, video: 4, audio: 4, font: 4, archive: 5,
+      code: 6, binary: 5,
     };
     expect(VIEWERS.map((v) => v.id).sort()).toEqual(Object.keys(expected).sort());
     for (const viewer of VIEWERS) expect(viewer.version ?? 1, viewer.id).toBe(expected[viewer.id]);
@@ -389,7 +400,7 @@ describe("viewer Phone: capacity degradation", () => {
     const html = await res.text();
     expect(html).toContain("Long public path");
     expect(qrSvg(html), "no truncated or substitute QR on encoder overflow").toBeUndefined();
-    expect(html, "capacity overflow must retain the complete canonical link")
+    expect(phonePanels(html).join("\n"), "capacity overflow must retain the complete canonical link")
       .toContain(`href="${ORIGIN}${path}"`);
     expect(html).not.toContain('href="https://api.qr');
   });

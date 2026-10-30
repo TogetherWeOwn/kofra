@@ -1,0 +1,43 @@
+/* App-only controls: button variants, checkbox labels, tabs, key-value lists. */
+.btn.danger{background:transparent;color:var(--danger);border-color:var(--danger)}
+.btn.danger:hover{background:var(--danger-wash);color:var(--danger)}
+.hint{font-size:13px;color:var(--muted);margin:6px 0 0}
+.chip.danger{border-color:var(--danger);color:var(--danger)}
+.chip.solid{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.quiet{background:transparent;border-color:transparent;color:var(--accent);text-decoration:underline;text-underline-offset:3px;padding-inline:4px}
+.btn.quiet:hover{background:var(--accent-wash);color:var(--accent-hover)}
+.btn.lg{padding:14px 22px;font-size:16px}
+.linkbtn{background:none;border:0;padding:0;color:var(--accent);text-decoration:underline;text-underline-offset:3px;font-size:14px}
+.linkbtn:hover{color:var(--accent-hover)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+/* A select is as tall as the text inputs beside it (Chrome ignores line-height in selects), so the labels of a
+   row of fields line up. */
+select.input{min-height:calc(1.55em + 24px)}
+/* Checkboxes and radios drawn from the tokens, so unchecked ones match the mode too (a native unchecked control
+   stays the browser's grey in Midnight). Forced colours get the native controls back (91-a11y-app.css). */
+input:is([type=checkbox],[type=radio]){-webkit-appearance:none;appearance:none;width:16px;height:16px;margin:0;flex:none;display:inline-grid;place-content:center;vertical-align:-3px;border:1.5px solid var(--edge);background:var(--field);color:var(--accent-ink);transition:background-color var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease)}
+input[type=checkbox]{border-radius:3px}
+input[type=radio]{border-radius:50%}
+input:is([type=checkbox],[type=radio]):hover{border-color:var(--accent)}
+input:is([type=checkbox],[type=radio]):checked{background:var(--accent);border-color:var(--accent)}
+input[type=checkbox]:checked::before{content:"";width:9px;height:5px;border:solid currentColor;border-width:0 0 2px 2px;transform:translateY(-1px) rotate(-45deg)}
+input[type=radio]:checked::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+input:is([type=checkbox],[type=radio]):disabled{opacity:.5;cursor:not-allowed}
+/* Top-aligned in its line: a ticked and an unticked control (the tick is a pseudo-element) give the same line box, so
+   option rows side by side line up (J20). */
+.tog{display:inline-flex;gap:9px;align-items:flex-start;font-size:14px;line-height:1.4;color:var(--ink);vertical-align:top}
+.tog input{width:16px;height:16px;margin:2px 0 0;flex:none}
+.tog .sub{font-size:13px}
+.tabs{display:flex;flex-wrap:wrap;gap:2px;border-bottom:1px solid var(--rule)}
+.tabs [role=tab]{background:transparent;border:0;border-bottom:2px solid transparent;margin-bottom:-1px;padding:10px 14px;color:var(--ink-2);font-size:14.5px;white-space:nowrap}
+.tabs [role=tab]:hover{color:var(--accent)}
+.tabs [role=tab][aria-selected=true]{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+.tabs [role=tab]:focus-visible{outline-offset:-2px}
+[role=tabpanel]{padding-top:var(--s4)}
+.kv{display:grid;grid-template-columns:minmax(8rem,max-content) minmax(0,1fr);gap:8px 20px;margin:0;font-size:14.5px}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+@media (max-width:720px){.kv{grid-template-columns:minmax(0,1fr);gap:2px 0}.kv dd{margin-bottom:10px}}
+details.how{margin-top:12px;font-size:14px;color:var(--ink-2)}
+details.how>summary{font-weight:600;font-size:14.5px}
+details.how[open]>summary{margin-bottom:12px}

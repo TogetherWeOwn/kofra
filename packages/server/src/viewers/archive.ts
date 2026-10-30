@@ -13,11 +13,13 @@ const MAX_COMMENT_BYTES = 65_535;
 const ARCHIVE_CSS = `
 .dw-archive{max-width:70rem;margin:auto;padding:1rem 1.25rem 3rem}
 .dw-archive h1{font-size:1.35rem;overflow-wrap:anywhere}
-.dw-archive-table{overflow:auto;border:1px solid var(--line);border-radius:8px}
+.dw-archive-table{overflow:auto;border:1px solid var(--rule-soft);border-radius:8px}
 .dw-archive table{border-collapse:collapse;width:100%;font-size:.9rem}
-.dw-archive th,.dw-archive td{padding:.5rem .75rem;border-bottom:1px solid var(--line);text-align:left}
-.dw-archive th{background:var(--code)}
+.dw-archive th,.dw-archive td{padding:.5rem .75rem;border-bottom:1px solid var(--rule-soft);text-align:left}
+.dw-archive th{background:var(--paper-3)}
 .dw-archive td:first-child{font-family:ui-monospace,monospace;overflow-wrap:anywhere;white-space:pre-wrap;min-width:12rem}
+.dw-archive-note{color:var(--muted);margin:.25rem 0 .75rem}
+.dw-archive-cap{caption-side:top;text-align:left;padding:.5rem .75rem;color:var(--muted)}
 .dw-archive .n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 `;
 
@@ -107,10 +109,10 @@ async function archiveListing(vc: ViewerContext): Promise<string | null> {
     cursor = next;
   }
   if (cursor !== size) return null;
-  const notice = count > MAX_ENTRIES ? `<p class="dw-note">Showing the first ${MAX_ENTRIES.toLocaleString("en-US")} of ${count.toLocaleString("en-US")} entries.</p>` : "";
+  const notice = count > MAX_ENTRIES ? `<p class="k-small dw-archive-note">Showing the first ${MAX_ENTRIES.toLocaleString("en-US")} of ${count.toLocaleString("en-US")} entries.</p>` : "";
   return `<p>${count.toLocaleString("en-US")} ${count === 1 ? "entry" : "entries"} · ${formatBytes(total)} uncompressed</p>${notice}
-<p class="dw-note">Central-directory metadata only, in archive order. Entry contents are not extracted or verified.</p>
-<div class="dw-archive-table"><table><caption class="dw-meta">ZIP entries</caption><thead><tr><th scope="col">Path</th><th scope="col" class="n">Uncompressed size</th><th scope="col">Method</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+<p class="k-small dw-archive-note">Central-directory metadata only, in archive order. Entry contents are not extracted or verified.</p>
+<div class="dw-archive-table"><table><caption class="k-small dw-archive-cap">ZIP entries</caption><thead><tr><th scope="col">Path</th><th scope="col" class="n">Uncompressed size</th><th scope="col">Method</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 }
 
 export const archiveViewer: Viewer = {
@@ -118,7 +120,7 @@ export const archiveViewer: Viewer = {
   // 3 was issued separately for the shared-link head tags (with shared-bar
   // sibling navigation) and for the Phone disclosure, so the merged render
   // moves to 4.
-  version: 4,
+  version: 5,
   // Large and unsupported archives still get an info page, but are never parsed.
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "archive" && mode !== "source",
@@ -142,7 +144,7 @@ export const archiveViewer: Viewer = {
         return viewerPage(vc, {
           tabs: standardTabs(vc, { rendered: "Entries" }),
           css: ARCHIVE_CSS,
-          body: `<main class="dw-archive"><h1>${escapeHtml(vc.file.path.split("/").pop() ?? vc.file.path)}</h1>${r.html}</main>`,
+          body: `<div class="dw-archive"><h1>${escapeHtml(vc.file.path.split("/").pop() ?? vc.file.path)}</h1>${r.html}</div>`,
           headers: { "X-Kofra-Render-Cache": r.cache },
         });
       }

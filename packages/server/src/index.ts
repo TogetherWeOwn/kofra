@@ -29,8 +29,39 @@ export { renderMarkdown } from "./viewers/markdown";
 export { sanitizeHtml } from "./viewers/sanitize";
 export { highlight, hljsLanguage } from "./viewers/highlight";
 export { cachedRender } from "./viewers/cache";
-export { escapeHtml, htmlPage, systemPage, BASE_CSS, APP_PAGE_CSP, formatBytes } from "./html";
+export { escapeHtml, htmlPage, systemPage, APP_PAGE_CSP, siteSystemCsp, domainsLine, formatBytes, BASE_CSS } from "./html";
 export { buildOpenApi } from "./openapi";
 export { llmsTxt, llmsFullTxt, skillMarkdown, skillInstance, agentSkillsIndex, SKILL_NAME, SKILL_DESCRIPTION, type SkillInstance } from "./discovery";
 export { createMcpEndpoint, mcpInstructions, selectTools, MCP_SERVER_VERSION, type McpEndpointOptions } from "./mcp";
-export { renderAppPage, appScriptCsp, APP_CSS, CORE_NAV, clientScriptUrl, type AppPageOptions } from "./ui";
+export { renderAppPage, appScriptCsp, CORE_NAV, CORE_FOOTER_LINKS, SOURCE_REPO, APP_CSS, clientScriptUrl, type AppPageOptions } from "./ui";
+export {
+  renderDocument,
+  appStylesheetUrl,
+  fontFaceCss,
+  accountArea,
+  appChrome,
+  appHeader,
+  appFooter,
+  identityTag,
+  GUILLOCHE_BAND,
+  modeSwitch,
+  siteHeader,
+  siteFooter,
+  SKIP_LINK,
+  TRUST_LINE,
+  THEME_COOKIE,
+  THEME_PATH,
+  bindRequestTheme,
+  themeOf,
+  requestTheme,
+  themeSetCookie,
+  safeNext,
+  fileSeal,
+  type DocumentOptions,
+  type AccountAreaOptions,
+  type AppChromeOptions,
+  type AppHeaderOptions,
+  type AppFooterOptions,
+  type ChromeNavItem,
+  type ThemePref,
+} from "./ui";

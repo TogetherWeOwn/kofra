@@ -2,6 +2,8 @@ import type { Hono } from "hono";
 import { siteUrl } from "@dropway/core";
 import type { DropwayEnv } from "./env";
 import { escapeHtml } from "./html";
+import { renderDocument } from "./ui/document";
+import { themeOf } from "./ui/theme";
 
 /** Trusted app-origin code authenticates everything before handing bytes to an opaque frame. */
 async function encryptedLoader() {
@@ -147,10 +149,22 @@ export function installEncrypted(app: Hono<DropwayEnv>) {
   app.get("/__dropway/encrypted/:slug", c => {
     const slug = c.req.param("slug");
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return c.notFound();
-    const bundle = new URL("encrypted.bin?raw=1", siteUrl(c.get("dw"), slug));
-    return c.html(`<!doctype html><meta charset="utf-8"><title>Encrypted site · Kofra</title><body style="margin:0;height:100dvh;display:flex;flex-direction:column"><main style="padding:.5rem 1rem"><h1 style="font-size:1rem;margin:0">Encrypted site</h1><p>Only open sites whose bundled scripts and executable content you trust. Malicious scripts can navigate this frame to send decrypted data to the server.</p><p id="status" data-bundle="${escapeHtml(bundle.href)}">Decrypting locally. The key is never sent to the server.</p><noscript>JavaScript is required to decrypt this site.</noscript></main><script src="/__dropway/encrypted-loader.js"></script></body>`, 200, {
-      ...headers, "X-Frame-Options": "DENY",
-      "Content-Security-Policy": `default-src 'none'; script-src 'self'; connect-src 'self' ${bundle.origin}; frame-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
+    const dw = c.get("dw");
+    const name = dw.config.instanceName;
+    const bundle = new URL("encrypted.bin?raw=1", siteUrl(dw, slug));
+    // No mode switch here (form-action 'none'), but the cookie and ?theme still apply through the server.
+    const html = renderDocument({
+      title: `Encrypted site · ${name}`,
+      delivery: "app",
+      theme: themeOf(dw),
+      robots: "noindex",
+      css: "body.k-enc{margin:0;height:100vh;height:100dvh;display:flex;flex-direction:column}.k-enc-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;padding:10px 18px 0}.k-enc-h .k-wm{font-size:18px}.k-enc-m{padding:6px 18px 10px;border-bottom:1px solid var(--rule)}.k-enc-m .k-banner{margin:6px 0 8px}.k-enc-m p.k-small{margin:0}.k-enc-m h1{font-size:28px;margin:10px 0 14px}",
+      bodyAttrs: ' class="k-enc"',
+      body: `<header class="k-enc-h"><a class="k-wm" href="/">${escapeHtml(name)}</a><span class="k-k">Encrypted site</span></header><main id="dw-main" class="k-enc-m"><h1>Encrypted site</h1><div class="k-banner k-warn" role="note"><div><strong>Only open sites whose bundled scripts and executable content you trust.</strong> Malicious scripts can navigate this frame to send decrypted data to the server.</div></div><p class="k-small" id="status" aria-live="polite" data-bundle="${escapeHtml(bundle.href)}">Decrypting locally. The key is never sent to the server.</p><p class="k-small">If this site cannot open, ask the sender for a fresh, complete share link. <a href="/">Home</a></p><noscript><p class="k-small">JavaScript is required to decrypt this site.</p></noscript></main><script src="/__dropway/encrypted-loader.js"></script>`,
+    });
+    return c.html(html, 200, {
+      ...headers, "X-Frame-Options": "DENY", Vary: "Cookie",
+      "Content-Security-Policy": `default-src 'none'; script-src 'self'; connect-src 'self' ${bundle.origin}; frame-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
     });
   });
 }

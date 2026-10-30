@@ -1,0 +1,123 @@
+/* App-only content: cards, three-column notes, code blocks with a header, one-line file warnings. */
+.table td.act{text-align:right;white-space:nowrap}
+.table td.act .btn+.btn{margin-left:6px}
+.banner.danger{background:var(--danger-wash);border-color:var(--danger);border-left-width:3px}
+.banner.danger b,.banner.danger strong,.banner.danger svg{color:var(--danger)}
+.card{background:var(--paper-2);border:1px solid var(--rule);padding:var(--s6);position:relative}
+.card h3{margin:6px 0 8px}
+.card p{color:var(--ink-2)}
+.card.framed::before{content:"";position:absolute;inset:6px;border:1px solid var(--rule-soft);pointer-events:none}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:var(--s5)}
+.notes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-top:1px solid var(--accent);margin:0;padding:0;list-style:none}
+.note{padding:22px 24px 24px 0;border-bottom:1px solid var(--rule-soft);min-width:0}
+.note+.note{padding-left:24px;border-left:1px solid var(--rule-soft)}
+.note:nth-child(3n+1){padding-left:0;border-left:0}
+.note h3{font-size:23px;margin:6px 0 8px}
+.note p{margin:0;color:var(--ink-2);font-size:15px}
+.fwarn{display:flex;gap:7px;align-items:flex-start;margin-top:6px;font-size:13px;line-height:1.35;color:var(--warning);font-weight:600}
+.codeblock{border:1px solid var(--rule);background:var(--paper-3);margin:14px 0;min-width:0;max-width:100%}
+.codeblock-h{display:flex;align-items:center;gap:12px;padding:6px 8px 6px 12px;border-bottom:1px solid var(--rule-soft);background:var(--paper-2);min-height:40px}
+.codeblock-h .k{margin-right:auto}
+/* A line wider than the block scrolls inside it, and a shadow at the right (or left) edge says there is more: it moves
+   with the content and is gone at the end (scroll shadows; the see-through ends are the token at alpha 0). */
+.codeblock pre{margin:0;padding:16px 18px;overflow-x:auto;font:400 13px/1.65 var(--mono);color:var(--ink);tab-size:2;white-space:pre;background:linear-gradient(to right,var(--paper-3) 40%,oklch(from var(--paper-3) l c h / 0)) left/28px 100% no-repeat local,linear-gradient(to left,var(--paper-3) 40%,oklch(from var(--paper-3) l c h / 0)) right/28px 100% no-repeat local,radial-gradient(farthest-side at 0 50%,oklch(from var(--shadow) l c h / .24),oklch(from var(--shadow) l c h / 0)) left/12px 100% no-repeat scroll,radial-gradient(farthest-side at 100% 50%,oklch(from var(--shadow) l c h / .24),oklch(from var(--shadow) l c h / 0)) right/12px 100% no-repeat scroll,var(--paper-3)}
+/* Commands people copy (the home page, the claim page) wrap instead, so the whole command shows at every width;
+   `pick` selects all of it with one click (pages with no script, which cannot have a Copy button). */
+.codeblock pre.wrapped{white-space:pre-wrap;overflow-wrap:anywhere}
+.codeblock pre.pick{-webkit-user-select:all;user-select:all}
+/* A banner's text column takes the banner's width, so a code block in it lines up with the banner's other content. */
+.banner>div{flex:1}
+.codeblock .c{color:var(--muted)}
+.codeblock .p{color:var(--accent-2);user-select:none}
+@media (max-width:1000px){
+  .notes{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .note:nth-child(n){padding-left:24px;border-left:1px solid var(--rule-soft)}
+  .note:nth-child(2n+1){padding-left:0;border-left:0}
+}
+@media (max-width:720px){
+  .notes{grid-template-columns:minmax(0,1fr)}
+  .note:nth-child(n){padding-left:0;border-left:0}
+}
+/* A panel's own h2 (a second panel on a page whose h1 sits in the first) is a step below the h1 (after the
+   shared .panel h1,.panel h2 rule, so it wins). */
+.panel>h2{font-size:27px;margin:2px 0 14px}
+/* The small rotated stamp (app pages only; site pages use .bigstamp). */
+.stamp{display:inline-block;border:2px solid var(--signal);color:var(--danger);font:500 11.5px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;padding:6px 8px 5px;border-radius:var(--r-stamp);transform:rotate(-3deg);background:color-mix(in srgb,var(--surface) 35%,transparent)}
+/* Admin ledgers. */
+.table.dense{font-size:13.5px}
+.table.dense th,.table.dense td{padding:6px 10px 6px 0}
+/* Ledger tables (app pages). Row headers wrap (a long feature name never widens its column past the page). */
+.table th[scope=row]{white-space:normal;min-width:9rem}
+/* Files table: every cell on the row's middle line, so the path, the seal, the short checksum and the
+   buttons share one line. */
+.table.ftable td{vertical-align:middle}
+/* Tablets: the two buttons stack, so the files table fits its column and no button sits past the scroll edge. */
+@media (max-width:1000px){.table.ftable td.act{white-space:normal;text-align:right}.table.ftable td.act .btn{margin:3px 0 3px 6px}}
+/* Sites table from 720px: fixed columns, so a long name or URL wraps or shortens inside its own column and
+   the status, time and buttons always stay on screen. The URL has a column of its own from 1100px; below
+   that it sits under the site's name. */
+@media (min-width:720.02px){
+  .table.sites{table-layout:fixed}
+  .table.sites th:nth-child(3){width:9.5rem}
+  .table.sites th:nth-child(4){width:7.5rem}
+  .table.sites th:nth-child(5){width:10rem}
+  .table.sites .title{overflow-wrap:break-word}
+}
+@media (min-width:1100px){
+  .table.sites th:nth-child(2){width:34%}
+  .only-narrow{display:none!important}
+}
+@media (max-width:1099.98px){.only-wide{display:none!important}}
+.rowurl{margin-top:8px}
+/* Phones: a ledger becomes one card per row (the row's name, its facts each under its column name, then the
+   actions), so nothing is clipped and nothing scrolls sideways. Two facts share a line where they fit. */
+@media (max-width:720px){
+  .table{display:block}
+  .table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+  /* Sort buttons in a header nobody can see would take focus invisibly; on phones the sort menus in the toolbar do it. */
+  .table thead:has(.th-sort){display:none}
+  .table tbody{display:block}
+  .table tr{display:grid;grid-template-columns:repeat(auto-fill,minmax(9.5rem,1fr));gap:10px 16px;padding:14px;border-bottom:1px solid var(--rule-soft)}
+  .blk .table tr:last-child{border-bottom:0}
+  .table tr>*{display:block;padding:0;border:0;white-space:normal;text-align:left;min-width:0;overflow-wrap:break-word}
+  .table tr>:first-child,.table tr>.act,.table tr>.wide{grid-column:1/-1}
+  .table tr>td:empty{display:none}
+  .table td[data-label]::before{content:attr(data-label);content:attr(data-label) / "";display:block;margin-bottom:3px;font:500 10.5px/1.3 var(--mono);text-transform:uppercase;letter-spacing:.11em;color:var(--accent-2)}
+  .table tr>.num{text-align:left;white-space:normal}
+  .table td.act{display:flex;flex-wrap:wrap;gap:8px}
+  .table td.act .btn+.btn{margin:0}
+  .table .chip{white-space:normal;overflow-wrap:anywhere}
+  .table .url{display:flex}
+  /* The address wraps after a "/" and before a "." (urlParts), never inside a name such as "kofra-sites". */
+  .table .url a{white-space:normal;overflow-wrap:break-word}
+  /* Files: one line per file (path, size, buttons). */
+  .table.ftable tr{grid-template-columns:minmax(0,1fr) auto auto;align-items:center;padding:10px 14px}
+  .table.ftable tr>:first-child,.table.ftable tr>.act{grid-column:auto}
+  .table.ftable tr>.num{text-align:right}
+  /* Paths break after a "/" (<wbr>), inside a name only as a last resort. */
+  .table.ftable .fname,.table.ftable tr>:first-child a{overflow-wrap:break-word}
+}
+/* The narrowest phones: the path takes the whole first line of its card, the size and the buttons the next. */
+@media (max-width:359.98px){
+  .table.ftable tr{grid-template-columns:minmax(0,1fr) auto}
+  .table.ftable tr>:first-child{grid-column:1/-1}
+  .table.ftable tr>.num{text-align:left}
+}
+.digest{overflow-wrap:anywhere;word-break:break-all}
+.th-sort{background:none;border:0;padding:0;font:inherit;color:inherit;letter-spacing:inherit;text-transform:inherit;cursor:pointer;display:inline-flex;align-items:center;gap:.25rem}
+.th-sort:hover span:first-child{text-decoration:underline}
+.th-sort span[aria-hidden]{color:var(--accent)}
+.sortbar{display:inline-flex;align-items:center;gap:.5rem}
+.sortbar .input,.review-nav .input{width:auto;max-width:100%}
+.review{margin:.75rem 0 0;border:1px solid var(--rule-soft);background:var(--paper)}
+.review>summary{cursor:pointer;padding:.5rem .75rem;font-weight:600}
+.review>p{margin:.5rem 0 .25rem;padding:0 .75rem}
+.review-h{font-weight:600}
+.review-list{list-style:none;margin:0 0 .5rem;padding:0 .75rem;max-height:12rem;overflow:auto}
+.review-row{padding:.2rem 0;border-top:1px dotted var(--rule-soft);overflow-wrap:anywhere}
+.review-nav{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;padding:.5rem .75rem 0}
+.qr{display:flex;flex-wrap:wrap;align-items:flex-start;gap:1rem}
+.qr>div{min-width:0;overflow-wrap:anywhere}
+.qr p{margin:0 0 .5rem}
+.qr-img{width:12rem;max-width:100%;height:auto;background:#fff;border:1px solid var(--rule-soft)}
+.cap{text-transform:capitalize}

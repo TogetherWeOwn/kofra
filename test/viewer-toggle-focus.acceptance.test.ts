@@ -128,19 +128,19 @@ describe("viewer toggle focus (rendered contract)", () => {
     // The hidden input, its visible mediabar control, and the stage label,
     // still siblings in this order so the :checked~ zoom rules keep working.
     const input = html.indexOf('<input type="checkbox" id="dw-zoom"');
-    const mediabar = html.indexOf('class="dw-mediabar"');
-    const stage = html.indexOf("dw-stage dw-checker");
+    const mediabar = html.search(/class="(?:[^"]*\s)?dw-mediabar(?:\s|")/);
+    const stage = html.search(/class="(?=(?:[^"]*\s)?dw-stage(?:\s|"))(?=(?:[^"]*\s)?k-checker(?:\s|"))[^"]*"/);
     expect(input, "zoom toggle input").toBeGreaterThan(-1);
     expect(mediabar, "mediabar follows the toggle").toBeGreaterThan(input);
     expect(stage, "checker stage follows the mediabar").toBeGreaterThan(mediabar);
-    expect(html).toContain('<label for="dw-zoom" class="dw-btn">Actual size</label>');
-    expect(html).toContain('<label for="dw-zoom" class="dw-stage dw-checker">');
+    expect(html).toMatch(/<label\b(?=[^>]*\bfor="dw-zoom")(?=[^>]*\bclass="(?:[^"]*\s)?k-btn(?:\s|"))[^>]*>\s*Actual size\s*<\/label\s*>/);
+    expect(html).toMatch(/<label\b(?=[^>]*\bfor="dw-zoom")(?=[^>]*\bclass="(?:[^"]*\s)?dw-stage(?:\s|"))(?=[^>]*\bclass="(?:[^"]*\s)?k-checker(?:\s|"))[^>]*>/);
     // Pre-existing checked behaviour stays wired (click/tap and zoom).
     expect(hasCheckedRule(html, "#dw-zoom", /\.dw-stage/), "checked zoom still reaches the stage").toBe(true);
     // The fix under test: keyboard focus on the hidden input must paint a
     // visible indicator on the visible control.
     expect(
-      hasFocusIndicatorRule(html, ["#dw-zoom", ".dw-toggle"], MEDIABAR_LABEL),
+      hasFocusIndicatorRule(html, ["#dw-zoom", ".k-toggle"], MEDIABAR_LABEL),
       "a :focus-visible general-sibling rule paints an outline/shadow on the Actual size label",
     ).toBe(true);
     // Distinguishable from checked: the checked mediabar-label rule must not
@@ -154,8 +154,8 @@ describe("viewer toggle focus (rendered contract)", () => {
     const { html } = await page("data/config.json");
     const tree = html.indexOf('<input type="radio" name="dw-jt" id="dw-jt-tree"');
     const pretty = html.indexOf('<input type="radio" name="dw-jt" id="dw-jt-pretty"');
-    const tabs = html.indexOf('class="dw-jtabs"');
-    const treePane = html.indexOf("dw-jpane dw-jtree");
+    const tabs = html.search(/class="(?:[^"]*\s)?dw-jtabs(?:\s|")/);
+    const treePane = html.search(/class="(?=(?:[^"]*\s)?dw-jpane(?:\s|"))(?=(?:[^"]*\s)?dw-jtree(?:\s|"))[^"]*"/);
     expect(tree, "Tree radio").toBeGreaterThan(-1);
     expect(pretty, "Pretty radio follows Tree").toBeGreaterThan(tree);
     expect(tabs, "tab labels follow the radios").toBeGreaterThan(pretty);
@@ -179,16 +179,16 @@ describe("viewer toggle focus (rendered contract)", () => {
     const { html } = await page("src/app.ts");
     const input = html.indexOf('<input type="checkbox" id="dw-wrap"');
     expect(input, "wrap toggle input").toBeGreaterThan(-1);
-    expect(html.indexOf('class="dw-codehead"'), "code head follows the toggle").toBeGreaterThan(input);
-    expect(html).toContain('<label for="dw-wrap" class="dw-btn">Wrap</label>');
-    expect(hasFocusIndicatorRule(html, ["#dw-wrap", ".dw-toggle"], WRAP_LABEL), "Wrap label still outlined on :focus-visible").toBe(true);
+    expect(html.search(/class="(?:[^"]*\s)?dw-codehead(?:\s|")/), "code head follows the toggle").toBeGreaterThan(input);
+    expect(html).toMatch(/<label\b(?=[^>]*\bfor="dw-wrap")(?=[^>]*\bclass="(?:[^"]*\s)?k-btn(?:\s|"))[^>]*>\s*Wrap\s*<\/label\s*>/);
+    expect(hasFocusIndicatorRule(html, ["#dw-wrap", ".k-toggle"], WRAP_LABEL), "Wrap label still outlined on :focus-visible").toBe(true);
   });
 
   it("source views are unchanged and keep the Wrap focus indicator", async () => {
     for (const path of ["img/icon.svg?view=source", "data/config.json?view=source"]) {
       const { res, html } = await page(path);
       expect(res.headers.get("x-kofra-viewer"), path).toBe("source");
-      expect(hasFocusIndicatorRule(html, ["#dw-wrap", ".dw-toggle"], WRAP_LABEL), `${path}: Wrap focus rule`).toBe(true);
+      expect(hasFocusIndicatorRule(html, ["#dw-wrap", ".k-toggle"], WRAP_LABEL), `${path}: Wrap focus rule`).toBe(true);
     }
   });
 
@@ -216,7 +216,7 @@ describe("viewer toggle focus (rendered contract)", () => {
     const res = await get(path);
     expect(res.status).toBe(200);
     const etag = res.headers.get("etag")!;
-    const m = new RegExp(`^W/"${viewerId}@(\\d+)-[a-f0-9]{64}(?:-nav[a-z0-9]+)?-folderver_[a-z0-9]+-chrome2"$`).exec(etag);
+    const m = new RegExp(`^W/"${viewerId}@(\\d+)-[a-f0-9]{64}(?:-nav[a-z0-9]+)?-folderver_[a-z0-9]+-chrome\\d+(?:\\.[0-9a-f]{8})?"$`).exec(etag);
     expect(m, `${viewerId} ETag shape: ${etag}`).not.toBeNull();
     // Viewer ETags derive from the viewer version. The pre-change pages were
     // version 2 for all three viewers (image/SVG gained folder navigation at
@@ -273,9 +273,9 @@ describe("viewer toggle focus (JSON without a Pretty pane)", () => {
     expect(html, "no Pretty tab label").not.toMatch(/<label\b[^>]*\bfor="?dw-jt-pretty\b/);
     expect(html, "no Pretty pane").not.toMatch(/<div\b[^>]*\bclass="[^"]*\bdw-jpretty\b/);
     // The Tree radio, tab label and pane remain, in sibling order.
-    const tree = html.indexOf('<input type="radio" name="dw-jt" id="dw-jt-tree" class="dw-toggle" checked>');
-    const tabs = html.indexOf('<div class="dw-jtabs"><label for="dw-jt-tree">Tree</label></div>');
-    const pane = html.indexOf('<div class="dw-jpane dw-jtree">');
+    const tree = html.search(/<input\b(?=[^>]*\btype="radio")(?=[^>]*\bname="dw-jt")(?=[^>]*\bid="dw-jt-tree")(?=[^>]*\bclass="(?:[^"]*\s)?k-toggle(?:\s|"))(?=[^>]*\bchecked\b)[^>]*>/);
+    const tabs = html.search(/<div\b(?=[^>]*\bclass="(?:[^"]*\s)?dw-jtabs(?:\s|"))[^>]*>\s*<label\b[^>]*\bfor="dw-jt-tree"[^>]*>\s*Tree\s*<\/label\s*>\s*<\/div\s*>/);
+    const pane = html.search(/class="(?=(?:[^"]*\s)?dw-jpane(?:\s|"))(?=(?:[^"]*\s)?dw-jtree(?:\s|"))[^"]*"/);
     expect(tree, "checked Tree radio").toBeGreaterThan(-1);
     expect(tabs, "Tree is the only tab label and follows the radio").toBeGreaterThan(tree);
     expect(pane, "tree pane follows the tab labels").toBeGreaterThan(tabs);

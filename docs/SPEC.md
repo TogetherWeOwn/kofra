@@ -1359,6 +1359,7 @@ Sites origin:
 | `/<slug>/<path>` or `https://<slug>.<SITES_DOMAIN>/<path>` | The site; `?raw=1`, `?download=1`, `?view=1`, `?view=source` | P0 | Done (view modes R-07) |
 | `/<slug>--v<N>/<path>` or `<slug>--v<N>.<SITES_DOMAIN>` | Version preview | P0 | R-13 |
 | `<site>/__dropway/password` | Password form post | P0 | Done |
+| `<site>/__dropway/open?next=<path>&theme=light\|dark` | How the app's file viewer opens a folder, raw file or the site's own page in its frame: 303 to `next`, adding `?theme=` only when `next` shows a page Kofra draws (listing, viewer, system page), so the site's own HTML never sees it; on a locked site the gate (in that mode) comes first | P0 | Done |
 | `<site>/__dropway/access`, `<site>/__dropway/share/<token>` | Restricted-site sign-in, share-link entry | P1 | R-23 |
 | `<site>/.dropway/data/<collection>[/<id>]` | Site Data browser API | P1 | R-30 |
 | any path declared in `.dropway/proxy.json` | Proxy route | P1 | R-31 |
@@ -1771,10 +1772,12 @@ rewriting is unchanged. The link opens the site's absolute `__dropway/report` UR
 in a new window with `noopener noreferrer`, so an untrusted `<base>` cannot redirect it
 and it works without script authority in the sandbox. Raw/download responses and stored
 bytes are not changed; claimed and owned sites carry no anonymous link. Transformed HTML
-uses a separate versioned ETag and ignores byte ranges. **The report form and submission
-processing remain R-37.** Until that route exists, its destination follows ordinary site
-resolution: a 404 (possibly the site's `404.html`) or the site's `index.html` SPA fallback.
-The link alone is not an operational reporting channel.
+uses a separate versioned ETag and ignores byte ranges. The link's destination is a Kofra
+page on the site's origin: `<site>/__dropway/report` answers (before the password gate) with
+a REPORT system page that names the site's address and points at the instance's optional
+`ABUSE_CONTACT` (an email address opens a prefilled email; an https URL is the report link);
+without it, the page asks people to tell whoever runs the instance. **A report form that
+stores and processes submissions remains R-37.**
 
 ### 11.7 Default limits (all admin-configurable)
 
@@ -1806,7 +1809,7 @@ The link alone is not an operational reporting channel.
    cannot do) and a GitHub or GitLab account. Workers Paid ($5/month on Cloudflare) is recommended: the Free
    plan's 10 ms CPU per request breaks zip uploads and large renders, and Email sending and Dynamic Workers
    need Paid.
-2. **Click** `https://deploy.workers.cloudflare.com/?url=https://github.com/TogetherWeOwn/dropway`.
+2. **Click** `https://deploy.workers.cloudflare.com/?url=https://github.com/TogetherWeOwn/kofra`.
    Cloudflare copies the repo into the operator's account, creates D1 `dropway`, R2 `dropway-files`, KV,
    the Analytics Engine dataset (on first write) and, once added to `wrangler.jsonc`, the Queue and Durable
    Objects; it prompts for `ADMIN_BOOTSTRAP_KEY` (from `.dev.vars.example`, with help text from

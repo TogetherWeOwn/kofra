@@ -1,40 +1,46 @@
 import { Marked, type Tokens } from "marked";
 import { escapeHtml } from "../html";
 import { cachedRender } from "./cache";
-import { standardTabs, viewerPage } from "./chrome";
+import { standardTabs, viewerCarry, viewerPage } from "./chrome";
 import { HIGHLIGHT_CSS, highlight, hljsLanguage } from "./highlight";
 import type { Viewer } from "./index";
-import { sanitizeHtml } from "./sanitize";
+import { carryDocLinks } from "./links";
+import { RESERVED_NAME, sanitizeHtml } from "./sanitize";
 
 // 4 was issued separately for the report print treatment plus shared-link
 // head tags and for the Phone disclosure in the viewer bar; neither 4
 // identifies the merged bytes, so the merged render moves to 5.
-const MD_VERSION = 5;
+const MD_VERSION = 6;
 
-const MD_CSS = `
-.dw-md{max-width:48rem;margin:0 auto;padding:2.5rem 1.25rem 5rem}
-.dw-md h1,.dw-md h2,.dw-md h3,.dw-md h4,.dw-md h5,.dw-md h6{line-height:1.25;margin:2rem 0 .75rem;scroll-margin-top:4rem}
-.dw-md h1{font-size:2.1rem;margin-top:0}.dw-md h2{font-size:1.5rem;padding-bottom:.3rem;border-bottom:1px solid var(--line)}
-.dw-md h3{font-size:1.2rem}
-.dw-md .dw-anchor{margin-left:.4rem;color:var(--muted);opacity:0;text-decoration:none;font-weight:400}
-.dw-md :is(h1,h2,h3,h4,h5,h6):hover .dw-anchor,.dw-md .dw-anchor:focus{opacity:1}
-.dw-md p,.dw-md ul,.dw-md ol,.dw-md blockquote,.dw-md table,.dw-md pre,.dw-md details{margin:0 0 1rem}
-.dw-md img,.dw-md video{max-width:100%;height:auto;border-radius:6px}
-.dw-md code{background:var(--code);padding:.12em .35em;border-radius:4px}
-.dw-md pre{background:var(--code);padding:1rem;border-radius:8px;overflow:auto;line-height:1.45;font-size:.88rem}
-.dw-md pre code{background:none;padding:0;font-size:inherit}
-.dw-md pre[data-lang]{position:relative}
-.dw-md pre[data-lang]::before{content:attr(data-lang);position:absolute;top:.35rem;right:.6rem;font:.68rem/1 ui-monospace,monospace;color:var(--muted);text-transform:lowercase}
-.dw-md blockquote{border-left:3px solid var(--accent);padding:.1rem 1rem;color:var(--muted)}
-.dw-md table{border-collapse:collapse;display:block;overflow:auto;max-width:100%}
-.dw-md th,.dw-md td{border:1px solid var(--line);padding:.4rem .75rem}
-.dw-md th{background:var(--code)}
-.dw-md hr{border:0;border-top:1px solid var(--line);margin:2rem 0}
-.dw-md li>input[type=checkbox]{margin:0 .45rem 0 -.2rem}
-.dw-md ul:has(>li>input[type=checkbox]){list-style:none;padding-left:1.2rem}
-.dw-md .dw-fm{font-size:.85rem;color:var(--muted);border:1px solid var(--line);border-radius:8px;padding:.4rem .8rem}
-.dw-md .dw-fm pre{margin:.5rem 0 .2rem}
-.dw-md .dw-diagram::after{content:"Mermaid diagram source";display:block;margin-top:.5rem;font:.72rem/1 ui-sans-serif,system-ui;color:var(--muted)}
+export const MD_CSS = `
+.k-doc{max-width:46em;margin:0 auto;padding:var(--s7) var(--s7) var(--s10);font-size:17px;line-height:1.6;color:var(--ink);overflow-wrap:break-word}
+.k-doc h1,.k-doc h2,.k-doc h3,.k-doc h4,.k-doc h5,.k-doc h6{font-family:var(--serif);font-weight:500;color:var(--accent);line-height:1.2;margin:1.8em 0 .6em;scroll-margin-top:4.5rem}
+.k-doc h1{font-size:clamp(32px,4vw,52px);margin-top:0;letter-spacing:-.01em}
+.k-doc h2{font-size:clamp(25px,2.8vw,34px);padding-bottom:.3rem;border-bottom:1px solid var(--rule-soft)}
+.k-doc h3{font-size:clamp(20px,2vw,24px)}
+.k-doc h4,.k-doc h5,.k-doc h6{font-size:19px}
+.k-doc .md-anchor{margin-left:.35em;color:var(--muted);opacity:0;text-decoration:none;font-family:var(--sans);font-weight:400;font-size:.7em}
+.k-doc :is(h1,h2,h3,h4,h5,h6):hover .md-anchor,.k-doc .md-anchor:focus{opacity:1}
+.k-doc p,.k-doc ul,.k-doc ol,.k-doc blockquote,.k-doc table,.k-doc pre,.k-doc details,.k-doc dl{margin:0 0 1.1em}
+.k-doc li{margin:.25em 0}
+.k-doc li::marker{color:var(--accent-2)}
+.k-doc img,.k-doc video{max-width:100%;height:auto}
+.k-doc code{font-size:.86em}
+.k-doc pre{background:var(--paper-3);border:1px solid var(--rule-soft);padding:16px 18px;overflow:auto;line-height:1.6;font-size:13.5px}
+.k-doc pre code{background:none;padding:0;font-size:inherit}
+.k-doc pre[data-lang]{position:relative}
+.k-doc pre[data-lang]::before{content:attr(data-lang);position:absolute;top:6px;right:10px;font:500 10.5px/1 var(--mono);letter-spacing:.11em;text-transform:uppercase;color:var(--accent-2)}
+.k-doc blockquote{border-left:3px solid var(--accent);padding:.1em 0 .1em 1em;color:var(--ink-2);font-family:var(--serif);font-size:1.06em}
+.k-doc table{border-collapse:collapse;display:block;width:max-content;overflow:auto;max-width:100%;font-size:15px;border-top:1px solid var(--accent)}
+.k-doc th{font:500 10.5px/1.3 var(--mono);text-transform:uppercase;letter-spacing:.11em;color:var(--accent-2);text-align:left;padding:10px 14px 8px 0;border-bottom:1px solid var(--rule)}
+.k-doc td{padding:10px 14px 10px 0;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+.k-doc hr{border:0;border-top:1px solid var(--rule);margin:2em 0}
+.k-doc li>input[type=checkbox]{margin:0 .45rem 0 -.2rem}
+.k-doc ul:has(>li>input[type=checkbox]){list-style:none;padding-left:1.2rem}
+.k-doc .md-fm{font-size:14px;color:var(--ink-2);border:1px solid var(--rule-soft);background:var(--paper-2);padding:8px 14px}
+.k-doc .md-fm pre{margin:.5rem 0 .2rem}
+.k-doc .md-diagram::after{content:"Mermaid diagram source";display:block;margin-top:.5rem;font:12px/1 var(--sans);color:var(--muted)}
+@media (max-width:720px){.k-doc{padding:var(--s6) var(--s4) var(--s8);font-size:16.5px}}
 `;
 
 /** Split optional YAML front matter from the body. Only `title:` is used. */
@@ -45,17 +51,21 @@ export function splitFrontMatter(src: string): { title: string | null; body: str
   return { title: t ? t[1]! : null, body: src.slice(m[0].length), frontMatter: m[1]! };
 }
 
-/** GitHub-style heading id: lowercase, punctuation dropped, spaces to dashes. */
+/**
+ * GitHub-style heading id: lowercase, punctuation dropped, spaces to dashes. An id in a namespace reserved
+ * for Kofra's own markup (`k-`, `dw-`; the sanitizer strips those from user content) gets an `h-` prefix,
+ * so the heading keeps an id and its `#` link still reaches it.
+ */
 export function headingId(text: string): string {
-  return (
+  const id =
     text
       .toLowerCase()
       .replace(/<[^>]+>/g, "")
       .replace(/&[a-z0-9#]+;/g, "")
       .replace(/[^\p{L}\p{N}\s_-]/gu, "")
       .trim()
-      .replace(/\s+/g, "-") || "section"
-  );
+      .replace(/\s+/g, "-") || "section";
+  return RESERVED_NAME.test(id) ? `h-${id}` : id;
 }
 
 function markedFor(): Marked {
@@ -71,11 +81,11 @@ function markedFor(): Marked {
         const n = seen.get(id) ?? 0;
         seen.set(id, n + 1);
         if (n) id = `${id}-${n}`;
-        return `<h${depth} id="${escapeHtml(id)}">${inner}<a class="dw-anchor" href="#${escapeHtml(id)}" aria-label="Link to this section">#</a></h${depth}>\n`;
+        return `<h${depth} id="${escapeHtml(id)}">${inner}<a class="md-anchor" href="#${escapeHtml(id)}" aria-label="Link to this section">#</a></h${depth}>\n`;
       },
       code({ text, lang }: Tokens.Code) {
         const tag = (lang ?? "").trim().split(/\s+/)[0] ?? "";
-        if (tag.toLowerCase() === "mermaid") return `<pre class="dw-diagram" data-lang="mermaid"><code>${escapeHtml(text)}</code></pre>\n`;
+        if (tag.toLowerCase() === "mermaid") return `<pre class="md-diagram" data-lang="mermaid"><code>${escapeHtml(text)}</code></pre>\n`;
         const name = hljsLanguage(tag);
         const body = name ? highlight(text, name) : escapeHtml(text);
         return `<pre${tag ? ` data-lang="${escapeHtml(tag.slice(0, 20))}"` : ""}><code class="hljs${name ? ` language-${escapeHtml(name)}` : ""}">${body}</code></pre>\n`;
@@ -106,7 +116,7 @@ export const markdownViewer: Viewer = {
     const r = await cachedRender(vc.dw, `markdown@${MD_VERSION}/${vc.file.sha256}`, async () => {
       const out = renderMarkdown(await vc.readText(), vc.file.path);
       const fm = out.frontMatter
-        ? `<details class="dw-fm"><summary>Front matter</summary><pre><code>${escapeHtml(out.frontMatter)}</code></pre></details>`
+        ? `<details class="md-fm"><summary>Front matter</summary><pre><code>${escapeHtml(out.frontMatter)}</code></pre></details>`
         : "";
       // The title travels with the cached fragment so a hit needs no re-parse.
       return `<!--title:${escapeHtml(out.title)}-->${fm}${await sanitizeHtml(out.html)}`;
@@ -118,7 +128,7 @@ export const markdownViewer: Viewer = {
       print: true,
       tabs: standardTabs(vc, { source: true }),
       css: MD_CSS + HIGHLIGHT_CSS,
-      body: `<article class="dw-md">${m ? r.html.slice(m[0].length) : r.html}</article>`,
+      body: `<article class="k-doc">${await carryDocLinks(m ? r.html.slice(m[0].length) : r.html, vc.url.pathname, vc.siteBase, viewerCarry(vc))}</article>`,
       headers: { "X-Kofra-Render-Cache": r.cache },
     });
   },

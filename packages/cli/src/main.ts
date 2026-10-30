@@ -1428,7 +1428,7 @@ Quick start:
 
 ${HELP_FOOTER}
 
-Docs: https://github.com/TogetherWeOwn/dropway/tree/main/packages/cli`;
+Docs: https://github.com/TogetherWeOwn/kofra/tree/main/packages/cli`;
 }
 
 function commandHelp(name: string, c: Command): string {

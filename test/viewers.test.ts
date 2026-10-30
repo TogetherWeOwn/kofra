@@ -100,8 +100,8 @@ describe("viewer versions", () => {
   it("pins every registered viewer to its current render version", () => {
     expect(VIEWERS).toHaveLength(15);
     expect(Object.fromEntries(VIEWERS.map((v) => [v.id, v.version ?? 1]))).toEqual({
-      source: 5, "html-frame": 4, markdown: 5, notebook: 4, json: 5, csv: 5, svg: 5, image: 5,
-      pdf: 4, video: 4, audio: 4, font: 4, archive: 4, code: 5, binary: 5,
+      source: 6, "html-frame": 4, markdown: 6, notebook: 5, json: 6, csv: 6, svg: 5, image: 5,
+      pdf: 4, video: 4, audio: 4, font: 4, archive: 5, code: 6, binary: 5,
     });
   });
 });
@@ -267,6 +267,8 @@ describe("viewer pages", () => {
     const html = await res.text();
     expect(html).toContain('id="L1"');
     expect(html).toContain('href="#L2"');
+    // Line links work by click and by #L2, but stay out of the Tab order (a long file would be thousands of stops).
+    expect(html).toContain('<a href="#L2" data-n="2" aria-label="Line 2" tabindex="-1">');
     expect(html).toContain('<span class="hljs-keyword">export</span>');
     expect(html).toContain("typescript · 2 lines");
     expect(res.headers.get("x-kofra-render-cache")).toBe("miss");
@@ -274,10 +276,12 @@ describe("viewer pages", () => {
     expect(again.headers.get("x-kofra-render-cache")).toBe("memory");
     const etag = again.headers.get("etag")!;
     // Nonembedded pages include the live manifest identity as well as the file hash.
-    expect(etag).toMatch(/^W\/"code@5-[a-f0-9]{64}-[A-Za-z0-9_-]+"$/);
-    const hash = etag.match(/^W\/"code@5-([a-f0-9]{64})-/)![1];
+    expect(etag).toMatch(/^W\/"code@\d+-[a-f0-9]{64}-folder[A-Za-z0-9_-]+-chrome\d+(?:\.[0-9a-f]{8})?"$/);
+    const hash = etag.match(/^W\/"code@\d+-([a-f0-9]{64})-/)![1];
     expect((await get("src/app.ts", { ...NAV, "If-None-Match": `W/"code@3-${hash}"` })).status).toBe(200);
     expect((await get("src/app.ts", { ...NAV, "If-None-Match": etag })).status).toBe(304);
+    // A validator from before the redesign (no page version) never revalidates the new page.
+    expect((await get("src/app.ts", { ...NAV, "If-None-Match": `W/"code@1-${hash}"` })).status).toBe(200);
     // Sub-resource requests still get the bytes.
     const script = await get("src/app.ts", { "Sec-Fetch-Dest": "script", Accept: "*/*" });
     expect(script.headers.get("x-kofra-viewer")).toBeNull();
@@ -290,7 +294,7 @@ describe("viewer pages", () => {
     expect(await page.text()).toContain("<p>home</p>");
     const frame = await get("index.html?view=1");
     expect(frame.headers.get("x-kofra-viewer")).toBe("html-frame");
-    expect(await frame.text()).toContain(`<iframe class="dw-frame" src="/s/${slug}/index.html"`);
+    expect(await frame.text()).toContain(`<iframe class="k-frame" src="/s/${slug}/index.html"`);
     const src = await get("index.html?view=source");
     expect(src.headers.get("x-kofra-viewer")).toBe("source");
     const html = await src.text();
@@ -394,9 +398,9 @@ describe("viewer pages", () => {
 
   it("&embed=1 drops the bar (used by the app-origin viewer)", async () => {
     const full = await (await get("src/app.ts?view=1")).text();
-    expect(full).toContain('class="dw-vbar"');
+    expect(full).toContain('class="k-vbar dw-vbar"');
     const embed = await get("src/app.ts?view=1&embed=1");
-    expect(await embed.text()).not.toContain('class="dw-vbar"');
+    expect(await embed.text()).not.toContain('class="k-vbar dw-vbar"');
     expect(embed.headers.get("etag")).toMatch(/-e"$/);
   });
 
@@ -412,7 +416,7 @@ describe("viewer pages", () => {
     const res = await get("img/");
     expect(res.headers.get("x-kofra-viewer")).toBe("listing");
     const html = await res.text();
-    expect(html).toContain('class="dw-gal"');
+    expect(html).toContain('class="k-gallery"');
     expect(html).toContain(">SVG image<");
     expect(html).toContain(`href="https://dropway.test/v/${slug}/img/"`);
   });
@@ -758,7 +762,7 @@ describe("notebook output folding", () => {
     expect(res.status).toBe(200);
     const etag = res.headers.get("etag")!;
     expect(etag).not.toBe(legacy);
-    expect(etag).toMatch(/^W\/"notebook@\d+-[a-f0-9]{64}(-[A-Za-z0-9_-]+)?"$/);
+    expect(etag).toMatch(/^W\/"notebook@\d+-[a-f0-9]{64}-folder[A-Za-z0-9_-]+-chrome\d+(?:\.[0-9a-f]{8})?"$/);
     expect(detailsBlocks(await res.text())).toHaveLength(3);
     const fresh = await get("nb/fold.ipynb", { ...NAV, "If-None-Match": etag });
     expect(fresh.status).toBe(304);

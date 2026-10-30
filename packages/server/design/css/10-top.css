@@ -1,0 +1,43 @@
+/* App header (ui/chrome.ts). The markup order is the wordmark, the tag, the account area, the colour mode switch
+   and the navigation. Under 1000px that is also the screen order: the first row is the wordmark, the tag, the account
+   area and the switch, and the navigation is the row under it (so focus moves left to right, then down, never back
+   up the screen, and the header keeps the same rows whether or not the account area has filled in). From 1000px the
+   header is one row, as in the gallery: the wordmark and tag on the left, then the navigation, the account area and
+   the switch on the right (the navigation moves up with `order`). The switch never drops to a row of its own. */
+.top{border-bottom:1px solid var(--rule);background:var(--paper)}
+.top>.wrap{display:flex;align-items:center;gap:10px var(--s5);min-height:60px;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}
+.top .wm{font-size:22px;line-height:1.2}
+/* The tag is user data (account, email): sans, as typed, never upper-cased like a kicker. It takes the room the row
+   leaves and wraps (two short lines fit the row's height) instead of cutting the address off (WCAG 1.4.12). */
+.top .tag{flex:1 1 0;font-size:13.5px;line-height:1.3;color:var(--ink-2);min-width:0;overflow-wrap:anywhere;max-width:24rem}
+.nav{flex-basis:100%;display:flex;gap:4px 18px;font-size:14px;flex-wrap:wrap;align-items:center}
+.nav a{text-decoration:none;color:var(--ink);padding:4px 0;border-bottom:2px solid transparent}
+.nav a:hover{color:var(--accent);border-bottom-color:var(--accent-line)}
+.nav a[aria-current=page]{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+.acct{display:flex;align-items:center;gap:10px;font-size:13.5px;color:var(--ink-2);white-space:nowrap;margin-left:auto}
+.acct .who{max-width:14rem;overflow:hidden;text-overflow:ellipsis}
+.acct form{margin:0}
+/* Pages with no switch (they answer a POST or show a secret once): the account area ends flush with the content edge. */
+.noswitch .acct .btn.quiet:last-child{margin-right:-5px}
+.slotbanner{border-bottom:1px solid var(--rule-soft);background:var(--paper-2)}
+.slotbanner>.wrap{padding-top:10px;padding-bottom:10px;font-size:14.5px}
+@media (min-width:1000px){
+  .top .nav{flex-basis:auto;flex-wrap:nowrap;order:1;margin-left:auto;white-space:nowrap}
+  /* With a navigation, it takes the free room; without one (sign-in, secret pages) the account area keeps margin-left:
+     auto, so the account area and the switch still end at the content edge. */
+  .acct{order:2}
+  .top>.wrap:has(>.nav)>.acct{margin-left:0}
+  .top .mode-switch{order:3}
+}
+@media (max-width:720px){
+  .top>.wrap{gap:10px 12px}
+  .top .tag{display:none}
+  .acct .who{display:none}
+}
+/* The narrowest phones (320px): the wordmark, the account area and the switch measure 294px with these gaps and 288px
+   is free, so the gaps and the switch padding close up to keep the switch on the first row (about 14px to spare). */
+@media (max-width:359.98px){
+  .top>.wrap{column-gap:8px}
+  .top .mode-switch button{padding-inline:8px}
+}
+@media print{.nav,.acct{display:none}}

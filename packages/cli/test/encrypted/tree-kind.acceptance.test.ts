@@ -377,6 +377,8 @@ describe("loaded-manifest file-kind filtering", () => {
   it("supports labelled keyboard controls and focused, non-overflowing filtering on a narrow screen", async () => {
     const view = await visit({ width: 375 });
     try {
+      const files = view.page.locator("details > summary").filter({ hasText: /^Files\s*\(\d+\)$/ });
+      await files.click();
       await kindControl(view);
       // Native select receives actual keyboard input, not a synthetic change event.
       await view.kind.focus();
@@ -404,6 +406,7 @@ describe("loaded-manifest file-kind filtering", () => {
       await count(view, 10, 10);
       expect(await view.page.evaluate(() => (globalThis as any).document.activeElement !== (globalThis as any).document.body), "reset must preserve meaningful focus").toBe(true);
       await view.page.reload({ waitUntil: "networkidle" });
+      await files.click();
       expect(await view.kind.inputValue()).toBe(await allValue(view));
       expect(await view.query.inputValue()).toBe("");
     } finally { await view.context.close(); }

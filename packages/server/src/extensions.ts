@@ -112,6 +112,8 @@ export interface UiSlots {
   landing?: (c: Context<DropwayEnv>) => Response | Promise<Response>;
   /** Extra HTML injected into <head> of Kofra-rendered app pages. */
   headHtml?: string;
+  /** Footer links shown before the core ones (API, llms.txt, MCP, Agent skill, Self-host), e.g. Pricing. */
+  footerLinks?: { label: string; href: string }[];
   /** Extra sections at the end of /dashboard/settings. */
   settingsSections?: UiSection[];
   /** One-line notice (trusted HTML) above every app page, or null for none. */

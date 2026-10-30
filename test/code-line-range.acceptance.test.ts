@@ -194,7 +194,7 @@ describe("served code viewer: line-range selection contract", () => {
   it("render identity is bumped past the pre-feature code@1", async () => {
     const res = await get("src/app.ts");
     const etag = res.headers.get("etag")!;
-    const m = /^W\/"code@(\d+)-[a-f0-9]{64}(?:-folder[A-Za-z0-9_-]+)?"$/.exec(etag);
+    const m = /^W\/"code@(\d+)-[a-f0-9]{64}(?:-folder[A-Za-z0-9_-]+)?-chrome\d+(?:\.[0-9a-f]{8})?"$/.exec(etag);
     expect(m, etag).not.toBeNull();
     expect(Number(m![1])).toBeGreaterThanOrEqual(2);
     await res.text();

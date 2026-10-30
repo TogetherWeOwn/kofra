@@ -163,9 +163,13 @@ describe("password gate in subdomain mode (P3, P7, viewer)", () => {
     // The framed page's own sub-resources are same-origin.
     const js = await dw.call(`${site("locked-site")}/app.js`, { headers: { "Sec-Fetch-Dest": "script", "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Site": "same-origin", Cookie: cookie } });
     expect(js.status).toBe(200);
-    // The viewer page frames the site's own origin.
+    // The viewer page frames the site's own origin, through its __dropway/open with the embed, so the gate is
+    // drawn without a header and footer of its own inside the app.
     const viewer = await dw.call(`${APP}/v/locked-site/`, { headers: NAV });
-    expect(await viewer.text()).toContain(`src="${site("locked-site")}/"`);
+    expect(await viewer.text()).toContain(`src="${site("locked-site")}/__dropway/open?next=%2F&amp;embed=1"`);
+    const gate = await dw.call(`${site("locked-site")}/__dropway/open?next=%2F&embed=1`, { headers: FRAME });
+    expect(gate.status).toBe(401);
+    expect(await gate.text()).not.toContain('<header class="k-sitehead"');
     expect(viewer.headers.get("content-security-policy")).toContain("frame-src 'self' https://*.sites.test");
   });
 

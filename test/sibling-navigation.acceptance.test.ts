@@ -214,8 +214,8 @@ describe("same-folder sibling navigation", () => {
       const { html } = await view(path);
       expect(await anchors(html)).toEqual([]);
       // Phone is independent of sibling navigation: full pages carry it, embeds never do.
-      if (path.includes("embed=1")) expect(html).not.toContain("<details class=\"dw-phone\">");
-      else expect(html).toContain('<details class="dw-phone"><summary>Phone</summary>');
+      if (path.includes("embed=1")) expect(html).not.toMatch(/class="(?:[^"]*\s)?dw-phone(?:\s|")/);
+      else expect(html).toMatch(/<details\b[^>]*\bclass="(?:[^"]*\s)?dw-phone(?:\s[^"]*)?"[^>]*>\s*<summary[^>]*>\s*Phone\s*<\/summary\s*>/);
       expect(html).toMatchSnapshot(path);
     }
   });
@@ -224,7 +224,7 @@ describe("same-folder sibling navigation", () => {
     const { html } = await view(path);
     expect(await anchors(html)).toEqual([]);
     // Excluded from sibling navigation only; the viewer bar still offers Phone for this file.
-    expect(html).toContain('<details class="dw-phone"><summary>Phone</summary>');
+    expect(html).toMatch(/<details\b[^>]*\bclass="(?:[^"]*\s)?dw-phone(?:\s[^"]*)?"[^>]*>\s*<summary[^>]*>\s*Phone\s*<\/summary\s*>/);
     expect(html).toContain(`>https://dropway.test${base}${path}</a></div></details>`);
     expect(html).toMatchSnapshot(path);
   });

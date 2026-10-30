@@ -5,8 +5,8 @@ Publish a file, a folder or a whole site to a live URL with one command or one
 HTTP call. Every publish is an immutable version you can restore. MIT licensed;
 runs on your own Cloudflare account.
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/TogetherWeOwn/dropway)
-[![ci](https://github.com/TogetherWeOwn/dropway/actions/workflows/ci.yml/badge.svg)](https://github.com/TogetherWeOwn/dropway/actions/workflows/ci.yml)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/TogetherWeOwn/kofra)
+[![ci](https://github.com/TogetherWeOwn/kofra/actions/workflows/ci.yml/badge.svg)](https://github.com/TogetherWeOwn/kofra/actions/workflows/ci.yml)
 
 Prefer not to self-host? A hosted version is coming.
 
@@ -28,7 +28,7 @@ Prefer not to self-host? A hosted version is coming.
 - **Dashboard**: sign in with an API key, drag-and-drop publish, versions, restore, files, keys,
   members and settings; a file browser at `/v/<site>/` that never renders user content on the app origin.
 - **Agent-first**: a remote MCP server at `/mcp` with a tool for every capability, a CLI with JSON
-  output and stable exit codes, an installable Agent Skill (`npx skills add TogetherWeOwn/dropway`),
+  output and stable exit codes, an installable Agent Skill (`npx skills add TogetherWeOwn/kofra`),
   `/openapi.json`, `/llms.txt` and `/llms-full.txt` on every instance. Every error has a stable `code`
   and a `hint`; writes take idempotency keys.
 - **Scoped API keys** (`sites:read`, `sites:write`, `keys:write`, `members:write`, optional single-site
@@ -208,6 +208,20 @@ npm run dev        # wrangler dev; put ADMIN_BOOTSTRAP_KEY in .dev.vars
 This repository is the complete single-tenant product. CI fails if billing, pricing or payment code,
 or code from a hosted service, lands here (`scripts/guard-open-core.mjs`).
 
+The page design (Security Print: light, dark and Auto colour modes) lives in `packages/server/design/`.
+Edit the sources there, then run `npm run design:build`; `npm test` fails while the generated modules
+are stale. `npm run design:shots -- --out <dir>` screenshots every page in every colour mode at 390, 768
+and 1440 px (headless Chrome via `CHROME_PATH`). See `packages/server/design/DESIGN.md`.
+
+## Third-party fonts
+
+Pages use three fonts, served by the Worker itself from `/__dropway/fonts/` (no font CDN):
+[Public Sans](https://github.com/uswds/public-sans), [Newsreader](https://github.com/productiontype/Newsreader)
+and [Martian Mono](https://github.com/evilmartians/mono). All three are under the
+[SIL Open Font License 1.1](https://openfontlicense.org) with no Reserved Font Name. The files are the
+unmodified `@fontsource-variable` 5.3.0 builds; the licences are in `packages/server/design/fonts/OFL-*.txt`
+and every instance serves them at `/__dropway/fonts/OFL.txt`.
+
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). The bundled fonts keep their own licence (SIL OFL 1.1, above).

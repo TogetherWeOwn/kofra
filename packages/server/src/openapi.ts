@@ -2,6 +2,7 @@ import { createOperationRegistry } from "./operations/registry";
 import { schemaJson, type OperationDefinition } from "./operations";
 import { PAGE_PATHS } from "./page-openapi";
 import { ApiError, resolveConfig, type DropwayContext } from "@dropway/core";
+import { SOURCE_REPO } from "./repo";
 
 type Json = Record<string, any>;
 const json = (schema: Json, example: unknown, description = "OK") => ({
@@ -138,7 +139,7 @@ export function buildOpenApi(origin: string, instanceName: string, anonymousOrOp
         "Publish files, folders and sites to live URLs. Authenticate with a scoped bearer API key. REST, MCP and CLI metadata are generated from the operation registry. Errors include a stable code and remediation hint.",
       license: {
         name: "MIT",
-        url: "https://github.com/TogetherWeOwn/dropway/blob/main/LICENSE",
+        url: `${SOURCE_REPO}/blob/main/LICENSE`,
       },
     },
     servers: [{ url: origin }],

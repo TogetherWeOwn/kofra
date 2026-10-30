@@ -106,8 +106,8 @@ describe("print appearance without screen or request side effects", () => {
     try {
       const { page } = view;
       const before = await screenSnapshot(page);
-      expect(before.styles[0].slice(1, 3), "preserve the existing light/dark screen tokens").toEqual(theme === "dark"
-        ? ["rgb(236, 232, 226)", "rgb(20, 19, 18)"] : ["rgb(29, 27, 25)", "rgb(251, 250, 248)"]);
+      expect(before.styles[0].slice(1, 3), "preserve the redesign light/dark screen tokens").toEqual(theme === "dark"
+        ? ["rgb(238, 234, 224)", "rgb(15, 22, 38)"] : ["rgb(20, 20, 20)", "rgb(244, 239, 226)"]);
       expect(await page.locator(".dw-vbar").isVisible(), "normal screen keeps the existing viewer toolbar").toBe(true);
       const beforeRequests = [...view.requests];
       await page.emulateMedia({ media: "print" });

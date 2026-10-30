@@ -99,8 +99,8 @@ describe("font specimen HTTP and resource invariants", () => {
       expect(response.status, "changed font UX must not revalidate the old specimen HTML as 304").toBe(200);
       expect(response.headers.get("etag")).not.toBe(old);
       const match = response.headers.get("etag")?.match(variant === "embed"
-        ? /^W\/"font@(\d+)-([a-f0-9]{64})-folder[A-Za-z0-9_-]+-chrome\d+(-e)"$/
-        : /^W\/"font@(\d+)-([a-f0-9]{64})-folder[A-Za-z0-9_-]+-chrome\d+"$/);
+        ? /^W\/"font@(\d+)-([a-f0-9]{64})-folder[A-Za-z0-9_-]+-chrome\d+(?:\.[0-9a-f]{8})?(-e)"$/
+        : /^W\/"font@(\d+)-([a-f0-9]{64})-folder[A-Za-z0-9_-]+-chrome\d+(?:\.[0-9a-f]{8})?"$/);
       expect(match, "keep the viewer-version/content-hash ETag contract").not.toBeNull();
       expect(Number(match![1])).toBeGreaterThan(1);
       expect(match![2]).toBe(FONT_SPECIMEN_SHA256);
@@ -113,7 +113,7 @@ describe("font specimen HTTP and resource invariants", () => {
     const embed = await get("?view=1&embed=1");
     const fullTag = full.headers.get("etag")!;
     const embedTag = embed.headers.get("etag")!;
-    expect(fullTag).toMatch(/^W\/"font@\d+-[a-f0-9]{64}-folder[A-Za-z0-9_-]+-chrome\d+"$/);
+    expect(fullTag).toMatch(/^W\/"font@\d+-[a-f0-9]{64}-folder[A-Za-z0-9_-]+-chrome\d+(?:\.[0-9a-f]{8})?"$/);
     expect(embedTag).toBe(fullTag.replace(/"$/, '-e"'));
     expect((await get("", { ...NAV, "If-None-Match": fullTag })).status).toBe(304);
     expect((await get("?view=1&embed=1", { ...NAV, "If-None-Match": embedTag })).status).toBe(304);
@@ -132,7 +132,7 @@ describe("font specimen HTTP and resource invariants", () => {
       font!.version = version + 1;
       const changed = await get("", { ...NAV, "If-None-Match": old });
       expect(changed.status).toBe(200);
-      expect(changed.headers.get("etag")).toMatch(new RegExp(`^W/"font@${version + 1}-${FONT_SPECIMEN_SHA256}-folder[A-Za-z0-9_-]+-chrome\\d+"$`));
+      expect(changed.headers.get("etag")).toMatch(new RegExp(`^W/"font@${version + 1}-${FONT_SPECIMEN_SHA256}-folder[A-Za-z0-9_-]+-chrome\\d+(?:\\.[0-9a-f]{8})?"$`));
       expect((await get("?view=1&embed=1", { ...NAV, "If-None-Match": old.replace(/"$/, '-e"') })).status).toBe(200);
       expect((await changed.text()).length).toBeGreaterThan(0);
     } finally { font!.version = originalVersion; }

@@ -2,6 +2,8 @@ import type { Hono } from "hono";
 import type { DropwayEnv } from "../env";
 import type { UiSlots } from "../extensions";
 import { clientScriptResponse } from "./assets";
+import { artResponse, designCssResponse, fontResponse } from "./design-routes";
+import { THEME_PATH, themeRoute } from "./theme";
 import { keysPage, loginPage, publishPage, settingsPage, sitePage, sitesPage, viewerPage } from "./pages";
 
 /**
@@ -11,7 +13,10 @@ import { keysPage, loginPage, publishPage, settingsPage, sitePage, sitesPage, vi
  * (uiSlots.landing replaces it).
  */
 export function installUi(app: Hono<DropwayEnv>, slots: UiSlots) {
-  app.get("/__dropway/ui/:file", (c) => clientScriptResponse(c.req.param("file")) ?? c.notFound());
+  app.get("/__dropway/ui/:file", (c) => clientScriptResponse(c.req.param("file")) ?? designCssResponse(c.req.param("file")) ?? c.notFound());
+  app.get("/__dropway/ui/art/:file", (c) => artResponse(c.req.param("file")) ?? c.notFound());
+  app.get("/__dropway/fonts/:file", (c) => fontResponse(c.req.param("file")) ?? c.notFound());
+  app.post(THEME_PATH, (c) => themeRoute(c));
   app.get("/login", (c) => loginPage(c));
   // The sign-in forms post here only if the dashboard script has not loaded yet: never echo or
   // store what was sent (it may be a key), just send the person back. Secrets never land in a URL.
@@ -32,5 +37,9 @@ export function installUi(app: Hono<DropwayEnv>, slots: UiSlots) {
 }
 
 export { homePage } from "./pages";
-export { renderAppPage, bindUiSlots, appScriptCsp, APP_CSS, CORE_NAV, type AppPageOptions } from "./shell";
+export { renderAppPage, bindUiSlots, appScriptCsp, CORE_NAV, CORE_FOOTER_LINKS, SOURCE_REPO, APP_CSS, type AppPageOptions } from "./shell";
+export { renderDocument, appStylesheetUrl, fontFaceCss, type DocumentOptions } from "./document";
+export { accountArea, appChrome, appHeader, appFooter, identityTag, modeSwitch, siteHeader, siteFooter, GUILLOCHE_BAND, SKIP_LINK, TRUST_LINE, type AccountAreaOptions, type AppChromeOptions, type AppHeaderOptions, type AppFooterOptions, type ChromeNavItem } from "./chrome";
+export { THEME_COOKIE, THEME_PATH, bindRequestTheme, themeOf, requestTheme, themeFromCookie, themeFromQuery, themeSetCookie, themeMetas, themeAttr, safeNext, type ThemePref, type ThemeMode } from "./theme";
+export { fileSeal, seal, plate, kofraMotifs } from "./motifs";
 export { clientScriptUrl, CLIENT_SCRIPT } from "./assets";

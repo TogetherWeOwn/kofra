@@ -1,0 +1,18 @@
+/* Security-print motifs. Seals are inline SVG from ui/motifs.ts whose strokes and fills use the classes
+   below, so a mode switch (or a live OS switch) recolours them with no redraw. Plates are static SVG files,
+   one per mode, chosen by CSS (see the generated ART_CSS). The guilloche band is a CSS mask. */
+.sp-svg{color:var(--eng-1)}
+.sp-svg .e1{stroke:var(--eng-1)}
+.sp-svg .e2{stroke:var(--eng-2)}
+.sp-svg .e3{stroke:var(--eng-3)}
+.sp-svg .em{stroke:var(--eng-mark)}
+.sp-svg .ef{stroke:var(--eng-frame)}
+.sp-svg .fm{fill:var(--eng-mark);stroke:none}
+.sp-svg .ft{fill:var(--eng-1);stroke:none}
+.sp-svg .fp{fill:var(--paper-2);stroke:none}
+.sp-svg path,.sp-svg circle{fill:none}
+.sp-svg .fm,.sp-svg .fp{fill-opacity:1}
+.seal{display:block}
+.seal.draw path{stroke-dasharray:1;stroke-dashoffset:1;animation:k-draw var(--t-draw) var(--ease) forwards}
+@keyframes k-draw{to{stroke-dashoffset:0}}
+.guilloche-band{--k-guilloche:url("data:image/svg+xml,%3Csvg xmlns='http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg' width='40' height='24' viewBox='0 0 40 24'%3E%3Cg fill='none' stroke='black' stroke-width='.6'%3E%3Cpath d='M-40 12Q-30-6-20 12T0 12T20 12T40 12T60 12'/%3E%3Cpath transform='translate(6.67)' d='M-40 12Q-30-6-20 12T0 12T20 12T40 12T60 12'/%3E%3Cpath transform='translate(13.33)' d='M-40 12Q-30-6-20 12T0 12T20 12T40 12T60 12'/%3E%3Cpath transform='translate(20)' d='M-40 12Q-30-6-20 12T0 12T20 12T40 12T60 12'/%3E%3Cpath transform='translate(26.67)' d='M-40 12Q-30-6-20 12T0 12T20 12T40 12T60 12'/%3E%3Cpath transform='translate(33.33)' d='M-40 12Q-30-6-20 12T0 12T20 12T40 12T60 12'/%3E%3C/g%3E%3C/svg%3E");height:24px;background:var(--eng-3);-webkit-mask:var(--k-guilloche) repeat-x center/40px 24px;mask:var(--k-guilloche) repeat-x center/40px 24px}

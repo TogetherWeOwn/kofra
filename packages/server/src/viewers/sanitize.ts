@@ -94,6 +94,32 @@ function safeSrcset(value: string, tag: string): boolean {
   return value.split(",").every((part) => isSafeUrl(part.trim().split(/\s+/)[0] ?? "", tag, "src"));
 }
 
+/** Class and id names reserved for Kofra's own markup (design system k-*, page hooks dw-*). */
+export const RESERVED_NAME = /^(k|dw)-/i;
+/**
+ * Reserved classes that pass anyway: the notebook viewer sanitizes its whole render, cell frames included, and
+ * these only lay out cells (no banner, seal, button or other trust chrome).
+ */
+const NOTEBOOK_CLASS = /^dw-(?:cell|prompt|mdcell|out)$/;
+const reservedClass = (t: string) => RESERVED_NAME.test(t) && !NOTEBOOK_CLASS.test(t);
+
+/**
+ * An attribute value as the browser will read it. HTMLRewriter hands back the source spelling, so
+ * `k&#45;banner` would pass a prefix test and still become `k-banner` in the page. Numeric references (with
+ * or without the semicolon, as browsers accept them in attributes) and the named references that spell
+ * ASCII whitespace are decoded; no named reference spells "-", "k", "d" or "w".
+ */
+export function decodeAttr(v: string): string {
+  return v.replace(/&#(?:[xX]([0-9a-fA-F]+)|([0-9]+));?|&(Tab|NewLine);/g, (_m, hex: string | undefined, dec: string | undefined, named: string | undefined) => {
+    if (named) return named === "Tab" ? "\t" : "\n";
+    const cp = hex !== undefined ? parseInt(hex, 16) : parseInt(dec!, 10);
+    if (!(cp > 0 && cp <= 0x10ffff) || (cp >= 0xd800 && cp <= 0xdfff)) return "\uFFFD";
+    return String.fromCodePoint(cp);
+  });
+}
+/** HTML class lists split on ASCII whitespace only. */
+const CLASS_SEP = /[\t\n\f\r ]+/;
+
 /** Sanitize an HTML fragment. */
 export async function sanitizeHtml(html: string): Promise<string> {
   const rewriter = new HTMLRewriter()
@@ -122,10 +148,28 @@ export async function sanitizeHtml(html: string): Promise<string> {
             continue;
           }
           const v = el.getAttribute(name) ?? "";
+          // User content must not wear Kofra's chrome: classes and ids in the k- (design system) and dw-
+          // (page hooks) namespaces are dropped, so a page cannot draw a fake banner, seal or button.
+          // Tested as the browser will read them (character references decoded).
+          if (n === "class") {
+            const tokens = decodeAttr(v).split(CLASS_SEP).filter(Boolean);
+            if (!tokens.some(reservedClass)) continue; // untouched
+            // Rewritten from the decoded tokens: only plain ones, so nothing here needs escaping.
+            const kept = tokens.filter((t) => !reservedClass(t) && !/["&<>]/.test(t));
+            if (kept.length) el.setAttribute(name, kept.join(" "));
+            else el.removeAttribute(name);
+            continue;
+          }
+          if (n === "id" && RESERVED_NAME.test(decodeAttr(v).replace(/^[\t\n\f\r ]+/, ""))) {
+            el.removeAttribute(name);
+            continue;
+          }
           if (URL_ATTRS.has(n) && !isSafeUrl(v, tag, n)) el.removeAttribute(name);
           else if (n === "srcset" && !safeSrcset(v, tag)) el.removeAttribute(name);
         }
         if (tag === "input") el.setAttribute("disabled", "");
+        // Code blocks scroll sideways on narrow screens: keyboard users must be able to reach and scroll them.
+        if (tag === "pre") el.setAttribute("tabindex", "0");
         if (tag === "a" && el.getAttribute("href")) el.setAttribute("rel", "nofollow noopener noreferrer");
       },
     })

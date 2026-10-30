@@ -231,7 +231,7 @@ describe("instance name", () => {
   it("names the product in page titles, the dashboard, MCP instructions and system pages", async () => {
     const home = await (await dw.call(`${NEW}/`, { headers: BROWSER_NAV })).text();
     expect(home).toContain("<title>Kofra</title>");
-    expect(home).toContain('class="dw-brand" href="/">Kofra</a>');
+    expect(home).toContain('<a class="k-wm" href="/">Kofra</a>');
     const login = await (await dw.call(`${NEW}/login`, { headers: BROWSER_NAV })).text();
     expect(login).toContain("<title>Sign in · Kofra</title>");
     expect(login).toContain("Sign in to Kofra");
