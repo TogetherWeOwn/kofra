@@ -65,6 +65,20 @@ describe("app pages", () => {
     expect(CLIENT_SCRIPT).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
   });
 
+  // The served script redistributes the vendored QR encoder, so its MIT notice
+  // must travel with the bytes. Function.prototype.toString serializes the body
+  // only, so the notice has to sit inside the factory, not above it.
+  it("the served client script carries the vendored encoder's MIT notice", async () => {
+    expect(CLIENT_SCRIPT).toContain("Copyright (c) 2009 Kazuhiko Arase");
+    expect(CLIENT_SCRIPT).toContain("Permission is hereby granted");
+    expect(CLIENT_SCRIPT).toContain("THE SOFTWARE IS PROVIDED \"AS IS\"");
+    // Assert it on the bytes the Worker actually returns, not just the constant.
+    const dw = await freshInstance();
+    const js = await (await dw.call(`/__dropway/ui/app-${CLIENT_HASH}.js`)).text();
+    expect(js).toContain("Copyright (c) 2009 Kazuhiko Arase");
+    expect(js).toContain("Permission is hereby granted");
+  });
+
   it("sign-in and dashboard pages are shells the script fills in", async () => {
     const dw = await freshInstance();
     for (const [path, page] of [
