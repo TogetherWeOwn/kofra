@@ -18,7 +18,7 @@ import { unfurlHead } from "./unfurl";
  * extension viewers using viewerPage() too, not just the built-ins whose own
  * `version` is bumped by hand. Bump it whenever the shared output changes.
  */
-export const VIEWER_CHROME_VERSION = 1;
+export const VIEWER_CHROME_VERSION = 2;
 
 /** CSP for viewer pages: no scripts, so user-authored markup inside e.g. Markdown cannot execute. */
 export const VIEWER_CSP =
@@ -163,7 +163,8 @@ export function viewerPage(
     head: unfurlHead({
       title,
       description: `${KIND_LABELS[vc.file.kind] ?? "File"} · ${formatBytes(vc.file.size)} · ${vc.file.contentType.split(";")[0]}`,
-      url: vc.url.origin + vc.siteBase + encodePath(vc.file.path),
+      // Live badge.svg is reserved for provider status; previews serve the uploaded path directly.
+      url: vc.url.origin + vc.siteBase + (!vc.preview && vc.file.path === "badge.svg" ? "" : encodePath(vc.file.path)),
       image: vc.file.kind === "image",
     }),
     // File path only: never copy request/capability URLs into printed context, even when embedded.

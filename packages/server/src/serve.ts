@@ -512,15 +512,16 @@ async function serveFile(
   // Rendered views: see ./viewers (one per file kind, plus ?view=source).
   if (viewer && viewMode) {
     const embed = flag(sp, "embed");
-    // The shared bar links live siblings even when this file's bytes are unchanged.
-    // Images/SVG have their own validator; embeds do not render the shared bar.
-    const folderVariant = !embed && viewer.id !== "image" && viewer.id !== "svg" ? `-folder${live.versionId}` : "";
+    // Every page, including image/SVG and embeds, names manifest metadata.
+    // A sole-file root can resolve to a new path with identical bytes, and MIME
+    // can change independently too. Content-only render fragments stay reusable.
+    const folderVariant = `-folder${live.versionId}`;
     // The shared chrome revision retires every full-page validator when
     // viewerPage markup/CSS changes, including extension viewers whose own
     // version cannot know about an internal chrome change.
     const etag = `W/"${etagSegment(viewer.id)}@${viewer.version ?? 1}-${sha256}${etagSegment(viewer.etagExtra?.(file, live) ?? "")}${folderVariant}-chrome${VIEWER_CHROME_VERSION}${embed ? "-e" : ""}${reportVariant}"`;
     const h = new Headers();
-    if (etagMatches(req, etag)) {
+    if (status === 200 && etagMatches(req, etag)) {
       h.set("ETag", etag);
       securityHeaders(h, live, mode);
       return new Response(null, { status: 304, headers: h });
@@ -561,9 +562,9 @@ async function serveFile(
     // withhold the success ETag: revalidating the fallback as if it were
     // the healthy render would strand browsers on it after recovery.
     const viewerCacheControl = out.get("Cache-Control");
-    if (viewerCacheControl?.includes("no-store")) out.delete("ETag");
+    if (status >= 400 || viewerCacheControl?.includes("no-store")) out.delete("ETag");
     else out.set("ETag", etag);
-    out.set("Cache-Control", live.passwordHash ? "private, no-store" : viewerCacheControl ?? "public, max-age=0, must-revalidate");
+    out.set("Cache-Control", status >= 400 || live.passwordHash ? "private, no-store" : viewerCacheControl ?? "public, max-age=0, must-revalidate");
     out.set("Vary", "Accept, Sec-Fetch-Dest");
     // Headers.set throws on CR, LF and NUL: a viewer id containing them would
     // 500 an otherwise healthy render. Omit this diagnostic header for such
@@ -574,6 +575,13 @@ async function serveFile(
     out.delete("Content-Length");
     securityHeaders(out, live, mode);
     let page = new Response(head ? null : rendered.body, { status, headers: out });
+    // Only generated viewer pages pass here: leave authored error HTML/raw bytes
+    // alone, but never advertise a fallback file as the missing resource.
+    if (status >= 400 && !head) {
+      page = new HTMLRewriter().on('head meta[property^="og:"], head meta[name="description"], head meta[name^="twitter:"]', {
+        element(el) { el.remove(); },
+      }).transform(page);
+    }
     if (mode.rewrite && !head) page = rewriteHtml(page, mode.rewrite);
     return report && !head ? injectReportLink(page, reportUrl) : page;
   }
