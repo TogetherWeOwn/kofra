@@ -183,7 +183,7 @@ export async function invalidate(t: Transfer) {
  * Never mock the gate, lifecycle service, clock or download accounting itself.
  */
 export async function state(t: Transfer, fields: Record<string, number | string | null>) {
-  const allowed = ["expires_at", "revoked_at", "deleted_at", "takedown_at", "takedown_reason", "legal_hold", "notified_at"];
+  const allowed = ["expires_at", "expired_at", "revision", "downloads", "revoked_at", "deleted_at", "takedown_at", "takedown_reason", "legal_hold", "notified_at"];
   for (const name of Object.keys(fields)) expect(allowed).toContain(name);
   const entries = Object.entries(fields);
   const result = await env.DB.prepare(`UPDATE transfers SET ${entries.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`)
