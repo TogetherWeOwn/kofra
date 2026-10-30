@@ -1,4 +1,4 @@
-import { detectFileKind, encodePath, KIND_LABELS, type LiveSite } from "@dropway/core";
+import { detectFileKind, encodePath, isSiteConfigPath, KIND_LABELS, type LiveSite } from "@dropway/core";
 import { escapeHtml, formatBytes, htmlPage } from "../html";
 import type { ServeMode } from "../serve";
 import { unfurlHead } from "./unfurl";
@@ -46,8 +46,8 @@ export function renderListing(live: LiveSite, dir: string, mode: ServeMode, appV
   const files: Array<{ name: string; size: number; kind: ReturnType<typeof detectFileKind> }> = [];
   let total = 0;
   for (const [path, [, size, type]] of Object.entries(live.files)) {
-    // .dropway/* is stored but never served, so listings do not name it either.
-    if (path === ".dropway" || path.startsWith(".dropway/")) continue;
+    // .dropway/* and the hosting-rule files are stored but never served, so listings do not name them either.
+    if (path === ".dropway" || path.startsWith(".dropway/") || isSiteConfigPath(path)) continue;
     if (!path.startsWith(dir)) continue;
     const rest = path.slice(dir.length);
     const slash = rest.indexOf("/");

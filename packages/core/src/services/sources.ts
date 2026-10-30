@@ -8,7 +8,7 @@ import { stringField } from "../lib/input";
 import { normaliseFilePath } from "../lib/paths";
 import type { Principal } from "../principal";
 import { blobScope, putVerifiedBlob } from "./blobs";
-import { createDeploy, deployWarnings, finalizeDeploy, parseDeployOptions, versionConflict, type Warning } from "./deploys";
+import { createDeploy, deployWarnings, finalizeDeploy, parseDeployOptions, versionConflict, versionWarnings, type Warning } from "./deploys";
 import { discardNewSite, findSite, getVersion, serializeSite, serializeVersion, type SiteRow, type VersionRow } from "./sites";
 import { resolvePublishTarget, unzipFiles, validateInlineFiles } from "./publish";
 import { getSiteByRef, resolveSiteSlug, resolveVersionRef } from "./site-ops";
@@ -511,7 +511,7 @@ async function completeVersion(
   if (deploy.unchanged) {
     status = "unchanged";
     version = site.current_version_id ? await getVersion(dc, site.id, site.current_version_id) : null;
-    warnings = await deployWarnings(dc, site, deploy.deploy.id);
+    warnings = version ? await versionWarnings(dc, site, version) : await deployWarnings(dc, site, deploy.deploy.id);
   } else {
     const missing = new Set(deploy.missing);
     const scope = blobScope({ tenantId: site.tenant_id, siteId: site.id });
@@ -592,6 +592,9 @@ export interface PublishSourcesInput {
   spa?: unknown;
   renderMarkdown?: unknown;
   crossOriginIsolation?: unknown;
+  noindex?: unknown;
+  viewers?: unknown;
+  ttlSeconds?: unknown;
   password?: unknown;
   message?: unknown;
   baseVersionId?: unknown;
@@ -666,7 +669,7 @@ export async function publishSources(dc: DropwayContext, p: Principal, input: Pu
     : await resolveFileInputs(dc, p, input.files, { lim, scope: callerBlobScope(p, existing), site: existing, fetcher: input.fetcher });
 
   const fields: Record<string, unknown> = { slug };
-  for (const k of ["title", "description", "spa", "renderMarkdown", "crossOriginIsolation", "password"] as const) if (input[k] !== undefined) fields[k] = input[k];
+  for (const k of ["title", "description", "spa", "renderMarkdown", "crossOriginIsolation", "noindex", "viewers", "ttlSeconds", "password"] as const) if (input[k] !== undefined) fields[k] = input[k];
   const manifest = resolved.files.map((f) => ({ path: f.path, size: f.size, sha256: f.sha256, contentType: f.contentType }));
   const target = await resolvePublishTarget(dc, p, fields, manifest);
   const site = target.site;

@@ -15,6 +15,9 @@ export interface Instance {
 
 /** Wipe storage, apply migrations, build a Kofra and create its owner. */
 export async function freshInstance(config: ConfigOverrides = {}, extra: Omit<CreateDropwayOptions, "config"> = {}): Promise<Instance> {
+  // The test runtime resets live D1 objects, but can retain a stopped object's
+  // SQLite storage. Wake D1 before the single reset, even on an empty database.
+  await env.DB.prepare("SELECT 1").first();
   await reset();
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
   // Diagnostic for the intermittent setup 409: record whether reset left a

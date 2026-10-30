@@ -24,6 +24,7 @@ export * from "./lib/filetypes";
 export * from "./lib/secrets";
 
 export * from "./services/events";
+export * from "./services/site-config";
 export * from "./services/identity";
 export * from "./services/keys";
 export * from "./services/tenants";

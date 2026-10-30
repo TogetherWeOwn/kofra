@@ -33,6 +33,7 @@ export const ERROR_CODES: Readonly<Record<string, ErrorCode>> = {
   invalid_site: { status: 400, retryable: false, hint: "Use a site slug, site ID or a URL returned by this instance; list sites to find valid references." },
   invalid_size: { status: 400, retryable: false, hint: "Set size to the file's non-negative integer byte length." },
   invalid_slug: { status: 400, retryable: false, hint: "Use 3–56 lowercase letters, digits and single hyphens, starting and ending with a letter or digit." },
+  invalid_ttl: { status: 400, retryable: false, hint: "Set ttlSeconds to an integer from 1 to 315360000 (10 years), or null to clear a keyed site's lifetime." },
   invalid_zip: { status: 400, retryable: false, hint: "Send a standard .zip using deflate or stored entries." },
   password_required: { status: 400, retryable: false, hint: "Call again with a password of 4–200 characters." },
   reason_required: { status: 400, retryable: false, hint: "Provide a non-empty reason for releasing the held name, such as a trademark dispute reference." },

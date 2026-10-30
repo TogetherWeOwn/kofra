@@ -8,6 +8,7 @@ import { cleanupTransfers } from "./transfer-cleanup";
 import { assertSiteDeletionState, siteDeletionStateChanged } from "./atomic-write";
 import { cleanupExpiredMultipartUploads } from "./uploads";
 import type { SiteRow } from "./sites";
+import { usageStatements } from "./usage";
 
 const HOUR = 3600_000;
 const DAY = 24 * HOUR;
@@ -24,7 +25,7 @@ export interface CleanupReport {
 
 /**
  * Hourly housekeeping (Worker cron):
- * 1. expire anonymous sites past expires_at (soft delete, name tombstoned);
+ * 1. expire sites past expires_at (anonymous sites and keyed sites with a ttlSeconds lifetime; soft delete, name tombstoned);
  * 2. purge rows of sites deleted more than an hour ago (tombstones survive);
  * 3. drop pending deploys older than a day;
  * 4. delete blobs no version references any more (older than a day);
@@ -39,7 +40,7 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
   const report: CleanupReport = { expiredSites: 0, purgedSites: 0, abandonedDeploys: 0, deletedBlobs: 0, expiredUploads: 0, ...await cleanupTransfers(dc, now) };
   const db = dc.env.DB;
 
-  // 1. Expire anonymous sites.
+  // 1. Expire sites past their lifetime (anonymous expiry or a keyed site's ttlSeconds).
   const { results: expired } = await db
     .prepare("SELECT * FROM sites WHERE mode = 'site' AND expires_at IS NOT NULL AND expires_at < ? AND deleted_at IS NULL LIMIT 50")
     .bind(now)
@@ -54,6 +55,7 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
           .bind(now, `~deleted~${s.id}`, s.id),
         insertTombstone(dc, { slug: s.slug, tenantId: s.tenant_id, siteId: s.id, chosen: s.slug_chosen === 1, holdUntil, reason: "expired", createdAt: now, deletedAt: now }),
         ...convertRedirectsStatements(dc, { siteId: s.id, tenantId: s.tenant_id, reason: "expired", now, deletedAt: now }),
+        ...usageStatements(dc, s.tenant_id),
       ]);
     } catch (error) {
       // A changed row is reconsidered from fresh state on the next cron run.

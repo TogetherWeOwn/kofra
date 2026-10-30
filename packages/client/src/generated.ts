@@ -52,16 +52,19 @@ export interface PublishSiteInput {
   archiveUrl?: string;
   /** Optional. Slug, id or URL of your existing site to replace, or a new slug (3-56 chars: a-z, 0-9, single hyphens). */
   site?: string;
-  /** Title shown in lists. */
+  /** Title. */
   title?: string | null;
-  /** One or two sentences about the site. */
+  /** Summary. */
   description?: string | null;
-  /** SPA: unknown paths serve index.html instead of 404. */
+  /** Unknown paths serve index.html. */
   spa?: boolean;
-  /** Render .md files as pages for browsers (default true); false serves raw. */
+  /** Render .md (default true); false serves raw. */
   renderMarkdown?: boolean;
-  /** Send COOP/COEP headers (for SharedArrayBuffer/threaded WASM). */
+  /** COOP/COEP for SharedArrayBuffer/threaded WASM. */
   crossOriginIsolation?: boolean;
+  noindex?: boolean;
+  viewers?: boolean;
+  ttlSeconds?: number | null;
   /** Optional visitor password (see set_site_access). */
   password?: string;
   /** Short note about this version, like a commit message. */
@@ -365,6 +368,12 @@ export interface UpdateSiteSettingsInput {
   renderMarkdown?: boolean;
   /** Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM). */
   crossOriginIsolation?: boolean;
+  /** Ask crawlers not to index this site (X-Robots-Tag: noindex). */
+  noindex?: boolean;
+  /** Rendered file viewers on (default true); false always serves the stored bytes. */
+  viewers?: boolean;
+  /** Keyed sites only: lifetime in seconds from the latest publish; null clears it. */
+  ttlSeconds?: number | null;
   /** Visitor password; null removes it. Needs an API key. */
   password?: string | null;
   slug: string;
@@ -480,6 +489,12 @@ export interface CreateSiteInput {
   renderMarkdown?: boolean;
   /** Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM). */
   crossOriginIsolation?: boolean;
+  /** Ask crawlers not to index this site (X-Robots-Tag: noindex). */
+  noindex?: boolean;
+  /** Rendered file viewers on (default true); false always serves the stored bytes. */
+  viewers?: boolean;
+  /** Keyed sites only: lifetime in seconds from the latest publish; null clears it. */
+  ttlSeconds?: number | null;
   /** Visitor password; null removes it. Needs an API key. */
   password?: string | null;
   [key: string]: unknown;
@@ -900,6 +915,12 @@ export interface PublishUploadInput {
   renderMarkdown?: boolean;
   /** Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM). */
   crossOriginIsolation?: boolean;
+  /** Ask crawlers not to index this site (X-Robots-Tag: noindex). */
+  noindex?: boolean;
+  /** Rendered file viewers on (default true); false always serves the stored bytes. */
+  viewers?: boolean;
+  /** Keyed sites only: lifetime in seconds from the latest publish; null clears it. */
+  ttlSeconds?: number | null;
   /** Visitor password; null removes it. Needs an API key. */
   password?: string | null;
   path?: string;
@@ -1068,6 +1089,12 @@ export interface CreateVersionInput {
   renderMarkdown?: boolean;
   /** Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM). */
   crossOriginIsolation?: boolean;
+  /** Ask crawlers not to index this site (X-Robots-Tag: noindex). */
+  noindex?: boolean;
+  /** Rendered file viewers on (default true); false always serves the stored bytes. */
+  viewers?: boolean;
+  /** Keyed sites only: lifetime in seconds from the latest publish; null clears it. */
+  ttlSeconds?: number | null;
   /** Visitor password; null removes it. Needs an API key. */
   password?: string | null;
   slug: string;

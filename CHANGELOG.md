@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Static hosting correctness and site lifecycle
+
+- Root `_redirects` (301/302/307/308, `:placeholders`, one trailing `*`
+  splat) and `_headers` (path patterns) are parsed at finalize into the
+  version's `config_json` (migration 0009). Invalid lines are skipped and
+  returned as `invalid_hosting_rule` warnings; the files themselves are never
+  served. Platform-owned headers cannot be set from `_headers`, and platform
+  security headers are applied after (and win over) site headers. Restoring
+  or duplicating a version carries its rules with its files.
+- The cache policy is now the full matrix: gated sites `private, no-store`;
+  sites shipping `.wasm` revalidate; fingerprinted build outputs immutable;
+  HTML and unfingerprinted files revalidate. A `_headers` `Cache-Control`
+  overrides the non-gated classes. Configured redirects revalidate by default,
+  even when their source path looks fingerprinted; only stored files use the
+  immutable asset class. Self-redirect suppression compares the effective URL,
+  including encoded paths and query changes.
+- Authorized version previews use the selected version's hosting rules and the
+  current viewer setting, without reading or repairing the live KV pointer.
+  Preview privacy headers still win over custom headers. Root hosting inputs
+  are also excluded from Previous/Next viewer links; nested names stay ordinary files.
+- Site settings gain `noindex` (X-Robots-Tag plus a generated disallowing
+  `robots.txt` when the site ships none; a site's own `robots.txt` is served
+  verbatim), `viewers: false` (always serve the stored bytes), and
+  `ttlSeconds` for keyed sites: the site expires that long after its latest
+  finalize, and `null` clears the lifetime. Anonymous sites keep the
+  instance expiry and cannot set `ttlSeconds` (an explicit `null` is
+  ignored; 400 `invalid_ttl` for values outside 1 to 315360000). Expiry of a
+  keyed site refreshes the owner's usage counters, `_redirects`/`_headers` never
+  count as the single served file or appear in folder listings, and
+  `Service-Worker-Allowed` is platform-owned.
+
 ### Viewer phone handoff
 
 - File viewer bars offer a keyboard-operable Phone disclosure without JavaScript.
@@ -248,6 +279,13 @@
   Add `delete_folder` to the registry; deleting an organizer keeps its sites.
 
 ### Extension API
+
+- Add optional `LiveSite.noindex`, `LiveSite.viewers` and `LiveSite.config`
+  (the live version's parsed `_redirects`/`_headers`), optional `noindex`,
+  `viewers` and `ttl_seconds` on site rows, optional `config_json` on version
+  rows, and the public `@dropway/core` site-config parsers/matchers. Fields
+  are additive and optional, so existing viewers, adapters and service
+  callers keep working unchanged without an additional extension API bump.
 
 - Bump `EXTENSION_API_VERSION` to 6: `ViewerContext` and `ServeMode` gain an
   optional `preview` flag (set only by version-preview serving), and every

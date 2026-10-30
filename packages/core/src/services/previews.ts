@@ -5,6 +5,7 @@ import type { Principal } from "../principal";
 import type { LiveSite } from "./live";
 import { canAccess, findSite, type SiteRow, type VersionRow } from "./sites";
 import { capabilityDecision } from "./policy";
+import { parseSiteConfigJson } from "./site-config";
 
 const PREVIEW_TTL_MS = 24 * 60 * 60 * 1000;
 const payload = (siteId: string, versionId: string, expiresAt: number) => `dw-preview:${siteId}:${versionId}:${expiresAt}`;
@@ -62,8 +63,8 @@ export async function readVersionPreview(
   const site = await findSite(dc, slug);
   if (!site || site.mode === "transfer" || (site.expires_at !== null && site.expires_at < Date.now())) return null;
   if (!(await capabilityDecision(dc, principal, "version_previews", { siteId: site.id, tenantId: site.tenant_id })).allowed) return null;
-  const version = await dc.env.DB.prepare("SELECT id FROM versions WHERE site_id = ? AND number = ? AND status = 'ready'")
-    .bind(site.id, number).first<{ id: string }>();
+  const version = await dc.env.DB.prepare("SELECT id, config_json FROM versions WHERE site_id = ? AND number = ? AND status = 'ready'")
+    .bind(site.id, number).first<{ id: string; config_json: string | null }>();
   if (!version) return null;
   let expiresAt: number | null = null;
   if (token !== null) {
@@ -87,6 +88,9 @@ export async function readVersionPreview(
       spa: site.spa === 1,
       renderMarkdown: site.render_markdown === 1,
       crossOriginIsolation: site.cross_origin_isolation === 1,
+      noindex: site.noindex === 1,
+      viewers: site.viewers !== 0,
+      config: parseSiteConfigJson(version.config_json),
       passwordHash: site.password_hash,
       expiresAt: site.expires_at,
       files,

@@ -57,8 +57,9 @@ throws `ApiError` with a stable `code` and a `hint` for the caller.
 | `identity.ts` | Default identity adapter: `Authorization: Bearer` API key (`dw_`), claim token (`dwc_`) or bootstrap secret |
 | `keys.ts` | Create, list, revoke scoped API keys (only a SHA-256 is stored) |
 | `tenants.ts` | First-run setup (bootstrap key creates the owner), members, owner recovery |
-| `sites.ts` | Create, list, update, delete and claim sites; settings; access checks (`getSiteFor`) |
-| `deploys.ts` | Manifest validation, content-addressed upload, atomic finalize, versions, restore, read-back |
+| `sites.ts` | Create, list, update, delete and claim sites; settings (including `noindex`, `viewers` and keyed-site `ttlSeconds`); access checks (`getSiteFor`) |
+| `deploys.ts` | Manifest validation, content-addressed upload, atomic finalize (including parsing the version's site config and restarting a keyed site's `ttl_seconds` lifetime), versions, restore, read-back |
+| `site-config.ts` | Parses root `_redirects` (301/302/307/308, placeholders, one trailing splat) and `_headers` (path patterns) into a version's `config_json`; invalid lines become `invalid_hosting_rule` warnings; matches rules for serving |
 | `uploads.ts` | Fresh upload items for pending versions, plus resumable multipart sessions: real R2 multipart staged at `uploads/<id>`, durable part acknowledgements, streaming-digest verification before promotion to `blobs/<sha256>`, bounded expired-session cleanup |
 | `publish.ts` | One-shot publish (multipart, JSON, zip, raw) built on `deploys.ts` |
 | `sources.ts` | Agent file sources (`content`, base64, `url` with an SSRF guard, `sha256` + upload links, `copyFrom`, chat attachments normalized from `download_url`/`file_name`), top-level `archiveUrl` zip publishing through the same fetcher and zip extractor, `publishSources`, partial `updateSiteFiles`, `finalizeVersionByRef` |
@@ -66,7 +67,7 @@ throws `ApiError` with a stable `code` and a `hint` for the caller.
 | `idempotency.ts` | Atomic D1 idempotency claims (24 h): replay the first result, 422 on a reused key with another body, retryable 409 for concurrent/unknown outcomes |
 | `upload-tokens.ts` | HMAC upload-only capabilities for the blobs of one pending version, expiring one hour after creation |
 | `blobs.ts` | R2 storage at `blobs/<sha256>` (R2 verifies the hash on write), edge cache |
-| `live.ts` | `live:<slug>` manifest in KV (D1 fallback, per-isolate 5 s cache); v3 filename maps are prototype-less so legal names like `__proto__` survive |
+| `live.ts` | `live:<slug>` manifest in KV (D1 fallback, per-isolate 5 s cache); v3 filename maps are prototype-less so legal names like `__proto__` survive; v4 adds the `noindex`/`viewers` settings and the live version's parsed site config |
 | `cleanup.ts` | Hourly cron: expire anonymous sites, purge deleted sites, drop stale uploads, delete orphan blobs |
 | `events.ts` | Runs hooks and metering after the response (never throws) |
 | `transfers.ts` | Sender-owned deliveries: create/read/update/revoke, revision fencing and permanent slug reservations |
@@ -117,11 +118,41 @@ Path mode is interim. Root-relative URLs (`/assets/app.js`) would escape the
    import specifiers, CSS set from JS, `location.href = "/x"` and
    `history.pushState("/x")`. Use relative URLs there, or subdomain mode.
 
+Site-config patterns use whole-segment `:placeholders` and one trailing `*` splat;
+adjacent captures are rejected to keep request matching bounded, as is a `:splat`
+placeholder combined with a trailing splat. Header values and redirect destinations
+must fit HTTP's byte-string representation, and header values are limited to 4096
+characters; anything else becomes a warning. Stored warnings retain their path,
+line and fix details on unchanged publishes and repeated finalization.
+
+Site-config files: after the password gate, `_redirects` rules run before
+file resolution (first non-self match wins; effective URL identity includes the
+site prefix, encoded path and inherited or explicit query, so self targets are
+skipped without suppressing genuine query changes; destinations made invalid by
+capture substitution are skipped in favor of later rules or ordinary serving), and
+`_redirects`/`_headers` themselves always answer 404. `_headers` entries apply to file and rendered-viewer responses (including configured
+redirect responses), under the platform security headers, which are applied afterwards
+and win; platform-owned headers (cookies, length, type, validators, CSP, framing,
+`X-Kofra-*`, service-worker scope and origin-wide reporting/client-hint policies)
+cannot be set at all, and a gated site's `Cache-Control` stays
+`private, no-store`. Otherwise the cache matrix is: gated `private, no-store`;
+any site shipping `.wasm` revalidates; fingerprinted build outputs are
+immutable for a year; HTML and other unfingerprinted files revalidate.
+Configured redirects revalidate regardless of source filename (or stay private/no-store
+when gated); permitted explicit public cache overrides still apply. A
+site's own `robots.txt` is served verbatim; without one, a `noindex` site
+(anonymous, expiring, or the `noindex` setting) gets a generated
+disallow-all and any other site a plain 404 — never a configured redirect or the
+SPA fallback. Substituted root-relative redirect destinations stay on the site's
+origin, even if a captured splat starts with a slash.
+
 ### Version previews
 
 `<slug>--v<N>` uses the same path/subdomain topology as the live site, but resolves
-its ready version and current site settings directly from D1 (`services/previews.ts`).
-It never reads or repairs the live KV pointer, so newly published bytes are available
+its ready version and current SPA, Markdown, isolation, password and viewer settings
+directly from D1 (`services/previews.ts`). Hosting rules come from the selected
+immutable version's `config_json`, not the live version. It never reads or repairs
+the live KV pointer, so newly published bytes are available
 even during live-cache propagation. Pending versions and transfer sites are not previewable.
 
 Access requires a credential that can read the site or a signed `dw_preview` capability
@@ -182,7 +213,8 @@ requests share the existing `unknown` IP bucket and form-proof binding.
 ### Viewing files
 
 `serveFile` asks `findViewer(file, live, viewers, mode)` (`packages/server/src/viewers`)
-for a rendered view. The mode comes from the request:
+for a rendered view — unless the site sets `viewers: false`, which always
+serves the stored bytes. The mode comes from the request:
 
 | Request | Mode | What it gets |
 |---|---|---|
@@ -343,8 +375,8 @@ through the list refresh after a successful publish.
 - `tenants`: exactly one in this build (created by `POST /api/v1/setup`).
 - `members`: owner / admin / member of a tenant; `external_ref` links an outer identity system.
 - `api_keys`: SHA-256 of the key, `scopes` (`sites:read sites:write sites:delete keys:write members:write data:write secrets:write admin`), optional `site_id` restriction.
-- `sites`: `tenant_id` NULL = anonymous (then `claim_token_hash`, `expires_at`).
-- `versions`: immutable manifests; `status` pending|ready; `manifest_hash` (identical republish = `unchanged`); `base_version_id` (409 `version_conflict`).
+- `sites`: `tenant_id` NULL = anonymous (then `claim_token_hash`, `expires_at`); `noindex`/`viewers` serving switches; `ttl_seconds` (keyed sites only) recomputes `expires_at` at every finalize, so expiry counts from the latest publish.
+- `versions`: immutable manifests; `status` pending|ready; `manifest_hash` (identical republish = `unchanged`); `base_version_id` (409 `version_conflict`); `config_json` holds the parsed `_redirects`/`_headers` rules and their warnings for that version, so restore and duplicate carry the rules with the files.
 - `version_files`: path -> sha256, size, content type.
 - `blobs` + `blob_scopes`: bytes exist once in R2; a scope (`t:<tenant>` or `s:<anonymous site>`) skips an upload only for bytes it has proven it holds, so dedupe never reveals another owner's files.
 - `upload_sessions` + `upload_parts` (`0007_multipart_uploads.sql`, `0008_multipart_session_cap.sql`): one unfinished session per pending manifest file (partial unique index) (R2 key/upload id, part size, status, expiry capped by any dwu_ capability that created it); part rows are the durable acknowledgements (number, size, etag, part digest) a client resumes from. Completion fenced by the session status assembles the R2 object, stream-hashes it, and only then registers the blob in the owner's scope; hourly cleanup aborts at most 100 expired sessions per run and keeps ownership rows when storage cleanup fails. Concurrent first-part writes are exclusive even for identical content (R2 etags identify writes, not hashes). Storage or acknowledgement failures release unacknowledged claims. A ten-minute-old lost claim is recovered by confirming abort of its whole old R2 handle before replacing the session, never by lease takeover of a physical part. Live application part buffers share a 96 MiB isolate budget and hashing is incremental; overload is retryable `503 upload_busy`.

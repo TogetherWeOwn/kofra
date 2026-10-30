@@ -9,9 +9,9 @@ import { contentTypeFor, normaliseContentType } from "../lib/mime";
 import { normaliseFilePath, stripCommonRoot } from "../lib/paths";
 import type { Principal } from "../principal";
 import { blobScope, putVerifiedBlob } from "./blobs";
-import { createDeploy, deployWarnings, finalizeDeploy, parseDeployOptions, precheckManifest, validateManifest, type Warning } from "./deploys";
+import { createDeploy, deployWarnings, finalizeDeploy, parseDeployOptions, precheckManifest, validateManifest, versionWarnings, type Warning } from "./deploys";
 import { versionPreviewUrl } from "./previews";
-import { createSite, discardNewSite, findSite, getSiteFor, parseSettings, serializeSite, updateSite, type SiteRow, type VersionRow } from "./sites";
+import { createSite, discardNewSite, findSite, getSiteFor, getVersion, parseSettings, serializeSite, updateSite, type SiteRow, type VersionRow } from "./sites";
 
 /** A file held in memory for one-shot publishing. */
 export interface InlineFile {
@@ -22,13 +22,13 @@ export interface InlineFile {
 
 export interface PublishInput {
   files: InlineFile[];
-  /** Metadata: slug, title, description, spa, renderMarkdown, crossOriginIsolation, password, message, baseVersionId. */
+  /** Metadata: slug, title, description, spa, renderMarkdown, crossOriginIsolation, noindex, viewers, ttlSeconds, password, message, baseVersionId. */
   fields: Record<string, unknown>;
   source: string;
 }
 
 const FILE_FIELD_NAMES = new Set(["file", "files", "files[]", "upload", "uploads", "uploads[]"]);
-const META_FIELDS = ["slug", "title", "description", "spa", "renderMarkdown", "crossOriginIsolation", "message", "path", "filename", "password", "baseVersionId"];
+const META_FIELDS = ["slug", "title", "description", "spa", "renderMarkdown", "crossOriginIsolation", "noindex", "viewers", "ttlSeconds", "message", "path", "filename", "password", "baseVersionId"];
 
 function isZip(bytes: Uint8Array): boolean {
   return bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
@@ -369,9 +369,13 @@ async function publishToTarget(
 
   let uploaded = 0;
   // An unchanged republish still reports the live version's warnings, like finalize does.
-  let warnings: Warning[] = deploy.unchanged ? await deployWarnings(dc, site, deploy.deploy.id) : [];
+  let warnings: Warning[] = [];
   let versionId = deploy.deploy.id;
-  if (!deploy.unchanged) {
+  if (deploy.unchanged) {
+    // The same files mean the same parsed site config, so its warnings still apply.
+    const current = await getVersion(dc, site.id, deploy.deploy.id);
+    warnings = current ? await versionWarnings(dc, site, current) : await deployWarnings(dc, site, deploy.deploy.id);
+  } else {
     const missing = new Set(deploy.missing);
     const toStore = new Map<string, (typeof hashed)[number]>();
     for (const f of hashed) if (missing.has(f.sha256) && !toStore.has(f.sha256)) toStore.set(f.sha256, f);

@@ -53,11 +53,14 @@ export const FILE_INPUT: Schema = {
 };
 
 export const SETTINGS_INPUT = {
-  title: { type: ["string", "null"], maxLength: 200, description: "Title shown in lists." },
-  description: { type: ["string", "null"], maxLength: 2000, description: "One or two sentences about the site." },
-  spa: { type: "boolean", description: "SPA: unknown paths serve index.html instead of 404." },
-  renderMarkdown: { type: "boolean", description: "Render .md files as pages for browsers (default true); false serves raw." },
-  crossOriginIsolation: { type: "boolean", description: "Send COOP/COEP headers (for SharedArrayBuffer/threaded WASM)." },
+  title: { type: ["string", "null"], maxLength: 200, description: "Title." },
+  description: { type: ["string", "null"], maxLength: 2000, description: "Summary." },
+  spa: { type: "boolean", description: "Unknown paths serve index.html." },
+  renderMarkdown: { type: "boolean", description: "Render .md (default true); false serves raw." },
+  crossOriginIsolation: { type: "boolean", description: "COOP/COEP for SharedArrayBuffer/threaded WASM." },
+  noindex: { type: "boolean" },
+  viewers: { type: "boolean" },
+  ttlSeconds: { type: ["integer", "null"], minimum: 1, maximum: 315360000 },
 } satisfies Record<string, Schema>;
 
 export const IDEMPOTENCY_KEY: Schema = {

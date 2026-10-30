@@ -178,6 +178,18 @@ export const HTTP_JSON_PUBLISH: Record<string, any> = {
       type: "boolean",
       description: "Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM).",
     },
+    noindex: {
+      type: "boolean",
+      description: "Ask crawlers not to index this site (X-Robots-Tag: noindex).",
+    },
+    viewers: {
+      type: "boolean",
+      description: "Rendered file viewers on (default true); false always serves the stored bytes.",
+    },
+    ttlSeconds: {
+      type: ["integer", "null"],
+      description: "Keyed sites only: lifetime in seconds from the latest publish; null clears it.",
+    },
     password: {
       type: ["string", "null"],
       description: "Visitor password; null removes it. Needs an API key.",

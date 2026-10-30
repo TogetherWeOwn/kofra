@@ -344,11 +344,11 @@ Delivers: AX-05. Depends: R-25, R-10.
 
 ### R-27 Static hosting correctness and site lifecycle (2 days)
 Delivers: SRV-05, SRV-09, SRV-12, PUB-15, PUB-16, VIEW-06. Depends: R-05.
-- `_redirects` (301/302/307/308, splats, placeholders) and `_headers` (path patterns) parsed at finalize
-  into `config_json`; invalid lines become warnings; files never served.
-- Cache policy matrix from SPEC SRV-05 (tests per class).
-- `ttlSeconds` for keyed sites; `duplicate_site`; settings `noindex` and `viewers`; a site's own
-  `robots.txt` served.
+- Done: `_redirects` (301/302/307/308, splats, placeholders) and `_headers` (path patterns) parsed at finalize
+  into `config_json` (migration `0009`); invalid lines become `invalid_hosting_rule` warnings; files never served.
+- Done: cache policy matrix from SPEC SRV-05 (tests per class, including sites with `.wasm` revalidating).
+- Done: `ttlSeconds` for keyed sites (expiry recomputed at finalize, `null` clears); `duplicate_site` (landed
+  earlier); settings `noindex` and `viewers`; a site's own `robots.txt` served verbatim.
 
 ### R-28 Folders and search (2 days)
 Delivers: ORG-01, ORG-02. Depends: R-19. Migration `0006`.
