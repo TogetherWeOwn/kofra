@@ -25,10 +25,16 @@ function page(dc: DropwayContext, url: string, message: string, extra = "", stat
   const html = appStatePage(dc, url, { title: "File delivery", code: "FILE DELIVERY", heading: "File delivery", message, extra, ...o });
   return new Response(html, { status, headers: { ...headers, "Content-Type": "text/html; charset=utf-8", Vary: "Cookie" } });
 }
+/** The delivery page URL, keeping an explicit ?theme= of `from` (validated) so a password retry or unlock stays in that mode. */
+function themedPageUrl(dc: DropwayContext, from: string, slug: string, recipient?: string) {
+  const href = transferPageUrl(dc, slug, recipient);
+  const theme = themeFromQuery(from);
+  return theme && theme !== "auto" ? `${href}${href.includes("?") ? "&" : "?"}theme=${theme}` : href;
+}
 function passwordPage(dc: DropwayContext, url: string, slug: string, recipient?: string, error?: { status: number; message: string }) {
   const invalid = error ? ' aria-invalid="true" aria-describedby="dw-tpw-err"' : "";
   const alert = error ? `<p class="k-msgline k-err" id="dw-tpw-err" role="alert">${escapeHtml(error.message)}</p>` : "";
-  return page(dc, url, "This delivery is password protected.", `<form method="post" action="${escapeHtml(transferPageUrl(dc, slug, recipient))}"><label class="k-label" for="dw-tpw">Password</label><div class="k-field"><input class="k-input" id="dw-tpw" type="password" name="password" minlength="8" maxlength="1024" required autocomplete="current-password"${invalid}><button class="k-btn" type="submit">Unlock delivery</button></div>${alert}</form>`, error?.status ?? 403, { modeSwitch: !error });
+  return page(dc, url, "This delivery is password protected.", `<form method="post" action="${escapeHtml(themedPageUrl(dc, url, slug, recipient))}"><label class="k-label" for="dw-tpw">Password</label><div class="k-field"><input class="k-input" id="dw-tpw" type="password" name="password" minlength="8" maxlength="1024" required autocomplete="current-password"${invalid}><button class="k-btn" type="submit">Unlock delivery</button></div>${alert}</form>`, error?.status ?? 403, { modeSwitch: !error });
 }
 const HTML_UNLOCK_ERRORS: Record<string, { status: number; message: string }> = {
   transfer_locked: { status: 403, message: "Incorrect password. Try again or ask the sender for the delivery password." },
@@ -45,7 +51,7 @@ export function transferPageError(dc: DropwayContext, request: Request, slug: st
     if (error.code === "transfer_unlock_unavailable") {
       return page(dc, request.url, "Password unlock is unavailable. Try again later.", "", 503, {
         modeSwitch: false,
-        actions: `<a class="k-btn" href="${escapeHtml(transferPageUrl(dc, slug, recipient))}">Back to this delivery</a>`,
+        actions: `<a class="k-btn" href="${escapeHtml(themedPageUrl(dc, request.url, slug, recipient))}">Back to this delivery</a>`,
       });
     }
   }
@@ -119,7 +125,7 @@ export function installTransferPages(app: Hono<DropwayEnv>) {
         if (c.req.header("Origin") !== appOrigin(dc) || ["cross-site", "same-site"].includes(c.req.header("Sec-Fetch-Site") ?? "")) return new Response("Origin refused", { status: 403, headers });
         const text = await readPasswordForm(c.req.raw);
         const grant = await unlockTransfer(dc, t, new URLSearchParams(text).get("password"), c.req.header("CF-Connecting-IP") ?? "unknown");
-        return new Response(null, { status: 303, headers: { ...headers, Location: transferPageUrl(dc, t.slug, recipient),
+        return new Response(null, { status: 303, headers: { ...headers, Location: themedPageUrl(dc, c.req.url, t.slug, recipient),
           "Set-Cookie": `${transferCookieName(t)}=${grant}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=900` } });
       }
       if (!await transferUnlocked(dc, t, c.req.raw)) return passwordPage(dc, c.req.url, t.slug, recipient);

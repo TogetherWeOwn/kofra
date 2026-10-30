@@ -1,6 +1,6 @@
 import { detectFileKind, encodePath, extname, type LiveSite } from "@dropway/core";
 import { escapeHtml, formatBytes } from "../html";
-import { scriptHash, standardTabs, viewerCsp, viewerPage, type ViewerTab } from "./chrome";
+import { scriptHash, standardTabs, viewerCarry, viewerCsp, viewerPage, type ViewerTab } from "./chrome";
 import type { ViewMode, Viewer, ViewerContext, ViewerFile } from "./index";
 
 /**
@@ -170,14 +170,17 @@ function folderNavEtag(file: ViewerFile, live: LiveSite): string {
 /**
  * Plain-link Previous/Next controls for flipping through a folder's images
  * from the image you opened. No JavaScript: each link is an ordinary file
- * URL, so the neighbour renders in its own viewer. Hidden in embed mode,
+ * URL, so the neighbour renders in its own viewer. An explicit ?theme= goes
+ * along as is: every target is an image or SVG, never the site's own HTML, so
+ * no __dropway/open hop is needed. Hidden in embed mode,
  * where the app-origin file browser owns navigation.
  */
 function folderNavHtml(vc: ViewerContext): string {
   if (vc.embed) return "";
   const nav = folderNav(vc.live, vc.file.path);
   if (!nav) return "";
-  const href = (p: string) => escapeHtml(vc.siteBase + encodePath(p));
+  const { theme } = viewerCarry(vc);
+  const href = (p: string) => escapeHtml(vc.siteBase + encodePath(p) + (theme === "auto" ? "" : `?theme=${theme}`));
   const name = (p: string) => escapeHtml(p.split("/").pop() ?? p);
   const prev = nav.prev ? `<a class="k-btn k-sm k-ghost" rel="prev" href="${href(nav.prev)}"><span aria-hidden="true">←</span> Previous: <span class="dw-fname">${name(nav.prev)}</span></a>` : "";
   const next = nav.next ? `<a class="k-btn k-sm k-ghost" rel="next" href="${href(nav.next)}">Next: <span class="dw-fname">${name(nav.next)}</span> <span aria-hidden="true">→</span></a>` : "";
