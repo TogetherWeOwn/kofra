@@ -100,8 +100,8 @@ describe("viewer versions", () => {
   it("pins every registered viewer to its current render version", () => {
     expect(VIEWERS).toHaveLength(15);
     expect(Object.fromEntries(VIEWERS.map((v) => [v.id, v.version ?? 1]))).toEqual({
-      source: 4, "html-frame": 3, markdown: 4, notebook: 4, json: 4, csv: 4, svg: 5, image: 5,
-      pdf: 3, video: 3, audio: 3, font: 4, archive: 3, code: 4, binary: 4,
+      source: 5, "html-frame": 4, markdown: 5, notebook: 4, json: 5, csv: 5, svg: 5, image: 5,
+      pdf: 4, video: 4, audio: 4, font: 4, archive: 4, code: 5, binary: 5,
     });
   });
 });
@@ -274,8 +274,8 @@ describe("viewer pages", () => {
     expect(again.headers.get("x-kofra-render-cache")).toBe("memory");
     const etag = again.headers.get("etag")!;
     // Nonembedded pages include the live manifest identity as well as the file hash.
-    expect(etag).toMatch(/^W\/"code@4-[a-f0-9]{64}-[A-Za-z0-9_-]+"$/);
-    const hash = etag.match(/^W\/"code@4-([a-f0-9]{64})-/)![1];
+    expect(etag).toMatch(/^W\/"code@5-[a-f0-9]{64}-[A-Za-z0-9_-]+"$/);
+    const hash = etag.match(/^W\/"code@5-([a-f0-9]{64})-/)![1];
     expect((await get("src/app.ts", { ...NAV, "If-None-Match": `W/"code@3-${hash}"` })).status).toBe(200);
     expect((await get("src/app.ts", { ...NAV, "If-None-Match": etag })).status).toBe(304);
     // Sub-resource requests still get the bytes.
