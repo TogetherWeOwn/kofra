@@ -600,6 +600,48 @@ describe("unfurl canonical reachability for a reserved root name", () => {
     expect(stillProviderSvg).not.toContain("UNFURL_ARTWORK_ONLY");
     expect(stillProvider.headers.get("content-type")).toBe(provider.headers.get("content-type"));
   });
+
+  it.each(["index.html", "notes.txt"])("keeps authorized multi-file preview badge.svg directly canonical with %s", async (companion) => {
+    const dw = await freshInstance();
+    const slug = "unfurl-badge-preview";
+    const artwork = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><text>PREVIEW_ARTWORK_ONLY</text></svg>';
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey,
+      body: form({ "badge.svg": artwork, [companion]: "<p>PREVIEW_COMPANION</p>" }, { slug }),
+    });
+    expect(published.status).toBe(201);
+    expect(published.body.versionUrl).toEqual(expect.any(String));
+    const previewRoot = new URL(published.body.versionUrl);
+    // Use ordinary owner authorization; never send or report the signed query.
+    previewRoot.search = "";
+    previewRoot.hash = "";
+    expect(previewRoot.origin).toBe(ORIGIN);
+    expect(previewRoot.pathname).toBe(`/s/${slug}--v${published.body.version.number}/`);
+    const canonical = new URL("badge.svg", previewRoot).href;
+
+    const root = await dw.call(previewRoot.href, { key: dw.ownerKey, headers: NAV });
+    expect(root.status).toBe(200);
+    expect(root.headers.get("x-kofra-viewer")).not.toBe("svg");
+    const rootHtml = await root.text();
+    expect(rootHtml).toContain(companion === "index.html" ? "PREVIEW_COMPANION" : "notes.txt");
+    expect(rootHtml).not.toContain("PREVIEW_ARTWORK_ONLY");
+
+    const response = await dw.call(`${canonical}?view=1`, { key: dw.ownerKey, headers: NAV });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-kofra-viewer")).toBe("svg");
+    expect(response.headers.get("cache-control")).toMatch(/\bprivate\b/);
+    expect(response.headers.get("cache-control")).toMatch(/\bno-store\b/);
+    await expectUnfurl(await response.text(), { url: canonical, kind: /svg|image/i, sizes: [sizeRe(byteLen(artwork))] });
+
+    const navigation = await dw.call(canonical, { key: dw.ownerKey, headers: NAV });
+    expect(navigation.status).toBe(200);
+    expect(navigation.headers.get("x-kofra-viewer"), "the preview canonical navigates directly to the artwork, not its index/listing").toBe("svg");
+    await navigation.text();
+    const raw = await dw.call(`${canonical}?raw=1`, { key: dw.ownerKey, headers: NAV });
+    expect(raw.status).toBe(200);
+    expect(raw.headers.get("x-kofra-viewer")).toBeNull();
+    expect(await raw.text()).toBe(artwork);
+  });
 });
 
 describe("unfurl metadata is absent from authored 404 fallbacks", () => {
@@ -636,6 +678,36 @@ describe("unfurl metadata is absent from authored 404 fallbacks", () => {
     expect(metas.find((meta) => meta.key === "robots")?.content, "404 still carries noindex").toContain("noindex");
     expect(metas.filter((meta) => meta.key.startsWith("og:") || meta.key.startsWith("twitter:") || meta.key === "description"),
       "an authored fallback is an error, not a file to unfurl").toEqual([]);
+  });
+
+  it.each(["1", "source"])("never revalidates missing?view=%s against a successful custom-404 viewer", async (mode) => {
+    const directPath = `/s/${slug}/404.html?view=${mode}`;
+    const direct = await dw.call(directPath, { headers: NAV });
+    expect(direct.status).toBe(200);
+    const viewer = mode === "1" ? "html-frame" : "source";
+    expect(direct.headers.get("x-kofra-viewer")).toBe(viewer);
+    const etag = direct.headers.get("etag");
+    expect(etag, "a successful direct custom-404 viewer supplies a real validator").toEqual(expect.any(String));
+    await direct.text();
+
+    // Reuse the successful file's tag twice: the second request revalidates
+    // after an error. Even a wildcard must never turn a missing path into 304.
+    for (const validator of [etag!, etag!, "*"]) {
+      const response = await dw.call(`/s/${slug}/missing?view=${mode}`, {
+        headers: { ...NAV, "If-None-Match": validator },
+      });
+      expect(response.status, "a conditional custom-404 response stays an error, never 304").toBe(404);
+      expect(response.headers.get("x-kofra-viewer")).toBe(viewer);
+      expect(response.headers.get("etag"), "error viewers must not advertise a successful file validator").toBeNull();
+      expect(response.headers.get("cache-control")).toMatch(/\bprivate\b/);
+      expect(response.headers.get("cache-control")).toMatch(/\bno-store\b/);
+      const metas = await metasIn(await response.text());
+      expect(metas.find((meta) => meta.key === "robots")?.content, "conditional errors retain noindex").toContain("noindex");
+      expect(metas.filter((meta) => meta.key.startsWith("og:") || meta.key.startsWith("twitter:") || meta.key === "description"),
+        "conditional error viewers carry no generated file metadata").toEqual([]);
+    }
+    // Error responses must not disable or poison successful-file revalidation.
+    await expectRevalidated(dw, directPath, etag!);
   });
 });
 

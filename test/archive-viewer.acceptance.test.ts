@@ -23,8 +23,9 @@
  * - Caps: MAX_ARCHIVE_BYTES = 2 MiB parsed, MAX_ENTRIES = 1000 rows shown.
  *   Past the entry cap: "Showing the first 1,000 of N entries".
  * - Cache like every viewer: cachedRender keyed with id + version
- *   ("archive@4/..."), X-Kofra-Render-Cache header; ETag W/"archive@4-<sha>-<manifest>"
- *   (or W/"archive@4-<sha>-e" for &embed=1) so a version bump invalidates old renders.
+ *   ("archive@4/..."), X-Kofra-Render-Cache header; ETag
+ *   W/"archive@4-<sha>-folder<manifest>-chrome2" (with -e before the closing
+ *   quote for &embed=1) so a version bump invalidates old renders.
  * - Escape entry names as text; make no external requests (relative links
  *   plus the absolute app-origin Files link only).
  * - Review pins: the counts line totals the complete directory past the
@@ -265,6 +266,7 @@ describe("archive viewer selection", () => {
 describe("archive viewer pages", () => {
   let dw: Instance;
   let slug: string;
+  let manifestVersion: string;
   const files: Record<string, Uint8Array> = {};
 
   beforeAll(async () => {
@@ -300,6 +302,7 @@ describe("archive viewer pages", () => {
     });
     expect(res.status).toBe(201);
     slug = res.body.slug;
+    manifestVersion = res.body.version.id;
   }, 30_000);
 
   const get = (path: string, headers: Record<string, string> = NAV) => dw.call(`/s/${slug}/${path}`, { headers });
@@ -580,7 +583,7 @@ describe("archive viewer pages", () => {
       expect((await get("archives/version-probe.zip", { ...NAV, "If-None-Match": bumpedWarm.headers.get("etag")! })).status).toBe(304);
       const embed = await get("archives/version-probe.zip?view=1&embed=1", { ...NAV, "If-None-Match": `W/"archive@${version}-${sha}-chrome1-e"` });
       expect(embed.status).toBe(200);
-      expect(embed.headers.get("etag")).toBe(`W/"archive@${version + 1}-${sha}-chrome1-e"`);
+      expect(embed.headers.get("etag")).toBe(`W/"archive@${version + 1}-${sha}-folder${manifestVersion}-chrome2-e"`);
 
       // Drop only isolate memory: the bumped version must also have its own edge-cache fragment.
       clearRenderMemoryCache();
