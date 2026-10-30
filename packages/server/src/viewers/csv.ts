@@ -9,10 +9,19 @@ import type { Viewer } from "./index";
  * numeric columns, and row/column counts. Shows the first 2,000 rows; reads at
  * most the first 4 MB of the file, so even very large files open fast.
  */
-const CSV_VERSION = 2;
+// 4 was issued separately for the report print treatment plus shared-link
+// head tags and for the Phone disclosure in the viewer bar; neither 4
+// identifies the merged bytes, so the merged render moves to 5.
+const CSV_VERSION = 5;
 export const MAX_ROWS = 2_000;
 const READ_MAX_BYTES = 4 * 1024 * 1024;
 const MAX_CELL = 1_000;
+/** Delimiter detection scans at most 64 Ki UTF-16 code units ... */
+const DETECT_SAMPLE_CHARS = 64 * 1024;
+/** ... and lets at most five complete nonempty logical records vote. */
+const DETECT_MAX_RECORDS = 5;
+/** Candidate order is also the tie-break order: comma, tab, semicolon, pipe. */
+const DELIMITER_CANDIDATES = [",", "\t", ";", "|"];
 
 const CSV_CSS = `
 .dw-csv{padding:12px 18px 48px}
@@ -27,18 +36,93 @@ const CSV_CSS = `
 .dw-csvwrap tbody tr:hover td{background:var(--accent-wash)}
 `;
 
-/** Pick the delimiter that splits the first line most consistently. */
+/**
+ * Pick the delimiter by counting candidates outside quoted fields across
+ * complete logical records (LF, CRLF and bare CR boundaries; LF/CRLF inside
+ * quotes are field content; `""` is an escaped quote, like {@link parseCsv}).
+ * A quote opens only at a field start, matching the parser.
+ *
+ * Bounded: at most {@link DETECT_SAMPLE_CHARS} UTF-16 code units are scanned
+ * and at most {@link DETECT_MAX_RECORDS} complete nonempty records vote, so
+ * detection is O(sample budget) time and O(1) memory. Hitting the character
+ * budget mid-record is not EOF: a trailing unterminated record is discarded
+ * and the completed prefix decides; with no completed record the fallback is
+ * comma. An unterminated quote at true EOF likewise casts no vote. Empty
+ * records cast no vote. Callers must pass the whole sample: the detector
+ * slices internally, which is what lets it tell a budget cut from EOF. A
+ * candidate seen a consistent nonzero number of times
+ * in every voting record wins; remaining ties keep candidate order, and files
+ * with no candidate evidence fall back to comma. `.tsv` always selects tab.
+ */
 export function detectDelimiter(sample: string, path: string): string {
   if (extname(path) === "tsv") return "\t";
-  const firstLines = sample.split(/\r?\n/, 5).filter(Boolean);
+  const truncated = sample.length > DETECT_SAMPLE_CHARS;
+  const text = truncated ? sample.slice(0, DETECT_SAMPLE_CHARS) : sample;
+  // Per-record outside-quote counts, one row per voting record.
+  const votes: number[][] = [];
+  let counts = [0, 0, 0, 0];
+  let quoted = false;
+  let fieldStart = true;
+  let sawChar = false;
+  let i = 0;
+  const n = text.length;
+  while (i < n) {
+    const ch = text[i]!;
+    if (quoted) {
+      sawChar = true;
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          i += 2;
+          continue;
+        }
+        quoted = false;
+        fieldStart = false;
+      }
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      sawChar = true;
+      if (fieldStart) quoted = true;
+      else fieldStart = false;
+      i++;
+      continue;
+    }
+    const cand = DELIMITER_CANDIDATES.indexOf(ch);
+    if (cand >= 0) {
+      sawChar = true;
+      fieldStart = true;
+      counts[cand]!++;
+      i++;
+      continue;
+    }
+    if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") i++;
+      i++;
+      if (sawChar) {
+        votes.push(counts);
+        if (votes.length >= DETECT_MAX_RECORDS) break;
+        counts = [0, 0, 0, 0];
+      }
+      sawChar = false;
+      fieldStart = true;
+      continue;
+    }
+    sawChar = true;
+    fieldStart = false;
+    i++;
+  }
+  // The budget boundary is not EOF: only a fully seen, balanced trailing
+  // record completes without a newline.
+  if (!truncated && sawChar && !quoted && votes.length < DETECT_MAX_RECORDS) votes.push(counts);
   let best = ",";
   let bestScore = 0;
-  for (const d of [",", "\t", ";", "|"]) {
-    const counts = firstLines.map((l) => l.split(d).length - 1);
-    const min = Math.min(...counts);
-    const score = min > 0 && counts.every((c) => c === counts[0]) ? min + 1000 : min;
+  for (let c = 0; c < DELIMITER_CANDIDATES.length; c++) {
+    const column = votes.map((v) => v[c]!);
+    const min = column.length ? Math.min(...column) : 0;
+    const score = min > 0 && column.every((x) => x === column[0]) ? min + 1000 : min;
     if (score > bestScore) {
-      best = d;
+      best = DELIMITER_CANDIDATES[c]!;
       bestScore = score;
     }
   }
@@ -135,7 +219,7 @@ export const csvViewer: Viewer = {
     let meta = "";
     const r = await cachedRender(vc.dw, `csv@${CSV_VERSION}/${extname(vc.file.path)}/${vc.file.sha256}`, async () => {
       const text = decodeText(await vc.readBytes(0, partial ? READ_MAX_BYTES : vc.file.size));
-      const delimiter = detectDelimiter(text.slice(0, 64 * 1024), vc.file.path);
+      const delimiter = detectDelimiter(text, vc.file.path);
       const parsed = parseCsv(text, delimiter, MAX_ROWS + 1);
       // A partial read can end mid-row.
       if (partial && parsed.complete && parsed.rows.length > 1) parsed.rows.pop();
@@ -151,6 +235,7 @@ export const csvViewer: Viewer = {
     if (m) meta = m[1]!;
     return viewerPage(vc, {
       tabs: standardTabs(vc, { rendered: "Table", source: true }),
+      print: true,
       css: CSV_CSS,
       body: `<div class="dw-csv"><p class="dw-csvmeta">${meta}</p>${m ? r.html.slice(m[0].length) : r.html}</div>`,
       headers: { "X-Kofra-Render-Cache": r.cache },

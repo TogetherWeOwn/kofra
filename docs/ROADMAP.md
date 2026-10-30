@@ -31,11 +31,12 @@ The first three feature branches are merged into `main` on top of the baseline b
 |---|---|---|
 | R-01 | Done | Open-core guard and self-test in CI (npm, Yarn, pnpm and Bun text locks); `EXTENSION_API_VERSION = 1`, Extension API changelog and contract tests for every existing extension point. |
 | R-04 | Partial | File sources (`content`, `url`, `sha256` + upload link, `copyFrom`) and idempotency keys for agent writes. |
-| R-05 | Partial | Partial updates (`PATCH /api/v1/sites/:slug/files`), `GET` version status, rename. |
+| R-05 | Done | Canonical `/versions` routes with `/deploys` kept as aliases, partial updates (`PATCH /api/v1/sites/:slug/files`), `GET` version status returning fresh upload items, fresh upload items in `missing_blobs`, rename. |
+| R-13 | Done | Exact ready-version previews in path and subdomain modes, owner credentials or 24-hour signed links, preview-root cookies, private/no-store privacy headers and stale-live-KV bypass. |
 | R-06 | Done | Remote MCP server at `/mcp` (Streamable HTTP) with a tool for every core capability, toolsets and read-only mode. |
 | R-07, R-08 | Done | Viewer bar with Rendered / Source / Raw, HTML frame, code highlighting, Markdown, JSON, CSV, images, SVG, PDF, video, audio, fonts, notebooks, binary info, cached renders. |
 | R-09, R-10 | Done | `kofra` CLI: publish (hash locally, upload only missing files), list, versions, restore, delete, login, whoami, setup, `api`. Not yet published to npm. |
-| R-11 | Done | `/llms.txt`, `/llms-full.txt`, `/skill.md`, `/.well-known/agent-skills`, repo skill in `skills/kofra`. |
+| R-11 | Done | `/llms.txt`, `/llms-full.txt`, `/skill.md`, `/.well-known/agent-skills`, repo skill in `skills/kofra`, `/connect`, `/connect.md`, `/.well-known/api-catalog`, `/robots.txt`. |
 | R-22 | Partial | Dashboard (sign-in with an API key, sites, versions, publish, keys, members, settings) and the app-origin file browser `/v/:slug/`. Sessions and login links are R-21. |
 
 Next: R-02 (operation registry), R-12 (path-mode hardening), R-13 (version preview URLs), R-14, R-15, R-16.
@@ -662,3 +663,24 @@ Delivers: new. Depends: R-36.
   counts per /64; IPv4-mapped and IPv4-compatible IPv6 forms share the IPv4 bucket.
 - If the counter is unavailable, these limits refuse (fail closed). `OPTIONS` and unknown paths spend
   nothing. 429 answers carry `RateLimit` and `Retry-After`.
+
+### R-59 Link permanence: hold freed names, 308 old names (2 days)
+Delivers: rename permanence (the rename-redirect part of R-50's scope; the 308 here replaces the 307
+planned there — coordinate with the R-50 card). Depends: none.
+- Rename: the old slug stays bound to the same site and answers 308 to the new name, path and query
+  kept, in path mode and subdomain mode, until `redirectUntil` (12 months by default, config).
+  `rename_site` returns `oldSlug` and `redirectUntil`. Chains resolve through the current name, so
+  a->b->c redirects a and b to c. Renaming back to your own old name works and flips the redirect.
+- Delete and expiry tombstone the freed name (plus every old name still redirecting to the site):
+  chosen names for 12 months, generated names for 90 days (config). Another tenant creating or
+  renaming to a held name gets 409 `slug_reserved`; the same tenant may reclaim it. Database triggers
+  refuse cross-tenant acquisition inside the write batch, so races cannot hijack a held name.
+- A hold ends early only with a reason and audit record. `release_slug` requires an unrestricted
+  admin key of the holding tenant plus confirm; tenant admins cannot release foreign or ownerless
+  holds. Cross-tenant trademark disputes and anonymous expiries use the instance operator's audited
+  database procedure in `docs/SELF_HOST.md`, never tenant-grantable API authority.
+- Delete/expiry assert the selected site's identity, name, ownership and expiry inside the batch;
+  stale API deletes return 409 `site_changed`, and cleanup skips changed rows until its next run.
+  Expired aliases are removed, not converted into fresh holds.
+- A deleted version's `<slug>--v<N>` answers 410 in both modes, never another site's bytes; a
+  renamed-away version address 308s to the new name. Live version previews stay R-13's to serve.

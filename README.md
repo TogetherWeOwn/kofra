@@ -64,6 +64,16 @@ Use this repository's composite action to publish a build folder, update one PR
 comment, and remove the preview on close. It uses your own Kofra instance and
 supports trusted same-repository PRs only. See [setup, permissions and cleanup](docs/PR_PREVIEWS.md).
 
+### Version badge
+
+Every public site serves a live-version badge at its own `badge.svg`:
+
+```markdown
+[![kofra](https://<your-site-address>/badge.svg)](https://<your-site-address>/)
+```
+
+The dashboard site page prints this snippet with your address filled in. See [the badge docs](docs/SITE_BADGE.md).
+
 ### curl
 
 ```sh
@@ -177,8 +187,10 @@ Every instance describes itself:
 
 - [Self-hosting and configuration](docs/SELF_HOST.md)
 - [CLI reference](packages/cli/README.md)
+- [Site recovery spec: `kofra pull`](docs/CLI_PULL.md) (proposed, design only)
 - [Architecture and extension points](docs/ARCHITECTURE.md)
 - [Agents: MCP server, REST twins, skill](docs/MCP.md)
+- [Embeddable live-version badge](docs/SITE_BADGE.md)
 - [Product specification](docs/SPEC.md) and [roadmap](docs/ROADMAP.md)
 - [Notes for coding agents working on this repo](AGENTS.md)
 

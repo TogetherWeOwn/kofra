@@ -7,13 +7,17 @@ import {
   hmacHex,
   isHtml,
   isTextual,
+  isApiError,
+  spendSitePasswordAttempt,
   meter,
   emit,
   precompressed,
   readBlob,
   readBlobRange,
   requestPathToFilePath,
+  resolveSlugRedirect,
   siteUrl,
+  timingSafeEqualStr,
   verifyPassword,
   type DropwayContext,
   type LiveSite,
@@ -21,14 +25,15 @@ import {
 import { escapeHtml, siteSystemCsp, systemPage } from "./html";
 import { urlCode } from "./ui/code";
 import { safeNext, themeOf } from "./ui/theme";
-import { findViewer, toViewerFile, VIEWER_CSP, VIEWERS, type ViewMode, type Viewer } from "./viewers";
-import { VIEWER_PAGE_VERSION } from "./viewers/chrome";
+import { findViewer, toViewerFile, VIEWER_CHROME_VERSION, VIEWER_CSP, VIEWERS, type ViewMode, type Viewer } from "./viewers";
 import { OPEN_PATH } from "./viewers/links";
 import { renderListing } from "./viewers/listing";
 import { MAX_CSS_REWRITE_BYTES, rewriteCss, rewriteHtml, type PathRewrite } from "./path-rewrite";
 import { PATH_SHIM_VERSION, pathShimScript } from "./path-shim";
 import { injectReportLink, REPORT_LINK_VERSION } from "./report-link";
+import { badgeFor, badgeResponse } from "./site-badge";
 import { serveTransfer } from "./transfers";
+import { attachmentDisposition } from "./content-disposition";
 
 /**
  * How a site is being served.
@@ -43,6 +48,10 @@ export interface ServeMode {
   sandbox: boolean;
   /** Path mode: prefix root-relative URLs in HTML and CSS (null = serve bytes untouched). */
   rewrite: PathRewrite | null;
+  /** Keep runtime URLs in path scope when a preview suppresses the Referer. */
+  pathShim?: boolean;
+  /** Authorized version-preview serving, not the live site (set only by the preview path). */
+  preview?: boolean;
 }
 
 export const INDEX_NAMES = ["index.html", "index.htm", "index.md", "README.md", "readme.md"];
@@ -56,6 +65,13 @@ const PASSWORD_PATH = "__dropway/password";
 export const REPORT_PATH = "__dropway/report";
 /** The app's file viewer opens folders and a site's own pages in its frame through this address (see openInFrame). */
 export { OPEN_PATH };
+const PASSWORD_FORM_TTL = 15 * 60_000;
+/** Edges' clocks differ slightly: a form issued by one may look this far ahead to another. */
+const PASSWORD_FORM_CLOCK_SKEW = 60_000;
+/** Cloudflare's shared source address for cross-zone Worker subrequests; the edge-added CF-Worker header names the zone. */
+const CROSS_ZONE_WORKER_IP = "2a06:98c0:3600::103";
+/** Reserved at a site root: the provider-served live-version badge (a published file of this name is not served). */
+const BADGE_PATH = "badge.svg";
 
 export type Resolved =
   | { kind: "file"; path: string; status: number }
@@ -70,9 +86,33 @@ export function isNavigation(req: Request): boolean {
   return (req.headers.get("accept") ?? "").includes("text/html");
 }
 
-function hasChildren(files: LiveSite["files"], dir: string): boolean {
-  for (const k in files) if (k.startsWith(dir)) return true;
+/** Private configuration paths are stored with the version but never served. */
+function isPrivatePath(p: string): boolean {
+  return p === ".dropway" || p.startsWith(".dropway/");
+}
+
+/** A directory counts for serving only when it holds at least one non-private entry. */
+function hasVisibleChildren(files: LiveSite["files"], dir: string): boolean {
+  for (const k in files) if (k.startsWith(dir) && !isPrivatePath(k)) return true;
   return false;
+}
+
+/**
+ * The longest proper ancestor directory of `filePath` (with trailing "/")
+ * that prefixes at least one non-private path in the live manifest, or null when no
+ * ancestor folder has files. The site root never counts. Computed from the
+ * already-loaded manifest only. Object.keys keeps an ancestor folder named
+ * `__proto__` ordinary manifest data.
+ */
+function nearestManifestAncestor(files: LiveSite["files"], filePath: string): string | null {
+  // Empty segments (leading, trailing or repeated "/") are filtered out below.
+  const segments = filePath.split("/").filter(Boolean);
+  const paths = Object.keys(files);
+  for (let len = segments.length - 1; len >= 1; len--) {
+    const dir = `${segments.slice(0, len).join("/")}/`;
+    if (paths.some((k) => k.startsWith(dir) && !isPrivatePath(k))) return dir;
+  }
+  return null;
 }
 
 /**
@@ -82,16 +122,20 @@ function hasChildren(files: LiveSite["files"], dir: string): boolean {
 export function resolvePath(live: LiveSite, p: string, req: Request, mode: ServeMode, fallbacks = true): Resolved {
   const files = live.files;
   const search = new URL(req.url).search;
+  // .dropway and .dropway/* are stored with the version (site configuration) but never
+  // served: not as a file, not raw, not as a listing, and not through the SPA fallback.
+  // A directory holding only private entries therefore answers as if it were absent.
+  if (isPrivatePath(p)) return { kind: "not_found" };
   if (p === "" || p.endsWith("/")) {
     for (const name of INDEX_NAMES) if (files[p + name]) return { kind: "file", path: p + name, status: 200 };
     if (p === "") {
       const keys = Object.keys(files);
-      if (keys.length === 1) return { kind: "file", path: keys[0]!, status: 200 };
+      if (keys.length === 1 && keys[0] !== ".dropway" && !keys[0]!.startsWith(".dropway/")) return { kind: "file", path: keys[0]!, status: 200 };
     }
-    if (hasChildren(files, p)) return { kind: "listing", dir: p };
+    if (hasVisibleChildren(files, p)) return { kind: "listing", dir: p };
   } else {
     if (files[p]) return { kind: "file", path: p, status: 200 };
-    if (hasChildren(files, `${p}/`)) return { kind: "redirect", location: `${mode.base}${encodePath(p)}/${search}` };
+    if (hasVisibleChildren(files, `${p}/`)) return { kind: "redirect", location: `${mode.base}${encodePath(p)}/${search}` };
     if (files[`${p}.html`]) return { kind: "file", path: `${p}.html`, status: 200 };
     if (files[`${p}.htm`]) return { kind: "file", path: `${p}.htm`, status: 200 };
   }
@@ -189,7 +233,8 @@ function endStateActions(origin: string, req: Request, live: LiveSite | null, st
     (code === "EMPTY" && live && embed
       ? `<a class="k-btn" href="${escapeHtml(origin)}/dashboard/publish?site=${escapeHtml(encodeURIComponent(live.slug))}"${out}>Publish files</a>`
       : status === 502
-        ? `<a class="k-btn" href="${escapeHtml(req.url)}">Try again</a>`
+        ? // The path only: a request's query (preview, claim, unlock, tokens) never goes into the page.
+          `<a class="k-btn" href="${escapeHtml(new URL(req.url).pathname)}">Try again</a>`
         : "");
   return `<div class="k-acts">${primary}<a class="k-btn${primary ? " k-ghost" : ""}" href="${escapeHtml(origin)}"${out}>Home</a></div>`;
 }
@@ -256,12 +301,54 @@ function readCookie(req: Request, name: string): string | null {
   return null;
 }
 
+/** The trusted edge's view of the visitor. Forwarding headers are never identity; only the synthetic address is split by zone. */
+function passwordVisitor(req: Request): string {
+  const ip = req.headers.get("CF-Connecting-IP") ?? "unknown";
+  const zone = req.headers.get("CF-Worker");
+  return zone && ip.toLowerCase() === CROSS_ZONE_WORKER_IP ? `${ip}|worker:${zone}` : ip;
+}
+
+async function passwordFormSignature(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, until: number): Promise<string> {
+  return hmacHex(dw.config.signingSecret, JSON.stringify([
+    "site-password-form", new URL(req.url).origin, mode.base, live.siteId, live.passwordHash,
+    passwordVisitor(req), until,
+  ]));
+}
+
+async function passwordSubmissionAllowed(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode): Promise<boolean> {
+  const origin = req.headers.get("Origin");
+  const site = req.headers.get("Sec-Fetch-Site");
+  if (origin && origin !== "null") return origin === new URL(req.url).origin && site !== "cross-site" && site !== "same-site";
+  if (origin !== "null") return site !== "cross-site" && site !== "same-site";
+  // Sandboxes and no-referrer pages can both send Origin: null. Require the
+  // visitor's short-lived form proof without reading or charging its body.
+  const token = new URL(req.url).searchParams.get("dw_form") ?? "";
+  const match = /^(\d{1,16})\.([a-f0-9]{64})$/.exec(token);
+  if (!match) return false;
+  const until = Number(match[1]);
+  const now = Date.now();
+  if (!Number.isSafeInteger(until) || until <= now || until > now + PASSWORD_FORM_TTL + PASSWORD_FORM_CLOCK_SKEW) return false;
+  return timingSafeEqualStr(match[2]!, await passwordFormSignature(dw, req, live, mode, until));
+}
+
 async function handlePassword(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, filePath: string): Promise<Response | null> {
   if (!live.passwordHash) return null;
   const expected = await passwordCookieValue(dw, live);
   if (readCookie(req, cookieName(live, mode)) === expected || readCookie(req, cookieName(live, mode, true)) === expected) return null;
 
   if (req.method === "POST" && filePath === PASSWORD_PATH) {
+    if (!await passwordSubmissionAllowed(dw, req, live, mode)) {
+      return systemResponse(dw, req, mode, live, 403, "403", "Password form refused", "Reload this site's password form and try again.");
+    }
+    try {
+      await spendSitePasswordAttempt(dw, live.siteId, passwordVisitor(req));
+    } catch (error) {
+      const limited = isApiError(error) && error.status === 429;
+      const response = systemResponse(dw, req, mode, live, limited ? 429 : 503, limited ? "429" : "503",
+        limited ? "Too many password attempts" : "Password unlock unavailable", "Please try again later.");
+      response.headers.set("Retry-After", String(limited ? error.retryAfterSeconds : 1));
+      return response;
+    }
     const form = await req.formData().catch(() => null);
     const password = form?.get("password");
     const next = String(form?.get("next") ?? mode.base);
@@ -321,12 +408,13 @@ function openInFrame(dw: DropwayContext, req: Request, url: URL, live: LiveSite,
   return new Response(null, { status: 303, headers: { Location: target.pathname + target.search, "Cache-Control": "no-store" } });
 }
 
-function passwordForm(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, next: string, failed: boolean): Response {
+async function passwordForm(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, next: string, failed: boolean): Promise<Response> {
   // The form posts with the same ?theme= as the page, so a wrong-password answer keeps the mode. No
   // autofocus: browsers block it in the app's file viewer (a cross-origin frame) and it skips the page.
   const theme = themeOf(dw);
-  const query = [theme === "auto" ? "" : `theme=${theme}`, isEmbedded(req) ? "embed=1" : ""].filter(Boolean).join("&");
-  const extra = `<form method="post" action="${escapeHtml(mode.base + PASSWORD_PATH + (query ? `?${query}` : ""))}">
+  const until = Date.now() + PASSWORD_FORM_TTL;
+  const query = [`dw_form=${until}.${await passwordFormSignature(dw, req, live, mode, until)}`, theme === "auto" ? "" : `theme=${theme}`, isEmbedded(req) ? "embed=1" : ""].filter(Boolean).join("&");
+  const extra = `<form method="post" action="${escapeHtml(`${mode.base}${PASSWORD_PATH}?${query}`)}">
 <input type="hidden" name="next" value="${escapeHtml(next)}">
 <label class="k-label" for="dw-pw">Password</label>
 <div class="k-field"><input class="k-input" id="dw-pw" type="password" name="password" autocomplete="current-password" required${failed ? ' aria-invalid="true" aria-describedby="dw-pw-err"' : ""}><button class="k-btn" type="submit">Open</button></div>
@@ -370,6 +458,18 @@ function etagMatches(req: Request, etag: string): boolean {
   });
 }
 
+// Viewer ids and etagExtra output may be any string — including lone
+// (unpaired) UTF-16 surrogates, on which encodeURIComponent throws URIError.
+// Normalize those to U+FFFD first (same approach as content-disposition.ts);
+// valid surrogate pairs pass through untouched.
+function etagSegment(value: string): string {
+  return encodeURIComponent(
+    value.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, (m) =>
+      m.length === 2 ? m : "\uFFFD",
+    ),
+  );
+}
+
 const flag = (sp: URLSearchParams, name: string) => sp.has(name) && sp.get(name) !== "0" && sp.get(name) !== "false";
 
 /** Which view a request asks for: ?view=source, ?view=1, or a browser navigation (top level or iframe). null = raw bytes. */
@@ -394,16 +494,21 @@ export async function serveSite(
   mode: ServeMode,
   viewers: readonly Viewer[] = VIEWERS,
 ): Promise<Response> {
-  const started = Date.now();
   const url = new URL(req.url);
   const method = req.method.toUpperCase();
   // Transfer gates never depend on an eventually consistent live manifest.
   const transfer = await dw.env.DB.prepare("SELECT mode FROM sites WHERE slug = ? UNION ALL SELECT 'transfer' AS mode FROM transfer_slug_tombstones WHERE slug = ? AND NOT EXISTS (SELECT 1 FROM sites WHERE slug = ?) LIMIT 1").bind(slug, slug, slug).first<{ mode: string }>();
+  const badge = (method === "GET" || method === "HEAD") && requestPathToFilePath(pathname) === BADGE_PATH;
   if (transfer?.mode === "transfer") {
+    // The badge never reaches the transfer handler: no download is counted or attributed.
+    if (badge) return badgeResponse(badgeFor(null), method);
     const path = requestPathToFilePath(pathname);
     if (path === null) return new Response("Not found", { status: 404 });
     return serveTransfer(req, dw, slug, path);
   }
+  // Credentials, cookies and Fetch Metadata are never read: the same bytes for everyone.
+  // Not recorded as a site request (no analytics point, no usage meter, no hook).
+  if (badge) return badgeResponse(badgeFor(await getLiveSite(dw, slug)), method);
   if (method === "OPTIONS") {
     // Password-protected sites are not readable cross-origin, so their preflights grant nothing.
     const gated = !!(await getLiveSite(dw, slug))?.passwordHash;
@@ -416,7 +521,39 @@ export async function serveSite(
   if (filePath === null) return systemResponse(dw, req, mode, null, 400, "400", "Bad request", "That address could not be decoded.");
 
   const live = await getLiveSite(dw, slug);
-  if (!live) return systemResponse(dw, req, mode, null, 404, "404", "Nothing is published here", "There is no site at this address. It may have been deleted. See {app}.");
+  if (!live) {
+    // R-59: a renamed site's old name 308s to the current name, path and query
+    // kept. Never cached: the hold ends and the name may be reused.
+    const redirect = await resolveSlugRedirect(dw, slug);
+    if (redirect) {
+      return new Response(null, {
+        status: 308,
+        headers: {
+          Location: siteUrl(dw, redirect.slug) + pathname.replace(/^\//, "") + url.search,
+          "Access-Control-Allow-Origin": "*",
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+    return systemResponse(dw, req, mode, null, 404, "404", "Nothing is published here", "There is no site at this address. It may have been deleted. See {app}.");
+  }
+  return serveSiteContent(req, dw, live, pathname, mode, viewers);
+}
+
+/** Serve an already resolved manifest. Preview callers authorize and load their version in D1 first. */
+export async function serveSiteContent(
+  req: Request,
+  dw: DropwayContext,
+  live: LiveSite,
+  pathname: string,
+  mode: ServeMode,
+  viewers: readonly Viewer[] = VIEWERS,
+): Promise<Response> {
+  const started = Date.now();
+  const url = new URL(req.url);
+  const method = req.method.toUpperCase();
+  const filePath = requestPathToFilePath(pathname);
+  if (filePath === null) return systemResponse(dw, req, mode, live, 400, "400", "Bad request", "That address could not be decoded.");
   // Anonymous sites are untrusted: sandbox them even where other sites are not.
   if (!mode.sandbox && live.tenantId === null && dw.config.sitesSandboxAnonymous) mode = { ...mode, sandbox: true };
   if (live.expiresAt && live.expiresAt < Date.now()) {
@@ -451,9 +588,17 @@ export async function serveSite(
     response = new Response(null, { status: 301, headers: { Location: resolved.location } });
     securityHeaders(response.headers, live, mode);
   } else if (resolved.kind === "not_found") {
-    response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", `There is no file at <code>/${escapeHtml(filePath)}</code> on this site.`);
+    // Post-gate only (like listings): lead back to the site instead of a dead end.
+    const ancestor = nearestManifestAncestor(live.files, filePath);
+    const recovery =
+      `<nav aria-label="Where to go next"><ul>` +
+      `<li><a href="${escapeHtml(mode.base)}">Site home</a></li>` +
+      (ancestor ? `<li><a href="${escapeHtml(mode.base + encodePath(ancestor))}">Folder: /${escapeHtml(ancestor)}</a></li>` : "") +
+      `<li><a href="${escapeHtml(`${appOrigin(dw)}/v/${live.slug}/${encodePath(ancestor ?? "")}`)}">Browse files</a></li>` +
+      `</ul></nav>`;
+    response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", `There is no file at <code>/${escapeHtml(filePath).replaceAll("{", "&#123;")}</code> on this site.`, recovery);
   } else if (resolved.kind === "listing") {
-    response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`, { dw, theme: themeOf(dw), embed: flag(url.searchParams, "embed") });
+    response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`, url.searchParams.get("sort"), url.origin, { dw, theme: themeOf(dw), embed: flag(url.searchParams, "embed") });
     securityHeaders(response.headers, live, mode);
   } else {
     response = await serveFile(req, dw, url, live, mode, resolved.path, resolved.status, viewers);
@@ -488,11 +633,18 @@ async function serveFile(
   // Rendered views: see ./viewers (one per file kind, plus ?view=source).
   if (viewer && viewMode) {
     const embed = flag(sp, "embed");
+    // Every page, including image/SVG and embeds, names manifest metadata.
+    // A sole-file root can resolve to a new path with identical bytes, and MIME
+    // can change independently too. Content-only render fragments stay reusable.
+    const folderVariant = `-folder${live.versionId}`;
     // ?theme= (from the app's file viewer) prints the page in one mode: a different body, so a different ETag.
     const theme = themeOf(dw);
-    const etag = `W/"${viewer.id}@${viewer.version ?? 1}.${VIEWER_PAGE_VERSION}-${sha256}${embed ? "-e" : ""}${theme === "auto" ? "" : `-t${theme[0]}`}${reportVariant}"`;
+    // The shared chrome revision retires every full-page validator when
+    // viewerPage markup/CSS changes, including extension viewers whose own
+    // version cannot know about an internal chrome change.
+    const etag = `W/"${etagSegment(viewer.id)}@${viewer.version ?? 1}-${sha256}${etagSegment(viewer.etagExtra?.(file, live) ?? "")}${folderVariant}-chrome${VIEWER_CHROME_VERSION}${embed ? "-e" : ""}${theme === "auto" ? "" : `-t${theme[0]}`}${reportVariant}"`;
     const h = new Headers();
-    if (etagMatches(req, etag)) {
+    if (status === 200 && etagMatches(req, etag)) {
       h.set("ETag", etag);
       securityHeaders(h, live, mode);
       return new Response(null, { status: 304, headers: h });
@@ -512,6 +664,7 @@ async function serveFile(
       file,
       mode: viewMode,
       embed,
+      preview: mode.preview === true,
       fileUrl,
       viewUrl: `${fileUrl}?view=1`,
       sourceUrl: `${fileUrl}?view=source`,
@@ -527,13 +680,31 @@ async function serveFile(
     });
     const out = new Headers(rendered.headers);
     if (!out.has("Content-Security-Policy")) out.set("Content-Security-Policy", VIEWER_CSP);
-    out.set("ETag", etag);
-    out.set("Cache-Control", live.passwordHash ? "private, no-store" : "public, max-age=0, must-revalidate");
+    // A viewer may mark its page non-storable (a fallback for a transient
+    // failure, never a verdict on the stored bytes). Honor that policy and
+    // withhold the success ETag: revalidating the fallback as if it were
+    // the healthy render would strand browsers on it after recovery.
+    const viewerCacheControl = out.get("Cache-Control");
+    if (status >= 400 || viewerCacheControl?.includes("no-store")) out.delete("ETag");
+    else out.set("ETag", etag);
+    out.set("Cache-Control", status >= 400 || live.passwordHash ? "private, no-store" : viewerCacheControl ?? "public, max-age=0, must-revalidate");
     out.set("Vary", "Accept, Sec-Fetch-Dest");
-    out.set("X-Kofra-Viewer", viewer.id);
+    // Headers.set throws on CR, LF and NUL: a viewer id containing them would
+    // 500 an otherwise healthy render. Omit this diagnostic header for such
+    // ids; the ETag above already carries the encoded identity.
+    if (!viewer.id.includes("\r") && !viewer.id.includes("\n") && !viewer.id.includes("\0")) {
+      out.set("X-Kofra-Viewer", viewer.id);
+    }
     out.delete("Content-Length");
     securityHeaders(out, live, mode);
     let page = new Response(head ? null : rendered.body, { status, headers: out });
+    // Only generated viewer pages pass here: leave authored error HTML/raw bytes
+    // alone, but never advertise a fallback file as the missing resource.
+    if (status >= 400 && !head) {
+      page = new HTMLRewriter().on('head meta[property^="og:"], head meta[name="description"], head meta[name^="twitter:"]', {
+        element(el) { el.remove(); },
+      }).transform(page);
+    }
     if (mode.rewrite && !head) page = rewriteHtml(page, mode.rewrite);
     return report && !head ? injectReportLink(page, reportUrl) : page;
   }
@@ -541,8 +712,8 @@ async function serveFile(
   // Path mode: HTML and CSS get root-relative URLs prefixed with the site base.
   const rewriteKind = mode.rewrite && !raw && !download && !precompressed(path) ? (isHtml(contentType) ? "html" : baseType(contentType) === "text/css" && size <= MAX_CSS_REWRITE_BYTES ? "css" : null) : null;
   if (rewriteKind || report) {
-    // Sandboxed pages send no Referer, so their HTML also carries the run-time shim (./path-shim).
-    const shim = rewriteKind === "html" && mode.sandbox;
+    // Sandboxed pages and private previews send no Referer, so they need runtime URL repair.
+    const shim = rewriteKind === "html" && (mode.sandbox || mode.pathShim === true);
     const etag = `W/"${rewriteKind ? "pm-" : ""}${sha256}${shim ? `-js${PATH_SHIM_VERSION}` : ""}${reportVariant}"`;
     const h = new Headers({ "Content-Type": contentType, ETag: etag, "Cache-Control": cacheControlFor(path, live) });
     if (rewriteKind) h.set("X-Kofra-Rewritten", "path-prefix");
@@ -550,7 +721,7 @@ async function serveFile(
     if (etagMatches(req, etag)) return new Response(null, { status: 304, headers: h });
     if (head) return new Response(null, { status, headers: h });
     const blob = await readBlob(dw, sha256, size);
-    if (!blob) return blobMissing(dw, req, mode, live);
+    if (!blob) return blobMissing(dw, req, mode, live, path);
     if (rewriteKind === "css" && mode.rewrite) {
       const css = blob.body ? await new Response(blob.body).text() : "";
       return new Response(rewriteCss(css, mode.rewrite), { status, headers: h });
@@ -577,7 +748,7 @@ async function serveFile(
   } else {
     h.set("Content-Type", contentType);
   }
-  if (download) h.set("Content-Disposition", `attachment; filename="${(path.split("/").pop() ?? "file").replace(/["\\\r\n]/g, "_")}"`);
+  if (download) h.set("Content-Disposition", attachmentDisposition(path.split("/").pop() ?? "file"));
   securityHeaders(h, live, mode);
 
   if (etagMatches(req, etag)) return new Response(null, { status: 304, headers: h });
@@ -595,19 +766,22 @@ async function serveFile(
     init.status = 206;
     if (head) return new Response(null, init);
     const body = await readBlobRange(dw, sha256, range);
-    if (!body) return blobMissing(dw, req, mode, live);
+    if (!body) return blobMissing(dw, req, mode, live, path);
     return new Response(body, init);
   }
   h.set("Content-Length", String(size));
   if (head || size === 0) return new Response(null, init);
   const blob = await readBlob(dw, sha256, size);
-  if (!blob) return blobMissing(dw, req, mode, live);
+  if (!blob) return blobMissing(dw, req, mode, live, path);
   return new Response(blob.body, init);
 }
 
-function blobMissing(dw: DropwayContext, req: Request, mode: ServeMode, live: LiveSite): Response {
+function blobMissing(dw: DropwayContext, req: Request, mode: ServeMode, live: LiveSite, path: string): Response {
   console.error(JSON.stringify({ event: "blob_missing", slug: live.slug, version: live.versionId, url: req.url }));
-  return systemResponse(dw, req, mode, live, 502, "502", "File unavailable", "This file is listed in the site but its contents could not be read. Try again shortly.");
+  // Rebuild the retry href from the serving base and the manifest path only:
+  // never copy the raw request URL or its query into the page.
+  const retry = `<a class="k-btn" href="${escapeHtml(mode.base + encodePath(path))}">Try again</a>`;
+  return systemResponse(dw, req, mode, live, 502, "502", "File unavailable", "This file is listed in the site but its contents could not be read. Try again shortly.", "", retry);
 }
 
 function recordHit(dw: DropwayContext, req: Request, live: LiveSite, path: string, status: number, bytes: number, ms: number) {

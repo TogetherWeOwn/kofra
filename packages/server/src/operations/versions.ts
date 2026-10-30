@@ -1,8 +1,10 @@
-import { HTTP_VERSION } from "./http-schemas";
-import { deleteVersion, getDeployStatus, getSiteByRef, requireConfirm, resolveVersionRef, getSiteFor } from "@dropway/core";
+import { HTTP_UPLOAD, HTTP_UPLOAD_ITEM, HTTP_VERSION } from "./http-schemas";
+import { deleteVersion, exportVersionZip, getVersionStatus, getSiteByRef, requireConfirm, resolveVersionRef } from "@dropway/core";
 import { CONFIRM_SLUG, SITE_REF, VERSION_OUT, VERSION_REF, obj } from "../mcp/schemas";
 import { defineOperation } from "../operations";
 import { fromSchema, RO, DESTROY, P, D } from "./shared";
+import { attachmentDisposition } from "../content-disposition";
+import { readJson } from "../routes/api";
 
 export const VERSION_OPERATIONS = [
   defineOperation({
@@ -13,7 +15,7 @@ export const VERSION_OPERATIONS = [
     toolset: "versions",
     scopes: ["sites:read"],
     description:
-      'Show one version ("live", "v3", "3" or an id): status, number, file count, size, source, client, message. For a pending version, `missing` lists the sha256 of files still to upload.',
+      'Show one version ("live", "v3", "3" or an id): status, number, counts, source, client, message. Pending: `missing` sha256 list, plus fresh upload items for write keys.',
     input: fromSchema({
       type: "object",
       properties: { site: SITE_REF, version: VERSION_REF },
@@ -26,6 +28,8 @@ export const VERSION_OPERATIONS = [
           site: { type: "string" },
           version: VERSION_OUT,
           missing: { type: "array", items: { type: "string" } },
+          // Pending versions (write keys): fresh upload items; same items repeat as legacy `uploads`.
+          upload: { type: "object" },
         },
         ["version"],
       ),
@@ -34,12 +38,7 @@ export const VERSION_OPERATIONS = [
     async handler(a, { dw, principal }) {
       const site = await getSiteByRef(dw, principal, a.site);
       const v = await resolveVersionRef(dw, site, a.version);
-      const status = await getDeployStatus(dw, site, v.id);
-      return {
-        site: site.slug,
-        version: status.deploy,
-        missing: status.missing,
-      };
+      return { site: site.slug, ...(await getVersionStatus(dw, site, v, principal)) };
     },
     http: {
       input: fromSchema({
@@ -53,17 +52,14 @@ export const VERSION_OPERATIONS = [
           site: { type: "string" },
           version: HTTP_VERSION,
           missing: { type: "array", items: { type: "string" } },
+          upload: HTTP_UPLOAD,
+          uploads: { type: "array", items: HTTP_UPLOAD_ITEM },
         },
       }),
       handler: async (c) => {
         const site = await getSiteByRef(D(c), P(c), c.req.param("slug")!);
         const v = await resolveVersionRef(D(c), site, c.req.param("id")!);
-        const status = await getDeployStatus(D(c), site, v.id);
-        return c.json({
-          site: site.slug,
-          version: status.deploy,
-          missing: status.missing,
-        });
+        return c.json({ site: site.slug, ...(await getVersionStatus(D(c), site, v, P(c))) });
       },
     },
     tool: {
@@ -116,13 +112,16 @@ export const VERSION_OPERATIONS = [
     http: {
       input: fromSchema({
         type: "object",
-        properties: { slug: { type: "string" }, id: { type: "string" } },
-        required: ["slug", "id"],
+        properties: { slug: { type: "string" }, id: { type: "string" }, confirm: CONFIRM_SLUG },
+        required: ["slug", "id", "confirm"],
       }),
       output: fromSchema({ type: "object" }),
       handler: async (c) => {
-        const site = await getSiteFor(D(c), P(c), c.req.param("slug")!, "sites:delete");
-        return c.json(await deleteVersion(D(c), P(c), site, c.req.param("id")!));
+        const site = await getSiteByRef(D(c), P(c), c.req.param("slug")!, "sites:delete");
+        const body = await readJson(c);
+        requireConfirm(body.confirm, site.slug);
+        const v = await resolveVersionRef(D(c), site, c.req.param("id")!);
+        return c.json(await deleteVersion(D(c), P(c), site, v.id));
       },
     },
     tool: { summarize: (r) => `Deleted version ${r.id}.` },
@@ -136,5 +135,55 @@ export const VERSION_OPERATIONS = [
         output: { deleted: true, id: "ver_old" },
       },
     ],
+  }),
+  defineOperation({
+    id: "export_version",
+    method: "GET",
+    path: "/api/v1/sites/{slug}/versions/{version}/export",
+    summary: "Download a version as a ZIP",
+    toolset: "versions",
+    scopes: ["sites:read"],
+    description:
+      'Stream one version ("live", "v3", "3" or an id) as a deterministic ZIP of exactly its served manifest bytes: entries stored uncompressed and sorted by path, one fixed timestamp, no data descriptors. Answers 413 when the version exceeds the effective file-count or byte caps. Binary payload: download it over REST (for example curl).',
+    input: fromSchema({
+      type: "object",
+      properties: { site: SITE_REF, version: VERSION_REF },
+      required: ["site", "version"],
+      additionalProperties: false,
+    }),
+    output: fromSchema({ type: "object", additionalProperties: true }),
+    annotations: RO,
+    mcp: {
+      exclude: "Binary ZIP bytes never pass through the model; download the export over REST (GET /api/v1/sites/{slug}/versions/{version}/export), for example with curl.",
+    },
+    http: {
+      input: fromSchema({
+        type: "object",
+        properties: { slug: { type: "string" }, version: { type: "string" } },
+        required: ["slug", "version"],
+      }),
+      responseType: "application/zip",
+      handler: async (c) => {
+        const version = c.req.param("version")!.trim();
+        const out = await exportVersionZip(D(c), P(c), c.req.param("slug")!, version);
+        const headers = {
+          "Content-Type": "application/zip",
+          // out.filename is slug-derived (`<slug>-v<n>.zip`; slugs are
+          // [a-z0-9-]), so the helper returns its plain ASCII form unchanged.
+          "Content-Disposition": attachmentDisposition(out.filename),
+          "Cache-Control": version === "" || version.toLowerCase() === "live"
+            ? "private, no-cache"
+            : "private, max-age=31536000, immutable",
+          "X-Content-Type-Options": "nosniff",
+          "X-Kofra-Version": out.versionId,
+        };
+        if (c.req.method === "HEAD") return c.body(null, 200, headers);
+        return c.body(out.stream, 200, headers);
+      },
+    },
+    examples: [{ input: { site: "bright-otter-x7k2", version: "live" }, output: "Hello" }],
+    async handler() {
+      throw new Error("REST transport required");
+    },
   }),
 ];

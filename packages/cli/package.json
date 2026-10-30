@@ -43,6 +43,7 @@
     "test": "vitest run -c vitest.config.ts"
   },
   "devDependencies": {
+    "@dropway/client": "^0.1.0",
     "@types/node": "^22.20.5",
     "esbuild": "^0.28.2",
     "fflate": "^0.8.3"

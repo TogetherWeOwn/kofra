@@ -1,5 +1,5 @@
 {
-  "about": "Which design/css files make each bundle (in order). app: one cached stylesheet for every app-origin page (/__dropway/ui/kofra-<hash>.css). site: inlined in every site-origin page, so it stays under 24 KB minified (about 5 KB brotli). raw: files shipped without the k- class prefix (their class names come from third-party output).",
+  "about": "Which design/css files make each bundle (in order). app: one cached stylesheet for every app-origin page (/__dropway/ui/kofra-<hash>.css). site: inlined in every site-origin page, so it stays under 24 KiB (24,576 bytes) minified (about 5 KB brotli). raw: files shipped without the k- class prefix (their class names come from third-party output).",
   "app": [
     "00-base.css",
     "10-top.css",

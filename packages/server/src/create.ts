@@ -23,6 +23,7 @@ import { apiErrorResponse, installApiMiddleware } from "./routes/api";
 import { legacyAppRedirect, legacyAppSuccessor, withDeprecationHeaders } from "./legacy";
 import { redirectResponse, routeSiteRequest } from "./route-sites";
 import { isNavigation, SITE_SANDBOX, serveSite, systemResponse } from "./serve";
+import { previewResponse, serveVersionPreview } from "./previews";
 import { appStatePage, bindUiSlots, uiSlotsOf } from "./ui/shell";
 import { bindRequestTheme } from "./ui/theme";
 import { VIEWERS, type Viewer } from "./viewers";
@@ -59,7 +60,7 @@ function requestErrorDetails(request: Request, error: unknown) {
   const safeUrl = `${url.origin}${url.pathname}`;
   // Exceptions can echo credentials using any equivalent URL encoding, not just
   // the spelling on this request. Do not serialize their message or stack here.
-  if (url.searchParams.has("grant") || url.searchParams.has("recipient")) {
+  if (url.searchParams.has("grant") || url.searchParams.has("recipient") || url.searchParams.has("dw_preview")) {
     return { url: safeUrl, error: "[redacted]" };
   }
   return { url: safeUrl, error: String(error), stack: (error as Error)?.stack };
@@ -120,13 +121,16 @@ export function createDropway(opts: CreateDropwayOptions = {}): Dropway {
     c.set("requestId", c.req.header("cf-ray") ?? crypto.randomUUID());
     bindUiSlots(c, uiSlots);
     await next();
+    c.header("X-Request-Id", c.get("requestId"));
+    // Raw extension/transport responses still need retry guidance, even without ApiError.
+    if ((c.res.status === 429 || c.res.status === 503) && !c.res.headers.has("Retry-After")) c.header("Retry-After", "1");
   });
   app.route("/api/v1", api);
   app.route("/", createAppRouter({ app: appRoutes, uiSlots, mcp: opts.mcp ?? createMcpEndpoint(), mcpTools, operations }));
   app.notFound((c) => {
     if (c.req.path.startsWith("/api/")) {
       return c.json(
-        new ApiError(404, "route_not_found", `No API route for ${c.req.method} ${c.req.path}.`, `See ${appOrigin(c.get("dw"))}/openapi.json for every endpoint.`).toJSON(c.get("requestId")),
+        new ApiError(404, "route_not_found", `No API route for ${c.req.method} ${c.req.path}.`, `See ${appOrigin(c.get("dw"))}/openapi.json for every endpoint.`).toJSON(c.get("requestId"), appOrigin(c.get("dw"))),
         404,
       );
     }
@@ -162,21 +166,27 @@ export function createDropway(opts: CreateDropwayOptions = {}): Dropway {
     const dw = context(env, ctx, url);
     // Site origins: ?theme= only (the theme cookie belongs to the app origin and is never read there).
     bindRequestTheme(dw, request, { cookie: false });
+    let preview = false;
     try {
       // A former app origin (config.legacyAppOrigins): pages move, the API and MCP keep answering.
       const successor = legacyAppSuccessor(dw, url);
       const moved = successor ? legacyAppRedirect(request, url, successor) : null;
       if (moved) return moved;
       const route = await routeSiteRequest(dw, request);
+      preview = route.kind === "preview" || route.kind === "gone" || (route.kind === "redirect" && route.preview === true);
       switch (route.kind) {
         case "site":
           return await serveSite(request, dw, route.slug, route.path, route.mode, viewers);
+        case "preview":
+          return await serveVersionPreview(request, dw, route.slug, route.number, route.path, route.mode, viewers);
         case "redirect":
           return redirectResponse(route);
         case "sites_home":
           return sitesHome(dw, request);
         case "sites_not_found":
           return systemResponse(dw, request, { kind: "path", base: "/", sandbox: true, rewrite: null }, null, 404, "404", "Nothing is published here", "There is no site at this address. See {app}.");
+        case "gone":
+          return previewResponse(systemResponse(dw, request, route.mode, null, 410, "GONE", "This version is gone", "This version address names a deleted version. Old version links never serve another site's files."));
         case "app": {
           bindRequestTheme(dw, request);
           contexts.set(request, dw);
@@ -192,15 +202,17 @@ export function createDropway(opts: CreateDropwayOptions = {}): Dropway {
           dw,
           code: "500",
           title: "Something went wrong on our side",
-          message: "This page could not be served. Try again in a moment.",
+          message: "Internal error: this page could not be served. Try again in a moment.",
           extra: `<div class="k-acts"><a class="k-btn" href="${escapeHtml(url.origin + url.pathname)}">Try again</a><a class="k-btn k-ghost" href="${escapeHtml(appOrigin(dw))}">Home</a></div>`,
         });
-        return new Response(html, {
+        const page = new Response(html, {
           status: 500,
           headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline'; font-src ${appOrigin(dw)}; img-src data:; base-uri 'none'; form-action 'none'`, "X-Content-Type-Options": "nosniff" },
         });
+        return preview ? previewResponse(page) : page;
       }
-      return new Response("Internal error", { status: 500, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } });
+      const response = new Response("Internal error", { status: 500, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } });
+      return preview ? previewResponse(response) : response;
     }
   }
 

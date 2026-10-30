@@ -26,3 +26,9 @@ export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n ==
 
 /** "2026-10-22T17:42:49.000Z" -> "2026-10-22 17:42". */
 export const shortTime = (iso: string | null | undefined) => (iso ? iso.replace("T", " ").slice(0, 16) : "-");
+
+/** Quote one argv word for display, so a pasted continuation command keeps working. */
+export function shellQuote(word: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(word)) return word;
+  return `'${word.replace(/'/g, `'\\''`)}'`;
+}

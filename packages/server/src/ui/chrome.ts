@@ -143,7 +143,7 @@ export function appFooter(o: AppFooterOptions): string {
   return `<footer class="k-foot"><div class="k-wrap"><a class="k-wm" href="${e(o.home ?? "/")}">${e(o.name)}</a>${o.domains ? domainsHtml(o.domains) : ""}${links ? `<nav class="k-end" aria-label="Footer">${links}</nav>` : ""}${o.trust ? `<p class="k-trust">${TRUST_LINE}</p>` : ""}</div></footer>`;
 }
 
-export const SKIP_LINK = '<a class="k-skip" href="#dw-main">Skip to content</a>';
+export const SKIP_LINK = '<a class="k-skip dw-skip" href="#dw-main">Skip to content</a>';
 
 export interface AppChromeOptions {
   header: AppHeaderOptions;
@@ -169,9 +169,9 @@ export function appChrome(o: AppChromeOptions): string {
 /** The guilloche band (a CSS mask, recoloured by the mode): under a hero and above every app footer. */
 export const GUILLOCHE_BAND = '<div class="k-guilloche-band" aria-hidden="true"></div>';
 
-/** Minimal header for site-origin pages: a small wordmark that links to the app. */
-export function siteHeader(name: string, appOrigin: string): string {
-  return `<header class="k-sitehead"><div class="k-wrap"><a class="k-wm" href="${e(appOrigin)}" rel="nofollow">${e(name)}</a></div></header>`;
+/** Minimal header for site-origin pages: a small wordmark that links to the app; `extra` (a listing's path, summary and sort) sits under the bar inside the same header. */
+export function siteHeader(name: string, appOrigin: string, extra = ""): string {
+  return `<header class="k-sitehead${extra ? " k-sitehead-x" : ""}"><div class="k-wrap"><a class="k-wm" href="${e(appOrigin)}" rel="nofollow">${e(name)}</a></div>${extra}</header>`;
 }
 
 /** Footer for site-origin pages: domains line, plus the trust line on pages that show files. */

@@ -6,6 +6,7 @@ import {
 import type { Hono } from "hono";
 import type { DropwayEnv } from "./env";
 import { APP_PAGE_CSP, escapeHtml, siteSystemCsp, systemPage } from "./html";
+import { attachmentDisposition } from "./content-disposition";
 import { TRUST_LINE } from "./ui/chrome";
 import { appStatePage } from "./ui/shell";
 import { themeFromQuery } from "./ui/theme";
@@ -146,7 +147,8 @@ export async function serveTransfer(request: Request, dc: DropwayContext, slug: 
       throw new ApiError(403, "transfer_locked", "Password required.", "Unlock the delivery on its app-origin page.");
     }
     const filename = out.file.path.split("/").pop()!;
-    const disposition = `attachment; filename="${filename.replace(/[^\x20-\x7e]|["\\]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(filename).replace(/['()*]/g, (s) => `%${s.charCodeAt(0).toString(16)}`)}`;
+    // Transfers have always sent filename*, even for ASCII names.
+    const disposition = attachmentDisposition(filename, { alwaysExtended: true });
     return new Response(out.body, { status: out.ranged ? 206 : 200, headers: {
       ...headers, "Content-Type": out.file.content_type, "Content-Disposition": disposition,
       "Content-Length": String(out.length), "Accept-Ranges": "bytes",

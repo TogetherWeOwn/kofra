@@ -23,12 +23,21 @@
 .slotbanner>.wrap{padding-top:10px;padding-bottom:10px;font-size:14.5px}
 @media (min-width:1000px){
   .top .nav{flex-basis:auto;flex-wrap:nowrap;order:1;margin-left:auto;white-space:nowrap}
-  .acct{order:2;margin-left:0}
+  /* With a navigation, it takes the free room; without one (sign-in, secret pages) the account area keeps margin-left:
+     auto, so the account area and the switch still end at the content edge. */
+  .acct{order:2}
+  .top>.wrap:has(>.nav)>.acct{margin-left:0}
   .top .mode-switch{order:3}
 }
 @media (max-width:720px){
   .top>.wrap{gap:10px 12px}
   .top .tag{display:none}
   .acct .who{display:none}
+}
+/* The narrowest phones (320px): the wordmark, the account area and the switch measure 294px with these gaps and 288px
+   is free, so the gaps and the switch padding close up to keep the switch on the first row (about 14px to spare). */
+@media (max-width:359.98px){
+  .top>.wrap{column-gap:8px}
+  .top .mode-switch button{padding-inline:8px}
 }
 @media print{.nav,.acct{display:none}}

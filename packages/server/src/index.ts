@@ -3,7 +3,7 @@
  * handler that serves the app, the REST API, the MCP slot and every published site.
  */
 /** Version of the public embedding contract; changes are recorded in CHANGELOG.md. */
-export const EXTENSION_API_VERSION = 3;
+export const EXTENSION_API_VERSION = 6;
 
 export { createDropway, CORE_MCP_TOOLS, type Dropway } from "./create";
 export { defineOperation, type OperationDefinition, type OperationContext } from "./operations";
@@ -23,7 +23,7 @@ export type { DropwayEnv, ServerBindings } from "./env";
 export { readJson, apiErrorResponse } from "./routes/api";
 export { routeSiteRequest, type SiteRoute } from "./route-sites";
 export { serveSite, resolvePath, isNavigation, requestedViewMode, securityHeaders, systemResponse, SITE_SANDBOX, type ServeMode } from "./serve";
-export { VIEWERS, VIEWER_CSP, viewerCsp, findViewer, toViewerFile, type Viewer, type ViewerContext, type ViewerFile, type ViewMode } from "./viewers";
+export { VIEWERS, VIEWER_CHROME_VERSION, VIEWER_CSP, viewerCsp, findViewer, toViewerFile, type Viewer, type ViewerContext, type ViewerFile, type ViewMode } from "./viewers";
 export { viewerPage, standardTabs, VIEWER_CSS, type ViewerTab } from "./viewers/chrome";
 export { renderMarkdown } from "./viewers/markdown";
 export { sanitizeHtml } from "./viewers/sanitize";

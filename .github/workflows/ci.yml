@@ -14,7 +14,8 @@ jobs:
   # unit and end-to-end tests against a local Worker.
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Allow slow browser dependency downloads plus the full test and validation suite.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -28,10 +29,15 @@ jobs:
       - run: npm test
       - name: Validate generated OpenAPI 3.1 and required operation metadata
         run: npm run openapi:lint
-      - name: CLI package builds and packs
+      - name: Generated typed client is current
+        run: node scripts/generate-client.mjs --check
+      - name: Published packages build and pack
         run: |
           npm run build -w kofra
           npm pack -w kofra --dry-run
+          npm pack -w @dropway/core --dry-run
+          npm pack -w @dropway/server --dry-run
+          npm pack -w @dropway/client --dry-run
 
   # This repository is the single-tenant open-source product. Fails on any sign of the
   # hosted service's code: payment SDKs, private packages or markers, billing/pricing code.

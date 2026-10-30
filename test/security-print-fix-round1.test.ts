@@ -49,14 +49,14 @@ describe("links between Kofra pages keep the mode and the embed (J29 frame navig
   it("a listing inside the app's frame (&embed=1) has no header, footer or Browse files, and its links keep the embed and the mode", async () => {
     const { call } = await siteFixture();
     const html = await (await call("/docs/?embed=1&theme=dark")).text();
-    expect(html).not.toContain("<header class=\"k-sitehead\"");
+    expect(html).not.toContain("<header class=\"k-sitehead");
     expect(html).not.toContain('class="k-foot"');
     expect(html).not.toContain("Browse files");
     expect(html).toContain('href="/__dropway/open?next=%2Fdocs%2Fb.md&amp;embed=1&amp;theme=dark"');
     expect(html).toContain('href="/__dropway/open?next=%2F&amp;embed=1&amp;theme=dark"'); // the ../ row and the crumb to the site root
     // On its own (no embed, Auto) the listing keeps its frame and plain links.
     const plain = await (await call("/docs/")).text();
-    expect(plain).toContain("<header class=\"k-sitehead\"");
+    expect(plain).toContain("<header class=\"k-sitehead");
     expect(plain).toContain("Browse files");
     expect(plain).toContain('href="/docs/b.md"');
     // In an explicit mode only: the mode goes along, the embed does not.
@@ -96,20 +96,20 @@ describe("links between Kofra pages keep the mode and the embed (J29 frame navig
     const gate = await call(`/__dropway/open?next=%2F&embed=1&theme=light`, { headers: { "Sec-Fetch-Dest": "iframe" } });
     expect(gate.status).toBe(401);
     const html = await gate.text();
-    expect(html).not.toContain("<header class=\"k-sitehead\"");
+    expect(html).not.toContain("<header class=\"k-sitehead");
     expect(html).not.toContain('class="k-foot"');
     expect(bands(html)).toBe(0);
-    expect(html).toContain('action="/__dropway/password?theme=light&amp;embed=1"');
+    expect(html).toMatch(/action="\/__dropway\/password\?dw_form=[^"&]+&amp;theme=light&amp;embed=1"/);
     // Opened directly, the gate has the site frame.
     const direct = await (await call("/")).text();
-    expect(direct).toContain("<header class=\"k-sitehead\"");
+    expect(direct).toContain("<header class=\"k-sitehead");
   });
 
   it("system pages inside the frame open app links in a new tab (the app refuses to be framed)", async () => {
     const { call } = await siteFixture();
     const html = await (await call("/nope.html?embed=1")).text();
     expect(html).toContain('target="_blank" rel="noopener">Home</a>');
-    expect(html).not.toContain("<header class=\"k-sitehead\"");
+    expect(html).not.toContain("<header class=\"k-sitehead");
   });
 });
 
@@ -164,7 +164,7 @@ describe("one app chrome (header and footer) on every app page", () => {
 describe("viewer details", () => {
   it("the JSON Tree/Pretty switch is a segmented control, and the HTML viewer's Open is a button", async () => {
     const { call } = await siteFixture({ "d.json": '{"a":1}', "p.html": "<p>x</p>" });
-    expect(await (await call("/d.json")).text()).toContain('<div class="dw-jtabs k-seg" role="group"');
+    expect(await (await call("/d.json")).text()).toContain('<div class="dw-jtabs" role="group"');
     expect(await (await call("/p.html?view=1")).text()).toContain('<a class="k-btn k-sm k-ghost" href="/p.html" rel="nofollow" title="Open the page without the bar">Open</a>');
   });
 });

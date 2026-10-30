@@ -4,7 +4,9 @@ Use Zod 4.6.7 or later in your embedding app; `@dropway/server` declares it as a
 peer so operation schemas and the server share the same Zod type identity.
 
 `defineOperation()` is the public API extension boundary. One definition supplies
-REST, OpenAPI 3.1, an MCP tool, the CLI command table and agent discovery text.
+REST, OpenAPI 3.1, an MCP tool, the CLI command table, the `@dropway/client`
+typed method and agent discovery text. Regenerate the client after changing an
+operation (`npm run client:generate`); CI fails when it is stale.
 Business logic still belongs in a service taking `DropwayContext` and `Principal`.
 
 ```ts
@@ -78,7 +80,14 @@ remediation hint; both transports preserve it.
 - For declarative destructive confirmation, set `confirm: "name"` (or `slug`,
   `email`, `domain`) and include required string `confirm` and target fields in
   the input schema. Both generated transports reject a mismatch before execution.
-  Existing legacy REST destructive routes retain their original wire contract.
+  Legacy REST destructive routes otherwise retain their original wire contract.
+  Version deletion is an explicit breaking exception: HTTP
+  `DELETE /api/v1/sites/{slug}/versions/{id}` requires a JSON body
+  `{"confirm":"<canonical-site-slug>"}`. Its compatibility handler resolves the
+  site before comparing confirmation, so an ID/URL reference is not itself a
+  valid confirmation value. CLI, dashboard and generated SDK callers send the
+  same field; missing input fails schema validation and a mismatch returns
+  `confirm_mismatch` before any deletion.
 - An operation appears as an MCP tool unless `mcp: { exclude: "reason" }` is set.
   Raw request-body operations require an exclusion. `mcp.alwaysLoad` is available
   for essential tools. Tool filtering and the existing MCP idempotency behavior
@@ -102,7 +111,8 @@ changing tool order. Duplicate method/path registrations are rejected. Existing
 contains `id`, `method`, `path`, `scopes`, a JSON `inputSchema`, and optional `cli`
 metadata. No handlers, Zod internals, credentials or tenant data are returned.
 `kofra api METHOD PATH` remains the escape hatch for operations without a
-convenience CLI command.
+convenience CLI command. `kofra operations [id] [--schema]` inspects this same
+catalog without executing anything.
 
 Core definitions live in `packages/server/src/operations/`, with stable order in
 `core.ts`. Existing REST clients keep their original payloads/statuses through

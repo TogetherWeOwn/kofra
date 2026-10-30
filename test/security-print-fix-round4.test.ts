@@ -49,7 +49,7 @@ describe("F2: a site's name never splits at a hyphen", () => {
   });
 
   it("both stylesheets keep code.k-tok and the parts of code.k-brk whole (the site origin had neither)", () => {
-    for (const css of [APP_CSS, SITE_CSS]) expect(css).toContain("code.k-tok,code.k-brk span{white-space:nowrap}");
+    for (const css of [APP_CSS, SITE_CSS]) expect(css).toContain("code.k-tok,code.k-brk span,a.k-brk span{white-space:nowrap}");
   });
 
   it("nameCode: whole when it fits the narrowest line; urlCode: a part longer than that line may break inside itself", () => {

@@ -6,7 +6,7 @@ import {
   type CreateTenantWithOwnerInput, type CreateTenantWithOwnerOptions, type DropwayContext, type MemberRow,
   type Principal, type SiteNameMutation, type TenantRow,
 } from "@dropway/core";
-import { BOOTSTRAP, form, freshInstance, jsonBody } from "./helpers";
+import { BOOTSTRAP, ORIGIN, form, freshInstance, jsonBody } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
 import {
   allocateExternal, asOwner, audit, auditRows, count, deferred, expectApiError, extensionSchema,
@@ -679,7 +679,9 @@ describe("rename cache and stale-write fencing", () => {
     expect(renamed.site.current_version_id).toBe(original.current_version_id);
     expect(await env.CACHE.get("live:cache-source")).toBeNull();
     expect(await env.CACHE.get("live:cache-accepted", "json")).toMatchObject({ siteId: original.id, versionId: original.current_version_id, slug: "cache-accepted" });
-    expect((await h.dw.call("/s/cache-source/")).status).toBe(404);
+    const moved = await h.dw.call("/s/cache-source/");
+    expect(moved.status).toBe(308);
+    expect(moved.headers.get("location")).toBe(`${ORIGIN}/s/cache-accepted/`);
     expect(await (await h.dw.call("/s/cache-accepted/")).text()).toBe("unchanged-content");
     await h.flush();
   });
@@ -722,9 +724,16 @@ describe("rename cache and stale-write fencing", () => {
       expect(await site("stale-target")).toBeNull();
       expect(await env.CACHE.get("live:stale-target")).toBeNull();
       expect((await h.dw.call("/s/stale-target/")).status).toBe(404);
-      expect((await h.dw.call("/s/stale-source/")).status).toBe(404);
-      if (overtaker === "rename") expect(await (await h.dw.call("/s/stale-winner/")).text()).toBe("unchanged-content");
-      else expect(await count("sites")).toBe(1); // soft-delete retained, never resurrected
+      if (overtaker === "rename") {
+        // The overtaking rename recorded its own redirect; the refused stale write added nothing.
+        const moved = await h.dw.call("/s/stale-source/");
+        expect(moved.status).toBe(308);
+        expect(moved.headers.get("location")).toBe(`${ORIGIN}/s/stale-winner/`);
+        expect(await (await h.dw.call("/s/stale-winner/")).text()).toBe("unchanged-content");
+      } else {
+        expect((await h.dw.call("/s/stale-source/")).status).toBe(404);
+        expect(await count("sites")).toBe(1); // soft-delete retained, never resurrected
+      }
     } finally { release.resolve(); await pending; await h.flush(); }
   });
 

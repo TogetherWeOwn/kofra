@@ -30,7 +30,7 @@ const acts = (html: string) => /<div class="k-acts">(.*?)<\/div>/.exec(html)?.[1
 
 describe("the app header is one row from 1000px, as in the gallery", () => {
   it("from 1000px the navigation sits on the first row before the account area and the switch; narrower it is the row under them", () => {
-    expect(APP_CSS).toContain("@media (min-width:1000px){.k-top .k-nav{flex-basis:auto;flex-wrap:nowrap;order:1;margin-left:auto;white-space:nowrap}.k-acct{order:2;margin-left:0}.k-top .k-mode-switch{order:3}}");
+    expect(APP_CSS).toContain("@media (min-width:1000px){.k-top .k-nav{flex-basis:auto;flex-wrap:nowrap;order:1;margin-left:auto;white-space:nowrap}.k-acct{order:2}.k-top>.k-wrap:has(>.k-nav)>.k-acct{margin-left:0}.k-top .k-mode-switch{order:3}}");
     expect(APP_CSS).toContain(".k-nav{flex-basis:100%;");
   });
 
@@ -151,7 +151,7 @@ describe("site-origin viewers: one h1 each, the trust line in a landmark, the pa
 
   it("on phones an image's stage hugs the image", async () => {
     const { call } = await siteFixture();
-    expect(await (await call("/m/p.png")).text()).toContain("@media (max-width:600px){.dw-stage{min-height:0}}");
+    expect(await (await call("/m/p.png")).text()).toContain("@media (max-width:640px){.dw-stage{min-height:0}}");
   });
 });
 
@@ -244,7 +244,7 @@ describe("dashboard copy and state", () => {
     expect(CLIENT_SCRIPT).toMatch(/publish: "one-call publish"/);
     expect(CLIENT_SCRIPT).not.toMatch(/v\.client, v\.source\]/);
     expect(CLIENT_SCRIPT).toMatch(/hasLive\s*\?/);
-    expect(CLIENT_SCRIPT).toMatch(/"Sites this key reaches"/);
+    expect(CLIENT_SCRIPT).toMatch(/"Key limited to a site"/);
     expect(CLIENT_SCRIPT).not.toMatch(/"No sites yet\."/);
   });
 

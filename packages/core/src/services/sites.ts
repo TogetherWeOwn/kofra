@@ -3,18 +3,22 @@ import { appOrigin, siteUrl } from "../context";
 import { ApiError, badRequest, conflict, forbidden, notFound, rateLimited, unauthorized } from "../errors";
 import { hashPassword, newId, newSecret, sha256Hex } from "../lib/crypto";
 import { generateSlug, validateSlug } from "../lib/slug";
+import { stringField } from "../lib/input";
 import { hasScope, type Principal, type Scope } from "../principal";
 import { CLAIM_TOKEN_PREFIX } from "./identity";
 import { dropLive, refreshLive } from "./live";
 import { emit, meter } from "./events";
 import { requireCapability, requireQuota, quotaExceeded } from "./policy";
 import { getUsage, incrementalBytes, PROJECTED_STORAGE_SQL, usageStatements } from "./usage";
-import { atomicWrite, siteSlugError } from "./atomic-write";
+import { assertSiteDeletionState, atomicWrite, siteDeletionStateChanged, siteSlugError } from "./atomic-write";
+import { checkNameAvailable, convertRedirectsStatements, insertTombstone, reclaimTombstone } from "./slug-holds";
 
 export interface SiteRow {
   id: string;
   mode?: "site" | "transfer";
   slug: string;
+  /** 1 when the current name was explicitly chosen, 0 when generated (decides the R-59 hold after delete/expiry). */
+  slug_chosen: number;
   tenant_id: string | null;
   created_by: string | null;
   folder_id: string | null;
@@ -148,8 +152,8 @@ function boolField(v: unknown, name: string): boolean | undefined {
 /** Parse the settings fields shared by create, publish and PATCH. */
 export function parseSettings(body: Record<string, unknown>): SiteSettingsInput {
   const out: SiteSettingsInput = {};
-  if ("title" in body) out.title = body.title == null ? null : String(body.title).slice(0, 200);
-  if ("description" in body) out.description = body.description == null ? null : String(body.description).slice(0, 2000);
+  if ("title" in body) out.title = body.title == null ? null : stringField(body.title, "title").slice(0, 200);
+  if ("description" in body) out.description = body.description == null ? null : stringField(body.description, "description").slice(0, 2000);
   const spa = boolField(body.spa, "spa");
   if (spa !== undefined) out.spa = spa;
   const md = boolField(body.renderMarkdown, "renderMarkdown");
@@ -159,7 +163,7 @@ export function parseSettings(body: Record<string, unknown>): SiteSettingsInput 
   if ("password" in body) {
     if (body.password === null || body.password === "") out.password = null;
     else {
-      const pw = String(body.password);
+      const pw = stringField(body.password, "password");
       if (pw.length < 4 || pw.length > 200) throw badRequest("invalid_password", "Passwords must be 4-200 characters.");
       out.password = pw;
     }
@@ -181,6 +185,8 @@ export function anonymousDisabled(): ApiError {
 }
 
 export interface CreateSiteOptions {
+  /** Internal provisional-create path: the caller reclaims the hold only when its first version becomes live. */
+  deferNameReclaim?: boolean;
   /**
    * Runs after every permission, rate-limit and policy check, just before the row
    * is written. Throw to refuse without creating anything (used to validate the
@@ -221,6 +227,7 @@ export async function createSite(
   }
   const tenantId = p.kind === "member" ? p.tenantId : null;
   const wanted = input.slug ? validateSlug(input.slug) : null;
+  if (wanted) await checkNameAvailable(dc, wanted, tenantId, null);
   const owner = { siteId: null, tenantId };
   if (input.password) await requireCapability(dc, p, "site_password", owner);
   const siteQuota = tenantId === null ? null : await requireQuota(dc, p, "sites", owner, (await getUsage(dc, tenantId)).sites, 1);
@@ -236,6 +243,7 @@ export async function createSite(
       id: newId("site"),
       mode: "site",
       slug: wanted ?? generateSlug(),
+      slug_chosen: wanted ? 1 : 0,
       tenant_id: tenantId,
       created_by: p.kind === "member" ? p.memberId : "anonymous",
       folder_id: null,
@@ -258,17 +266,20 @@ export async function createSite(
         operation: "create", siteId: site.id, tenantId, slug: site.slug, previousSlug: null,
       }, dc);
       await atomicWrite(dc, [
+        // Same-tenant holds pass the INSERT trigger. Provisional creates retain
+        // them until publication succeeds; anonymous creations never reclaim.
+        ...(tenantId !== null && !opts.deferNameReclaim ? [reclaimTombstone(dc, site.slug, tenantId)] : []),
         // Refuse inside the batch so neither core nor extension writes can commit
         // when another create consumed the last slot during preparation.
         dc.env.DB.prepare(`SELECT CASE WHEN ? IS NULL OR
           (SELECT COUNT(*) FROM sites WHERE tenant_id = ? AND deleted_at IS NULL) < ?
           THEN 1 ELSE json_extract('{}', 'dropway_sites_quota') END`).bind(siteQuota, tenantId, siteQuota),
         dc.env.DB.prepare(
-          `INSERT INTO sites (id, slug, tenant_id, created_by, title, description, spa, render_markdown, cross_origin_isolation,
+          `INSERT INTO sites (id, slug, slug_chosen, tenant_id, created_by, title, description, spa, render_markdown, cross_origin_isolation,
              password_hash, claim_token_hash, creator_ip_hash, expires_at, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).bind(
-          site.id, site.slug, site.tenant_id, site.created_by, site.title, site.description, site.spa, site.render_markdown,
+          site.id, site.slug, site.slug_chosen, site.tenant_id, site.created_by, site.title, site.description, site.spa, site.render_markdown,
           site.cross_origin_isolation, site.password_hash, site.claim_token_hash, site.creator_ip_hash, site.expires_at,
           site.created_at, site.updated_at,
         ), ...usageStatements(dc, tenantId),
@@ -279,7 +290,7 @@ export async function createSite(
         return siteSlugError(error, site.slug, "Pick another slug, or omit it to get a generated one.");
       });
     } catch (e) {
-      if (wanted || !(e instanceof ApiError) || e.status !== 409 || e.code !== "slug_taken") throw e;
+      if (wanted || !(e instanceof ApiError) || e.status !== 409 || (e.code !== "slug_taken" && e.code !== "slug_reserved")) throw e;
       continue;
     }
     meter(dc, { type: "site_created", tenantId, siteId: site.id, anonymous, at: now });
@@ -369,17 +380,34 @@ export async function updateSite(dc: DropwayContext, p: Principal, slug: string,
   return (await dc.env.DB.prepare("SELECT * FROM sites WHERE id = ?").bind(site.id).first<SiteRow>())!;
 }
 
-/** Soft-delete: the slug is freed at once; rows and unreferenced files are removed by the hourly cleanup. */
+/** Soft-delete: the name is tombstoned for its previous tenant (R-59); rows and unreferenced files are removed by the hourly cleanup. */
 export async function deleteSite(dc: DropwayContext, p: Principal, slug: string): Promise<{ deleted: true; slug: string }> {
   const site = await getSiteFor(dc, p, slug, "sites:delete");
   const now = Date.now();
-  const [deleted] = await dc.env.DB.batch([
-    dc.env.DB.prepare(`UPDATE sites SET deleted_at = ?, deleted_slug = slug, slug = ?, claim_token_hash = NULL
-      WHERE id = ? AND deleted_at IS NULL
-        AND NOT EXISTS (SELECT 1 FROM transfers WHERE site_id = sites.id AND legal_hold <> 0)`)
-      .bind(now, `~deleted~${site.id}`, site.id),
-    ...usageStatements(dc, site.tenant_id),
-  ]);
+  const holdUntil = now + (site.slug_chosen === 1 ? dc.config.slugHolds.chosenMs : dc.config.slugHolds.generatedMs);
+  // Transfers keep their permanent sender-owned reservations (XFR-04 instead of a time-boxed hold).
+  const holdStatements = site.mode === "transfer"
+    ? []
+    : [
+        insertTombstone(dc, { slug: site.slug, tenantId: site.tenant_id, siteId: site.id, chosen: site.slug_chosen === 1, holdUntil, reason: "delete", createdAt: now, deletedAt: now }),
+        ...convertRedirectsStatements(dc, { siteId: site.id, tenantId: site.tenant_id, reason: "delete", now, deletedAt: now }),
+      ];
+  let results: D1Result[];
+  try {
+    results = await dc.env.DB.batch([
+      assertSiteDeletionState(dc, site),
+      dc.env.DB.prepare(`UPDATE sites SET deleted_at = ?, deleted_slug = slug, slug = ?, claim_token_hash = NULL
+        WHERE id = ? AND deleted_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM transfers WHERE site_id = sites.id AND legal_hold <> 0)`)
+        .bind(now, `~deleted~${site.id}`, site.id),
+      ...holdStatements,
+      ...usageStatements(dc, site.tenant_id),
+    ]);
+  } catch (error) {
+    if (siteDeletionStateChanged(error)) throw conflict("site_changed", "The site changed while preparing its deletion.", "Reload the site and retry deleting its current name.");
+    throw error;
+  }
+  const [, deleted] = results;
   if (!deleted?.meta.changes) throw conflict("transfer_conflict", "This delivery is held or no longer available.", "Release the hold before deleting it; revocation remains available.");
   await dropLive(dc, site.slug);
   emit(dc, "onDelete", { site: { id: site.id, slug: site.slug, tenantId: site.tenant_id, url: siteUrl(dc, site.slug) }, principal: p, reason: "api", at: now });

@@ -1,24 +1,28 @@
 import { appOrigin, encodePath, KIND_LABELS } from "@dropway/core";
 import { escapeHtml, formatBytes, htmlPage } from "../html";
 import { SKIP_LINK, TRUST_LINE } from "../ui/chrome";
-import { SITE_CSS_HASH } from "../ui/design.generated";
 import { fileSeal } from "../ui/motifs";
 import { themeOf } from "../ui/theme";
 import type { ViewerContext } from "./index";
+import { compareNames } from "./listing";
 import { carryLink, type LinkCarry } from "./links";
-
-/**
- * Version of what every viewer page shares: the bar, the document and the inlined site CSS. It is part of
- * every viewer ETag, so a redesign (or any change to the site CSS, through its hash) turns over the
- * validators of every viewer at once, not only of viewers whose own version was bumped.
- */
-export const VIEWER_PAGE_VERSION = `sp2.${SITE_CSS_HASH}`;
+import { viewerPhone } from "./phone";
+import { REPORT_PRINT_CSS } from "./print";
+import { unfurlHead } from "./unfurl";
 
 /**
  * The shared frame of every viewer page: one slim bar (kind, path, size, type;
  * view tabs; Download; a link to the app-origin file browser) above the body.
  * The bar is plain links, so it works with JavaScript off.
  */
+
+/**
+ * Revision of this shared frame (bar markup and VIEWER_CSS). It is part of
+ * every full-page viewer ETag, so a chrome change retires cached pages for
+ * extension viewers using viewerPage() too, not just the built-ins whose own
+ * `version` is bumped by hand. Bump it whenever the shared output changes.
+ */
+export const VIEWER_CHROME_VERSION = 2;
 
 /** CSP for viewer pages: no scripts, so user-authored markup inside e.g. Markdown cannot execute. */
 export const VIEWER_CSP =
@@ -107,25 +111,55 @@ function withTheme(vc: ViewerContext, href: string): string {
   return `${href}${href.includes("?") ? "&" : "?"}theme=${t}`;
 }
 
+/** Direct files in listing name order; image/SVG viewers keep their own stage navigation. */
+function siblingLinks(vc: ViewerContext): string {
+  if (vc.mode !== "source" && (vc.file.kind === "image" || vc.file.kind === "svg")) return "";
+  const slash = vc.file.path.lastIndexOf("/");
+  const dir = vc.file.path.slice(0, slash + 1);
+  const names = Object.keys(vc.live.files)
+    // .dropway/* is stored but never served, so listings (and these links) do not name it.
+    .filter((path) => path !== ".dropway" && !path.startsWith(".dropway/"))
+    .filter((path) => path.startsWith(dir) && !path.slice(dir.length).includes("/"))
+    .map((path) => path.slice(dir.length))
+    .sort(compareNames);
+  const i = names.indexOf(vc.file.path.slice(dir.length));
+  if (i < 0 || names.length < 2) return "";
+  const link = (name: string | undefined, rel: string, label: string) => name === undefined ? "" :
+    `<a class="k-btn k-sm k-ghost" href="${escapeHtml(carryLink(vc.siteBase, vc.siteBase + encodePath(dir + name), viewerCarry(vc)))}" rel="${rel}" title="${escapeHtml(name)}" aria-label="${escapeHtml(`${label}: ${name}`)}">${label}</a>`;
+  return link(names[i - 1], "prev", "Previous") + link(names[i + 1], "next", "Next");
+}
+
+/** The instance a viewer renders for; renderers fed a bare context (no config) fall back to defaults. */
+function instanceOf(vc: ViewerContext): { origin: string | undefined; name: string } {
+  return vc.dw?.config ? { origin: appOrigin(vc.dw), name: vc.dw.config.instanceName } : { origin: undefined, name: "Kofra" };
+}
+
 export function viewerBar(vc: ViewerContext, tabs: ViewerTab[], extra = ""): string {
   if (vc.embed) return "";
+  const siblings = siblingLinks(vc);
   const kind = KIND_LABELS[vc.file.kind] ?? "File";
   const type = vc.file.contentType.split(";")[0]!;
-  const origin = appOrigin(vc.dw);
-  return `<header class="k-vbar">
-<div class="k-vfile"><a class="k-wm" href="${escapeHtml(origin)}" rel="nofollow">${escapeHtml(vc.dw.config.instanceName)}</a><span class="k-chip k-accent">${escapeHtml(kind)}</span><nav class="k-crumbs" aria-label="Path" title="${escapeHtml(vc.file.path)}">${crumbs(vc)}</nav><span class="k-vmeta">${formatBytes(vc.file.size)} · ${escapeHtml(type)}</span><span class="k-sum k-mini">${fileSeal(vc.file.path, vc.file.sha256)}<details class="k-checksum"><summary>SHA-256 ${escapeHtml(vc.file.sha256.slice(0, 12))}…</summary><code>${escapeHtml(vc.file.sha256)}</code></details></span></div>
+  const inst = instanceOf(vc);
+  return `<header class="k-vbar dw-vbar">
+<div class="k-vfile"><a class="k-wm" href="${escapeHtml(inst.origin ?? "/")}" rel="nofollow">${escapeHtml(inst.name)}</a><span class="k-chip k-accent">${escapeHtml(kind)}</span><nav class="k-crumbs" aria-label="Path" title="${escapeHtml(vc.file.path)}">${crumbs(vc)}</nav><span class="k-vmeta">${formatBytes(vc.file.size)} · ${escapeHtml(type)}</span><span class="k-sum k-mini">${fileSeal(vc.file.path, vc.file.sha256)}<details class="k-checksum"><summary>SHA-256 ${escapeHtml(vc.file.sha256.slice(0, 12))}</summary><code>${escapeHtml(vc.file.sha256)}</code></details></span></div>
 <nav class="k-seg" aria-label="View">${tabs
     .map((t) => `<a href="${escapeHtml(t.raw ? t.href : withTheme(vc, t.href))}"${t.current ? ' aria-current="page"' : ""} rel="nofollow">${escapeHtml(t.label)}</a>`)
     .join("")}</nav>
-<nav class="k-btnrow" aria-label="File">${extra}<a class="k-btn k-sm k-ghost" href="${escapeHtml(vc.downloadUrl)}" rel="nofollow" download>Download</a><a class="k-btn k-sm k-ghost" href="${escapeHtml(vc.appViewerUrl)}" rel="nofollow" title="Browse every file of this site">Files</a></nav>
+<nav class="k-btnrow" aria-label="File">${siblings}${extra}${viewerPhone(vc)}<a class="k-btn k-sm k-ghost" href="${escapeHtml(vc.downloadUrl)}" rel="nofollow" download>Download</a><a class="k-btn k-sm k-ghost" href="${escapeHtml(vc.appViewerUrl)}" rel="nofollow" title="Browse every file of this site">Files</a></nav>
 <p class="k-trust k-show-lg">${TRUST_LINE}</p>
 </header>`;
 }
 
 /** Shared viewer styles (on top of the site bundle). */
 export const VIEWER_CSS = `
+[hidden]{display:none!important}
 .k-vbody{min-height:calc(100vh - 3.5rem)}
 .k-toggle:focus-visible~* .k-togglebtn,.k-toggle:focus-visible~.k-togglebtn{outline:2px solid var(--focus);outline-offset:2px}
+.dw-phone summary{list-style:none}.dw-phone summary::-webkit-details-marker{display:none}
+.k-vbar:has(.dw-phone[open]){position:relative}
+.dw-phone-panel{position:absolute;right:12px;top:100%;z-index:30;width:min(20rem,calc(100vw - 24px));box-sizing:border-box;padding:16px;border:1px solid var(--rule-soft);background:var(--paper);box-shadow:var(--shadow-2);font-size:14px;color:var(--ink)}
+.dw-phone-panel p{margin:0 0 12px}.dw-phone-panel svg{display:block;max-width:100%;height:auto;margin:0 auto 12px}
+.dw-phone-panel a{display:block;overflow-wrap:anywhere;font-family:var(--mono);font-size:12.5px;color:var(--accent)}
 `;
 
 /**
@@ -137,19 +171,29 @@ export const VIEWER_CSS = `
  */
 export function viewerPage(
   vc: ViewerContext,
-  opts: { title?: string; body: string; css?: string; tabs: ViewerTab[]; barExtra?: string; csp?: string; script?: string; headers?: Record<string, string>; srHeading?: boolean },
+  opts: { title?: string; body: string; css?: string; print?: boolean; tabs: ViewerTab[]; barExtra?: string; csp?: string; script?: string; headers?: Record<string, string>; srHeading?: boolean },
 ): Response {
   const name = vc.file.path.split("/").pop() ?? vc.file.path;
+  const title = opts.title ?? `${name} · ${vc.live.slug}`;
   const page = htmlPage({
-    title: opts.title ?? `${name} · ${vc.live.slug}`,
-    css: VIEWER_CSS + (opts.css ?? ""),
-    robots: "noindex",
+    title,
+    css: VIEWER_CSS + (opts.css ?? "") + (opts.print ? REPORT_PRINT_CSS : ""),
+    head: unfurlHead({
+      title,
+      description: `${KIND_LABELS[vc.file.kind] ?? "File"} · ${formatBytes(vc.file.size)} · ${vc.file.contentType.split(";")[0]}`,
+      // Live badge.svg is reserved for provider status; previews serve the uploaded path directly.
+      url: vc.url.origin + vc.siteBase + (!vc.preview && vc.file.path === "badge.svg" ? "" : encodePath(vc.file.path)),
+      image: vc.file.kind === "image",
+    }),
+    // unfurlHead carries the one robots meta.
     delivery: "site",
     theme: themeOf(vc.dw),
-    appOrigin: appOrigin(vc.dw),
+    appOrigin: instanceOf(vc).origin,
+    // File path only: never copy request/capability URLs into printed context, even when embedded.
     body:
       (vc.embed ? "" : SKIP_LINK) +
       viewerBar(vc, opts.tabs, opts.barExtra) +
+      (opts.print ? `<p class="dw-print-title">${escapeHtml(vc.file.path)}</p>` : "") +
       `<main id="dw-main" class="k-vbody">${opts.srHeading ?? !/<h1[\s>]/i.test(opts.body) ? `<h1 class="k-sr">${escapeHtml(name)}</h1>` : ""}${opts.body}</main>` +
       (vc.embed ? "" : `<footer class="k-hide-lg"><p class="k-trust k-vtrust">${TRUST_LINE}</p></footer>`) +
       (opts.script ? `<script>${opts.script}</script>` : ""),

@@ -9,7 +9,7 @@ const BINDINGS: Partial<Record<Capability, string>> = {
   site_data: "SITE_DATA", functions: "LOADER", code_mode: "LOADER", screenshots: "BROWSER",
   ai_metadata: "AI", analytics: "ANALYTICS", site_restricted: "EMAIL",
 };
-const BUILTIN: readonly Capability[] = ["anonymous_publish", "url_fetch", "large_uploads", "site_password", "members", "api_keys"];
+const BUILTIN: readonly Capability[] = ["anonymous_publish", "url_fetch", "large_uploads", "version_previews", "site_password", "members", "api_keys"];
 
 export async function capabilityDecision(dc: DropwayContext, p: Principal, capability: Capability, owner: SiteOwner | null = null): Promise<CapabilityDecision> {
   const binding = BINDINGS[capability];

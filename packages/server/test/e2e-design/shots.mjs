@@ -27,6 +27,8 @@
 //            (the mode switch, whose pressed state differs, and per-screen secrets are masked; channel
 //            deltas of 2/255 or less, rasteriser rounding on anti-aliased edges, are reported as noise)
 //   copy     no ledger fact (a phone card cell) starts or ends with a dangling "·" separator
+//   header   the mode switch is on the header's first row; from 1000px the account area and the switch end at the
+//            content edge whether or not the page has a navigation
 // Console capture stays on while axe runs (only axe's own cross-frame postMessage warning is ignored), and
 // every form field is asked checkValidity() first, so an invalid pattern attribute shows up as a console error.
 // axe "incomplete" (needs review) results, colour contrast included, are listed per cell in matrix.json
@@ -61,6 +63,7 @@ const arg = (name, dflt) => {
   return i >= 0 ? args[i + 1] : dflt;
 };
 const OUT = resolve(arg("out", join(ROOT, "e2e-design-out")));
+let cellCount = 0;
 const ONLY = arg("only", "") ? new Set(arg("only").split(",")) : null;
 const WIDTHS = arg("widths", "390,768,1440").split(",").map(Number);
 const MODES = arg("modes", "light,dark,auto-light,auto-dark").split(",");
@@ -456,7 +459,7 @@ function screens(fx) {
         await page.waitForSelector("#dw-publish .k-keyout", { timeout: 15000 });
       },
       // The new site's address is random per cell; each cell deletes its site afterwards.
-      mask: ["#dw-pub-slug", "#dw-pub-site", "#dw-publish .k-keyout code"],
+      mask: ["#dw-pub-slug", "#dw-pub-site", "#dw-pub-lookup", "#dw-publish .k-keyout code", "#dw-publish textarea.k-mono", "#dw-publish .k-small[role=status]:has-text('Resolved destination')"],
       after: deleteSite,
     }),
     app("J24", "A11 API keys", "/dashboard/keys", { wait: "#dw-keys tbody tr" }),
@@ -1352,11 +1355,14 @@ async function runCell(browser, mf, fx, sc, mode, width, axeSource, opts = {}) {
   const fontHeaders = [];
   const redirects = [];
   const css = [];
+  // Each cell is its own visitor (a documentation address), so the site password throttle counts one cell's
+  // attempts, not every wrong-password cell of the run.
+  const visitor = `192.0.2.${(cellCount = (cellCount % 254) + 1)}`;
   await context.route("**/*", async (route) => {
     const req = route.request();
     const url = req.url();
     if (!/^https:\/\/([a-z0-9-]+\.)?kofra(-sites|-separate)?\.test\//.test(url)) return route.abort();
-    const headers = await req.allHeaders();
+    const headers = { ...(await req.allHeaders()), "cf-connecting-ip": visitor };
     const body = req.postDataBuffer();
     const res = await mf.dispatchFetch(url, { method: req.method(), headers, body: body && req.method() !== "GET" && req.method() !== "HEAD" ? body : undefined, redirect: "manual" });
     const out = {};
@@ -1460,6 +1466,10 @@ async function runCell(browser, mf, fx, sc, mode, width, axeSource, opts = {}) {
     await page.evaluate(async () => {
       await document.fonts.ready;
       await Promise.all([...document.fonts].filter((f) => f.status === "loading").map((f) => f.loaded.catch(() => {})));
+      // Images the script added after "load" (the site badge preview) are in too, so two captures of one
+      // screen never differ by an image that had or had not arrived.
+      const imgs = [...document.images].filter((i) => !i.complete);
+      await Promise.race([Promise.all(imgs.map((i) => new Promise((r) => { i.addEventListener("load", r, { once: true }); i.addEventListener("error", r, { once: true }); }))), new Promise((r) => setTimeout(r, 5000))]);
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     });
     await page.waitForTimeout(sc.frame ? 900 : 200);
@@ -1483,7 +1493,8 @@ async function runCell(browser, mf, fx, sc, mode, width, axeSource, opts = {}) {
   const shot = (o = {}) => page.screenshot({ fullPage: !sc.viewportOnly, ...o }).catch(() => page.screenshot(o));
   const png = await shot({ path: join(OUT, file) });
   // G6 compares this copy: the switch (its pressed state differs by design) and per-cell secrets masked.
-  const masks = [".k-mode-switch", ...(sc.mask ?? [])].map((m) => page.locator(m));
+  // The live-version badge says how long ago the site changed, so two captures a minute apart differ.
+  const masks = [".k-mode-switch", "[data-testid=site-badge-preview]", ...(sc.mask ?? [])].map((m) => page.locator(m));
   let masked = null;
   if (pass === "matrix" && opts.maskDir) {
     masked = join(opts.maskDir, file);
@@ -1534,6 +1545,26 @@ async function runCell(browser, mf, fx, sc, mode, width, axeSource, opts = {}) {
         return d ? getComputedStyle(d, "::backdrop").backgroundColor : null;
       })(),
       // Ledger facts on phones: a cell that starts or ends with the "·" separator has a part missing.
+      // The app header (DESIGN.md section 7, Nav): from 1000px the last item on the row (the switch, or the account
+      // area where a page has no switch) ends at the content edge, with or without a navigation; at every width the
+      // switch stays on the first row, beside the wordmark.
+      header: (() => {
+        const wrap = document.querySelector(".k-top>.k-wrap");
+        if (!wrap) return null;
+        const r = wrap.getBoundingClientRect();
+        const edge = r.right - parseFloat(getComputedStyle(wrap).paddingRight);
+        const items = [...wrap.querySelectorAll(":scope>.k-acct>*, :scope>.k-mode-switch")].map((e) => e.getBoundingClientRect()).filter((b) => b.width > 0);
+        const wm = wrap.querySelector(":scope>.k-wm")?.getBoundingClientRect();
+        const sw = wrap.querySelector(":scope>.k-mode-switch")?.getBoundingClientRect();
+        return {
+          edge: Math.round(edge),
+          right: items.length ? Math.round(Math.max(...items.map((b) => b.right))) : null,
+          noswitch: document.querySelector(".k-top.k-noswitch") !== null,
+          switchRow1: !sw || !wm || sw.top < wm.bottom,
+          // What the first row is made of, for a failure: each item's width and the row's gap.
+          widths: [...wrap.children].filter((e) => e.getBoundingClientRect().width > 0).map((e) => `${e.className.replace(/k-/g, "")} ${Math.round(e.getBoundingClientRect().width)}`).concat(`gap ${getComputedStyle(wrap).columnGap}`),
+        };
+      })(),
       danglers: [...document.querySelectorAll(".k-table td, .k-table th")].map((e) => e.innerText.replace(/\s+/g, " ").trim()).filter((t) => /^·|·$/.test(t)).slice(0, 5),
       motion: {
         buttons: dur(".k-btn, .k-mode-switch button"),
@@ -1611,6 +1642,11 @@ async function runCell(browser, mf, fx, sc, mode, width, axeSource, opts = {}) {
     // G11 is a reduced-motion check; the motion pass is the normal-motion capture of the same screen.
     motion: { pass: pass === "motion" || sc.userPage || (probe.motion.buttons.length === 0 && probe.motion.skel.length === 0 && probe.motion.scroll === "auto"), detail: probe.motion },
     copy: { pass: sc.userPage || probe.danglers.length === 0, detail: probe.danglers },
+    // A quiet text button last on a no-switch page sits 5px past the edge so its text, not its padding, lines up.
+    header: {
+      pass: !probe.header || (probe.header.switchRow1 && (width < 1000 || probe.header.right === null || (probe.header.right >= probe.header.edge - 1 && probe.header.right <= probe.header.edge + (probe.header.noswitch ? 6 : 1)))),
+      detail: probe.header,
+    },
   };
   if (explicit && !sc.userPage && !sc.staticTheme && !forced) {
     gates.flash = { pass: firstHtml.includes(`data-theme="${explicit}"`) && frames.length === 0, detail: { inHtml: firstHtml.includes(`data-theme="${explicit}"`), frames: probe.frames.length, other: [...new Set(frames)] } };

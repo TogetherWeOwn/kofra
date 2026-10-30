@@ -5,13 +5,22 @@ import type { DropwayContext } from "../context";
  * under live:<slug>. D1 is the source of truth; KV is rewritten on every change
  * (finalize, restore, settings, claim, delete) and rebuilt from D1 on a miss.
  * Files are stored compactly as path -> [sha256, size, contentType].
+ * v3: filename maps are prototype-less, so legal names like __proto__ survive
+ * as own keys; older cached entries are treated as a miss and rebuilt from D1.
+ * v4: adds the live version's number and go-live time (the embeddable badge reads
+ * them from this entry, so it costs no extra D1 or R2 read); v3 entries are rebuilt.
  */
 export interface LiveSite {
-  v: 2;
+  /** 2 = stale (rebuilt on read); fresh writes are LIVE_VERSION. */
+  v: 2 | 3 | 4;
   siteId: string;
   slug: string;
   tenantId: string | null;
   versionId: string | null;
+  /** Sequence number of the live version (null: nothing live). Always set on v4 entries. */
+  versionNumber?: number | null;
+  /** When the live version was finalized, epoch ms (null: nothing live). Always set on v4 entries. */
+  versionAt?: number | null;
   spa: boolean;
   renderMarkdown: boolean;
   crossOriginIsolation: boolean;
@@ -21,6 +30,15 @@ export interface LiveSite {
 }
 
 export const liveKey = (slug: string) => `live:${slug}`;
+
+const LIVE_VERSION = 4;
+
+/** Copy own file entries into a prototype-less map, preserving an own __proto__ key. */
+function ownFiles(files: LiveSite["files"]): LiveSite["files"] {
+  const out: LiveSite["files"] = Object.create(null);
+  for (const k of Object.keys(files)) out[k] = files[k]!;
+  return out;
+}
 
 /** Per-isolate memory cache: one page load fetches many files from the same site. */
 const MEMORY_TTL_MS = 5_000;
@@ -41,7 +59,8 @@ export async function getLiveSite(dc: DropwayContext, slug: string): Promise<Liv
   const hit = memory.get(slug);
   if (hit && Date.now() - hit.at < MEMORY_TTL_MS) return hit.live;
   const cached = await dc.env.CACHE.get<LiveSite>(liveKey(slug), { type: "json", cacheTtl: dc.config.liveCacheTtlSeconds }).catch(() => null);
-  if (cached && cached.v === 2) {
+  if (cached && cached.v === LIVE_VERSION && cached.files && typeof cached.files === "object") {
+    cached.files = ownFiles(cached.files);
     remember(slug, cached);
     return cached;
   }
@@ -53,8 +72,9 @@ export async function getLiveSite(dc: DropwayContext, slug: string): Promise<Liv
 
 export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string; siteId?: string }): Promise<LiveSite | null> {
   const site = await dc.env.DB.prepare(
-    `SELECT id, slug, tenant_id, current_version_id, spa, render_markdown, cross_origin_isolation, password_hash, expires_at
-       FROM sites WHERE ${by.siteId ? "id" : "slug"} = ? AND deleted_at IS NULL`,
+    `SELECT s.id, s.slug, s.tenant_id, s.current_version_id, s.spa, s.render_markdown, s.cross_origin_isolation, s.password_hash, s.expires_at,
+            v.number AS version_number, COALESCE(v.finalized_at, v.created_at) AS version_at
+       FROM sites s LEFT JOIN versions v ON v.id = s.current_version_id WHERE s.${by.siteId ? "id" : "slug"} = ? AND s.deleted_at IS NULL`,
   )
     .bind(by.siteId ?? by.slug)
     .first<{
@@ -62,6 +82,8 @@ export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string
       slug: string;
       tenant_id: string | null;
       current_version_id: string | null;
+      version_number: number | null;
+      version_at: number | null;
       spa: number;
       render_markdown: number;
       cross_origin_isolation: number;
@@ -69,7 +91,7 @@ export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string
       expires_at: number | null;
     }>();
   if (!site) return null;
-  const files: LiveSite["files"] = {};
+  const files: LiveSite["files"] = Object.create(null);
   if (site.current_version_id) {
     const { results } = await dc.env.DB.prepare("SELECT path, sha256, size, content_type FROM version_files WHERE version_id = ?")
       .bind(site.current_version_id)
@@ -77,11 +99,13 @@ export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string
     for (const f of results) files[f.path] = [f.sha256, f.size, f.content_type];
   }
   return {
-    v: 2,
+    v: LIVE_VERSION,
     siteId: site.id,
     slug: site.slug,
     tenantId: site.tenant_id,
     versionId: site.current_version_id,
+    versionNumber: site.version_number,
+    versionAt: site.version_at,
     spa: site.spa === 1,
     renderMarkdown: site.render_markdown === 1,
     crossOriginIsolation: site.cross_origin_isolation === 1,

@@ -2,11 +2,12 @@
 /**
  * Browser code for the app-origin pages (home, sign-in, dashboard, file viewer).
  *
- * This whole file is ONE self-contained function. ./assets.ts serves its
+ * This file is ONE function, receiving only the closure-free seal and QR factories. ./assets.ts serves its
  * source text (Function.prototype.toString) as /__dropway/ui/app-<hash>.js, so
  * there is no build step and no bundler config for embedding apps to copy.
  * Rules for editing:
- * - Never reference anything outside dropwayClient() (no imports, no module-level values).
+ * - No external references: assets.ts passes the motifs factory (./motifs.ts) as arguments[0] and the QR factory as
+ *   arguments[1] (no named parameters: the served script starts "(function dropwayClient() {").
  * - Plain modern JavaScript; TypeScript annotations would survive into the browser.
  * - Never put API data into innerHTML: build DOM with h() / text nodes.
  * - Every action calls the public REST API (/api/v1), the same one agents use.
@@ -15,10 +16,12 @@
  * project). The suite checks the served script is self-contained; flows were
  * checked in a real browser (see the PR / commit notes).
  */
-export function dropwayClient(motifsFactory) {
+export function dropwayClient() {
   "use strict";
   var d = document;
   // Seals and plates (./motifs.ts), passed in by ./assets.ts; null if absent.
+  var motifsFactory = arguments[0];
+  var qrFactory = arguments[1];
   var M = typeof motifsFactory === "function" ? motifsFactory() : null;
   var bootEl = d.getElementById("dw-boot");
   var boot = bootEl ? JSON.parse(bootEl.textContent || "{}") : {};
@@ -237,6 +240,10 @@ export function dropwayClient(motifsFactory) {
     }
     return v.toFixed(v < 10 ? 1 : 0) + " " + u[i];
   }
+  function exactBytes(n) {
+    if (n === null || n === undefined) return "";
+    return n.toLocaleString("en-US") + (n === 1 ? " byte" : " bytes");
+  }
   function ago(iso) {
     if (!iso) return "";
     var t = new Date(iso).getTime();
@@ -249,6 +256,24 @@ export function dropwayClient(motifsFactory) {
     var days = Math.round(hr / 24);
     if (days < 30) return days + (days === 1 ? " day ago" : " days ago");
     return new Date(iso).toISOString().slice(0, 10);
+  }
+  function expiry(iso) {
+    if (!iso) return "";
+    var date = new Date(iso);
+    var t = date.getTime();
+    if (!Number.isFinite(t)) return "";
+    var remaining = t - Date.now();
+    // Past 30 days, both directions read as a local date ("Expired Sep 26, 2026").
+    if (remaining < 0) return "Expired " + (-remaining < 30 * 864e5 - 12 * 36e5 ? ago(iso) : date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }));
+    var s = Math.round(remaining / 1000);
+    if (s < 45) return "Expires in under a minute";
+    var m = Math.round(s / 60);
+    if (m < 60) return "Expires in " + m + " min";
+    var hr = Math.round(m / 60);
+    if (hr < 24) return "Expires in " + hr + " h";
+    var days = Math.round(hr / 24);
+    if (days < 30) return "Expires in " + days + (days === 1 ? " day" : " days");
+    return "Expires " + date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
   }
   function encodePath(p) {
     return p.split("/").map(encodeURIComponent).join("/");
@@ -318,7 +343,7 @@ export function dropwayClient(motifsFactory) {
   function sealFor(path, sha, opts) {
     opts = opts || {};
     if (!M || !/^[0-9a-f]{64}$/.test(String(sha))) return null;
-    var box = h("span", { class: "k-sum" + (opts.mini ? " k-mini" : "") + (opts.hideSm ? " k-hide-sm" : "") });
+    var box = h("span", { class: "k-sum" + (opts.mini ? " k-mini" : "") + (opts.hideSm ? " k-hide-sm dw-hide-sm" : "") });
     // Parsed as SVG, never written as HTML; the seal holds only numbers derived from the hex checksum.
     var parsed = new DOMParser().parseFromString(M.seal("SHA256:" + sha, { size: "mini" }), "image/svg+xml").documentElement;
     var svg = parsed && parsed.nodeName === "svg" ? d.importNode(parsed, true) : null;
@@ -329,7 +354,7 @@ export function dropwayClient(motifsFactory) {
       box.appendChild(svg);
     }
     if (!opts.noText) add(box, opts.full
-      ? h("details", { class: "k-checksum" }, h("summary", { text: "SHA-256 " + sha.slice(0, 12) + "…" }), h("code", { text: sha }))
+      ? h("details", { class: "k-checksum" }, h("summary", { text: "SHA-256 " + sha.slice(0, 12) }), h("code", { text: sha }))
       : h("span", {}, h("code", { title: "SHA-256 " + sha, text: sha.slice(0, 12) + "…" }), opts.caption ? h("span", { class: "k-small", text: opts.caption }) : null));
     return box;
   }
@@ -347,7 +372,7 @@ export function dropwayClient(motifsFactory) {
   function errorBox(err, prefix) {
     return h(
       "div",
-      { class: "k-banner k-danger", role: "alert" },
+      { class: "k-banner k-danger dw-error", role: "alert" },
       h(
         "div",
         {},
@@ -395,12 +420,100 @@ export function dropwayClient(motifsFactory) {
     });
   }
 
+  /** Keep receipt fields on one line; reject unsafe values rather than sanitizing them. */
+  function publicReceiptField(value) {
+    return typeof value === "string" && value && !/[\s\u0000-\u001f\u007f-\u009f]/.test(value) ? value : null;
+  }
+
+  /** A publish response URL that is safe to share, or null. Never stripped or rebuilt. */
+  function publicReceiptUrl(url) {
+    if (!publicReceiptField(url)) return null;
+    var u;
+    try {
+      u = new URL(url);
+    } catch (e) {
+      return null;
+    }
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    if (u.username || u.password || u.search || u.hash) return null;
+    return url;
+  }
+
+  /** Plain-text public receipt: allowlisted response fields only, never secrets. */
+  function publicReceiptText(siteUrl, version) {
+    var lines = [];
+    var clean = publicReceiptUrl(siteUrl);
+    if (clean) lines.push("Site URL: " + clean);
+    if (version && publicReceiptField(version.id)) lines.push("Version ID: " + version.id);
+    if (version && typeof version.number === "number") lines.push("Version: " + version.number);
+    if (version && typeof version.fileCount === "number") lines.push("Files: " + version.fileCount);
+    if (version && typeof version.totalBytes === "number") lines.push("Total bytes: " + version.totalBytes);
+    return lines.join("\n");
+  }
+
+  /** Copyable public receipt for a publish result. Local only: no requests, no persistence. */
+  function receiptBlock(r) {
+    var text = publicReceiptText(r.url, r.version);
+    if (!text) return null;
+    var busy = false;
+    var label = "Copy public details";
+    var note = h("div", { class: "k-small", role: "status", text: "" });
+    var area = h("textarea", {
+      class: "k-input k-mono",
+      readonly: true,
+      rows: String(text.split("\n").length),
+      spellcheck: "false",
+      "aria-label": "Public details",
+      value: text,
+    });
+    var btn = h("button", {
+      type: "button",
+      class: "k-btn k-sm k-ghost",
+      text: label,
+      onclick: function () {
+        if (busy) return;
+        busy = true;
+        btn.disabled = true;
+        btn.textContent = "Copying…";
+        var after = function (ok) {
+          busy = false;
+          btn.disabled = false;
+          btn.textContent = label;
+          note.textContent = ok
+            ? "Public details copied."
+            : "Could not copy automatically. Select the text above and copy it manually.";
+        };
+        try {
+          var p = navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(text) : null;
+          if (p && p.then) p.then(function () { after(true); }, function () { after(false); });
+          else after(false);
+        } catch (e) {
+          after(false);
+        }
+      },
+    });
+    return h(
+      "div",
+      { style: "margin-top:.6rem" },
+      h("div", { class: "k-label", text: "Public details" }),
+      area,
+      h("div", { class: "k-btnrow", style: "margin-top:.4rem" }, btn),
+      note,
+      h("p", {
+        class: "k-small",
+        text: "The live site URL can change when a new version is published. This version receipt records what was published; it is not an immutable or pinned preview, and sharing it does not change access restrictions or passwords.",
+      }),
+    );
+  }
+
   /** Modal confirmation. typeToConfirm: the user must type this value. Resolves true or false. */
   function confirmBox(opts) {
     return new Promise(function (resolve) {
       var input = opts.typeToConfirm ? h("input", { class: "k-input k-mono", id: "dw-dlg-input", autocomplete: "off", spellcheck: "false" }) : null;
       var ok = h("button", { class: "k-btn" + (opts.danger === false ? "" : " k-danger"), value: "ok", text: opts.confirmText || "Confirm", disabled: !!input });
-      var cancel = h("button", { class: "k-btn k-ghost", value: "cancel", text: "Cancel" });
+      // type=button: the form's default button stays the disabled confirm, so Enter in the field with a wrong value
+      // does nothing (implicit submission) instead of submitting through Cancel and closing the dialog.
+      var cancel = h("button", { type: "button", class: "k-btn k-ghost", value: "cancel", text: "Cancel", onclick: function () { dlg.close("cancel"); } });
       var dlg = h(
         "dialog",
         { class: "k-dlg" + (opts.danger === false ? "" : " k-warn"), "aria-labelledby": "dw-dlg-title", "aria-describedby": opts.message ? "dw-dlg-msg" : null },
@@ -604,11 +717,16 @@ export function dropwayClient(motifsFactory) {
       if (p.indexOf("/") < 0 || p.split("/")[0] !== first) return items;
     }
     return items.map(function (it) {
-      return { path: it.path.slice(first.length + 1), file: it.file };
+      return Object.assign({}, it, { path: it.path.slice(first.length + 1) });
     });
   }
 
-  function readEntry(entry, prefix, out) {
+  /**
+   * Read one DataTransfer entry into `out`. Unreadable files and directories are
+   * reported into `errors` ({ path, kind }) instead of resolving silently, so a
+   * partial traversal can never publish as if it were complete.
+   */
+  function readEntry(entry, prefix, out, errors) {
     return new Promise(function (resolve) {
       if (entry.isFile) {
         entry.file(
@@ -617,10 +735,12 @@ export function dropwayClient(motifsFactory) {
             resolve();
           },
           function () {
+            errors.push({ path: prefix + entry.name, kind: "file" });
             resolve();
           },
         );
       } else if (entry.isDirectory) {
+        var dirPath = prefix + entry.name;
         var reader = entry.createReader();
         var all = [];
         var next = function () {
@@ -629,7 +749,7 @@ export function dropwayClient(motifsFactory) {
               if (!batch.length) {
                 Promise.all(
                   all.map(function (e) {
-                    return readEntry(e, prefix + entry.name + "/", out);
+                    return readEntry(e, dirPath + "/", out, errors);
                   }),
                 ).then(function () {
                   resolve();
@@ -640,6 +760,7 @@ export function dropwayClient(motifsFactory) {
               next();
             },
             function () {
+              errors.push({ path: dirPath, kind: "directory" });
               resolve();
             },
           );
@@ -659,17 +780,21 @@ export function dropwayClient(motifsFactory) {
       }
     }
     if (!entries.length) {
-      return Array.prototype.map.call(dt.files || [], function (f) {
-        return { path: f.name, file: f };
-      });
+      return {
+        items: Array.prototype.map.call(dt.files || [], function (f) {
+          return { path: f.name, file: f };
+        }),
+        errors: [],
+      };
     }
     var out = [];
+    var errors = [];
     await Promise.all(
       entries.map(function (e) {
-        return readEntry(e, "", out);
+        return readEntry(e, "", out, errors);
       }),
     );
-    return out;
+    return { items: out, errors: errors };
   }
 
   async function sha256Hex(file) {
@@ -749,15 +874,40 @@ export function dropwayClient(motifsFactory) {
       );
       return;
     }
-    var state = { items: [], skipped: [], busy: false };
+    // errors: unreadable files/directories from the last traversal (publishing
+    // blocked until reselected). seq: selection generation; a drop that resolves
+    // after a newer selection (or after a publish started) is stale and ignored.
+    var state = { items: [], skipped: [], errors: [], busy: false, seq: 0 };
+    // Review navigation (search, visibility, ordering). Presentation only: it
+    // never touches state.items, state.skipped, the ignore policy or what
+    // run() sends. Every setItems call resets it to the complete review.
+    var nav = { q: "", cat: "all", order: "path" };
+    var navEls = null;
+    // Explicit update destination (opts.site, or the slug lookup below). The
+    // sites list is only its first page, so a nonempty explicit destination
+    // is verified with the existing single-site GET and the slug it returns
+    // is what gets selected and published to. destSeq fences races: every
+    // newer explicit choice (a lookup, a picker change, new-site focus, a
+    // finished publish) invalidates older in-flight lookups, whose late
+    // responses are ignored. While destState is "pending" or "failed" the
+    // update destination is unresolved and publishing stays disabled; it
+    // never falls back to the first listed site or to a new site.
+    var destSeq = 0;
+    var destState = "idle"; // idle | pending | resolved | failed
+    var destSite = null; // { slug, title } returned by the verifying GET
+    var initialSite = opts.site && String(opts.site).trim() ? String(opts.site).trim() : null;
     var siteSelect = h("select", { class: "k-input", id: "dw-pub-site", "aria-label": "Site to update" }, h("option", { value: "", text: "Loading sites…" }));
+    var lookupInput = h("input", { class: "k-input", id: "dw-pub-lookup", "aria-label": "Site slug to look up", placeholder: "exact site slug", autocomplete: "off", spellcheck: "false", style: "flex:1 1 10rem;width:auto;min-width:0" });
+    var lookupBtn = h("button", { type: "button", class: "k-btn k-ghost", text: "Look up site" });
+    var destStatus = h("div", { class: "k-small", role: "status" });
+    var destError = h("div", { hidden: true });
     var slugInput = h("input", { class: "k-input", id: "dw-pub-slug", placeholder: "generated if empty", autocomplete: "off", spellcheck: "false", pattern: "[a-z0-9][a-z0-9\\-]{1,62}" });
     var modeNew = h("input", { type: "radio", name: "dw-pub-mode", value: "new", checked: !opts.site });
     var modeUpd = h("input", { type: "radio", name: "dw-pub-mode", value: "update", checked: !!opts.site });
     var message = h("input", { class: "k-input", id: "dw-pub-msg", maxlength: "200", placeholder: "What changed (optional)" });
     var dirInput = h("input", { type: "file", webkitdirectory: true, multiple: true, hidden: true });
     var fileInput = h("input", { type: "file", multiple: true, hidden: true });
-    var summary = h("div", { class: "k-small", "aria-live": "polite" });
+    var summary = h("div", { class: "k-small dw-muted", "aria-live": "polite" });
     var chosen = h("ul", { class: "k-frows k-chosen", hidden: true, "aria-label": "Files to publish" });
     var publishBtn = h("button", { type: "button", class: "k-btn", text: "Publish", disabled: true });
     var clearBtn = h("button", { type: "button", class: "k-btn k-quiet", text: "Clear", hidden: true });
@@ -765,32 +915,66 @@ export function dropwayClient(motifsFactory) {
     var bar = h("i");
     var progress = h("div", { class: "k-prog", hidden: true, role: "progressbar", "aria-label": "Publishing", "aria-valuemin": "0", "aria-valuemax": "100" }, bar);
     var result = h("div");
+    var errorList = h("div", { hidden: true });
+    var review = h("details", { class: "k-review", hidden: true });
+    var chooseDirBtn = h("button", { type: "button", class: "k-btn k-ghost", text: "Choose folder", onclick: function (e) { e.stopPropagation(); dirInput.click(); } });
+    var chooseFileBtn = h("button", { type: "button", class: "k-btn k-ghost", text: "Choose files", onclick: function (e) { e.stopPropagation(); fileInput.click(); } });
     var zone = h(
       "div",
-      { class: "k-dropzone", role: "group", "aria-label": "Drop zone: drop a folder, files or a .zip here, or choose them with the buttons" },
+      { class: "k-dropzone", role: "group", "aria-label": "Drop a folder, files or a .zip here, or choose them with the buttons" },
       h("strong", { text: "Drop a folder, files or a .zip" }),
       h("p", { text: "Files are hashed in your browser; only files the server does not have yet are uploaded." }),
-      h(
-        "div",
-        { class: "k-btnrow" },
-        h("button", { type: "button", class: "k-btn k-ghost", text: "Choose folder", onclick: function (e) { e.stopPropagation(); dirInput.click(); } }),
-        h("button", { type: "button", class: "k-btn k-ghost", text: "Choose files", onclick: function (e) { e.stopPropagation(); fileInput.click(); } }),
-      ),
+      h("div", { class: "k-btnrow" }, chooseDirBtn, chooseFileBtn),
       dirInput,
       fileInput,
     );
 
-    function setItems(items) {
+    /** Render one unreadable traversal entry. Ignored files never land here. */
+    function traversalAlert(er) {
+      return h(
+        "div",
+        { class: "k-banner k-danger dw-error", role: "alert" },
+        h("strong", { text: (er.kind === "directory" ? "Could not read folder “" : "Could not read file “") + er.path + "”." }),
+        h("div", { class: "k-small", text: "Check access to this path, then reselect the folder, or use Choose files to select only the files you want to publish. Publishing stays disabled until the selection is complete." }),
+      );
+    }
+
+    /** One review row per path (never a joined line), so narrow screens can wrap. */
+    function reviewRow(text) {
+      return h("li", { class: "k-review-row" }, h("code", { class: "k-mono", text: text }));
+    }
+
+    function setItems(items, errors) {
+      // Normalize the whole selection before applying the existing ignore rules,
+      // including unreadable paths. A directory's slash marks its subtree; an
+      // unreadable sole root normalizes to "" and remains a blocking error.
+      var selection = items.concat((errors || []).map(function (er) {
+        return { path: er.path + (er.kind === "directory" ? "/" : ""), error: er };
+      }));
+      errors = [];
       var keep = [];
       var skipped = [];
-      stripCommonRoot(items).forEach(function (it) {
+      var skipRows = [];
+      stripCommonRoot(selection).forEach(function (it) {
         var why = ignored(it.path);
-        if (why) skipped.push(it.path + " (" + why + ")");
+        if (why) {
+          var entry = it.path + " (" + why + (it.error ? "; " + (it.error.kind === "directory" ? "contents unreadable" : "unreadable") : "") + ")";
+          skipped.push(entry);
+          // The full "path (reason)" text stays the row; the path alone
+          // drives review search and ordering, never the reason.
+          skipRows.push({ path: it.path, text: entry });
+        } else if (it.error) errors.push(it.error);
         else keep.push(it);
       });
       state.items = keep;
       state.skipped = skipped;
+      state.errors = errors;
       clear(result);
+      clear(errorList);
+      errors.forEach(function (er) {
+        add(errorList, traversalAlert(er));
+      });
+      errorList.hidden = !errors.length;
       var total = keep.reduce(function (s, it) {
         return s + it.file.size;
       }, 0);
@@ -802,12 +986,22 @@ export function dropwayClient(motifsFactory) {
       clear(chosen);
       chosen.hidden = !keep.length;
       if (keep.length) {
+        // The one-line display names the selection being sent (bounded: the
+        // review below holds the complete inventory). It must keep describing
+        // the in-flight publish while busy, so setItems never runs then.
+        var preview = keep
+          .slice(0, 3)
+          .map(function (it) {
+            return it.path;
+          })
+          .join(", ");
+        if (keep.length > 3) preview += " + " + (keep.length - 3) + " more in the review";
         add(
           summary,
           h("strong", { text: zip ? "1 zip file · " + bytes(total) + " (unpacked on the server)" : plural(keep.length, "file") + " · " + bytes(total) }),
-          !zip && keep.length > 1 && hasIndex ? " · has an index page" : "",
-          !zip && keep.length > 1 && !hasIndex ? h("p", { class: "k-fwarn", text: "No index.html: the site root will list the files." }) : null,
-          skipped.length ? h("p", { class: "k-small", text: "Skipped " + plural(skipped.length, "file") + ": " + skipped.slice(0, 5).join(", ") + (skipped.length > 5 ? "…" : "") }) : null,
+          !zip && keep.length > 1 ? (hasIndex ? " · has an index page" : " · no index.html: the site root will list the files") : "",
+          h("div", { text: preview }),
+          skipped.length ? h("div", { text: "Skipped " + plural(skipped.length, "file") + ": " + skipped.slice(0, 5).join(", ") + (skipped.length > 5 ? ", +" + (skipped.length - 5) + " more in the review" : "") }) : null,
         );
         keep.slice(0, 6).forEach(function (it) {
           var folder = it.path.indexOf("/") > 0;
@@ -823,13 +1017,156 @@ export function dropwayClient(motifsFactory) {
           );
         });
         if (keep.length > 6) add(chosen, h("li", { class: "k-frow" }, h("span"), h("span", { class: "k-small", text: "and " + plural(keep.length - 6, "more file") }), h("span")));
-      } else if (skipped.length) add(summary, "Every file was skipped: " + skipped.slice(0, 5).join(", "));
-      publishBtn.disabled = !keep.length || state.busy;
+      } else if (skipped.length) add(summary, "Every file was skipped: " + skipped.slice(0, 5).join(", ") + (skipped.length > 5 ? ", +" + (skipped.length - 5) + " more in the review" : ""));
+      // The review lists the exact normalized inventory publish() will send:
+      // every included path with its byte size, every excluded path with its
+      // ignore reason. It reads no file contents and makes no requests.
+      // Navigation (search, visibility, ordering) only re-renders these rows:
+      // default is the complete review in deterministic Path order, included
+      // group first. Size orders included bytes descending (equal sizes fall
+      // back to Path order); exclusions always stay Path-ordered last, and an
+      // unreadable exclusion keeps its "unreadable" note instead of a guessed
+      // size. Hidden rows are still uploaded; Clear restores the full review.
+      var wasOpen = review.open;
+      clear(review);
+      nav.q = "";
+      nav.cat = "all";
+      nav.order = "path";
+      navEls = null;
+      if (!keep.length && !skipped.length) {
+        review.hidden = true;
+      } else {
+        review.hidden = false;
+        var label = keep.length ? "Review " + plural(keep.length, "file") + " · " + bytes(total) : "Review selection";
+        if (skipped.length) label += " · " + plural(skipped.length, "excluded file");
+        add(review, h("summary", { text: label }));
+        var search = h("input", { class: "k-input", type: "search", placeholder: "Search paths", "aria-label": "Search review by path", autocomplete: "off", spellcheck: "false" });
+        var navOption = function (value, text) {
+          var o = h("option", { text: text });
+          o.value = value;
+          o.setAttribute("value", value);
+          return o;
+        };
+        var catSel = h("select", { class: "k-input", "aria-label": "Review visibility" }, navOption("all", "All"), navOption("included", "Included"), navOption("excluded", "Excluded"));
+        catSel.value = "all";
+        var orderSel = h("select", { class: "k-input", "aria-label": "Review order" }, navOption("path", "Path"), navOption("size", "Size"));
+        orderSel.value = "path";
+        var clearNav = h("button", { type: "button", class: "k-btn k-sm k-ghost", text: "Clear filters" });
+        var counts = h("p", { class: "k-small", role: "status" });
+        // Controls stay mounted while typing: only the emitted tail (headings,
+        // lists, notes) is re-rendered, so focus never detaches mid-query.
+        var tail = [];
+        add(review, h("div", { class: "k-review-nav" }, search, catSel, orderSel, clearNav));
+        add(review, h("p", { class: "k-small", text: keep.length ? "Search, visibility and ordering only change this review. All included files are uploaded." : "Search, visibility and ordering only change this review." }));
+        add(review, counts);
+        var cmpPath = function (a, b) {
+          return a < b ? -1 : a > b ? 1 : 0;
+        };
+        var renderReview = function () {
+          var q = nav.q;
+          var showIncluded = nav.cat !== "excluded";
+          var showExcluded = nav.cat !== "included";
+          var visKeep = showIncluded
+            ? keep.filter(function (it) {
+                return !q || it.path.toLowerCase().indexOf(q) >= 0;
+              })
+            : [];
+          var visSkip = showExcluded
+            ? skipRows.filter(function (r) {
+                return !q || r.path.toLowerCase().indexOf(q) >= 0;
+              })
+            : [];
+          // Sorted copies only: the normalized inventory keeps selection
+          // order, which is the manifest order run() sends.
+          var byPath = function (a, b) {
+            return cmpPath(a.path, b.path);
+          };
+          visSkip.sort(byPath);
+          if (nav.order === "size") {
+            visKeep.sort(function (a, b) {
+              return b.file.size - a.file.size || cmpPath(a.path, b.path);
+            });
+          } else {
+            visKeep.sort(byPath);
+          }
+          counts.textContent = visKeep.length + " of " + keep.length + " included files · " + visSkip.length + " of " + skipRows.length + " excluded paths";
+          tail.forEach(function (n) {
+            n.remove();
+          });
+          tail = [];
+          var emit = function (n) {
+            add(review, n);
+            tail.push(n);
+          };
+          if (visKeep.length) {
+            emit(h("p", { class: "k-small k-review-h", text: zip ? "Archive" : "Included (" + keep.length + ")" }));
+            var included = h("ul", { class: "k-review-list" });
+            visKeep.forEach(function (it) {
+              add(included, h("li", { class: "k-review-row" }, h("code", { class: "k-mono", text: it.path }), " · " + bytes(it.file.size)));
+            });
+            emit(included);
+            if (zip) emit(h("p", { class: "k-small", text: "This archive is unpacked by the server; its entries cannot be listed before upload." }));
+          }
+          if (visSkip.length) {
+            emit(h("p", { class: "k-small k-review-h", text: "Excluded (" + skipRows.length + ")" }));
+            var excluded = h("ul", { class: "k-review-list" });
+            visSkip.forEach(function (r) {
+              add(excluded, reviewRow(r.text));
+            });
+            emit(excluded);
+          }
+          if (!visKeep.length && !visSkip.length) emit(h("p", { class: "k-small", text: "No matching files in this review." }));
+        };
+        search.addEventListener("input", function () {
+          if (state.busy) return;
+          // Literal substring on the path only: never a regex, never the
+          // exclusion reason.
+          nav.q = search.value.trim().toLowerCase();
+          renderReview();
+        });
+        catSel.addEventListener("change", function () {
+          if (state.busy) return;
+          nav.cat = catSel.value;
+          renderReview();
+        });
+        orderSel.addEventListener("change", function () {
+          if (state.busy) return;
+          nav.order = orderSel.value;
+          renderReview();
+        });
+        clearNav.addEventListener("click", function () {
+          if (state.busy) return;
+          nav.q = "";
+          nav.cat = "all";
+          nav.order = "path";
+          search.value = "";
+          catSel.value = "all";
+          orderSel.value = "path";
+          renderReview();
+          search.focus();
+        });
+        navEls = { search: search, cat: catSel, order: orderSel, clear: clearNav };
+        if (state.busy) setNavDisabled(true);
+        renderReview();
+        review.open = wasOpen;
+      }
+      refreshPublishBtn();
       clearBtn.hidden = !keep.length;
     }
 
+    function busyNotice() {
+      toast("A publish is in progress. The new selection was ignored; try again when it finishes.", false);
+    }
     zone.addEventListener("click", function () {
+      if (state.busy) return;
       dirInput.click();
+    });
+    zone.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        if (state.busy) return;
+        dirInput.click();
+      }
     });
     ["dragenter", "dragover"].forEach(function (t) {
       zone.addEventListener(t, function (e) {
@@ -844,25 +1181,48 @@ export function dropwayClient(motifsFactory) {
     });
     zone.addEventListener("drop", async function (e) {
       e.preventDefault();
-      setItems(await filesFromDrop(e.dataTransfer));
+      if (state.busy) {
+        busyNotice();
+        return;
+      }
+      var ticket = ++state.seq;
+      var found = await filesFromDrop(e.dataTransfer);
+      // A newer selection arrived (or a publish started) while enumerating:
+      // the stale result must not replace the displayed selection.
+      if (state.busy) {
+        busyNotice();
+        return;
+      }
+      if (ticket !== state.seq) return;
+      setItems(found.items, found.errors);
     });
     dirInput.addEventListener("change", function () {
-      setItems(
-        Array.prototype.map.call(dirInput.files, function (f) {
-          return { path: f.webkitRelativePath || f.name, file: f };
-        }),
-      );
+      var picked = Array.prototype.map.call(dirInput.files, function (f) {
+        return { path: f.webkitRelativePath || f.name, file: f };
+      });
       dirInput.value = "";
+      if (state.busy) {
+        busyNotice();
+        return;
+      }
+      state.seq++;
+      setItems(picked, []);
     });
     fileInput.addEventListener("change", function () {
-      setItems(
-        Array.prototype.map.call(fileInput.files, function (f) {
-          return { path: f.name, file: f };
-        }),
-      );
+      var picked = Array.prototype.map.call(fileInput.files, function (f) {
+        return { path: f.name, file: f };
+      });
       fileInput.value = "";
+      if (state.busy) {
+        busyNotice();
+        return;
+      }
+      state.seq++;
+      setItems(picked, []);
     });
     clearBtn.addEventListener("click", function () {
+      if (state.busy) return;
+      state.seq++;
       setItems([]);
       clear(status);
       progress.hidden = true;
@@ -876,10 +1236,38 @@ export function dropwayClient(motifsFactory) {
       status.textContent = text;
     }
 
+    /** Review navigation locks with the destination while a publish runs. */
+    function setNavDisabled(on) {
+      if (!navEls) return;
+      navEls.search.disabled = on;
+      navEls.cat.disabled = on;
+      navEls.order.disabled = on;
+      navEls.clear.disabled = on;
+    }
+
+    /** Destination controls bound to the active publish; frozen while it runs. */
+    function setDestinationDisabled(on) {
+      modeNew.disabled = on;
+      modeUpd.disabled = on;
+      slugInput.disabled = on;
+      siteSelect.disabled = on;
+      lookupInput.disabled = on;
+      lookupBtn.disabled = on;
+      chooseDirBtn.disabled = on;
+      chooseFileBtn.disabled = on;
+      clearBtn.disabled = on;
+    }
+
     async function run() {
-      if (state.busy || !state.items.length) return;
+      if (state.busy || !state.items.length || state.errors.length) return;
+      // An unresolved explicit update must never publish to whatever the
+      // picker happens to show (see the destination state above).
+      if (!anonymous && modeUpd.checked && destUnresolved()) return;
+      state.seq++;
       state.busy = true;
       publishBtn.disabled = true;
+      setDestinationDisabled(true);
+      setNavDisabled(true);
       clear(result);
       var auth = key;
       var claim = null;
@@ -921,7 +1309,11 @@ export function dropwayClient(motifsFactory) {
         var dep = await api("/sites/" + encodeURIComponent(slug) + "/deploys", { method: "POST", body: { files: manifest, message: msg }, key: auth });
         if (dep.unchanged) {
           setProgress(1, "Nothing changed.");
-          showResult({ slug: slug, unchanged: true, version: dep.deploy });
+          // Unchanged needs a live version, so it is reachable only when updating
+          // an existing site (the new-site leg above just created an empty one).
+          // Recover that site's authoritative URL with an authorized read.
+          if (updating) await showUnchangedResult(slug, dep.deploy, auth);
+          else showResult({ slug: slug, unchanged: true, version: dep.deploy });
           return;
         }
         var uploads = dep.uploads || [];
@@ -953,14 +1345,30 @@ export function dropwayClient(motifsFactory) {
         add(result, errorBox(e, "Publish failed"));
       } finally {
         state.busy = false;
-        publishBtn.disabled = !state.items.length;
+        setDestinationDisabled(false);
+        setNavDisabled(false);
+        refreshPublishBtn();
       }
     }
 
-    function showResult(r) {
+    function showResult(r, opts) {
       setItems([]);
       clear(result);
       var url = r.url || null;
+      var linkRetry = null;
+      if (r.linkUnavailable) {
+        linkRetry = h("button", {
+          type: "button",
+          class: "k-btn k-sm k-ghost",
+          text: "Retry getting the link",
+          onclick: function () {
+            if (linkRetry.disabled || !r.onLinkRetry) return;
+            linkRetry.disabled = true;
+            linkRetry.textContent = "Retrying…";
+            r.onLinkRetry();
+          },
+        });
+      }
       add(
         result,
         h(
@@ -978,6 +1386,17 @@ export function dropwayClient(motifsFactory) {
             h("a", { class: "k-btn k-ghost", href: "/v/" + encodeURIComponent(r.slug) + "/", text: "Browse files" }),
             key ? h("a", { class: "k-btn k-ghost", href: "/dashboard/sites/" + encodeURIComponent(r.slug), text: "Manage" }) : null,
           ),
+          r.linkUnavailable
+            ? h(
+                "div",
+                { class: "k-small", style: "margin-top:.6rem" },
+                h("p", { text: "The public link could not be retrieved. The publish itself succeeded — nothing changed and nothing was uploaded. Retrying only reads the site link again; it does not publish again." }),
+                h("div", { class: "k-btnrow", style: "margin-top:.4rem" }, linkRetry),
+              )
+            : null,
+          // No receipt without a usable link: it would record a public
+          // identity with nowhere to open it.
+          r.linkUnavailable ? null : receiptBlock(r),
           r.warnings && r.warnings.length
             ? h("ul", { class: "k-small" }, r.warnings.map(function (w) {
                 return h("li", { text: w.message });
@@ -993,26 +1412,208 @@ export function dropwayClient(motifsFactory) {
             : null,
         ),
       );
-      if (key) {
+      if (opts && opts.restoreFocus) {
+        var nextAction = linkRetry || $("a.k-btn", result);
+        if (nextAction) nextAction.focus();
+      }
+      if (key && !(opts && opts.keepDestination)) {
         modeUpd.checked = true;
         slugInput.value = "";
+        // The slug just published to is verified; keep it selected as the
+        // update destination even if the refreshed first page omits it.
+        destSeq++;
+        destState = "resolved";
+        destSite = { slug: r.slug, title: destSite && destSite.slug === r.slug ? destSite.title : null };
+        clear(destError);
+        destError.hidden = true;
+        destStatus.textContent = "Resolved destination: " + r.slug;
+        lookupInput.value = r.slug;
         loadSites(r.slug);
+      }
+    }
+
+    function destUnresolved() {
+      return destState === "pending" || destState === "failed";
+    }
+
+    function refreshPublishBtn() {
+      publishBtn.disabled = !state.items.length || state.busy || !!state.errors.length || (modeUpd.checked && destUnresolved());
+    }
+
+    /** A deliberate newer destination choice supersedes any in-flight lookup. */
+    function invalidateDest() {
+      destSeq++;
+      destState = "idle";
+      destSite = null;
+      clear(destError);
+      destError.hidden = true;
+      destStatus.textContent = "";
+    }
+
+    /** Add the verified site as an option unless the list already has it. */
+    function ensureDestOption(site) {
+      var found = false;
+      Array.prototype.forEach.call(siteSelect.children, function (o) {
+        if (o.value === site.slug) found = true;
+      });
+      if (!found) add(siteSelect, h("option", { value: site.slug, text: site.title ? site.title + " (" + site.slug + ")" : site.slug }));
+    }
+
+    function failDest(err) {
+      destState = "failed";
+      destSite = null;
+      destStatus.textContent = "";
+      var box = errorBox(err, "Could not look up that site");
+      add(box, h("div", { class: "k-small", text: "Check the slug and look it up again, or choose a site from the list. Nothing was published." }));
+      add(destError, box);
+      destError.hidden = false;
+      refreshPublishBtn();
+    }
+
+    /**
+     * Verify one explicit destination with the existing single-site GET.
+     * The reference is encoded as exactly one path segment and the slug the
+     * server returns (never the typed reference) is selected. Typing alone
+     * never calls this; only the initial explicit destination, Enter in the
+     * lookup field or the lookup button do.
+     */
+    async function lookupDest(reference) {
+      var ref = String(reference === null || reference === undefined ? "" : reference).trim();
+      if (!ref) {
+        destStatus.textContent = "Enter a site slug to look up.";
+        return;
+      }
+      if (!key || state.busy) return;
+      var seq = ++destSeq;
+      destState = "pending";
+      destSite = null;
+      modeUpd.checked = true;
+      clear(destError);
+      destError.hidden = true;
+      destStatus.textContent = "Looking up site " + ref + "…";
+      siteSelect.value = "";
+      refreshPublishBtn();
+      // URL parsing normalizes dot segments even after encodeURIComponent.
+      // Reject them locally after retiring any older lookup's intent.
+      if (/^\.+$/.test(ref)) {
+        failDest(apiError(400, null, "That is not a site slug."));
+        return;
+      }
+      var res;
+      try {
+        res = await api("/sites/" + encodeURIComponent(ref));
+      } catch (e) {
+        if (seq !== destSeq) return; // a newer choice superseded this lookup
+        failDest(e);
+        return;
+      }
+      if (seq !== destSeq) return;
+      var site = res && res.site;
+      if (!site || !site.slug) {
+        failDest(apiError(0, null, "The server did not return that site."));
+        return;
+      }
+      destSite = { slug: site.slug, title: site.title || null };
+      destState = "resolved";
+      ensureDestOption(destSite);
+      siteSelect.value = destSite.slug;
+      lookupInput.value = destSite.slug;
+      destStatus.textContent = "Resolved destination: " + destSite.slug;
+      refreshPublishBtn();
+    }
+
+    /**
+     * Show an unchanged update with its live link. The unchanged deploy itself
+     * returns the version identity but no URL, so read the site (get_site) with
+     * the publish's own credentials and use only the authoritative URL it
+     * returns — never its live-version pointer, which may have moved on, and
+     * never a URL rebuilt from the slug. A failed or unusable read keeps the
+     * successful "nothing changed" result and offers a retry of the read only.
+     */
+    async function showUnchangedResult(slug, version, auth, restoreFocus) {
+      // A retry runs after run() has finished: hold the same in-flight locks
+      // while it reads, so a new selection cannot race its result rendering.
+      var holdBusy = !state.busy;
+      if (holdBusy) {
+        state.busy = true;
+        publishBtn.disabled = true;
+        setDestinationDisabled(true);
+        setNavDisabled(true);
+      }
+      try {
+        var url = null;
+        try {
+          var res = await api("/sites/" + encodeURIComponent(slug), { key: auth });
+          url = publicReceiptUrl(res && res.site && res.site.url);
+        } catch (e) {
+          url = null;
+        }
+        if (url) {
+          showResult({ slug: slug, unchanged: true, version: version, url: url }, { keepDestination: true, restoreFocus: restoreFocus });
+          return;
+        }
+        showResult(
+          {
+            slug: slug,
+            unchanged: true,
+            version: version,
+            linkUnavailable: true,
+            onLinkRetry: function () {
+              return showUnchangedResult(slug, version, auth, true);
+            },
+          },
+          { keepDestination: true, restoreFocus: restoreFocus },
+        );
+      } finally {
+        if (holdBusy) {
+          state.busy = false;
+          setDestinationDisabled(false);
+          setNavDisabled(false);
+          refreshPublishBtn();
+        }
       }
     }
 
     async function loadSites(select) {
       if (!key) return;
+      var listSeq = destSeq;
       try {
         var res = await api("/sites?limit=200");
+        var current = siteSelect.value;
+        var currentOption = siteSelect.options[siteSelect.selectedIndex];
         clear(siteSelect);
-        if (!res.sites.length) add(siteSelect, h("option", { value: "", text: "No sites yet" }));
+        if (!res.sites.length && !(destState === "resolved" && destSite)) add(siteSelect, h("option", { value: "", text: "No sites yet" }));
         res.sites.forEach(function (s) {
           add(siteSelect, h("option", { value: s.slug, text: s.title ? s.title + " (" + s.slug + ")" : s.slug }));
         });
-        if (select) siteSelect.value = select;
+        // A deliberate picker choice may be a previously verified off-page
+        // option. Keep its label and identity before restoring its value.
+        if (current && currentOption && !res.sites.some(function (s) { return s.slug === current; })) add(siteSelect, currentOption);
+        // Decide the selection when the list lands, not when it was asked
+        // for: a destination verified (or still resolving) meanwhile wins
+        // over the stale select request and over the first listed site.
+        if (destState === "resolved" && destSite) {
+          ensureDestOption(destSite);
+          siteSelect.value = destSite.slug;
+        } else if (destUnresolved()) {
+          siteSelect.value = "";
+        } else if (current && destSeq !== listSeq) {
+          // A newer explicit choice (e.g. the picker) landed while this
+          // list was in flight; the older list response must not move it.
+          siteSelect.value = current;
+        } else if (select) {
+          siteSelect.value = select;
+        } else if (current) {
+          siteSelect.value = current;
+        }
       } catch (e) {
         clear(siteSelect);
-        add(siteSelect, h("option", { value: "", text: "Could not load sites" }));
+        if (destState === "resolved" && destSite) {
+          ensureDestOption(destSite);
+          siteSelect.value = destSite.slug;
+        } else {
+          add(siteSelect, h("option", { value: "", text: "Could not load sites" }));
+        }
       }
     }
 
@@ -1025,14 +1626,49 @@ export function dropwayClient(motifsFactory) {
           h("legend", { class: "k-label", text: "Publish to" }),
           h("div", { class: "k-two" },
             h("div", { class: "k-group" }, h("label", { class: "k-tog" }, modeNew, h("span", { text: "A new site" })), h("label", { class: "k-sub", for: "dw-pub-slug", text: "Name (optional)" }), slugInput),
-            h("div", { class: "k-group" }, h("label", { class: "k-tog" }, modeUpd, h("span", { text: "A new version of" })), h("label", { class: "k-sub", for: "dw-pub-site", text: "Site" }), siteSelect),
+            h(
+              "div",
+              { class: "k-group" },
+              h("label", { class: "k-tog" }, modeUpd, h("span", { text: "A new version of" })),
+              h("label", { class: "k-sub", for: "dw-pub-site", text: "Site" }),
+              siteSelect,
+              h("label", { class: "k-sub", for: "dw-pub-lookup", text: "Site slug (if it is not in the list)" }),
+              h("div", { class: "k-btnrow" }, lookupInput, lookupBtn),
+              h("p", { class: "k-hint", text: "The list shows recent sites only. To update an older site, enter its exact slug and look it up; the site found becomes the destination." }),
+              destStatus,
+              destError,
+            ),
           ),
         );
     slugInput.addEventListener("focus", function () {
       modeNew.checked = true;
+      invalidateDest();
+      refreshPublishBtn();
     });
     siteSelect.addEventListener("change", function () {
       modeUpd.checked = true;
+      invalidateDest();
+      refreshPublishBtn();
+    });
+    modeNew.addEventListener("change", function () {
+      invalidateDest();
+      refreshPublishBtn();
+    });
+    modeUpd.addEventListener("change", function () {
+      refreshPublishBtn();
+    });
+    lookupInput.addEventListener("focus", function () {
+      modeUpd.checked = true;
+      refreshPublishBtn();
+    });
+    lookupInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        lookupDest(lookupInput.value);
+      }
+    });
+    lookupBtn.addEventListener("click", function () {
+      lookupDest(lookupInput.value);
     });
     add(
       root,
@@ -1041,16 +1677,133 @@ export function dropwayClient(motifsFactory) {
       zone,
       chosen,
       h("div", { class: "k-pubbar" }, summary, h("div", { class: "k-btnrow" }, clearBtn, publishBtn)),
+      errorList,
+      review,
       progress,
       status,
       result,
     );
-    if (key) loadSites(opts.site);
+    if (key) {
+      loadSites(opts.site);
+      // Verify an explicit destination independently of (and without
+      // waiting for) the first list page above.
+      if (initialSite) lookupDest(initialSite);
+    }
+  }
+
+  // The shared, closure-free matrix factory is supplied by assets.ts.
+  var qrcode = qrFactory();
+
+  // ------------------------------------------------------------------ site QR code
+  //
+  // The site page shows a QR code that opens the live site on a phone. The
+  // matrix comes from the shared vendored encoder and is drawn to a canvas, so
+  // the PNG data URL is generated entirely client-side: no new endpoint, no
+  // image service, no third-party request, and no CSP change (img-src data:
+  // is already allowed). The payload is always the site's clean public live
+  // URL exactly as the API returned it; a password-gated site gets the same
+  // payload plus a notice, and the password itself is never touched here.
+
+  /** PNG data URL of the QR matrix for `text` (auto version, ECC M, quiet zone 4). */
+  function qrPngDataURL(text) {
+    var qr = qrcode(0, "M");
+    qr.addData(text);
+    qr.make();
+    var count = qr.getModuleCount();
+    var cell = 8;
+    var quiet = 4;
+    var size = (count + quiet * 2) * cell;
+    var canvas = d.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    var ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas 2d is unavailable.");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = "#000000";
+    for (var r = 0; r < count; r++) {
+      for (var c = 0; c < count; c++) {
+        if (qr.isDark(r, c)) ctx.fillRect((c + quiet) * cell, (r + quiet) * cell, cell, cell);
+      }
+    }
+    return canvas.toDataURL("image/png");
+  }
+
+  /** "Open on your phone" section for the site page: QR + adjacent URL, or a state. */
+  function siteQrSection(url, gated) {
+    var head = h("div", { class: "k-blk-h" }, h("h2", { text: "Open on your phone" }));
+    if (!url) {
+      return h(
+        "section",
+        { class: "k-blk" },
+        head,
+        h("div", { class: "k-pad" }, h("p", { "data-testid": "site-qr-empty", text: "No live URL yet, so there is no QR code. Publish a version and the code appears here." })),
+      );
+    }
+    var img;
+    try {
+      img = h("img", {
+        class: "k-qr-img",
+        "data-testid": "site-qr-image",
+        src: qrPngDataURL(url),
+        alt: url,
+        "data-qr-payload": url,
+      });
+    } catch (e) {
+      return h(
+        "section",
+        { class: "k-blk" },
+        head,
+        h("div", { class: "k-pad" }, h("div", { class: "k-banner k-danger dw-error", role: "alert", "data-testid": "site-qr-error", text: "The QR code could not be generated in this browser." })),
+      );
+    }
+    return h(
+      "section",
+      { class: "k-blk dw-qr", "data-testid": "site-qr" },
+      h("div", { class: "k-blk-h" }, h("h2", { text: "Open on your phone" }), h("span", { class: "k-small", text: "Scan with your phone camera" })),
+      h(
+        "div",
+        { class: "k-pad k-qr" },
+        img,
+        h(
+          "div",
+          {},
+          h("p", { "data-testid": "site-qr-url" }, h("a", { href: url, target: "_blank", rel: "noopener", text: url }), " ", copyButton(url, "Copy site URL")),
+          gated ? h("p", { class: "k-small", "data-testid": "site-qr-gated-notice", text: "Visitors need the site password after scanning." }) : null,
+        ),
+      ),
+    );
+  }
+
+  /** Embed snippet for the provider-served live-version badge. Public sites with a live URL only; nothing is rendered otherwise. */
+  function siteBadgeSection(url, gated) {
+    if (!url || gated) return null;
+    var badge = url + "badge.svg";
+    var markdown = "[![kofra](" + badge + ")](" + url + ")";
+    return h(
+      "section",
+      { class: "k-blk", "data-testid": "site-badge-snippet" },
+      h("div", { class: "k-blk-h" }, h("h2", { text: "Embed a version badge" }), h("span", { class: "k-small", text: "Shows the live version and how recently it changed" })),
+      h(
+        "div",
+        { class: "k-pad" },
+        h("p", { style: "margin:0 0 .5rem" }, h("img", { "data-testid": "site-badge-preview", src: badge, alt: "kofra live version badge", height: "20", style: "height:20px;vertical-align:middle" })),
+        h("code", { "data-testid": "site-badge-markdown", class: "k-mono", style: "display:block;margin:0 0 .5rem;overflow-wrap:anywhere", text: markdown }),
+        copyButton(markdown, "Copy badge Markdown"),
+        h("p", { class: "k-small", style: "margin:.5rem 0 0", text: "Paste into a README or any page. It never shows exact times, and it stays generic if the site is password protected, expired or removed." }),
+      ),
+    );
   }
 
   // ------------------------------------------------------------------ pages
 
   var pages = {};
+  // Latest site-page traversal handler: pages.site() re-runs after restore,
+  // delete and settings saves, and must replace (not stack) its listener.
+  var sitePopstate = null;
+  // Generation of the latest pages.site() run: work started by an earlier
+  // run must not commit (view, URL or history) over its replacement.
+  var siteRun = 0;
 
   pages.home = async function () {
     wireTabs(d);
@@ -1153,10 +1906,11 @@ export function dropwayClient(motifsFactory) {
     else chips.push(h("span", { class: "k-chip", text: "Empty" }));
     if (s.settings && s.settings.passwordProtected) chips.push(h("span", { class: "k-chip k-warn", text: "Password" }));
     if (s.settings && s.settings.spa) chips.push(h("span", { class: "k-chip", text: "SPA" }));
-    if (s.expiresAt) chips.push(h("span", { class: "k-chip k-warn", title: s.expiresAt, text: "Expires " + localTime(s.expiresAt) }));
+    var expires = expiry(s.expiresAt);
+    if (expires) chips.push(h("span", { class: "k-chip k-warn dw-badge", title: s.expiresAt, text: expires }));
     return h(
       "tr",
-      { "data-search": [s.slug, s.title || "", s.description || ""].join(" ").toLowerCase() },
+      { "data-search": [s.slug, s.title || ""].join(" ").toLowerCase() },
       h(
         "td",
         {},
@@ -1164,7 +1918,7 @@ export function dropwayClient(motifsFactory) {
         s.title ? h("span", { class: "k-sub k-mono", text: s.slug }) : null,
         h("span", { class: "k-chips k-rowchips" }, chips),
         // Under 1100px the URL sits here, under the name (its own column is hidden).
-        h("span", { class: "k-url k-rowurl k-only-narrow" }, h("a", { href: s.url, target: "_blank", rel: "noopener", class: "k-small", text: s.url.replace(/^https?:\/\//, "") }), copyButton(s.url, "Copy URL of " + s.slug)),
+        h("span", { class: "k-url k-rowurl k-only-narrow" }, h("a", { href: s.url, target: "_blank", rel: "noopener", class: "k-small k-brk" }, urlParts(s.url.replace(/^https?:\/\//, ""))), copyButton(s.url, "Copy URL of " + s.slug)),
       ),
       h(
         "td",
@@ -1194,7 +1948,7 @@ export function dropwayClient(motifsFactory) {
     if (params.get("deleted")) toast(params.get("deleted") + " was deleted.");
     var root = d.getElementById("dw-sites");
     var count = d.getElementById("dw-sites-count");
-    var search = h("input", { class: "k-input k-find", type: "search", placeholder: "Filter by name or title", "aria-label": "Filter sites" });
+    var search = h("input", { class: "k-input k-find", type: "search", placeholder: "Filter by name or title", "aria-label": "Filter loaded sites" });
     var tbody = h("tbody");
     var more = h("button", { type: "button", class: "k-btn k-ghost", text: "Load more", hidden: true });
     var nomatch = h("p", { class: "k-pad k-small", role: "status", hidden: true, text: "No site matches that filter." });
@@ -1209,52 +1963,132 @@ export function dropwayClient(motifsFactory) {
       ),
     );
     var body = h("div", {}, skeleton(4));
+    var errorWrap = h("div", {});
+    var moreWrap = h("div", { class: "k-pad", style: "text-align:center", hidden: true }, more);
     clear(root);
-    add(root, blk("All sites", search, body, nomatch, h("div", { class: "k-pad k-center", hidden: true }, more)));
+    add(root, blk("All sites", search, body, nomatch, errorWrap, moreWrap));
     var cursor = null;
     var loaded = 0;
+    var seenSlugs = [];
+    var consumedCursors = [];
+    var loading = false;
+    var hasMore = true;
+    var tableShown = false;
+    function currentQuery() {
+      return search.value.trim().toLowerCase();
+    }
+    function updateCounts() {
+      if (!count || !tableShown) return;
+      var q = currentQuery();
+      var visible = 0;
+      $$("tr[data-search]", tbody).forEach(function (tr) {
+        if (!tr.hidden) visible++;
+      });
+      if (q) {
+        count.textContent = plural(visible, "match", "matches") + " of " + plural(loaded, "loaded site", "loaded sites") + (hasMore ? "+" : "") + ".";
+      } else {
+        count.textContent = plural(loaded, "site") + (hasMore ? "+" : "") + ".";
+      }
+    }
+    function applyFilter() {
+      var q = currentQuery();
+      var shown = 0;
+      $$("tr[data-search]", tbody).forEach(function (tr) {
+        var hay = tr.getAttribute("data-search") || "";
+        tr.hidden = !!(q && hay.indexOf(q) < 0);
+        if (!tr.hidden) shown++;
+      });
+      nomatch.hidden = !q || !tableShown || shown > 0;
+      updateCounts();
+    }
+    function syncMore() {
+      moreWrap.hidden = !hasMore;
+      more.hidden = !hasMore;
+      more.disabled = !hasMore;
+      if (more.getAttribute("aria-busy")) more.removeAttribute("aria-busy");
+      if (more.textContent !== "Load more") more.textContent = "Load more";
+    }
+    function emptySites() {
+      return h(
+        "div",
+        { class: "k-empty dw-empty", role: "status" },
+        h("h3", { text: "No sites yet" }),
+        h("p", { text: "Publish a folder from this browser, or let an agent publish with the API, CLI or MCP." }),
+        h("a", { class: "k-btn", href: "/dashboard/publish", text: "Publish a folder" }),
+      );
+    }
     async function load() {
+      if (loading) return;
+      if (!hasMore) return;
+      loading = true;
+      var focusedBefore = d.activeElement === more;
+      more.disabled = true;
+      more.setAttribute("aria-busy", "true");
+      more.textContent = "Loading…";
+      var requestCursor = cursor;
       try {
-        var res = await api("/sites?limit=100" + (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""));
-        if (!loaded) clear(body);
-        if (!loaded && !res.sites.length) {
-          add(
-            body,
-            h(
-              "div",
-              { class: "k-empty", role: "status" },
-              h("h3", { text: "No sites yet" }),
-              h("p", { text: "Publish a folder from this browser, or let an agent publish with the API, CLI or MCP." }),
-              h("a", { class: "k-btn", href: "/dashboard/publish", text: "Publish a folder" }),
-            ),
-          );
-          search.hidden = true;
+        var res = await api("/sites?limit=100" + (requestCursor ? "&cursor=" + encodeURIComponent(requestCursor) : ""));
+        if (consumedCursors.indexOf(requestCursor) < 0) consumedCursors.push(requestCursor);
+        clear(errorWrap);
+        if (!tableShown && !loaded && !res.sites.length) {
+          clear(body);
+          add(body, emptySites());
           // The empty state below says "No sites yet"; the subline only counts.
           if (count) count.textContent = plural(0, "site") + ".";
+          var firstNext = res.nextCursor;
+          if (firstNext && consumedCursors.indexOf(firstNext) < 0) {
+            cursor = firstNext;
+            hasMore = true;
+          } else {
+            cursor = null;
+            hasMore = false;
+          }
+          syncMore();
           return;
         }
-        if (!loaded) add(body, table);
+        if (!tableShown) {
+          clear(body);
+          add(body, table);
+          tableShown = true;
+        }
         res.sites.forEach(function (s) {
+          if (seenSlugs.indexOf(s.slug) >= 0) return;
+          seenSlugs.push(s.slug);
           tbody.appendChild(siteRow(s));
         });
-        loaded += res.sites.length;
-        if (count) count.textContent = plural(loaded, "site") + (res.nextCursor ? "+" : "") + ".";
-        cursor = res.nextCursor;
-        more.parentNode.hidden = !cursor;
-        more.hidden = !cursor;
+        loaded = seenSlugs.length;
+        var next = res.nextCursor;
+        if (!next || consumedCursors.indexOf(next) >= 0) {
+          cursor = null;
+          hasMore = false;
+        } else {
+          cursor = next;
+          hasMore = true;
+        }
+        applyFilter();
+        syncMore();
       } catch (e) {
-        clear(body);
-        add(body, h("div", { class: "k-pad" }, errorBox(e, "Could not load sites")));
+        clear(errorWrap);
+        add(errorWrap, h("div", { class: "k-pad" }, errorBox(e, "Could not load sites"), h("p", { class: "k-small", text: "Use Load more to retry this page." })));
+        if (!tableShown && !loaded) {
+          clear(body);
+          if (count) count.textContent = "Could not load sites.";
+        }
+        cursor = requestCursor;
+        hasMore = true;
+        syncMore();
+        more.disabled = false;
+      } finally {
+        loading = false;
+        if (focusedBefore && hasMore && (d.activeElement === d.body || d.activeElement === null)) {
+          try {
+            more.focus();
+          } catch (focusErr) {}
+        }
       }
     }
     search.addEventListener("input", function () {
-      var q = search.value.trim().toLowerCase();
-      var shown = 0;
-      $$("tr[data-search]", tbody).forEach(function (tr) {
-        tr.hidden = q && tr.getAttribute("data-search").indexOf(q) < 0;
-        if (!tr.hidden) shown++;
-      });
-      nomatch.hidden = !q || shown > 0;
+      applyFilter();
     });
     more.addEventListener("click", load);
     load();
@@ -1262,19 +2096,41 @@ export function dropwayClient(motifsFactory) {
 
   pages.site = async function () {
     if (!requireAuth()) return;
+    var mySiteRun = ++siteRun;
     renderAccount();
     var slug = P.slug;
     var root = d.getElementById("dw-site");
     clear(root);
-    add(root, skeleton(5));
-    var site, versions, files;
+    add(
+      root,
+      skeleton(5),
+      h("section", { class: "k-blk", "aria-busy": "true", "aria-label": "Loading QR code" }, h("div", { class: "k-pad", "data-testid": "site-qr-loading", text: "Loading QR code…" })),
+    );
+    var site, versions, files, linkedVersion, linkedVersionError;
+    var requestedVersion = new URL(location.href).searchParams.get("version");
     try {
-      var r = await Promise.all([api("/sites/" + encodeURIComponent(slug)), api("/sites/" + encodeURIComponent(slug) + "/versions?limit=100")]);
+      var r = await Promise.all([
+        api("/sites/" + encodeURIComponent(slug)),
+        api("/sites/" + encodeURIComponent(slug) + "/versions?limit=100"),
+        requestedVersion ? api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(requestedVersion)).catch(function (error) {
+          linkedVersionError = error;
+          return null;
+        }) : Promise.resolve(null),
+      ]);
       site = r[0].site;
       versions = r[1].versions;
+      linkedVersion = r[2] && r[2].version;
+      // A newer re-run already owns this page; rendering now would replace it.
+      if (mySiteRun !== siteRun) return;
     } catch (e) {
+      if (mySiteRun !== siteRun) return;
       clear(root);
-      add(root, errorBox(e, "Could not load " + slug), h("a", { class: "k-btn k-ghost", href: "/dashboard", text: "Back to sites" }));
+      add(
+        root,
+        errorBox(e, "Could not load " + slug),
+        h("div", { class: "k-blk" }, h("div", { class: "k-pad", role: "alert", "data-testid": "site-qr-error", text: "The QR code is unavailable because the site could not be loaded." })),
+        h("a", { class: "k-btn k-ghost", href: "/dashboard", text: "Back to sites" }),
+      );
       return;
     }
     d.title = (site.title || site.slug) + " · " + boot.instanceName;
@@ -1283,62 +2139,214 @@ export function dropwayClient(motifsFactory) {
       return v.live;
     });
     var filesSection = h("section", { class: "k-blk", id: "files", "aria-label": "Files" });
+    var duplicateAttempt = null;
+    var duplicateDialog = null;
+    var duplicateButton = h("button", { type: "button", class: "k-btn k-ghost", text: "Duplicate site", onclick: openDuplicate });
+    function openDuplicate() {
+      if (duplicateDialog) return;
+      var busy = false;
+      var destination = h("input", { class: "k-input", id: "dw-duplicate-slug", name: "newSlug", required: true, minlength: "3", maxlength: "56", autocomplete: "off", autocapitalize: "none", spellcheck: "false", "aria-describedby": "dw-duplicate-slug-help" });
+      var message = h("textarea", { class: "k-input", id: "dw-duplicate-message", name: "message", maxlength: "500", rows: "2" });
+      var feedback = h("div", { "aria-live": "polite", style: "overflow-wrap:anywhere" });
+      var submit = h("button", { type: "submit", class: "k-btn", text: "Duplicate site" });
+      var cancel = h("button", { type: "button", class: "k-btn k-ghost", text: "Cancel", onclick: function () { dlg.close(); } });
+      var form = h(
+        "form",
+        {},
+        h("h2", { id: "dw-duplicate-title", text: "Duplicate site" }),
+        h("p", { id: "dw-duplicate-warning", class: "k-banner", text: "This creates a separate site from the source's live files, live immediately. Passwords and access protection are not copied. Re-apply protection on the copy before sharing it. Only SPA mode is carried over; all other settings reset to instance defaults. The original site is unchanged." }),
+        h("div", { class: "k-group" },
+          h("label", { class: "k-label", for: "dw-duplicate-slug", text: "Destination slug" }), destination,
+          h("p", { class: "k-hint", id: "dw-duplicate-slug-help", text: "3–56 lowercase letters, digits and single hyphens; start and end with a letter or digit. Choose an unused name." })),
+        h("div", { class: "k-group" }, h("label", { class: "k-label", for: "dw-duplicate-message", text: "Version message (optional)" }), message),
+        feedback,
+        h("div", { class: "k-btnrow" }, cancel, submit),
+      );
+      var dlg = h("dialog", { class: "k-dlg", "aria-labelledby": "dw-duplicate-title", "aria-describedby": "dw-duplicate-warning" }, form);
+      duplicateDialog = dlg;
+      dlg.addEventListener("cancel", function (event) {
+        if (busy) event.preventDefault();
+      });
+      dlg.addEventListener("close", function () {
+        dlg.remove();
+        duplicateDialog = null;
+        duplicateButton.focus();
+      });
+      // Native modal Tab handling still cycles through the browser UI, which
+      // leaves focus on the page body between the last and first controls.
+      // Keep the cycle among this dialog's enabled, tabbable controls instead.
+      dlg.addEventListener("keydown", function (event) {
+        if (event.key !== "Tab") return;
+        var focusable = $$("a[href], button, input, textarea, select, [tabindex]", dlg).filter(function (el) {
+          return !el.disabled && el.tabIndex >= 0;
+        });
+        if (!focusable.length) {
+          event.preventDefault();
+          return;
+        }
+        var active = d.activeElement;
+        if (event.shiftKey && (active === focusable[0] || focusable.indexOf(active) < 0)) {
+          event.preventDefault();
+          focusable[focusable.length - 1].focus();
+        } else if (!event.shiftKey && (active === focusable[focusable.length - 1] || focusable.indexOf(active) < 0)) {
+          event.preventDefault();
+          focusable[0].focus();
+        }
+      });
+      function setBusy(value) {
+        busy = value;
+        dlg.setAttribute("aria-busy", String(value));
+        destination.disabled = message.disabled = submit.disabled = cancel.disabled = value;
+        submit.textContent = value ? "Duplicating…" : "Duplicate site";
+      }
+      // An edit starts a new submission, even when the previous request's outcome
+      // was unknown. Closing/reopening alone retains the last attempt for replay.
+      function changed() { duplicateAttempt = null; }
+      destination.addEventListener("input", changed);
+      message.addEventListener("input", changed);
+      if (duplicateAttempt) {
+        destination.value = duplicateAttempt.body.newSlug;
+        message.value = duplicateAttempt.body.message || "";
+      }
+      form.addEventListener("submit", async function (event) {
+        event.preventDefault();
+        if (busy) return;
+        clear(feedback);
+        var newSlug = destination.value;
+        if (!/^[a-z0-9][a-z0-9-]{1,54}[a-z0-9]$/.test(newSlug) || newSlug.indexOf("--") >= 0) {
+          add(feedback, errorBox({ message: "Enter a valid destination slug.", hint: "Use 3–56 lowercase letters, digits and single hyphens, starting and ending with a letter or digit.", code: "invalid_slug" }));
+          destination.focus();
+          return;
+        }
+        if (message.value.length > 500) {
+          add(feedback, errorBox({ message: "The version message is too long.", hint: "Use at most 500 characters.", code: "invalid_request" }));
+          message.focus();
+          return;
+        }
+        var body = { newSlug: newSlug };
+        if (message.value) body.message = message.value;
+        var signature = JSON.stringify(body);
+        if (!duplicateAttempt || duplicateAttempt.signature !== signature) {
+          duplicateAttempt = { signature: signature, body: body, key: crypto.randomUUID() };
+        }
+        setBusy(true);
+        try {
+          var result = await api("/sites/" + encodeURIComponent(site.slug) + "/duplicate", { method: "POST", body: duplicateAttempt.body, headers: { "Idempotency-Key": duplicateAttempt.key } });
+          // Links and receipt use only the returned identity, never the requested name.
+          var copy = result && result.site;
+          var copyUrl = null;
+          try { if (result && typeof result.url === "string") copyUrl = new URL(result.url); } catch (e) {}
+          if (!copy || typeof copy.slug !== "string" || !copy.slug || !copyUrl || ["http:", "https:"].indexOf(copyUrl.protocol) < 0) throw new Error("The server did not return a valid copy identity and URL. Retry this submission to recover its result.");
+          clear(form);
+          add(form,
+            h("h2", { id: "dw-duplicate-title", text: "Site duplicated" }),
+            h("div", { role: "status", style: "overflow-wrap:anywhere" },
+              h("p", { text: "Created a separate site: " + copy.slug }),
+              h("p", {}, h("a", { href: result.url, target: "_blank", rel: "noopener", text: result.url }))),
+            h("p", { id: "dw-duplicate-warning", class: "k-banner", text: "Passwords and access protection were not copied. Re-apply protection before sharing the new site." }),
+            h("div", { class: "k-btnrow" },
+              h("button", { type: "button", class: "k-btn k-ghost", text: "Close", onclick: function () { dlg.close(); } }),
+              h("a", { class: "k-btn", href: "/dashboard/sites/" + encodeURIComponent(copy.slug), text: "Manage copy" })),
+          );
+          duplicateAttempt = null;
+          $("button", form).focus();
+        } catch (error) {
+          add(feedback, errorBox(error, "Could not duplicate site"));
+        } finally {
+          setBusy(false);
+        }
+      });
+      d.body.appendChild(dlg);
+      dlg.showModal();
+      destination.focus();
+    }
+    var expires = expiry(site.expiresAt);
     var head = h(
       "div",
-      { class: "k-pagehead" },
+      { class: "k-pagehead dw-pagehead" },
       h(
         "div",
         {},
         h("h1", { text: site.title || site.slug }),
         h("p", {}, h("span", { class: "k-url" }, h("a", { href: site.url, target: "_blank", rel: "noopener", text: site.url }), copyButton(site.url, "Copy site URL"))),
         site.description ? h("p", { text: site.description }) : null,
+        expires ? h("p", { class: "k-small", title: site.expiresAt, text: expires + " · " + new Date(site.expiresAt).toLocaleString() }) : null,
       ),
-      // With nothing live there is nothing to browse or open: the Versions block offers the one action (Publish files).
-      hasLive
-        ? h(
-            "div",
-            { class: "k-btnrow" },
-            h("a", { class: "k-btn k-ghost", href: "/v/" + encodeURIComponent(slug) + "/", text: "Browse files" }),
-            h("a", { class: "k-btn k-ghost", href: "/dashboard/publish?site=" + encodeURIComponent(slug), text: "Publish update" }),
-            h("a", { class: "k-btn", href: site.url, target: "_blank", rel: "noopener", text: "Open site" }),
-          )
-        : null,
+      // With nothing live there is nothing to browse or update: the Versions block offers that action (Publish files).
+      // Open site stays: the address answers either way.
+      h(
+        "div",
+        { class: "k-btnrow" },
+        hasLive ? h("a", { class: "k-btn k-ghost", href: "/v/" + encodeURIComponent(slug) + "/", text: "Browse files" }) : null,
+        hasLive ? h("a", { class: "k-btn k-ghost", href: "/dashboard/publish?site=" + encodeURIComponent(slug), text: "Publish update" }) : null,
+        hasLive ? duplicateButton : null,
+        h("a", { class: "k-btn", href: site.url, target: "_blank", rel: "noopener", text: "Open site" }),
+      ),
     );
 
-    var vList = h("ol", { class: "k-versions", "aria-label": "Versions, newest first" });
+    // Mutations that reload this page must not detach another action's feedback.
+    var siteMutationPending = false;
+    function setSiteMutationPending(pending) {
+      siteMutationPending = pending;
+      $$("button[data-site-mutation]", root).forEach(function (button) {
+        button.disabled = pending;
+      });
+    }
+    function versionDownload(v) {
+      var path = "/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id) + "/export";
+      var limits = "Browser ZIP downloads support at most 16 MiB of stored version bytes and 1,000 files; archive responses are limited to 32 MiB.";
+      var pending = v.status === "pending" || !v.finalizedAt;
+      var eligible = !pending && Number.isSafeInteger(v.totalBytes) && v.totalBytes >= 0 && v.totalBytes <= 16 * 1024 * 1024
+        && Number.isSafeInteger(v.fileCount) && v.fileCount >= 0 && v.fileCount <= 1000;
+      var fallback = h("p", { class: "k-hint" }, "For larger or unknown sizes, use the authenticated REST/CLI export route: ", h("code", { text: "GET " + boot.api + path }), ". Use your API client with a sites:read credential; server export limits still apply.");
+      var result = h("div");
+      var btn = h("button", {
+        type: "button", class: "k-btn k-sm k-ghost", text: "Download ZIP",
+        onclick: function () { downloadVersionZip(path, v.id, btn, result); },
+      });
+      btn.disabled = !eligible;
+      return h("div", { class: "k-pad" },
+        btn,
+        h("p", { class: "k-hint", text: limits }),
+        pending ? h("p", { class: "k-hint", text: "This version is pending. Upload missing files and finalize it, then reload versions before downloading." }) : null,
+        !eligible && !pending ? h("p", { class: "k-hint", text: "This version exceeds the browser limits or its stored size/file count is unknown. No archive has been requested." }) : null,
+        fallback, result,
+      );
+    }
+
+    var vBody = h("tbody");
     versions.forEach(function (v) {
-      vList.appendChild(
+      vBody.appendChild(
         h(
-          "li",
-          { "aria-current": v.live ? "true" : null },
-          h("span", { class: "k-vn", text: "v" + v.number }),
+          "tr",
+          { "data-search": ["v" + v.number, v.id, v.message || "", v.client || "", v.source || ""].join(" ").toLowerCase() },
+          h("td", {}, h("strong", { text: "v" + v.number }), " ", v.live ? h("span", { class: "k-chip k-ok", text: "Live" }) : null),
+          h("td", { class: "k-small" }, v.message ? h("span", { text: v.message }) : h("span", { class: "k-muted", text: "No message" }), h("span", { class: "k-sub", text: [sourceLabel(v.source), v.client].filter(Boolean).join(" · ") })),
+          h("td", { class: "k-num k-small" }, plural(v.fileCount, "file"), h("span", { class: "k-sub", text: bytes(v.totalBytes) })),
+          h("td", { class: "k-num k-small k-hide-sm dw-hide-sm", title: v.finalizedAt || v.createdAt, text: ago(v.finalizedAt || v.createdAt) }),
           h(
-            "div",
-            { class: "k-vmsg" },
-            h("span", { class: "k-chips" }, v.live ? h("span", { class: "k-chip k-ok", text: "Live" }) : null, h("span", { class: v.message ? null : "k-muted", text: v.message || "No message" })),
-            h("span", { class: "k-sub", title: localTime(v.finalizedAt || v.createdAt), text: [plural(v.fileCount, "file") + " · " + bytes(v.totalBytes), ago(v.finalizedAt || v.createdAt), sourceLabel(v.source), v.client].filter(Boolean).join(" · ") }),
-          ),
-          h(
-            "div",
+            "td",
             { class: "k-act" },
-            h("button", { type: "button", class: "k-btn k-sm k-ghost", text: "Files", "aria-label": "Files in version " + v.number, onclick: function () { showFiles(v); filesSection.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth" }); } }),
+            h("button", { type: "button", class: "k-btn k-sm k-ghost", text: "Files", onclick: function () { showFiles(v, { history: "push", clearFirst: true }); filesSection.scrollIntoView({ behavior: "smooth" }); } }),
+            " ",
             v.live
               ? null
               : h("button", {
                   type: "button",
                   class: "k-btn k-sm k-ghost",
                   text: "Restore",
-                  "aria-label": "Restore version " + v.number,
-                  onclick: async function (ev) {
-                    var btn = ev.currentTarget;
-                    btn.disabled = true;
+                  "data-site-mutation": "",
+                  onclick: async function () {
+                    if (siteMutationPending) return;
+                    setSiteMutationPending(true);
                     try {
                       await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id) + "/restore", { method: "POST" });
                       toast("v" + v.number + " is live again.");
                       pages.site();
                     } catch (e) {
                       toast(e.message, true);
-                      btn.disabled = false;
+                    } finally {
+                      setSiteMutationPending(false);
                     }
                   },
                 }),
@@ -1349,15 +2357,29 @@ export function dropwayClient(motifsFactory) {
                   class: "k-btn k-sm k-danger",
                   text: "Delete",
                   "aria-label": "Delete version " + v.number,
-                  onclick: async function () {
-                    var ok = await confirmBox({ title: "Delete v" + v.number + "?", message: "The version and its file list are removed for good (use this for a version that leaked something). Other versions are not affected.", confirmText: "Delete version" });
-                    if (!ok) return;
+                  "data-site-mutation": "",
+                  onclick: async function (ev) {
+                    if (siteMutationPending) return;
+                    var trigger = ev.currentTarget;
+                    setSiteMutationPending(true);
                     try {
-                      await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id), { method: "DELETE" });
+                      var ok = await confirmBox({ title: "Delete v" + v.number + "?", message: "The version and its file list are removed for good (use this for a version that leaked something). Other versions are not affected.", confirmText: "Delete version" });
+                      if (!ok) return;
+                      await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id), { method: "DELETE", body: { confirm: site.slug } });
                       toast("v" + v.number + " deleted.");
+                      // A successful deletion must not reload its now-invalid
+                      // explicit link; unrelated inspected versions stay put.
+                      var url = new URL(location.href);
+                      if (url.searchParams.get("version") === v.id) {
+                        url.searchParams.delete("version");
+                        history.replaceState(null, "", url.pathname + url.search + url.hash);
+                      }
                       pages.site();
                     } catch (e) {
                       toast(e.message, true);
+                    } finally {
+                      setSiteMutationPending(false);
+                      if ($$("button", root).indexOf(trigger) >= 0) trigger.focus();
                     }
                   },
                 }),
@@ -1365,63 +2387,414 @@ export function dropwayClient(motifsFactory) {
         ),
       );
     });
-    var versionsSection = blk(
-      "Versions",
-      versions.length ? h("span", { class: "k-small", text: plural(versions.length, "version") + ". Restoring is instant: it only moves the live pointer." }) : null,
-      versions.length
-        ? vList
-        : h("div", { class: "k-empty" }, h("h3", { text: "Nothing published yet" }), h("p", { text: "Publish files to this site and they go live at its address." }), h("a", { class: "k-btn", href: "/dashboard/publish?site=" + encodeURIComponent(slug), text: "Publish files" })),
+    var versionFilter = h("input", { id: "dw-version-filter", class: "k-input", type: "search", placeholder: "Version, id, message, client or source", "aria-describedby": "dw-version-scope", style: "flex:1 1 12rem;min-width:0" });
+    var versionClear = h("button", { type: "button", class: "k-btn k-ghost", text: "Clear" });
+    var versionCount = h("p", { class: "k-hint", role: "status", "aria-live": "polite", "aria-atomic": "true" });
+    var versionTable = h("div", { class: "k-table-wrap" }, h("table", { class: "k-table" }, h("thead", {}, h("tr", {}, h("th", { text: "Version" }), h("th", { text: "Message" }), h("th", { class: "k-num", text: "Files" }), h("th", { class: "k-num k-hide-sm dw-hide-sm", text: "Published" }), h("th", {}))), vBody));
+    var noVersionMatches = h("div", { class: "k-empty dw-empty", hidden: true }, h("h3", { text: "No matching versions" }), h("p", { text: "Try another filter or Clear to show the loaded versions." }));
+    function filterVersions() {
+      var q = versionFilter.value.trim().toLowerCase();
+      var matching = 0;
+      // Only hide existing rows: their immutable-id action closures and the
+      // separately selected file manifest stay untouched, in server order.
+      $$("tr[data-search]", vBody).forEach(function (tr) {
+        tr.hidden = !!(q && tr.getAttribute("data-search").indexOf(q) < 0);
+        if (!tr.hidden) matching++;
+      });
+      versionCount.textContent = plural(matching, "match", "matches") + " of " + plural(versions.length, "loaded version") + ".";
+      versionTable.hidden = !matching;
+      noVersionMatches.hidden = !versions.length || !!matching;
+    }
+    versionFilter.addEventListener("input", filterVersions);
+    versionClear.addEventListener("click", function () {
+      versionFilter.value = "";
+      filterVersions();
+      versionFilter.focus();
+    });
+    // Explicit version jump: open any version by reference (live, v3, 3 or an
+    // immutable id), including versions older than the newest-100 rows.
+    // Typing never fetches; each submit makes one bounded get_version lookup,
+    // then loads the manifest pinned to the returned immutable id.
+    var jumpInput = h("input", { class: "k-input", id: "dw-version-ref", name: "version", type: "text", style: "max-width:14rem", placeholder: "live, v3, 3, or id", autocomplete: "off", spellcheck: "false", "aria-describedby": "dw-version-jump-help" });
+    var jumpStatus = h("p", { class: "k-small", style: "margin:.4rem 0 0", role: "status", text: "" });
+    var jumpErrorBox = h("div", { role: "alert", text: "" });
+    var jumpForm = h(
+      "form",
+      { class: "k-pad", id: "dw-version-jump", style: "padding-top:.75rem;padding-bottom:.75rem" },
+      h("div", { class: "k-btnrow" }, h("label", { class: "k-label", style: "margin:0", for: "dw-version-ref", text: "Version" }), jumpInput, h("button", { type: "submit", class: "k-btn k-ghost", text: "Open" })),
+      h("p", { class: "k-hint", id: "dw-version-jump-help", text: "Open any version by reference. Nothing is fetched until you submit." }),
+      jumpStatus,
+      jumpErrorBox,
     );
+    jumpForm.addEventListener("submit", function (e) {
+      e.preventDefault();
+      openVersionRef(jumpInput.value, { history: "push" });
+    });
+    var versionsSection = h(
+      "section",
+      { class: "k-blk" },
+      h("div", { class: "k-blk-h" }, h("h2", { text: "Versions" }), h("span", { class: "k-small", text: plural(versions.length, "version") + (versions.length >= 100 ? " (newest 100)" : "") + ". Restoring is instant: it only moves the live pointer." })),
+      jumpForm,
+      h("div", { class: "k-pad" },
+        h("label", { class: "k-label", for: "dw-version-filter", text: "Filter loaded versions" }),
+        h("div", { class: "k-btnrow" }, versionFilter, versionClear),
+        h("p", { id: "dw-version-scope", class: "k-hint", text: "Only the newest 100 versions are loaded. This filters loaded versions, not all history." }),
+        versionCount,
+      ),
+      versions.length
+        ? versionTable
+        : h("div", { class: "k-empty dw-empty" }, h("h3", { text: "Nothing published yet" }), h("a", { class: "k-btn", href: "/dashboard/publish?site=" + encodeURIComponent(slug), text: "Publish files" })),
+      noVersionMatches,
+    );
+    filterVersions();
 
-    async function showFiles(v) {
-      clear(filesSection);
-      add(filesSection, h("div", { class: "k-blk-h" }, h("h2", { text: "Files in v" + v.number + (v.live ? " (live)" : "") })), skeleton(3));
+    // One token per selection attempt, whatever its source (history row,
+    // version jump, traversal): a completion holding a stale token must not
+    // touch the view, the URL, or the announced state. The token is per
+    // page run, so completions also check mySiteRun: a selection still in
+    // flight when this page re-runs belongs to a replaced closure.
+    var selectionReq = 0;
+    var displayedReq = 0;
+    var currentSelection = null;
+    function setJumpError(message, hint, opts) {
+      clear(jumpErrorBox);
+      add(jumpErrorBox, errorBox({ message: message, hint: hint }, null));
+      // A refused traversal retains the manifest: reconcile this entry's URL
+      // with that view, without pushing another history entry.
+      if (opts && opts.history === "replace" && currentSelection && mySiteRun === siteRun) recordSelection(currentSelection.id, "replace");
+    }
+    function clearJumpError() {
+      clear(jumpErrorBox);
+    }
+    function setJumpLoading(on) {
+      jumpStatus.textContent = on ? "Opening version…" : "";
+    }
+    // The management URL always names the displayed manifest by immutable
+    // id: explicit selections (history row, version jump) push an entry so
+    // Back returns to the previous version; traversal and the initial load
+    // replace the current entry instead of manufacturing new ones.
+    function selectionUrl(id) {
       try {
-        files = await api("/sites/" + encodeURIComponent(slug) + "/files" + (v.live ? "" : "?version=" + encodeURIComponent(v.id)));
+        var u = new URL(location.href);
+        u.searchParams.set("version", id);
+        return u.pathname + u.search + u.hash;
       } catch (e) {
-        clear(filesSection);
-        add(filesSection, h("div", { class: "k-pad" }, errorBox(e, "Could not load files")));
+        return null;
+      }
+    }
+    function recordSelection(id, mode) {
+      var url = selectionUrl(id);
+      if (!url || typeof history === "undefined") return;
+      try {
+        if (mode === "push" && typeof history.pushState === "function") history.pushState({ v: id }, "", url);
+        else if (typeof history.replaceState === "function") history.replaceState({ v: id }, "", url);
+        else if (typeof history.pushState === "function") history.pushState({ v: id }, "", url);
+      } catch (e) {}
+    }
+    function commitSelection(mv, opts, my) {
+      if (mySiteRun !== siteRun) return;
+      displayedReq = my;
+      currentSelection = { id: mv.id, number: mv.number };
+      setJumpLoading(false);
+      clearJumpError();
+      if (opts.history) recordSelection(mv.id, opts.history);
+    }
+    // One path segment, never decoded: empty, dot-only and separator-like
+    // references fail before any request; anything else goes out literally
+    // encoded so "%2F" cannot become a second segment.
+    function validVersionRef(ref) {
+      if (!ref) return false;
+      var t = ref.trim();
+      if (!t || /^\.+$/.test(t)) return false;
+      return !/[\/?#\\\x00-\x1f\x7f]/.test(t);
+    }
+    async function openVersionRef(raw, opts) {
+      opts = opts || {};
+      var my = ++selectionReq;
+      var ref = (raw || "").trim();
+      if (!validVersionRef(ref)) {
+        setJumpLoading(false);
+        setJumpError("Enter a version reference: live, v3, 3, or a version id.", "Check the reference and try again.", opts);
+        // Explicit submits return focus for correction; traversal must not
+        // steal it while the person is moving through history.
+        if (opts.focus !== false) jumpInput.focus();
         return;
       }
-      var filter = h("input", { class: "k-input k-find", type: "search", placeholder: "Filter files", "aria-label": "Filter files" });
+      clearJumpError();
+      setJumpLoading(true);
+      var found;
+      try {
+        found = await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(ref));
+      } catch (e) {
+        if (my !== selectionReq || mySiteRun !== siteRun) return;
+        setJumpLoading(false);
+        setJumpError(e.message || "Could not open that version.", "Check the reference and try again." + (e.hint ? " " + e.hint : ""), opts);
+        return;
+      }
+      if (my !== selectionReq || mySiteRun !== siteRun) return;
+      var v = found && found.version;
+      if (!v || v.status === "pending") {
+        setJumpLoading(false);
+        if (!v) setJumpError("That version reference did not resolve.", "Check the reference and try again.", opts);
+        else setJumpError("Version v" + v.number + " is not ready yet.", "Choose a ready version from the history, or retry once its upload finishes.", opts);
+        return;
+      }
+      // showFiles takes the next token and loads the manifest pinned to the
+      // returned immutable id, even when the version is not among the rows.
+      showFiles(v, { history: opts.history || "push" });
+    }
+    async function showFiles(v, opts) {
+      opts = opts || {};
+      var my = ++selectionReq;
+      var hadSelection = !!currentSelection;
+      // History rows swap panels at once; jumps and traversal keep the valid
+      // view until the replacement (or its failure) is known.
+      if (!hadSelection || opts.clearFirst) {
+        clear(filesSection);
+        add(filesSection, h("div", { class: "k-blk-h" }, h("h2", { text: "Files in v" + v.number + (v.live ? " (live)" : "") })), skeleton(3));
+      }
+      setJumpLoading(true);
+      var data;
+      try {
+        // Always pin the selected version by immutable ID: a live-row snapshot
+        // may already be stale by the time this request lands.
+        data = await api("/sites/" + encodeURIComponent(slug) + "/files?version=" + encodeURIComponent(v.id));
+      } catch (e) {
+        if (my !== selectionReq || mySiteRun !== siteRun) return;
+        setJumpLoading(false);
+        if (!hadSelection || opts.clearFirst) {
+          clear(filesSection);
+          add(filesSection, h("div", { class: "k-pad" }, errorBox(e, "Could not load files")));
+        } else {
+          setJumpError(e.message || "Could not load files.", e.hint, opts);
+        }
+        return;
+      }
+      if (my !== selectionReq || mySiteRun !== siteRun) return;
+      // Identity comes from the response, never the clicked row: the live
+      // pointer may have moved between selection and retrieval.
+      var mv = (data && data.version) || { id: v.id, number: v.number, live: v.live };
+      if (mv.status === "pending") {
+        setJumpLoading(false);
+        var notReady = { message: "Version v" + mv.number + " is not ready yet.", hint: "Choose a ready version from the history, or retry once its upload finishes." };
+        if (!hadSelection || opts.clearFirst) {
+          clear(filesSection);
+          add(filesSection, h("div", { class: "k-pad" }, errorBox(notReady, "Version not ready")));
+        } else {
+          setJumpError(notReady.message, notReady.hint, opts);
+        }
+        return;
+      }
+      var rows = (data && data.files) || [];
+      var filter = h("input", { class: "k-input", type: "search", placeholder: "Filter files", "aria-label": "Filter files" });
+      if (!rows.length) {
+        clear(filesSection);
+        add(
+          filesSection,
+          h("div", { class: "k-blk-h" }, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "k-btnrow" }, h("span", { class: "k-small", "aria-live": "polite", "aria-atomic": "true", text: plural(rows.length, "loaded file") + " in this selected version · " + exactBytes(0) }), filter)),
+          versionDownload(v),
+          h("div", { class: "k-empty dw-empty" }, h("h3", { text: "No files in this version" }), h("p", { class: "k-small", text: "This version has an empty manifest." })),
+        );
+        commitSelection(mv, opts, my);
+        return;
+      }
+      var copyStatus = h("p", { class: "k-pad k-small", style: "margin:0", role: "status", text: "" });
+      var copyReq = 0;
+      var copyTimer = null;
       var tb = h("tbody");
-      files.files.forEach(function (f) {
-        tb.appendChild(
+      // Rows keep their own closures (checksum and download targets, links);
+      // sorting only reorders these nodes and never mutates the manifest rows.
+      var items = rows.map(function (f) {
+        var tr = h(
+          "tr",
+          { "data-search": f.path.toLowerCase() },
+          h("td", { class: "k-mono" }, mv.live ? h("a", { href: "/v/" + encodeURIComponent(slug) + "/" + encodePath(f.path), text: f.path }) : h("span", { text: f.path })),
+          h("td", { class: "k-hide-sm dw-hide-sm" }, h("span", { class: "k-chip", text: f.kind })),
+          h("td", { class: "k-num k-small" }, h("span", { text: exactBytes(f.size) }), f.size >= 1024 ? h("span", { class: "k-sub", text: bytes(f.size) }) : null),
+          h("td", {}, h("code", { class: "k-mono k-digest", text: f.sha256 })),
           h(
-            "tr",
-            { "data-search": f.path.toLowerCase() },
-            h(
-              "td",
-              { class: "k-mono" },
-              v.live ? h("a", { href: "/v/" + encodeURIComponent(slug) + "/" + encodePath(f.path) }, pathBreaks(f.path)) : h("span", {}, pathBreaks(f.path)),
-              // 720-1099px: the kind sits under the path (its own column, and the checksum's, need 1100px).
-              h("span", { class: "k-chips k-rowchips k-only-narrow k-hide-sm" }, h("span", { class: "k-chip", text: kindLabel(f.kind) })),
-            ),
-            h("td", { class: "k-only-wide" }, h("span", { class: "k-chip", text: kindLabel(f.kind) })),
-            h("td", { class: "k-only-wide" }, sealFor(f.path, f.sha256, { mini: true })),
-            h("td", { class: "k-num k-small", text: bytes(f.size) }),
-            h(
-              "td",
-              { class: "k-act" },
-              v.live ? h("a", { class: "k-btn k-sm k-ghost k-hide-sm", href: f.url, target: "_blank", rel: "noopener", text: "Open", "aria-label": "Open " + f.path }) : null,
-              h("button", { type: "button", class: "k-btn k-sm k-ghost", text: "Download", "aria-label": "Download " + f.path, onclick: function (ev) { downloadFile(slug, f.path, v.live ? null : v.id, ev.currentTarget); } }),
-            ),
+            "td",
+            { class: "k-act" },
+            mv.live ? h("a", { class: "k-btn k-sm k-ghost", href: f.url, target: "_blank", rel: "noopener", text: "Open" }) : null,
+            " ",
+            h("button", {
+              type: "button",
+              class: "k-btn k-sm k-ghost",
+              text: "Copy SHA-256",
+              "aria-label": "Copy SHA-256 for " + f.path,
+              onclick: function (ev) {
+                var btn = ev.currentTarget;
+                var attempt = ++copyReq;
+                clearTimeout(copyTimer);
+                copyStatus.textContent = "";
+                copyText(f.sha256, btn).then(function (ok) {
+                  if (attempt !== copyReq || my !== displayedReq) return;
+                  // A separate task makes identical results observable again.
+                  copyTimer = setTimeout(function () {
+                    if (attempt !== copyReq || my !== displayedReq) return;
+                    copyStatus.textContent = ok
+                      ? "Copied SHA-256 for " + f.path + "."
+                      : "Copy failed for " + f.path + ". Select the checksum and copy it yourself.";
+                  }, 0);
+                });
+              },
+            }),
+            " ",
+            // Pin every download to the inspected manifest: even a live-marked
+            // row describes immutable bytes, and the live pointer may move on.
+            h("button", { type: "button", class: "k-btn k-sm k-ghost", text: "Download", onclick: function (ev) { downloadFile(slug, f.path, mv.id, ev.currentTarget); } }),
           ),
         );
+        tb.appendChild(tr);
+        return { file: f, row: tr };
       });
-      filter.addEventListener("input", function () {
-        var q = filter.value.trim().toLowerCase();
-        $$("tr[data-search]", tb).forEach(function (tr) {
-          tr.hidden = q && tr.getAttribute("data-search").indexOf(q) < 0;
+      // Client-side ordering of the already-loaded manifest: no requests, no
+      // storage, no endpoint. Default is deterministic Path ascending.
+      var sortField = "path";
+      var sortDir = "ascending";
+      var headCells = {};
+      var fieldSelect = null;
+      var dirSelect = null;
+      function cmpText(a, b) {
+        return a < b ? -1 : a > b ? 1 : 0;
+      }
+      function compareFiles(a, b) {
+        var primary = sortField === "size" ? a.size - b.size : cmpText(sortField === "kind" ? a.kind : a.path, sortField === "kind" ? b.kind : b.path);
+        if (primary !== 0) return sortDir === "ascending" ? primary : -primary;
+        if (sortField === "path") return 0;
+        return cmpText(a.path, b.path);
+      }
+      // Filter feedback is derived only from the already-loaded rows for this
+      // selected version: updating it never fetches, writes storage or moves
+      // focus (the filter keeps focus while typing). One persistent status
+      // element is updated in place so live announcements are not lost.
+      // aria-live (not role="status") so the checksum copy announcements keep
+      // the section's single status region and existing contracts hold.
+      var filterStatus = h("span", { class: "k-small", "aria-live": "polite", "aria-atomic": "true", text: "" });
+      var noMatch = h("div", { class: "k-empty dw-empty", hidden: true, text: "" });
+      var clearFilter = h("button", {
+        type: "button",
+        class: "k-btn k-sm k-ghost",
+        text: "Clear filter",
+        hidden: true,
+        onclick: function () {
+          // Reset only the query: sort, checksums, downloads and the
+          // selected immutable version are untouched. Focus returns to the
+          // filter so keyboard users land where they were.
+          filter.value = "";
+          applyFilter();
+          filter.focus();
+        },
+      });
+      function applyFilter() {
+        var raw = filter.value;
+        var q = raw.trim().toLowerCase();
+        var matching = 0;
+        var matchingBytes = 0;
+        items.forEach(function (it) {
+          var show = !q || it.row.getAttribute("data-search").indexOf(q) >= 0;
+          it.row.hidden = !show;
+          if (show) {
+            matching++;
+            matchingBytes += it.file.size || 0;
+          }
         });
+        filterStatus.textContent = q
+          ? matching + " of " + plural(items.length, "loaded file") + " in this selected version match · " + exactBytes(matchingBytes) + " matching"
+          : plural(items.length, "loaded file") + " in this selected version · " + exactBytes(matchingBytes);
+        clearFilter.hidden = !raw;
+        // The query is quoted back as inert text (textContent), never markup;
+        // a nonempty manifest with zero matches is not an empty version.
+        var noMatches = !!q && matching === 0;
+        noMatch.hidden = !noMatches;
+        noMatch.textContent = noMatches ? 'No matching files for "' + raw + '" in the loaded files for this selected version. Clear the filter to show every loaded file.' : "";
+      }
+      function applySort() {
+        items
+          .slice()
+          .sort(function (x, y) {
+            return compareFiles(x.file, y.file);
+          })
+          .forEach(function (it) {
+            tb.appendChild(it.row);
+          });
+        ["path", "kind", "size"].forEach(function (field) {
+          var hc = headCells[field];
+          if (!hc) return;
+          if (field === sortField) {
+            hc.th.setAttribute("aria-sort", sortDir);
+            hc.arrow.textContent = sortDir === "ascending" ? " ▲" : " ▼";
+            hc.btn.setAttribute("aria-label", "Sort by " + field + ", " + sortDir + " (activate to sort " + (sortDir === "ascending" ? "descending" : "ascending") + ")");
+          } else {
+            hc.th.removeAttribute("aria-sort");
+            hc.arrow.textContent = "";
+            hc.btn.setAttribute("aria-label", "Sort by " + field);
+          }
+        });
+        if (fieldSelect) fieldSelect.value = sortField;
+        if (dirSelect) dirSelect.value = sortDir;
+        applyFilter();
+      }
+      function sortTh(field, label, cls) {
+        var arrow = h("span", { "aria-hidden": "true" });
+        var btn = h(
+          "button",
+          {
+            type: "button",
+            class: "k-th-sort",
+            "aria-label": "Sort by " + field,
+            onclick: function () {
+              if (sortField === field) sortDir = sortDir === "ascending" ? "descending" : "ascending";
+              else {
+                sortField = field;
+                sortDir = "ascending";
+              }
+              applySort();
+            },
+          },
+          h("span", { text: label }),
+          arrow,
+        );
+        var th = h("th", { scope: "col", class: cls || null, "data-sort-field": field }, btn);
+        headCells[field] = { th: th, btn: btn, arrow: arrow };
+        return th;
+      }
+      function sortOption(value, label) {
+        var o = h("option", { text: label });
+        o.value = value;
+        o.setAttribute("value", value);
+        return o;
+      }
+      // Toolbar mirror of the header sorts: every field stays sortable on narrow
+      // screens, where the Kind column (and its header control) is hidden.
+      fieldSelect = h("select", { class: "k-input dw-select", "aria-label": "Sort files by" }, sortOption("path", "Path"), sortOption("kind", "Kind"), sortOption("size", "Size"));
+      fieldSelect.value = sortField;
+      fieldSelect.addEventListener("change", function () {
+        sortField = fieldSelect.value;
+        sortDir = "ascending";
+        applySort();
       });
+      dirSelect = h("select", { class: "k-input dw-select", "aria-label": "Sort direction" }, sortOption("ascending", "Ascending"), sortOption("descending", "Descending"));
+      dirSelect.value = sortDir;
+      dirSelect.addEventListener("change", function () {
+        sortDir = dirSelect.value;
+        applySort();
+      });
+      var sortBar = h("label", { class: "k-sortbar" }, h("span", { class: "k-small", text: "Sort" }), fieldSelect, dirSelect);
+      filter.addEventListener("input", applyFilter);
       clear(filesSection);
       add(
         filesSection,
-        h("div", { class: "k-blk-h" }, h("h2", { text: "Files in v" + v.number + (v.live ? " (live)" : "") }), h("div", { class: "k-tools" }, h("span", { class: "k-small", text: plural(files.files.length, "file") }), filter)),
-        v.live ? null : h("p", { class: "k-pad k-small", text: "Older versions are not served publicly. Restore this version to view it on the site, or download single files." }),
-        h("div", { class: "k-table-wrap" }, h("table", { class: "k-table k-ftable" }, h("thead", {}, h("tr", {}, h("th", { scope: "col", text: "Path" }), h("th", { scope: "col", class: "k-only-wide", text: "Kind" }), h("th", { scope: "col", class: "k-only-wide", text: "Checksum" }), h("th", { scope: "col", class: "k-num", text: "Size" }), h("th", { scope: "col" }, h("span", { class: "k-sr", text: "Actions" })))), tb)),
+        h("div", { class: "k-blk-h" }, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "k-tools" }, filterStatus, sortBar, filter, clearFilter)),
+        versionDownload(v),
+        h("p", { class: "k-pad k-small", text: "SHA-256 manifest checksums for the selected version (v" + mv.number + ", " + mv.id + "). A checksum is not proof of authenticity, provenance, safe content, or independent verification, and does not show the current live download matches — compare it against a trusted source you already have." }),
+        h("div", { class: "k-table-wrap" }, h("table", { class: "k-table k-ftable" }, h("thead", {}, h("tr", {}, sortTh("path", "Path"), sortTh("kind", "Kind", "k-only-wide"), sortTh("size", "Size", "k-num"), h("th", { scope: "col", text: "SHA-256" }), h("th", { scope: "col" }, h("span", { class: "k-sr", text: "Actions" })))), tb)),
+        noMatch,
+        copyStatus,
+        mv.live ? null : h("p", { class: "k-pad k-small", text: "Older versions are not served publicly. Restore this version to view it on the site, or download single files." }),
       );
+      applySort();
+      commitSelection(mv, opts, my);
     }
 
     var s = site.settings;
@@ -1442,13 +2815,15 @@ export function dropwayClient(motifsFactory) {
       h("div", { class: "k-group k-pwrow" },
         h("label", { class: "k-label", for: "dw-s-pw", text: s.passwordProtected ? "Password (set; type a new one to change it)" : "Password (optional)" }),
         h("div", { class: "k-field" }, h("input", { class: "k-input", id: "dw-s-pw", name: "password", type: "password", autocomplete: "new-password", minlength: "4", maxlength: "200", "aria-describedby": "dw-s-pw-hint" }),
-          s.passwordProtected ? h("button", { type: "button", class: "k-btn k-ghost", text: "Remove password", onclick: async function () { await saveSettings({ password: null }, "Password removed."); } }) : null),
+          s.passwordProtected ? h("button", { type: "button", class: "k-btn k-ghost", "data-site-mutation": "", text: "Remove password", onclick: async function () { await saveSettings({ password: null }, "Password removed."); } }) : null),
         h("p", { class: "k-hint", id: "dw-s-pw-hint", text: "Visitors must enter it. Changing it signs everyone out." }),
       ),
       h("p", { class: "k-msgline k-err", id: "dw-s-error", role: "alert", hidden: true }),
-      h("div", { class: "k-btnrow" }, h("button", { type: "submit", class: "k-btn", text: "Save settings" })),
+      h("div", { class: "k-btnrow" }, h("button", { type: "submit", class: "k-btn", "data-site-mutation": "", text: "Save settings" })),
     );
     async function saveSettings(body, msg) {
+      if (siteMutationPending) return;
+      setSiteMutationPending(true);
       var error = form.querySelector("#dw-s-error");
       error.hidden = true;
       $$("[aria-invalid]", form).forEach(function (field) { field.removeAttribute("aria-invalid"); field.removeAttribute("aria-errormessage"); });
@@ -1468,6 +2843,8 @@ export function dropwayClient(motifsFactory) {
           field.focus();
         }
         toast(message, true);
+      } finally {
+        setSiteMutationPending(false);
       }
     }
     form.addEventListener("submit", function (e) {
@@ -1477,37 +2854,241 @@ export function dropwayClient(motifsFactory) {
       if (f.password.value) body.password = f.password.value;
       saveSettings(body);
     });
+    var renamePending = false;
+    var renameInput = h("input", { class: "k-input", id: "dw-s-new-slug", name: "newSlug", type: "text", autocomplete: "off", autocapitalize: "none", spellcheck: "false", "aria-describedby": "dw-s-rename-help dw-s-rename-feedback" });
+    var renameFeedback = h("div", { id: "dw-s-rename-feedback", role: "status", "aria-live": "polite" });
+    var renameSubmit = h("button", { type: "submit", class: "k-btn", "data-site-mutation": "", text: "Rename site" });
+    var renameCancel = h("button", {
+      type: "button", class: "k-btn k-ghost", text: "Cancel",
+      onclick: function () {
+        if (renamePending) return;
+        renameInput.value = "";
+        renameInput.removeAttribute("aria-invalid");
+        clear(renameFeedback);
+        renameInput.focus();
+      },
+    });
+    var renameForm = h(
+      "form", { class: "k-pad", "aria-label": "Rename site" },
+      h("p", { class: "k-small" }, "Current slug: ", h("strong", { class: "k-mono", text: site.slug })),
+      h("div", { class: "k-group" },
+        h("label", { class: "k-label", for: "dw-s-new-slug", text: "Proposed slug" }), renameInput,
+        h("p", { class: "k-hint", id: "dw-s-rename-help", text: "Use 3–56 characters: letters, digits and single hyphens. Renaming changes the site URL. The server decides whether the name is available and how long the old name stays bound." })),
+      h("div", { class: "k-btnrow" }, renameSubmit, renameCancel), renameFeedback,
+    );
+    renameForm.addEventListener("submit", async function (e) {
+      e.preventDefault();
+      if (siteMutationPending) return;
+      clear(renameFeedback);
+      renameInput.removeAttribute("aria-invalid");
+      if (renameInput.value.trim().toLowerCase() === site.slug) {
+        renameFeedback.textContent = "This site already has that name. Nothing changed.";
+        renameInput.focus();
+        return;
+      }
+      renamePending = true;
+      setSiteMutationPending(true);
+      renameForm.setAttribute("aria-busy", "true");
+      renameInput.disabled = renameSubmit.disabled = renameCancel.disabled = true;
+      renameSubmit.textContent = "Rename site…";
+      try {
+        var renamed = await api("/sites/" + encodeURIComponent(slug) + "/rename", { method: "POST", body: { newSlug: renameInput.value } });
+        var invalidReceipt = "Could not confirm the rename response. Reload this site before trying again.";
+        if (!renamed || typeof renamed.renamed !== "boolean" || typeof renamed.slug !== "string" || !renamed.slug || typeof renamed.url !== "string") throw new Error(invalidReceipt);
+        var returnedUrl;
+        try { returnedUrl = new URL(renamed.url); } catch (err) { throw new Error(invalidReceipt); }
+        if (["https:", "http:"].indexOf(returnedUrl.protocol) < 0 || returnedUrl.username || returnedUrl.password) throw new Error(invalidReceipt);
+        if (!renamed.renamed) {
+          renameFeedback.textContent = "This site already has that name. Nothing changed.";
+          renameInput.focus();
+          return;
+        }
+        var receipt = h("section", { class: "k-blk", tabindex: "-1", role: "status", "aria-live": "polite", "aria-labelledby": "dw-rename-result" },
+          h("div", { class: "k-blk-h" }, h("h2", { id: "dw-rename-result", text: "Renamed to " + renamed.slug })),
+        );
+        var details = h("div", { class: "k-pad", style: "overflow-wrap:anywhere" },
+          h("p", {}, "Previous slug: ", h("strong", { class: "k-mono", text: renamed.oldSlug || site.slug })),
+          h("p", {}, "Old URL: ", h("span", { text: site.url })),
+          h("p", {}, "New URL: ", h("a", { href: renamed.url, target: "_blank", rel: "noopener", text: renamed.url })),
+        );
+        var deadline = renamed.redirectUntil && new Date(renamed.redirectUntil);
+        if (deadline && Number.isFinite(deadline.getTime())) {
+          add(details, h("p", {}, "Returned redirect deadline: ", h("time", { datetime: renamed.redirectUntil, text: deadline.toLocaleString() }), "."),
+            h("p", { class: "k-small", text: deadline.getTime() > Date.now()
+              ? "The old URL redirects (308) to the new URL until this deadline. The old name remains bound to this site during that configured lifetime. Redirects are not promised after the deadline."
+              : "This redirect deadline has expired. No active 308 redirect is guaranteed. Name retention follows the configured policy." }));
+        } else {
+          add(details, h("p", { class: "k-small", text: "No redirect deadline was provided. An active 308 redirect from the old URL is not guaranteed. The old name remains subject to the configured retention policy." }));
+        }
+        add(details, h("a", { class: "k-btn", href: "/dashboard/sites/" + encodeURIComponent(renamed.slug), text: "Manage " + renamed.slug }));
+        add(receipt, details);
+        // Retire old-slug controls; management resumes only with the confirmed identity.
+        clear(root);
+        add(root, receipt);
+        d.title = renamed.slug + " · " + boot.instanceName;
+        receipt.focus();
+      } catch (err) {
+        add(renameFeedback, errorBox(err, "Could not rename site"));
+        renameInput.setAttribute("aria-invalid", "true");
+      } finally {
+        renamePending = false;
+        setSiteMutationPending(false);
+        renameForm.removeAttribute("aria-busy");
+        renameInput.disabled = renameSubmit.disabled = renameCancel.disabled = false;
+        renameSubmit.textContent = "Rename site";
+        if ($$("form", root).indexOf(renameForm) >= 0) renameInput.focus();
+      }
+    });
+    var renameSection = blk("Rename site", null, renameForm);
     var danger = blk(
       "Delete site",
       null,
       h(
         "div",
         { class: "k-pad k-spread" },
-        h("p", { class: "k-small", text: "The URL stops working at once and the name is freed. Files no other site uses are removed by the hourly cleanup." }),
+        h("p", { class: "k-small", text: "The URL stops serving this site at once. Its name and any retained old names are held according to the configured name-retention policy. Deletion does not make a name immediately available to another tenant. Files no other site uses are removed by the hourly cleanup." }),
         h("button", {
           type: "button",
           class: "k-btn k-danger",
           text: "Delete site",
-          onclick: async function () {
-            var ok = await confirmBox({ title: "Delete " + slug + "?", message: "Every version goes with it. This cannot be undone from the dashboard.", confirmText: "Delete site", typeToConfirm: slug });
-            if (!ok) return;
+          "data-site-mutation": "",
+          onclick: async function (ev) {
+            if (siteMutationPending) return;
+            var trigger = ev.currentTarget;
+            setSiteMutationPending(true);
             try {
-              await api("/sites/" + encodeURIComponent(slug), { method: "DELETE" });
+              var ok = await confirmBox({ title: "Delete " + slug + "?", message: "Every version goes with it. This cannot be undone from the dashboard.", confirmText: "Delete site", typeToConfirm: slug });
+              if (!ok) return;
+              await api("/sites/" + encodeURIComponent(slug), { method: "DELETE", body: { confirm: slug } });
               location.href = "/dashboard?deleted=" + encodeURIComponent(slug);
             } catch (e) {
               toast(e.message, true);
+            } finally {
+              setSiteMutationPending(false);
+              if ($$("button", root).indexOf(trigger) >= 0) trigger.focus();
             }
           },
         }),
       ),
     );
-    add(root, head, versionsSection, filesSection, blk("Settings", null, form), danger);
+    var qrSection = siteQrSection(site.url, !!(site.settings && site.settings.passwordProtected));
+    add(root, head, qrSection, siteBadgeSection(site.url, !!(site.settings && site.settings.passwordProtected)), versionsSection, filesSection, blk("Settings", null, form), renameSection, danger);
     var live = versions.filter(function (v) {
       return v.live;
     })[0];
-    if (live) showFiles(live);
-    else filesSection.hidden = true;
+    if (typeof window !== "undefined" && window.addEventListener) {
+      if (sitePopstate && typeof window.removeEventListener === "function") {
+        try {
+          window.removeEventListener("popstate", sitePopstate);
+        } catch (e) {}
+      }
+      sitePopstate = function () {
+        var ref = null;
+        try {
+          ref = new URL(location.href).searchParams.get("version");
+        } catch (e) {}
+        if (ref && currentSelection && ref === currentSelection.id) {
+          // Forward can return to the displayed view while Back's request is
+          // still pending. Even this no-op navigation supersedes that request.
+          ++selectionReq;
+          setJumpLoading(false);
+          clearJumpError();
+          return;
+        }
+        if (ref) openVersionRef(ref, { history: "replace", focus: false });
+        else if (live) showFiles(live, { history: "replace" });
+      };
+      window.addEventListener("popstate", sitePopstate);
+    }
+    if (requestedVersion && linkedVersion && linkedVersion.status === "pending") {
+      // A pending link names unfinished bytes: report it, never render it as
+      // an inspected version, and never fall back to live.
+      add(filesSection, h("div", { class: "k-pad" }, errorBox({ message: "Version v" + linkedVersion.number + " is not ready yet — its upload has not finished.", hint: "Choose a ready version from the history, or retry once the upload finishes." }, "Version not ready")));
+    } else {
+      var selected = requestedVersion ? linkedVersion : live;
+      if (selected) showFiles(selected, { history: requestedVersion ? "replace" : null });
+      else if (requestedVersion) add(filesSection, h("div", { class: "k-pad" }, errorBox(linkedVersionError || { message: "This version is unavailable." }, "Version unavailable")));
+      else filesSection.hidden = true;
+    }
   };
+
+  async function downloadVersionZip(path, versionId, btn, result) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+    clear(result);
+    var controller = new AbortController();
+    var reader, res, objectUrl, a;
+    var complete = false;
+    try {
+      var headers = new Headers({ "Accept": "application/zip", "X-Kofra-Client": "dashboard/1" });
+      var key = getKey();
+      if (key) headers.set("Authorization", "Bearer " + key);
+      res = await fetch(boot.api + path, { method: "GET", headers: headers, credentials: "same-origin", redirect: "error", signal: controller.signal });
+      if (res.ok) {
+        if (res.headers.get("X-Kofra-Version") !== versionId) throw new Error("Archive version identity did not match the selected version. Reload versions and retry.");
+        if ((res.headers.get("Content-Type") || "").split(";")[0].trim().toLowerCase() !== "application/zip") throw new Error("The server did not return a ZIP response. Retry or use the authenticated REST/CLI export.");
+      }
+      var disposition = res.headers.get("Content-Disposition") || "";
+      // Only the server's inert slug-vN.zip attachment contract is accepted.
+      var filename = /^attachment;\s*filename="([a-z0-9][a-z0-9-]*-v[1-9][0-9]*\.zip)"$/i.exec(disposition);
+      if (res.ok && !filename) throw new Error("The ZIP attachment filename is missing or invalid. Reload versions and retry.");
+      var limit = res.ok ? 32 * 1024 * 1024 : 64 * 1024;
+      var limitLabel = res.ok ? "32 MiB" : "64 KiB";
+      var length = res.headers.get("Content-Length");
+      var expected = length === null ? null : Number(length);
+      if (expected !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(expected) || expected > limit)) {
+        throw new Error("The response exceeds the browser limit (" + limitLabel + ") or has an invalid length. Use the authenticated REST/CLI export.");
+      }
+      if (!res.body) throw new Error("The archive response is incomplete. Retry the download.");
+      reader = res.body.getReader();
+      var chunks = [], size = 0;
+      while (true) {
+        var next = await reader.read();
+        if (next.done) break;
+        size += next.value.byteLength;
+        // Check before retaining each chunk, even without a truthful Content-Length.
+        if (size > limit) throw new Error("The response exceeds the browser limit (" + limitLabel + "). Use the authenticated REST/CLI export or read files file-by-file.");
+        chunks.push(next.value);
+      }
+      if (expected !== null && size !== expected) throw new Error("The archive response was truncated or its length did not match. Retry the download.");
+      if (!res.ok) {
+        var data = null;
+        try { data = JSON.parse(await new Blob(chunks).text()); } catch (parseError) {}
+        throw apiError(res.status, data);
+      }
+      if (!size) throw new Error("The archive response is empty. Retry the download.");
+      // Never navigate to user bytes on the app origin, or offer a partial stream.
+      objectUrl = URL.createObjectURL(new Blob(chunks, { type: "application/zip" }));
+      a = h("a", { href: objectUrl, download: filename[1] });
+      d.body.appendChild(a);
+      a.click();
+      complete = true;
+    } catch (e) {
+      var failure = {
+        message: e.name === "AbortError" ? "ZIP download cancelled." : e.message || "ZIP download failed.",
+        hint: (e.hint ? e.hint + " " : "") + "Retry, reload versions, or use the authenticated REST/CLI export route above.",
+      };
+      // The selection may have changed mid-download, detaching this container.
+      if (result.isConnected === false) toast("Could not download ZIP for " + versionId + ": " + failure.message, true);
+      else add(result, errorBox(failure, "Could not download ZIP"));
+    } finally {
+      if (!complete) {
+        controller.abort();
+        try {
+          if (reader) await reader.cancel();
+          else if (res && res.body) await res.body.cancel();
+        } catch (cancelError) {}
+      }
+      if (reader) reader.releaseLock();
+      if (objectUrl) {
+        // Keep the URL alive for the browser's attachment handoff, then release it.
+        setTimeout(function () { URL.revokeObjectURL(objectUrl); a.remove(); }, 1000);
+      }
+      btn.disabled = false;
+      btn.removeAttribute("aria-busy");
+    }
+  }
 
   async function downloadFile(slug, path, versionId, btn) {
     if (btn) btn.disabled = true;
@@ -1606,11 +3187,13 @@ export function dropwayClient(motifsFactory) {
         var res = await api("/keys" + (showAll && showAll.checked ? "?all=1" : ""));
         clear(listBody);
         if (!res.keys.length) {
-          add(listBody, h("div", { class: "k-empty", role: "status" }, h("h3", { text: "No active keys" }), h("p", { text: "Create one above for each agent or person." })));
+          add(listBody, h("div", { class: "k-empty dw-empty", role: "status" }, h("h3", { text: "No active keys" }), h("p", { text: "Create one above for each agent or person." })));
           return;
         }
         var tb = h("tbody");
         res.keys.forEach(function (k) {
+          var expires = expiry(k.expiresAt);
+          var exactExpiry = expires ? h("span", { id: "dw-key-expiry-" + k.id, class: "k-sub", hidden: true }) : null;
           tb.appendChild(
             h(
               "tr",
@@ -1621,7 +3204,20 @@ export function dropwayClient(motifsFactory) {
               })), k.siteId ? h("span", { class: "k-sub", text: "One site only" }) : null),
               // Phones: the activity takes the card's full width, so "Never used" never splits from "Created ...".
               h("td", { class: "k-num k-small k-wide", "data-label": "Activity" }, h("span", { title: localTime(k.createdAt), text: "Created " + ago(k.createdAt) }), h("span", { class: "k-sub", title: k.lastUsedAt ? localTime(k.lastUsedAt) : null, text: k.lastUsedAt ? "Used " + ago(k.lastUsedAt) : "Never used" })),
-              h("td", { class: "k-num k-small", text: k.expiresAt ? "Expires " + localTime(k.expiresAt) : "No expiry" }),
+              h("td", { class: "k-num k-small", title: expires ? k.expiresAt : null }, expires ? [
+                h("button", {
+                  type: "button", class: "k-btn k-sm k-quiet", text: expires,
+                  "aria-label": "Expiry details for " + (k.name || k.prefix) + ": " + expires,
+                  "aria-expanded": "false", "aria-controls": exactExpiry.id,
+                  onclick: function (e) {
+                    var show = e.currentTarget.getAttribute("aria-expanded") !== "true";
+                    exactExpiry.textContent = show ? new Date(k.expiresAt).toLocaleString() : "";
+                    exactExpiry.hidden = !show;
+                    e.currentTarget.setAttribute("aria-expanded", String(show));
+                  },
+                }),
+                exactExpiry,
+              ] : k.expiresAt ? "" : "No expiry"),
               h(
                 "td",
                 { class: "k-act" },
@@ -1664,8 +3260,100 @@ export function dropwayClient(motifsFactory) {
     loadKeys();
   };
 
+  /**
+   * Read-only effective-policy section for /dashboard/settings, rendered from the
+   * already-fetched /me response (no extra request, no polling). Shows the four
+   * caller-effective limits, site/storage usage against their configured limits,
+   * and every returned capability by its stable id. Refusal codes, messages and
+   * hints render as plain text. Null when /me carries no policy fields (older
+   * responses), so legacy output renders exactly as before.
+   */
+  function effectivePolicySection(m) {
+    var limits = m && m.limits && typeof m.limits === "object" ? m.limits : null;
+    var usage = m && m.usage && typeof m.usage === "object" ? m.usage : null;
+    var caps = m && m.capabilities && typeof m.capabilities === "object" ? m.capabilities : null;
+    if (!limits && !usage && !caps) return null;
+    limits = limits || {};
+    usage = usage || {};
+    caps = caps || {};
+
+    function isCount(n) {
+      return typeof n === "number" && isFinite(n) && n >= 0 && Math.floor(n) === n;
+    }
+    /** Exact bytes plus the shared short form, so a limit is never ambiguous. */
+    function byteText(n) {
+      return n + " bytes (" + bytes(n) + ")";
+    }
+    /** Only the sites/storage quotas use null-as-unlimited; other nulls stay ordinary. */
+    function quotaText(limit) {
+      if (limit === null) return "unlimited";
+      return isCount(limit) ? String(limit) : "unavailable";
+    }
+    function usedOf(label, used, limit) {
+      var l = quotaText(limit);
+      if (!isCount(used) && l === "unavailable") return "usage and limit unavailable";
+      if (!isCount(used)) return "usage unavailable of " + l + " " + label;
+      if (l === "unavailable") return used + " " + label + " in use, limit unavailable";
+      return used + " of " + l + " " + label;
+    }
+    function storageText(used, limit) {
+      var l = limit === null ? "unlimited" : isCount(limit) ? byteText(limit) : "unavailable";
+      if (!isCount(used) && l === "unavailable") return "usage and limit unavailable";
+      if (!isCount(used)) return "usage unavailable of " + l + " retained";
+      if (l === "unavailable") return byteText(used) + " retained, limit unavailable";
+      return byteText(used) + " of " + l + " retained";
+    }
+    function capabilityItem(id, decision) {
+      var li = h("li", {}, h("code", { text: id }), " — ");
+      if (!decision || typeof decision !== "object" || (decision.allowed !== true && decision.allowed !== false)) {
+        return add(li, "Unknown state.");
+      }
+      if (decision.allowed === true) return add(li, "Allowed.");
+      var err = decision.error && typeof decision.error === "object" ? decision.error : {};
+      add(li, "Unavailable. ");
+      if (err.code !== undefined && err.code !== null && err.code !== "") add(li, h("span", { class: "k-mono", text: String(err.code) }), ": ");
+      if (err.message !== undefined && err.message !== null && err.message !== "") add(li, String(err.message), " ");
+      if (err.hint !== undefined && err.hint !== null && err.hint !== "") add(li, String(err.hint), " ");
+      var req = err.details && Array.isArray(err.details.requires) ? err.details.requires : null;
+      if (req && req.length) add(li, "Requires: " + req.join(", ") + ".");
+      return li;
+    }
+
+    var ids = Object.keys(caps);
+    var capList = h("ul", { class: "k-small dw-policy", style: "margin:.75rem 0 0" });
+    if (!ids.length) add(capList, h("li", { text: "Capability information unavailable." }));
+    ids.forEach(function (id) {
+      add(capList, capabilityItem(id, caps[id]));
+    });
+    return h(
+      "section",
+      { style: "margin-top:1rem", "aria-labelledby": "dw-effective-policy-h" },
+      h("h3", { id: "dw-effective-policy-h", text: "Your effective limits and capabilities" }),
+      h("p", { class: "k-small", text: "Effective values for the key you signed in with. They can be lower than the instance defaults under “This instance”." }),
+      h("p", { class: "k-small", text: "Allowed means this instance supports the capability for your key; each call still checks its own scopes. Storage counts bytes retained for your account, including earlier versions and deliveries." }),
+      h(
+        "dl",
+        { class: "k-kv dw-policy", style: "margin-top:.75rem" },
+        h("dt", { text: "Largest file" }), h("dd", { text: isCount(limits.maxFileBytes) ? byteText(limits.maxFileBytes) : "unavailable" }),
+        h("dt", { text: "Files per version" }), h("dd", { text: isCount(limits.maxFiles) ? plural(limits.maxFiles, "file") : "unavailable" }),
+        h("dt", { text: "Largest version" }), h("dd", { text: isCount(limits.maxSiteBytes) ? byteText(limits.maxSiteBytes) : "unavailable" }),
+        h("dt", { text: "One-call publish body" }), h("dd", { text: isCount(limits.oneShotMaxBytes) ? byteText(limits.oneShotMaxBytes) : "unavailable" }),
+      ),
+      h(
+        "dl",
+        { class: "k-kv dw-policy", style: "margin-top:.75rem" },
+        h("dt", { text: "Sites" }), h("dd", { text: usedOf("sites", usage.sites, limits.sites) }),
+        h("dt", { text: "Retained storage" }), h("dd", { text: storageText(usage.storage_bytes, limits.storage_bytes) }),
+      ),
+      capList,
+    );
+  }
+
   pages.settings = async function () {
     if (!requireAuth()) return;
+    // Usage and capability decisions must be fresh on each Settings visit.
+    var s = store("session");
+    if (s) s.removeItem(ME);
     var m = await renderAccount();
     var acct = d.getElementById("dw-me");
     if (acct && m && m.member) {
@@ -1676,10 +3364,11 @@ export function dropwayClient(motifsFactory) {
           "dl",
           { class: "k-kv" },
           h("dt", { text: "Signed in as" }), h("dd", { text: m.member.email || m.member.name || m.member.id }),
-          h("dt", { text: "Role" }), h("dd", { text: roleLabel(m.member.role) }),
+          h("dt", { text: "Role" }), h("dd", { class: "k-cap", text: String(m.member.role || "") }),
           h("dt", { text: "Key scopes" }), h("dd", { class: "k-mono", text: m.scopes.join(" ") }),
-          h("dt", { text: "Sites this key reaches" }), h("dd", { text: m.siteRestriction ? "One site only" : "Every site" }),
+          h("dt", { text: "Key limited to a site" }), h("dd", { text: m.siteRestriction ? "yes" : "no" }),
         ),
+        effectivePolicySection(m),
       );
     }
     var mem = d.getElementById("dw-members");
@@ -1770,11 +3459,12 @@ export function dropwayClient(motifsFactory) {
     var tools = d.getElementById("dw-tools");
     var info = d.getElementById("dw-fileinfo");
     var current = P.path || "";
-    var currentView = new URLSearchParams(location.search).get("mode") || "view";
+    var currentMode = null;
+    var panel = d.getElementById("dw-view-panel");
     var manifest = null;
     // A new mode reaches the framed viewer page through ?theme= (it is on another origin).
     d.addEventListener("kofra:themechange", function () {
-      go(current, currentView, false);
+      go(current, currentMode || "view", false);
     });
 
     function fileByPath(p) {
@@ -1809,6 +3499,11 @@ export function dropwayClient(motifsFactory) {
       return withViewerTheme(base + "?view=1&embed=1");
     }
 
+    function validMode(p, mode) {
+      var f = fileByPath(p);
+      if (mode === "source" && (!f || TEXT_KINDS.indexOf(f.kind) >= 0)) return mode;
+      return mode === "raw" ? mode : "view";
+    }
     function renderTools(p, mode) {
       clear(tools);
       clear(info);
@@ -1816,19 +3511,47 @@ export function dropwayClient(motifsFactory) {
       var isDir = !p || p.charAt(p.length - 1) === "/";
       var kind = f ? f.kind : null;
       var url = siteUrlFor(p);
+      var tabs = [];
+      panel.removeAttribute("role");
+      panel.removeAttribute("aria-labelledby");
       function tab(label, m, enabled) {
         if (!enabled) return null;
-        return h("button", {
+        var button = h("button", {
+          id: "dw-view-tab-" + m,
           type: "button",
           role: "tab",
+          tabindex: mode === m ? 0 : -1,
+          "aria-controls": panel.id,
           "aria-selected": mode === m ? "true" : "false",
           text: label,
+          onfocus: function (ev) {
+            tabs.forEach(function (t) { t.tabIndex = t === ev.currentTarget ? 0 : -1; });
+          },
+          onkeydown: function (ev) {
+            if (ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+            var i = tabs.indexOf(ev.currentTarget);
+            if (ev.key === "ArrowRight") i = (i + 1) % tabs.length;
+            else if (ev.key === "ArrowLeft") i = (i + tabs.length - 1) % tabs.length;
+            else if (ev.key === "Home") i = 0;
+            else if (ev.key === "End") i = tabs.length - 1;
+            else return;
+            ev.preventDefault();
+            tabs[i].focus();
+          },
+          // Native button Enter/Space already dispatch one click. Focus-only keys never navigate.
           onclick: function () {
+            if (mode === m) return;
+            var keepFocus = tabs.indexOf(d.activeElement) >= 0;
             go(p, m, true);
+            if (keepFocus) d.getElementById("dw-view-tab-" + m).focus();
           },
         });
+        tabs.push(button);
+        return button;
       }
       if (!isDir) {
+        panel.setAttribute("role", "tabpanel");
+        panel.setAttribute("aria-labelledby", "dw-view-tab-" + mode);
         add(
           tools,
           h(
@@ -1876,9 +3599,10 @@ export function dropwayClient(motifsFactory) {
     }
 
     function go(p, mode, push) {
+      mode = validMode(p, mode);
+      if (push && p === current && mode === currentMode) return;
       current = p;
-      mode = mode || "view";
-      currentView = mode;
+      currentMode = mode;
       var src = viewSrc(p, mode);
       if (frame.src !== src) {
         // A fresh iframe instead of a new src: changing src would add a history entry
@@ -1903,13 +3627,15 @@ export function dropwayClient(motifsFactory) {
     }
 
     function buildTree(files) {
-      var root = { dirs: {}, files: [] };
+      // Prototype-less directory maps: legal names like __proto__ or toString are own data, never methods.
+      var root = { dirs: Object.create(null), files: [] };
       files.forEach(function (f) {
         var parts = f.path.split("/");
         var node = root;
         for (var i = 0; i < parts.length - 1; i++) {
-          node.dirs[parts[i]] = node.dirs[parts[i]] || { dirs: {}, files: [] };
-          node = node.dirs[parts[i]];
+          var seg = parts[i];
+          if (!Object.hasOwn(node.dirs, seg)) node.dirs[seg] = { dirs: Object.create(null), files: [] };
+          node = node.dirs[seg];
         }
         node.files.push(f);
       });
@@ -1958,7 +3684,8 @@ export function dropwayClient(motifsFactory) {
       go(st.p !== undefined ? st.p : P.path || "", st.mode || "view", false);
     });
 
-    var mode = new URLSearchParams(location.search).get("mode") || "view";
+    var mode = validMode(current, new URLSearchParams(location.search).get("mode"));
+    renderTools(current, mode);
     if (!authed()) {
       renderTools(current, mode);
       clear(tree);
@@ -1976,31 +3703,99 @@ export function dropwayClient(motifsFactory) {
       return;
     }
     var smallSite = manifest.files.length <= 40;
-    var filter = h("input", { class: "k-input k-find", type: "search", placeholder: "Filter files", "aria-label": "Filter files" });
+    var filter = h("input", { class: "k-input", type: "search", placeholder: "Filter files", "aria-label": "Filter files" });
+    // Display names for the manifest's server-derived kinds (mirrors KIND_LABELS
+    // in @dropway/core). This labels values; it never classifies files itself.
+    var KIND_LABELS = {
+      html: "HTML page", markdown: "Markdown", image: "Image", svg: "SVG image", pdf: "PDF document",
+      video: "Video", audio: "Audio", json: "JSON", csv: "Table", code: "Code", text: "Text",
+      notebook: "Jupyter notebook", model3d: "3D model", font: "Font", archive: "Archive",
+      wasm: "WebAssembly", binary: "Binary file",
+    };
+    function kindLabel(kind) {
+      if (KIND_LABELS[kind]) return KIND_LABELS[kind];
+      var words = String(kind).replace(/[_-]+/g, " ").trim();
+      return words ? words.charAt(0).toUpperCase() + words.slice(1) : String(kind);
+    }
+    var kinds = [];
+    manifest.files.forEach(function (f) {
+      if (f && f.kind && kinds.indexOf(f.kind) < 0) kinds.push(f.kind);
+    });
+    kinds.sort();
+    var kindOptions = [h("option", { value: "", text: "All" })];
+    kinds.forEach(function (k) {
+      kindOptions.push(h("option", { value: k, text: kindLabel(k) }));
+    });
+    var kindSel = h("select", { id: "dw-kind", class: "k-input", "aria-label": "File kind" }, kindOptions);
+    var reset = h("button", { type: "button", class: "k-btn k-sm k-ghost", text: "Clear" });
+    var matchCount = h("span", { class: "k-small", role: "status", text: "" });
+    var emptyNote = h("p", { class: "k-small", role: "status", text: "", hidden: true });
     var treeBox = h("nav", { class: "k-tree", "aria-label": "Files of " + slug }, renderNode(buildTree(manifest.files), "", 0));
     // Phones: the tree folds into a "Files (n)" disclosure above the preview, closed, so the page opens on the
     // file. From 761px it is always open and the disclosure's summary is hidden.
     var narrowQuery = window.matchMedia ? window.matchMedia("(max-width: 760px)") : null;
-    var fold = h("details", { class: "k-treebox", open: !(narrowQuery && narrowQuery.matches) }, h("summary", { text: "Files (" + manifest.files.length + ")" }), filter, treeBox);
+    var fold = h(
+      "details",
+      { class: "k-treebox", open: !(narrowQuery && narrowQuery.matches) },
+      h("summary", { text: "Files (" + manifest.files.length + ")" }),
+      filter,
+      h("label", { class: "k-label", for: "dw-kind", text: "File kind" }),
+      kindSel,
+      h("div", { class: "k-btnrow" }, reset, matchCount),
+      emptyNote,
+      treeBox,
+    );
     if (narrowQuery && narrowQuery.addEventListener) {
       narrowQuery.addEventListener("change", function () {
         if (!narrowQuery.matches) fold.open = true;
       });
     }
-    filter.addEventListener("input", function () {
+    function applyFilter() {
       var q = filter.value.trim().toLowerCase();
+      var kind = kindSel.value;
+      var filtering = !!(q || kind);
+      var total = manifest.files.length;
+      var matching = 0;
       $$("a[data-path]", treeBox).forEach(function (a) {
-        a.parentNode.hidden = q && a.getAttribute("data-path").toLowerCase().indexOf(q) < 0;
+        var show = (!q || a.getAttribute("data-path").toLowerCase().indexOf(q) >= 0) && (!kind || a.getAttribute("data-kind") === kind);
+        a.parentNode.hidden = !show;
+        if (show) matching++;
       });
-      if (q) $$("details", treeBox).forEach(function (x) { x.open = true; });
+      // Innermost branches first, so each parent sees its children's settled state.
+      $$("details", treeBox).reverse().forEach(function (x) {
+        var hasMatch = $$("a[data-path]", x).some(function (a) {
+          return !a.parentNode.hidden;
+        });
+        x.parentNode.hidden = filtering && !hasMatch;
+        if (filtering && hasMatch) x.open = true;
+      });
+      matchCount.textContent = matching + " of " + plural(total, "file");
+      emptyNote.hidden = matching > 0;
+      emptyNote.textContent = total === 0 ? "No files in this version" : "No matching files";
+    }
+    filter.addEventListener("input", applyFilter);
+    kindSel.addEventListener("change", applyFilter);
+    reset.addEventListener("click", function () {
+      filter.value = "";
+      kindSel.value = "";
+      applyFilter();
     });
+    applyFilter();
     clear(tree);
     add(
       tree,
       h("div", { class: "k-vside-h" }, h("a", { class: "k-title", href: "/dashboard/sites/" + encodeURIComponent(slug), text: slug }), h("span", { class: "k-small", text: manifest.version ? "v" + manifest.version.number + " · " + plural(manifest.files.length, "file") : "No live version" })),
       fold,
     );
-    go(current, mode, false);
+    // The manifest load rebuilds the toolbar; a mode tab focused while it was in flight must keep focus.
+    var heldTab = tools.contains(d.activeElement) && d.activeElement.getAttribute("role") === "tab" ? d.activeElement.id : "";
+    go(current, currentMode || mode, false);
+    // If the manifest removed the held tab (Source on an image/binary), land on the tab that replaced it.
+    var heldEl = heldTab && (d.getElementById(heldTab) || d.getElementById("dw-view-tab-" + currentMode));
+    if (heldEl) heldEl.focus();
+    // Push entries carry {p, mode}; record the same for the loaded entry so
+    // Back restores the prior file and view mode instead of losing the mode.
+    history.replaceState({ p: current, mode: currentMode }, "");
     // Bring the current file into the tree's own scroll box (wide screens only: on phones the page itself
     // would scroll, and the header and preview would leave the screen).
     var cur = $("a[aria-current]", tree);

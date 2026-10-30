@@ -1,7 +1,7 @@
 import { createOperationRegistry } from "./operations/registry";
 import { schemaJson, type OperationDefinition } from "./operations";
 import { PAGE_PATHS } from "./page-openapi";
-import { resolveConfig, type DropwayContext } from "@dropway/core";
+import { ApiError, resolveConfig, type DropwayContext } from "@dropway/core";
 import { SOURCE_REPO } from "./repo";
 
 type Json = Record<string, any>;
@@ -106,14 +106,7 @@ export function buildOpenApi(origin: string, instanceName: string, anonymousOrOp
         [status]: success,
         default: json(
           { $ref: "#/components/schemas/Error" },
-          {
-            error: {
-              code: "invalid_request",
-              message: "Invalid request.",
-              hint: "Correct the input and retry.",
-            },
-            requestId: "request-example",
-          },
+          new ApiError(400, "invalid_request", "Invalid request.", "Correct the input and retry.").toJSON("request-example", origin),
           "Error with a stable code and remediation hint",
         ),
       };
@@ -169,11 +162,21 @@ export function buildOpenApi(origin: string, instanceName: string, anonymousOrOp
           properties: {
             error: {
               type: "object",
-              required: ["code", "message"],
+              required: ["code", "message", "retryable", "retryAfterSeconds", "docs", "next"],
               properties: {
                 code: { type: "string" },
                 message: { type: "string" },
                 hint: { type: "string" },
+                retryable: { type: "boolean" },
+                retryAfterSeconds: { type: ["integer", "null"], minimum: 0 },
+                docs: { type: "string", format: "uri" },
+                next: {
+                  type: "array",
+                  items: {
+                    type: "object", required: ["tool", "args", "why"],
+                    properties: { tool: { type: "string" }, args: { type: "object", additionalProperties: true }, why: { type: "string" } },
+                  },
+                },
                 details: { type: "object", additionalProperties: true },
               },
             },

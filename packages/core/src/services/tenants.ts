@@ -1,6 +1,7 @@
 import type { DropwayContext } from "../context";
 import { ApiError, badRequest, conflict, forbidden, notFound } from "../errors";
 import { newId } from "../lib/crypto";
+import { stringField } from "../lib/input";
 import { ALL_SCOPES, ROLES, ROLE_SCOPES, parseScopes, requireMember, type Principal, type Role } from "../principal";
 import { mintApiKey } from "./keys";
 import type { AtomicWriteExtension } from "../adapters";
@@ -43,8 +44,9 @@ function cleanEmail(v: unknown): string | null {
 
 function cleanRole(v: unknown, fallback: Role): Role {
   if (v === undefined || v === null || v === "") return fallback;
-  if (!(ROLES as readonly string[]).includes(String(v))) throw badRequest("invalid_role", `Role must be one of ${ROLES.join(", ")}.`);
-  return String(v) as Role;
+  const role = stringField(v, "role");
+  if (!(ROLES as readonly string[]).includes(role)) throw badRequest("invalid_role", `Role must be one of ${ROLES.join(", ")}.`);
+  return role as Role;
 }
 
 function tenantRow(input: { name?: string | null }): TenantRow {
@@ -158,11 +160,12 @@ export async function setupInstance(dc: DropwayContext, p: Principal, input: { e
     );
   }
   const email = cleanEmail(input.email);
+  const keyName = input.keyName == null ? "owner" : stringField(input.keyName, "keyName");
   const { tenant, owner } = await createTenantWithOwner(dc, {
     tenant: { name: input.tenantName == null ? null : String(input.tenantName) },
     owner: { email, name: input.name == null ? null : String(input.name) },
   });
-  const apiKey = await mintApiKey(dc, { tenantId: tenant.id, memberId: owner.id, name: input.keyName == null ? "owner" : String(input.keyName), scopes: ALL_SCOPES });
+  const apiKey = await mintApiKey(dc, { tenantId: tenant.id, memberId: owner.id, name: keyName, scopes: ALL_SCOPES });
   return { tenant: serializeTenant(tenant), member: serializeMember(owner), apiKey };
 }
 
@@ -190,6 +193,7 @@ export async function createMember(dc: DropwayContext, p: Principal, input: { em
   const role = cleanRole(input.role, "member");
   if (role === "owner" && caller.role !== "owner") throw forbidden("Only owners can add owners.");
   const scopes = parseScopes(input.scopes, ROLE_SCOPES[role].filter((s) => caller.scopes.includes(s)));
+  const keyName = input.keyName == null ? "default" : stringField(input.keyName, "keyName");
   const member = await insertMember(dc, {
     tenantId: caller.tenantId,
     email: cleanEmail(input.email),
@@ -199,7 +203,7 @@ export async function createMember(dc: DropwayContext, p: Principal, input: { em
   const apiKey = await mintApiKey(dc, {
     tenantId: caller.tenantId,
     memberId: member.id,
-    name: input.keyName == null ? "default" : String(input.keyName),
+    name: keyName,
     scopes,
   });
   return { member: serializeMember(member), apiKey };
@@ -214,7 +218,7 @@ export async function updateMember(dc: DropwayContext, p: Principal, memberId: s
   const role = cleanRole(input.role, m.role);
   if ((role === "owner" || m.role === "owner") && caller.role !== "owner" && role !== m.role) throw forbidden("Only owners can change owner roles.");
   if (m.role === "owner" && role !== "owner") await assertAnotherOwner(dc, caller.tenantId, m.id);
-  const name = input.name === undefined ? m.name : input.name === null ? null : String(input.name).slice(0, 120);
+  const name = input.name === undefined ? m.name : input.name === null ? null : stringField(input.name, "name").slice(0, 120);
   await dc.env.DB.prepare("UPDATE members SET role = ?, name = ? WHERE id = ?").bind(role, name, m.id).run();
   return serializeMember({ ...m, role, name });
 }

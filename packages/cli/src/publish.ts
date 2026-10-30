@@ -3,7 +3,8 @@
  *
  *   1. (new site) POST /sites                 -> slug (+ claimToken when anonymous)
  *   2. POST /sites/:slug/deploys {files}      -> which sha256 values the instance still needs
- *   3. PUT  /blobs/:sha256 for each missing   -> in parallel, retried on 429/5xx/network errors
+ *   3. PUT  /blobs/:sha256 for each missing   -> in parallel, retried on 429/5xx/network errors;
+ *      files above 95 MiB instead go through POST /uploads + PUT parts + complete (resumable)
  *   4. POST <finalizeUrl>                     -> the new version goes live atomically
  *
  * Files are content-addressed: bytes the instance already holds for this owner
@@ -39,6 +40,9 @@ export interface VersionInfo {
 export interface Warning {
   code: string;
   message: string;
+  path?: string;
+  line?: number;
+  fix?: string;
 }
 
 export interface PublishOptions {
@@ -103,6 +107,20 @@ interface SiteBody {
 }
 
 const enc = encodeURIComponent;
+
+/** Above this size a single request no longer fits a Worker; use the resumable multipart protocol. */
+const MULTIPART_THRESHOLD_BYTES = 95 * 1024 * 1024;
+// Six default file workers reserve at most 60 MiB, below the server's 96 MiB
+// application buffer bound. Existing sessions retain their original geometry.
+const MULTIPART_PART_BYTES = 10 * 1024 * 1024;
+
+interface MultipartSession {
+  id: string;
+  sha256: string;
+  size: number;
+  partSize: number;
+  parts?: Array<{ partNumber: number; size: number; etag: string }>;
+}
 
 function settingsOf(opts: PublishOptions): Record<string, unknown> {
   const s: Record<string, unknown> = {};
@@ -184,6 +202,69 @@ export async function publish(client: DropwayClient, files: SourceFile[], opts: 
   for (const f of files) if (!bySha.has(f.sha256)) bySha.set(f.sha256, f);
   const uploaded = new Set<string>();
   let bytesUploaded = 0;
+  const versionId = deploy.deploy.id;
+  let uploadFailed = false;
+  let uploadFailure: unknown;
+  const checkUploadFailure = () => { if (uploadFailed) throw uploadFailure; };
+
+  // One large file through the resumable protocol: start a session, ask it
+  // which parts it already acknowledged, PUT only the missing slices (the
+  // source Blob stays lazy and is sliced, never read whole), then complete
+  // so the instance hash-verifies before the bytes become a blob.
+  const uploadMultipart = async (t: UploadTarget, file: SourceFile) => {
+    const started = (await client.post<MultipartSession>("/uploads", { versionId, sha256: t.sha256, partSize: MULTIPART_PART_BYTES }, { token })).data;
+    if (!started?.id || !Number.isInteger(started.partSize) || started.partSize <= 0) {
+      throw new CliError({ code: "unexpected_response", message: "The instance did not return a resumable upload session.", exitCode: EXIT.error });
+    }
+    const session = (await client.get<MultipartSession>(`/uploads/${enc(started.id)}`, { token })).data ?? started;
+    const partSize = session.partSize;
+    const acknowledged = new Map((session.parts ?? []).map((part) => [part.partNumber, part.size]));
+    const body = await file.body();
+    const partCount = Math.ceil(t.size / partSize);
+    for (let partNumber = 1; partNumber <= partCount; partNumber++) {
+      checkUploadFailure();
+      const start = (partNumber - 1) * partSize;
+      const end = Math.min(t.size, start + partSize);
+      if (acknowledged.get(partNumber) === end - start) continue;
+      const slice = body instanceof Blob ? body.slice(start, end) : body.subarray(start, end);
+      const deadline = Date.now() + 120_000;
+      let lastBusy: unknown;
+      for (let attempt = 0; ; attempt++) {
+        checkUploadFailure();
+        if (attempt > 0 && Date.now() >= deadline) throw lastBusy;
+        try {
+          await client.request("PUT", `/uploads/${enc(session.id)}/parts/${partNumber}`, {
+            body: slice,
+            headers: { "Content-Type": "application/octet-stream" },
+            token,
+            retry: "safe",
+          });
+          break;
+        } catch (error) {
+          // These two protocol refusals mean another request is making
+          // progress. Never retry arbitrary 409s or conflicting bytes.
+          const busy = error instanceof CliError && error.retryable
+            && ((error.status === 409 && error.code === "part_busy") || (error.status === 503 && error.code === "upload_busy"));
+          if (!busy || attempt >= 59 || Date.now() >= deadline) throw error;
+          lastBusy = error;
+          const guidance = error.retryAfterSeconds;
+          const delay = guidance != null && Number.isFinite(guidance) && guidance > 0 ? Math.min(guidance, 30) * 1000 : 1000;
+          await new Promise((resolve) => setTimeout(resolve, Math.min(delay, deadline - Date.now())));
+          checkUploadFailure();
+          if (Date.now() >= deadline) throw error;
+          if (error.code === "part_busy") {
+            const refreshed = (await client.get<MultipartSession>(`/uploads/${enc(session.id)}`, { token })).data;
+            if (refreshed.parts?.some((part) => part.partNumber === partNumber && part.size === end - start)) break;
+          }
+        }
+      }
+    }
+    checkUploadFailure();
+    const completed = (await client.post<{ sha256?: string; size?: number }>(`/uploads/${enc(session.id)}/complete`, {}, { token, retry: "safe" })).data;
+    if ((completed?.sha256 !== undefined && completed.sha256 !== t.sha256) || (completed?.size !== undefined && completed.size !== t.size)) {
+      throw new CliError({ code: "unexpected_response", message: "The completed upload does not match this file's hash and size.", exitCode: EXIT.error });
+    }
+  };
 
   const upload = async (targets: UploadTarget[]) => {
     const queue = targets.filter((t) => !uploaded.has(t.sha256));
@@ -192,22 +273,32 @@ export async function publish(client: DropwayClient, files: SourceFile[], opts: 
     let done = 0;
     let bytes = 0;
     opts.onProgress?.({ phase: "upload", done, total, bytes, totalBytes });
+    uploadFailed = false;
     const worker = async () => {
-      for (let t = queue.shift(); t; t = queue.shift()) {
-        const file = bySha.get(t.sha256);
-        if (!file) {
-          throw new CliError({ code: "unexpected_upload", message: `The instance asked for ${t.sha256}, which is not in this publish.`, exitCode: EXIT.error });
+      try {
+        for (let t = queue.shift(); t; t = queue.shift()) {
+          checkUploadFailure();
+          const file = bySha.get(t.sha256);
+          if (!file) {
+            throw new CliError({ code: "unexpected_upload", message: `The instance asked for ${t.sha256}, which is not in this publish.`, exitCode: EXIT.error });
+          }
+          if (t.size > MULTIPART_THRESHOLD_BYTES) await uploadMultipart(t, file);
+          else await client.request(t.method ?? "PUT", t.url, { body: await file.body(), headers: t.headers ?? {}, token, retry: "safe" });
+          uploaded.add(t.sha256);
+          done++;
+          bytes += t.size;
+          bytesUploaded += t.size;
+          opts.onProgress?.({ phase: "upload", done, total, bytes, totalBytes });
         }
-        await client.request(t.method ?? "PUT", t.url, { body: await file.body(), headers: t.headers ?? {}, token, retry: "safe" });
-        uploaded.add(t.sha256);
-        done++;
-        bytes += t.size;
-        bytesUploaded += t.size;
-        opts.onProgress?.({ phase: "upload", done, total, bytes, totalBytes });
+      } catch (error) {
+        if (!uploadFailed) { uploadFailed = true; uploadFailure = error; }
+        throw error;
       }
     };
     const n = Math.max(1, Math.min(opts.concurrency ?? 6, total));
-    await Promise.all(Array.from({ length: n }, worker));
+    // Do not return while siblings can still PUT parts or complete sessions.
+    await Promise.allSettled(Array.from({ length: n }, worker));
+    checkUploadFailure();
   };
 
   await upload(deploy.uploads ?? []);
@@ -246,12 +337,13 @@ export async function publish(client: DropwayClient, files: SourceFile[], opts: 
  * Publish a .zip in one request: the instance unpacks it (one-shot publish, up
  * to the instance's ONESHOT_MAX_BYTES, 25 MB by default).
  */
-export async function publishZip(client: DropwayClient, zip: Blob | Uint8Array, opts: Pick<PublishOptions, "site" | "message" | "title" | "spa"> = {}): Promise<PublishResult> {
+export async function publishZip(client: DropwayClient, zip: Blob | Uint8Array, opts: Pick<PublishOptions, "site" | "message" | "title" | "spa" | "baseVersionId"> = {}): Promise<PublishResult> {
   const q = new URLSearchParams();
   if (opts.site) q.set("slug", opts.site.trim().toLowerCase());
   if (opts.message !== undefined) q.set("message", opts.message);
   if (opts.title !== undefined) q.set("title", opts.title);
   if (opts.spa !== undefined) q.set("spa", String(opts.spa));
+  if (opts.baseVersionId) q.set("baseVersionId", opts.baseVersionId);
   const qs = q.toString();
   const { data } = await client.request<{
     url: string;
@@ -285,6 +377,13 @@ export async function publishZip(client: DropwayClient, zip: Blob | Uint8Array, 
 /**
  * Poll the live URL until it serves `versionId` (X-Kofra-Version), so an agent
  * can open the URL the moment the command returns. Resolves false on timeout.
+ *
+ * The timeout is an overall budget: in-flight fetches, body disposal and the
+ * interval between polls all count against it. The outstanding fetch is aborted
+ * at the deadline, no poll starts after it, and live requires a successful
+ * status plus the expected version header (a body-disposal failure is never
+ * live). A transport that ignores AbortSignal still cannot strand the helper:
+ * the deadline race settles first.
  */
 export async function waitForVersion(
   url: string,
@@ -294,14 +393,65 @@ export async function waitForVersion(
   const doFetch = opts.fetch ?? ((req: Request) => fetch(req));
   const deadline = Date.now() + (opts.timeoutMs ?? 90_000);
   const interval = opts.intervalMs ?? 1000;
+  const TIMED_OUT = Symbol("wait-timeout");
+  let first = true;
   for (;;) {
+    if (!first && Date.now() >= deadline) return false;
+    first = false;
+
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(TIMED_OUT);
+      }, Math.max(0, deadline - Date.now()));
+    });
+    let res: Response;
     try {
-      const res = await doFetch(new Request(url, { method: "GET", headers: { Accept: "*/*", "Cache-Control": "no-cache" }, redirect: "follow" }));
-      await res.body?.cancel().catch(() => {});
-      if ((res.headers.get("x-kofra-version") ?? res.headers.get(`${LEGACY_HEADER_PREFIX}Version`)) === versionId) return true;
-    } catch {
-      /* not reachable yet */
+      const req = new Request(url, {
+        method: "GET",
+        headers: { Accept: "*/*", "Cache-Control": "no-cache" },
+        redirect: "follow",
+        signal: controller.signal,
+      });
+      res = await Promise.race([doFetch(req), timeout]);
+    } catch (e) {
+      if (timer !== undefined) clearTimeout(timer);
+      if (e === TIMED_OUT) return false;
+      if (controller.signal.aborted || Date.now() >= deadline) return false;
+      /* Network failure before the deadline: retry after the interval. */
+      if (Date.now() + interval > deadline) return false;
+      await new Promise((r) => setTimeout(r, interval));
+      continue;
     }
+    if (timer !== undefined) clearTimeout(timer);
+
+    try {
+      const cancel = res.body && typeof (res.body as { cancel?: unknown }).cancel === "function"
+        ? (res.body as unknown as { cancel: () => Promise<unknown> }).cancel.bind(res.body)
+        : null;
+      if (cancel) {
+        let cancelTimer: ReturnType<typeof setTimeout> | undefined;
+        const cancelTimeout = new Promise<never>((_, reject) => {
+          cancelTimer = setTimeout(() => reject(TIMED_OUT), Math.max(0, deadline - Date.now()));
+        });
+        try {
+          await Promise.race([cancel(), cancelTimeout]);
+        } finally {
+          if (cancelTimer !== undefined) clearTimeout(cancelTimer);
+        }
+      }
+    } catch (e) {
+      if (e === TIMED_OUT || Date.now() >= deadline) return false;
+      /* A body that cannot be disposed is never live; retry while budget remains. */
+      if (Date.now() + interval > deadline) return false;
+      await new Promise((r) => setTimeout(r, interval));
+      continue;
+    }
+
+    const statusOk = typeof res.ok === "boolean" ? res.ok : res.status >= 200 && res.status < 300;
+    if (statusOk && (res.headers.get("x-kofra-version") ?? res.headers.get(`${LEGACY_HEADER_PREFIX}Version`)) === versionId) return true;
     if (Date.now() + interval > deadline) return false;
     await new Promise((r) => setTimeout(r, interval));
   }

@@ -20,6 +20,7 @@
    Dark while the next page loads. The site's own HTML still gets a white canvas in Dark (E2): the browser paints an
    opaque canvas for a light-scheme document in a dark-scheme frame. */
 .frame{flex:1;width:100%;min-height:0;border:0;background:light-dark(#fff,var(--paper));display:block}
+.vpanel{flex:1;min-height:0;display:flex;flex-direction:column}
 /* The file list folds into a "Files (n)" disclosure on phones; from 761px it is always open and its summary hidden. */
 .treebox>summary{display:none}
 .treebox>.find{margin:0 0 12px}

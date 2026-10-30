@@ -21,18 +21,195 @@ Zero runtime dependencies. Node.js 20 or newer.
 | Command | What it does |
 |---|---|
 | `publish <path>` | Publish a folder, a single file or a `.zip`. Creates a site, or updates one with `--site <name>` |
+| `duplicate <source> <new-slug>` | Copy an explicit live site into a new slug (`--message`, `--idempotency-key`, offline `--dry-run`) |
 | `list` | Your sites (`--all` for every page) |
 | `site <name>` | One site: URL, live version, settings |
-| `files <name>` | Files of the live version (or `--version v3`) with their URLs |
-| `versions <name>` | Every version, newest first; the live one is marked |
+| `rename <source> <new-slug> --yes` | Rename an explicit site; offline `--dry-run`; saved local project mappings remain unchanged |
+| `files <name>` | Files of the live version (or `--version <ref>` with `live`, `v3`, `3` or a version id, read directly) with their URLs |
+| `read-file <site> <path>` | One file's content, one bounded page (`--version`, `--offset`, `--length`, `--encoding`) |
+| `versions <name>` | Newest 500 versions, newest first, live marked — or `versions <name> <ref>` to inspect one directly |
 | `restore <name> [v3]` | Make an older version live again. Without a version: the one before the live version. Alias `rollback` |
 | `delete <name> --yes` | Delete a site. `--version v3` deletes one non-live version instead |
+| `access <site> --mode <mode> --yes` | Set who can open a site: `public` or `password` (password from piped stdin or one no-echo prompt; `--dry-run` plans offline). Changing a password signs everyone out |
 | `whoami` | The instance, your identity and your key's scopes |
+| `keys ls [--all]` | Your API keys as safe metadata (never the secrets); `--all` adds other members' keys when your key has `members:write` |
+| `explain-config [path]` | [Diagnose local configuration offline](../../docs/CLI_DIAGNOSTICS.md): winning sources, file states, redacted. `--anonymous` callers may treat exit 3 as OK; never auto-login on exit 3 |
 | `login` / `logout` | Save or forget an API key for an instance |
 | `setup --email <you>` | First run of a new instance: create the owner and save their key |
 | `api [METHOD] <path>` | Call any REST endpoint, e.g. `kofra api PATCH /sites/my-site --data '{"spa":true}'` |
+| `operations [id]` | List API operations, or inspect one (`--schema` adds its input schema). Reads the public catalog only; never executes |
 
 `kofra help <command>` shows every option.
+
+```sh
+kofra keys ls               # your own keys: id, name, prefix, scopes, site restriction, expiry, last use
+kofra keys ls --all --json  # every member's keys (needs members:write) as one JSON object
+```
+
+`keys ls` prints safe metadata only; the secrets themselves are never shown. In text output,
+`*` marks the current key and terminal control characters are shown as visible `\uXXXX` escapes,
+keeping each key on one row. `--json` preserves the original metadata values. Create and revoke
+keys with the generic command, e.g. `kofra api POST /keys --data '{"name":"ci"}'`.
+
+## Versions
+
+A bare `kofra versions <name>` lists the newest 500 versions only, newest first; it has no
+cursor and does not promise full history. To inspect any single version — including ones older
+than that window — pass its ref, which is read directly from the server:
+
+```sh
+kofra versions team-report live            # the live version
+kofra versions team-report v3              # version number 3 ("3" works too)
+kofra versions team-report ver_abc123      # the exact version id
+kofra versions team-report v3 --json       # one JSON object: { site, version, missing }
+kofra files team-report --version v3       # files of that version, resolved directly
+```
+
+Restore and version deletion still select from the newest-500 ready-version list;
+the direct lookup above changes reads only. The proposed
+[explicit historical action contract](../../docs/CLI_HISTORICAL_VERSION_ACTIONS.md)
+compares extending those actions safely. It is design-only, not an available
+feature or implementation approval; omitted restore keeps its current rule.
+
+Runnable local check (from a repo clone, against your own instance):
+
+```sh
+node packages/cli/bin/dropway.mjs versions team-report v1 --api https://<your-instance> --json
+```
+
+## Duplicating a live site
+
+```sh
+kofra duplicate template template-copy --message "Template snapshot"
+kofra duplicate site_abc123 template-copy --idempotency-key copy-01 --json
+kofra duplicate https://sites.example/template/ template-copy --dry-run
+```
+
+Both the source (slug, site id or site URL) and destination slug are required explicitly;
+project mappings never supply either target. This calls only the existing `duplicate_site`
+operation: the source's live manifest becomes version 1 of a new site with no file upload or
+source changes. The destination is **live immediately**. Only SPA mode is carried over;
+**passwords/access gates and other settings are not copied**. Re-apply protection explicitly
+if needed. The CLI never opens a browser, publishes local files, protects the destination
+or saves/updates a local project link.
+
+`--dry-run` is entirely offline, without an instance or credentials. It emits exactly one JSON
+plan even without `--json`, reads no project, credential or content files, and writes nothing:
+
+```json
+{
+  "schemaVersion": 1,
+  "operation": "duplicate_site",
+  "source": "template",
+  "newSlug": "template-copy",
+  "message": "Template snapshot"
+}
+```
+
+`message` is omitted when absent. `source` stays unresolved; no site/version id is invented.
+This plan does not validate source visibility, a live version, destination availability or
+server policy/limits.
+
+An explicit `--idempotency-key` must contain 1-255 printable ASCII characters without spaces.
+Invalid keys return a usage error (exit 2) before any file/credential reads or networking,
+including with `--dry-run`. Valid keys are sent unchanged; otherwise a fresh key is generated
+once per invocation and retained across the SDK's bounded 429 retries. There are no automatic
+retries on conflicts, server errors or network failures. **To recover an unknown outcome**, choose
+an explicit key before the first attempt, then repeat the identical source reference, destination
+and message with that same key within the server's 24-hour idempotency window. A new invocation
+without an explicit key cannot recover the previous invocation's result; do not blindly retry
+an uncertain mutation with a new key. Reusing a key with a different payload is refused by the server.
+
+`--json` preserves the backend receipt (returned destination slug/site/version, clean public URL,
+file/byte counters, note, warnings and replay marker when supplied). Identities are never guessed;
+fields the backend does not supply remain absent. Progress and access-reset advice go to stderr,
+not JSON stdout. Keys and claim/upload credentials are not added to the receipt. Existing error
+codes, hints, details and status-to-exit mapping apply: refusal or network failure is never success.
+
+Disposable local integration check (no deploy):
+
+```sh
+npm run test:cli -- test/duplicate.acceptance.test.ts test/duplicate-worker.acceptance.test.ts
+```
+
+
+## Renaming a site
+
+```sh
+kofra rename old-report new-report --dry-run --json  # offline, no key or acknowledgement
+kofra rename old-report new-report --yes --json      # one explicit rename
+kofra rename site_abc123def456 new-report --yes       # a site id or URL also works
+```
+
+Both arguments are required: rename never selects a saved local target. `--yes` is
+mandatory for a mutation, even in a terminal; the command never prompts. Unknown
+flags, extra arguments and release/override flags fail locally. The new slug is
+trimmed and lowercased; validity, availability, permissions and name reservations
+remain server decisions. A canonical no-op succeeds without a second action.
+
+`--dry-run` makes no HTTP requests or config writes and does not require a key or
+`--yes`. With `--json` it returns exactly this versioned plan (not a resolved site
+identity or a promise that the server will accept the rename):
+
+```json
+{
+  "schemaVersion": 1,
+  "operation": "rename_site",
+  "target": { "api": "https://kofra.example", "site": "old-report" },
+  "patch": { "slug": "new-report" },
+  "localLinksUpdated": false
+}
+```
+
+An acknowledged rename calls the existing `rename_site` endpoint once through the
+typed client. JSON success is the unchanged server response (`site`, `slug`, `url`,
+`renamed`, `oldSlug`, `redirectUntil`, including any returned identity), plus
+`localLinksUpdated: false`, without an additional success envelope. Use the returned
+new URL, not one guessed from the requested name. Human output shows the old
+canonical URL when recognizable from the returned URL, otherwise the old name;
+custom addresses are not guessed. An old-URL redirect is reported only with the
+actual returned `redirectUntil`; a null deadline makes no redirect promise. Rename
+does not alter live versions, passwords, access rules or name-retention semantics.
+Server errors and the existing CLI exit codes are preserved; the command adds no
+retry or follow-up rename beyond the client's transport contract.
+
+**Saved local project mappings remain unchanged**, on success, no-op, failure and
+dry-run. Before a later publish, update the affected `dropway.json` mapping, or use
+the existing explicit-target update workflow:
+
+```sh
+kofra publish ./dist --site new-report  # updates that site and saves this path's target
+```
+
+That is a separate publish, not part of rename. Review the explicit target first:
+publishing without correcting a stale mapping can still target the old name.
+Unrelated paths, instances, credentials and project files are never rewritten by
+rename.
+
+## Discovering operations
+
+`kofra operations` reads the instance's public operation catalog (`GET
+/api/v1/operations`) and prints each operation's id, method, path, required
+scopes and CLI path. It never executes an operation, needs no API key, and
+sends none. Input schemas are omitted by default; inspect one row with an
+exact id, and add `--schema` for its unchanged `inputSchema`:
+
+```sh
+kofra operations --json                          # compact list, server order
+kofra operations list_versions --json            # one row, no schema
+kofra operations create_site --schema --json     # one row, with inputSchema
+```
+
+Unknown ids fail with exit 4 (`operation_not_found`) and a hint to list; `--schema`
+without an id fails with exit 2 before any request.
+
+Local check (from the repository root, with a dev instance running):
+
+```sh
+npm run dev &>/tmp/kofra-dev.log &   # serves http://127.0.0.1:8787
+node packages/cli/bin/dropway.mjs operations --api http://127.0.0.1:8787 --json
+kill %1
+```
 
 ## Publishing
 
@@ -50,6 +227,12 @@ instance is missing (6 in parallel, retried on rate limits, server errors and ne
 makes the new version live in one atomic step. Publishing identical files again reports
 `"unchanged": true` and creates no version.
 
+Conditional updates: `--base <versionId>` fails with `version_conflict` (exit 5) unless that
+version is still live — for folders and `.zip` alike. A conflicted publish is sent once, never
+retried; re-read the site and publish again with the new live id. `--wait` polls the live URL
+until it serves the new version (exit 8 on timeout); `--wait-timeout <s>` (default 90) is the
+overall budget, including in-flight requests. Live needs a successful status plus the new id.
+
 After the first publish with a key, `./dropway.json` records which site each published path updates,
 so running the same command again updates that site. It holds no secrets and is safe to commit.
 Use `--new` for a fresh site, `--no-save` to skip writing it.
@@ -59,9 +242,54 @@ SSH keys, `.dropway/`, `.DS_Store`, and anything matched by `<path>/.dropwayigno
 `!pattern` re-includes). Text files (up to 4 MB) that contain credentials (private keys, cloud and API
 tokens, Kofra keys) stop the publish with exit code 2 unless you pass `--allow-secrets`.
 
+`--dry-run --json` explains every skipped path in an `omissions` array (`{path, reason}`, sorted by
+relative path; pruned directories appear once): `ignored` (built-in or `.dropwayignore` rules),
+`excluded` (explicitly excluded, e.g. the `./dropway.json` project link), `symlink_directory`
+(directory links are never followed), `broken_symlink`, and `special_file` (FIFOs, sockets and
+devices are never published). An offline agent check, needing no URL
+or key:
+
+```sh
+kofra publish ./dist --dry-run --json | jq '{files: [.files[].path], omissions}'
+```
+
+Nothing publishable is refused with `no_files` (exit 2) before anything is contacted. This is a
+local inventory of what the CLI would send: it does not validate server policy, quotas or limits,
+and it is not the server's dry run. ZIP dry-runs stay an opaque archive summary (`{zip: true,
+bytes}`); the CLI never unpacks the archive locally.
+
 Anonymous publishing (`--anonymous`) works only on instances that turned it on. The site expires and
 the output includes a `claimToken`: keep it to update the site (`--key <claimToken> --site <name>`) or
 to claim it into an account.
+
+## Reading files
+
+```sh
+kofra read-file my-site index.html                                # text to stdout, page info to stderr
+kofra read-file my-site image.png --encoding base64 > image.b64  # binaries as base64; decode with: base64 -d image.b64 > image.png
+kofra read-file my-site big.txt --length 65536 --json             # one bounded page as JSON
+kofra read-file my-site big.txt --offset 65536 --length 65536     # next page (use nextOffset from the last result)
+kofra read-file my-site index.html --version v2                   # an older version ("live", "v3", "3" or an id)
+```
+
+One bounded page per call (default 64 KiB, up to 1 MiB with `--length`). The version is passed
+straight to `GET /api/v1/read-file` (operation `read_file`; MCP tool `read_file`): no version
+listing, no auto-fetch of the whole file. For the schema see `/openapi.json` or `/llms-full.txt`
+on your instance.
+
+Without `--json`, stdout carries only the page content byte-for-byte (no added newline;
+base64 stays base64, so redirection is safe) and the page metadata (size, encoding, byte range,
+SHA-256, truncation and the continuation command) goes to stderr, so pipes get clean content and
+truncation is never silent (shown even with `--quiet`). With `--json`, stdout is exactly the API
+page object; see "Output for agents". A truncated page's continuation pins the returned immutable
+version id; see [Recovery metadata](#recovery-metadata).
+
+Local check:
+
+```sh
+node packages/cli/bin/dropway.mjs read-file --help   # no instance needed
+npm run test:cli                                      # full CLI suite against a local Worker
+```
 
 ## Encrypted publishing
 
@@ -173,6 +401,25 @@ Errors (also on stdout with `--json`):
 | 6 | Invalid or over a limit (file too large, too many files) | Change the content |
 | 7 | Retryable: rate limited, server error, network error | Retry later |
 | 8 | `--wait` timed out before the URL served the new version | The publish succeeded; retry the check |
+
+### Recovery metadata
+
+This section is the canonical client/CLI recovery note; other surfaces link here rather
+than restating it.
+
+Error objects preserve the server's optional recovery metadata alongside the stable
+`code`/`message`/`hint`/`details`: an explicit boolean `retryable`, a `retryAfterSeconds`
+delay (`null` means no guidance), a `docs` reference and a `next` array of suggested
+`{tool, args, why}` calls. Malformed optional fields are omitted independently, and
+unknown envelope fields are never copied. `next` and `docs` are informational only: the
+client never executes a suggested call or fetches a docs URL, and retry scheduling is
+unchanged (any method retries 429 within the `Retry-After` cap, 5xx and network errors
+retry only for `GET`/`HEAD`, idempotency keys never authorize unsafe retries).
+
+`read-file` without `--json` prints exactly the page content to stdout; a truncated page
+adds a stderr continuation pinned to the successful response's immutable `versionId`, so
+the next page reads the same version even after live moves. A truncated page without a
+usable immutable id fails (`bad_read_file_version`, exit 1) instead of guessing.
 
 ## Configuration
 

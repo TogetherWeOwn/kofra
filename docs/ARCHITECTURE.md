@@ -38,7 +38,7 @@ packages/server           @dropway/server: createDropway() Hono app factory
   src/mcp/                Remote MCP server (/mcp): endpoint (index.ts), core tools (tools.ts), schemas
   src/app.ts              App-origin routes: home (./ui), /openapi.json, discovery routes, /claim, /mcp
   src/openapi.ts          OpenAPI 3.1 document for every route (operationId = MCP tool name)
-  src/discovery.ts        /llms.txt, /llms-full.txt, /skill.md, /.well-known/agent-skills (generated)
+  src/discovery.ts        /llms.txt, /llms-full.txt, /skill.md, /connect(.md), /.well-known/*, /robots.txt (generated)
   src/extensions.ts       Types for routes, MCP tools, UI slots, createDropway options
 packages/cli              `kofra` CLI (npm package "kofra", Node 20+, zero runtime dependencies)
 skills/kofra/SKILL.md   Agent Skill (`npx skills add TogetherWeOwn/kofra`); generated, `npm run skill:sync`
@@ -59,12 +59,14 @@ throws `ApiError` with a stable `code` and a `hint` for the caller.
 | `tenants.ts` | First-run setup (bootstrap key creates the owner), members, owner recovery |
 | `sites.ts` | Create, list, update, delete and claim sites; settings; access checks (`getSiteFor`) |
 | `deploys.ts` | Manifest validation, content-addressed upload, atomic finalize, versions, restore, read-back |
+| `uploads.ts` | Fresh upload items for pending versions, plus resumable multipart sessions: real R2 multipart staged at `uploads/<id>`, durable part acknowledgements, streaming-digest verification before promotion to `blobs/<sha256>`, bounded expired-session cleanup |
 | `publish.ts` | One-shot publish (multipart, JSON, zip, raw) built on `deploys.ts` |
-| `sources.ts` | Agent file sources (`content`, base64, `url` with an SSRF guard, `sha256` + upload links, `copyFrom`), `publishSources`, partial `updateSiteFiles`, `finalizeVersionByRef` |
+| `sources.ts` | Agent file sources (`content`, base64, `url` with an SSRF guard, `sha256` + upload links, `copyFrom`, chat attachments normalized from `download_url`/`file_name`), top-level `archiveUrl` zip publishing through the same fetcher and zip extractor, `publishSources`, partial `updateSiteFiles`, `finalizeVersionByRef` |
 | `site-ops.ts` | Site refs (slug, id or URL), version refs (`live`, `v3`, `3`, id), rename, access modes, paged file reads, `confirm` checks |
-| `idempotency.ts` | Idempotency keys (KV, 24 h): replay the first result, 422 on a reused key with another body |
+| `idempotency.ts` | Atomic D1 idempotency claims (24 h): replay the first result, 422 on a reused key with another body, retryable 409 for concurrent/unknown outcomes |
+| `upload-tokens.ts` | HMAC upload-only capabilities for the blobs of one pending version, expiring one hour after creation |
 | `blobs.ts` | R2 storage at `blobs/<sha256>` (R2 verifies the hash on write), edge cache |
-| `live.ts` | `live:<slug>` manifest in KV (D1 fallback, per-isolate 5 s cache) |
+| `live.ts` | `live:<slug>` manifest in KV (D1 fallback, per-isolate 5 s cache); v3 filename maps are prototype-less so legal names like `__proto__` survive |
 | `cleanup.ts` | Hourly cron: expire anonymous sites, purge deleted sites, drop stale uploads, delete orphan blobs |
 | `events.ts` | Runs hooks and metering after the response (never throws) |
 | `transfers.ts` | Sender-owned deliveries: create/read/update/revoke, revision fencing and permanent slug reservations |
@@ -85,8 +87,8 @@ fetch(request)
        site      -> serveSite()       (packages/server/src/serve.ts)
        redirect  -> 301/307           (trailing slash, other origin, Referer fallback)
        app       -> Hono app: /api/v1/* (identity adapter resolves the principal),
-                    /, /openapi.json, /llms.txt, /llms-full.txt, /skill.md,
-                    /.well-known/agent-skills/*, /claim, /mcp, UI pages
+                    /, /openapi.json, /llms.txt, /llms-full.txt, /skill.md, /connect(.md),
+                    /.well-known/*, /robots.txt, /claim, /mcp, UI pages
 ```
 
 ### Where sites are served (config `SITES_MODE`)
@@ -115,6 +117,68 @@ Path mode is interim. Root-relative URLs (`/assets/app.js`) would escape the
    import specifiers, CSS set from JS, `location.href = "/x"` and
    `history.pushState("/x")`. Use relative URLs there, or subdomain mode.
 
+### Version previews
+
+`<slug>--v<N>` uses the same path/subdomain topology as the live site, but resolves
+its ready version and current site settings directly from D1 (`services/previews.ts`).
+It never reads or repairs the live KV pointer, so newly published bytes are available
+even during live-cache propagation. Pending versions and transfer sites are not previewable.
+
+Access requires a credential that can read the site or a signed `dw_preview` capability
+bound to the site id, version id and an absolute 24-hour expiry. Publish and finalize
+results return that signed `versionUrl`. Redeeming it sets a Secure, HttpOnly, host-only
+cookie scoped to the preview root and redirects to the same address without the token;
+the cookie cannot extend the signed expiry. Share the returned link carefully: it is a
+bearer credential. Unchanged publishes keep the same version address, but issue a fresh
+expiring capability. Idempotency replay retains the original result and its original expiry.
+The `version_previews` capability is built in; a policy refusal omits `versionUrl` without
+blocking ordinary publication, and live refusals deny existing links and owner previews.
+Signed links require an HTTPS preview origin; HTTP is allowed only for loopback development
+(`localhost`, `127.0.0.0/8` and `[::1]`). Other HTTP origins omit the link without failing publication.
+A pending result's link becomes readable only after finalization.
+
+`server/previews.ts` authorizes before reusing the normal file/viewer/password machinery.
+Preview responses are private/no-store, `noindex` and `no-referrer`, including conditional,
+range, HEAD and error responses. Path rewriting retains the version address for assets.
+Path-mode preview HTML also gets the existing runtime URL shim, even without a sandbox:
+root-relative JavaScript requests cannot rely on Referer recovery under `no-referrer`.
+The shim carries only the versioned path prefix, never the signed capability; its normal
+path-mode limitations still apply. Live unsandboxed pages keep their Referer fallback.
+Site passwords still apply; a preview capability is not a password unlock.
+
+As with password sites, path-scoped cookies are routing scope, **not origin isolation**.
+Path-mode sites share an origin; hostile content there can cause ambient-cookie requests
+(including classic-script inclusions from opaque sandbox origins). Use subdomain mode
+for sensitive previews or mutually untrusted sites. Its host-only `__Host-` cookie and
+same-site/cross-site subresource refusal isolate sibling sites. Removing CORS permission
+in path mode does not make different paths different origins.
+
+### Public site password attempts
+
+Unauthenticated site-password submissions spend separate atomic D1 budgets: ten per
+trusted client IP across ordinary sites and thirty per site, in fifteen-minute windows.
+Successful submissions count too; valid unlock cookies bypass these budgets. Refused
+attempts return uncached 429 responses with the remaining `Retry-After`; unavailable
+counter storage fails closed with 503. Late writes cannot move a counter window backward.
+A counter at its allowance is not written again until its window renews. A request refused
+by the site allowance has already spent its visitor reservation, which stands. Scheduled
+cleanup deletes at most 500 stale counter rows per invocation, so a large backlog drains over
+successive runs.
+
+Cross-zone Worker subrequests all arrive from `2a06:98c0:3600::103`; with that address the
+edge-added `CF-Worker` header names the upstream zone, and each zone gets its own visitor
+budget and form proof. `X-Forwarded-For` and `x-real-ip` are never identity.
+
+Submission provenance is checked before body parsing or counter charges. Foreign Origins
+and foreign Fetch Metadata are refused. Forms carry a signed action proof so sandboxed
+or no-referrer pages can safely submit with `Origin: null`. The fifteen-minute proof is
+bound to the target origin/root, site, current password hash and trusted visitor identity,
+and tolerates up to sixty seconds of clock skew between edges. Reload the form after expiry
+or an IP change. The proof does not unlock content or replace the password. Headerless
+programmatic clients still work.
+Self-hosters must preserve a trusted edge's `CF-Connecting-IP`; without that header,
+requests share the existing `unknown` IP bucket and form-proof binding.
+
 ### Viewing files
 
 `serveFile` asks `findViewer(file, live, viewers, mode)` (`packages/server/src/viewers`)
@@ -134,9 +198,20 @@ and has its own toolbar).
 
 Every view shares one bar (`viewers/chrome.ts`: kind, path, size, type; view
 tabs; Download; Files) built from plain links, so it works with JavaScript off.
+Except for image/SVG viewers and embeds, the bar also links to the previous
+and next direct files in the same folder, in listing name order, without
+wrapping. These default-view links use the loaded live manifest, never the
+request query. Their HTTP validators include the live version id so republishing
+siblings cannot revalidate stale navigation; content-only render fragments stay
+independent of the manifest. Image/SVG viewers retain their own stage navigation.
 View pages get `VIEWER_CSP` (no scripts). The code view adds one static inline
 script (Copy, `#L10-L20` ranges) allowed by its SHA-256 hash, which stays valid
-across 304 responses, unlike a nonce. User markup (Markdown, notebook HTML)
+across 304 responses, unlike a nonce. Line ranges are selected without typing a
+fragment: shift-click extends from the first line of the current `#L…` selection,
+and the toolbar's First/Last line inputs (bounded to the rendered lines, at most
+5000 at a time) do the same from the keyboard. Selection only rewrites the
+fragment — no request, storage or extra history beyond the new hash — and the
+address remains a live address, not a pinned one. User markup (Markdown, notebook HTML)
 goes through `viewers/sanitize.ts`, an allowlist sanitizer on `HTMLRewriter`.
 Expensive output (highlighting, Markdown, JSON trees, CSV tables) is cached by
 content in `viewers/cache.ts` (`render/<viewer>@<version>/<variant>/<sha256>`:
@@ -146,12 +221,53 @@ Syntax highlighting is highlight.js core plus about 80 languages registered in
 `viewers/hljs.js` (about 106 KB gzipped). That file is plain JavaScript with
 its own `hljs.d.ts` because highlight.js's types pull in the DOM lib.
 
+ZIP navigations, frames and `?view=1` list central-directory metadata only: paths,
+uncompressed sizes and compression methods in central-directory order, with totals
+for every entry and at most the first 1,000 rows. Archives over 2 MiB, invalid ZIPs,
+ZIP64/split ZIPs and non-ZIP archives get the binary info page with an explanation.
+No entry is inflated, extracted or linked, and entry contents are not verified.
+The ZIP fragment uses `archive@<version>/<sha256>`; bump the viewer version when
+its parser or output changes to invalidate both fragments and HTTP validators.
+A fallback caused by a transient short storage read is stored nowhere: no
+fragment is cached and the page itself is `no-store` without the listing ETag,
+so a reload recovers once storage does.
+Raw/download and sub-resource requests still serve the original complete bytes.
+
 **To add a viewer:** create `packages/server/src/viewers/<name>.ts` exporting a
 `Viewer` (`id`, `version`, `maxBytes`, `matches(file, live, mode)`, `render(vc)`),
 match on `file.kind` (from `detectFileKind` in `@dropway/core`) and the mode,
 wrap the body with `viewerPage()` from `viewers/chrome.ts`, and add it to
 `VIEWERS` in `viewers/index.ts` before the code/binary fallbacks. Embedding apps
 pass extra viewers in `createDropway({ viewers })`; they run first.
+
+Exact caps, read budgets, rendered-output limits and fallbacks for the JSON,
+CSV and notebook viewers (and the Source/Raw/Download byte contract) are in
+[`docs/VIEWERS.md`](VIEWERS.md); that page is canonical where a summary here
+or in `docs/SPEC.md` is shorter.
+
+CSV delimiter detection (`viewers/csv.ts`) counts comma/tab/semicolon/pipe only
+outside quoted fields across complete logical records (LF, CRLF and bare-CR
+boundaries; `""` stays inside its field), bounded to the first 64 Ki characters
+and five complete nonempty records. A trailing record cut by the budget or left
+unterminated casts no vote; empty input, one column, unknown separators and
+ties fall back to comma in candidate order; `.tsv` always selects tab. Render
+changes bump the viewer version, which retires both cached fragments and
+conditional ETags; raw/download bytes, the no-script viewer CSP and the 4 MiB /
+2,000-row / 1,000-character caps stay unchanged.
+
+Notebook outputs (`viewers/notebook.ts`) are grouped per code cell in a native
+initially-open `<details>` with an `Outputs (N)` summary, N counting only
+outputs that render a fragment; the code and its `In [n]:` prompt stay outside,
+so folding a long result never hides them. Cells with no rendered outputs get
+no control, controls toggle independently with no script, and the existing
+output formats, sanitizer, 100,000-character clip and 20 MiB cap remain in
+place. HTML/Markdown output fragments are made self-contained first
+(`viewers/contain.ts`, linear time): details/summary tags are unwrapped,
+unmatched end tags are discarded, misnested end tags and implied closes are
+spelled out, and unfinished comments and open elements are contained. Thus a
+fragment cannot close the generated fold or swallow the next output or cell.
+The render version bump retires cached pre-fold fragments and their conditional
+ETags; Raw, Download and Source bytes are untouched.
 
 ### App-origin UI (`packages/server/src/ui`)
 
@@ -164,15 +280,17 @@ pass extra viewers in `createDropway({ viewers })`; they run first.
 | `/dashboard/publish` | Drag-and-drop publish: folder, files or a zip |
 | `/dashboard/keys` | Create and revoke scoped API keys |
 | `/dashboard/settings` | Account, members, instance configuration, `uiSlots.settingsSections` |
-| `/v/:slug/*path` (`/view/...` redirects) | File browser: tree, view tabs, and the file in a sandboxed iframe on the sites origin |
+| `/v/:slug/*path` (`/view/...` redirects) | File browser: tree, view tabs, and the file in a sandboxed iframe on the sites origin. The tree combines a case-insensitive path filter with the manifest file kind (All by default); the count covers loaded files only, matching ancestors stay discoverable, and Clear restores All plus an empty path filter without changing the displayed file |
 
 Pages are server-rendered shells. One first-party script,
 `/__dropway/ui/app-<hash>.js`, fills in data from the public REST API, using the
 API key the person signed in with (sessionStorage, or localStorage when they tick
-"keep me signed in"; no cookies). The script is the source text of
-`dropwayClient()` in `ui/client.ts`, so there is no build step and nothing for an
-embedding app to configure. Keep that function self-contained and build DOM with
-its `h()` helper, never `innerHTML`.
+"keep me signed in"; no cookies). The script calls the serialized
+`dropwayClient` from `ui/client.ts` with the serialized `createQrEncoder` factory
+from `qr.js`, so there is no build step and nothing for an embedding app to
+configure. Both functions must remain closure-free: the client receives the QR
+factory as its only external dependency. Build DOM with its `h()` helper, never
+`innerHTML`.
 
 App pages use `appScriptCsp()`: scripts from `'self'` only, frames, images and
 `connect-src` limited to this origin and the sites origin, `frame-ancestors 'none'`.
@@ -180,11 +298,45 @@ The dashboard never renders user content on the app origin: files open in an
 iframe on the sites origin (with `allow-same-origin` only when that origin is
 not the app origin), and downloads go through a forced-download blob.
 
+The loaded version's file detail offers **Download ZIP** through the authenticated
+immutable-ID export route. Browser downloads require known metadata of at most
+16 MiB stored bytes and 1,000 files; pending, larger or unknown versions show an
+explanation and the authenticated REST/CLI route instead. The client verifies
+`X-Kofra-Version`, ZIP type and the server attachment filename, reads at most
+32 MiB of actual response bytes, and offers no attachment until the stream is
+complete. The file selection and filter stay intact. These browser limits do not
+change the server export limits.
+
 Drag-and-drop publishing hashes files in the browser (SHA-256), sends the
 manifest to `POST /api/v1/sites/:slug/deploys`, uploads only the blobs the
 server reports missing (4 at a time, retried on 429/5xx), then finalizes. A
 single `.zip` goes to `POST /api/v1/publish` instead. `.git/`, `node_modules/`,
-`.env*` and OS clutter are skipped and listed.
+`.env*` and OS clutter are skipped and listed. Before publishing, the browser
+shows a review of every included path with its byte size and every excluded
+path with its ignore reason. The review has a literal case-insensitive path
+search, an All/Included/Excluded visibility switch and Path/Size ordering;
+these only change the display, and every included file is still uploaded.
+Path order is ascending code-unit order; Size orders included bytes descending
+with Path order breaking ties; exclusions always stay Path-ordered after the
+included group, and an unreadable exclusion keeps its "unreadable" note
+instead of a guessed size. Clear restores the full review in Path order.
+Unreadable paths covered by those same ignore rules
+remain excluded (an unreadable folder's contents are not listed); other read
+failures block publishing until the selection is reselected. The displayed
+selection stays bound to the in-flight publish.
+
+The update picker lists only the first page of sites, so an explicit update
+destination (the `?site=` target, or a slug entered in the update panel's
+lookup field) is verified with the single-site `GET /api/v1/sites/:slug`
+instead of paging through every site: the reference is encoded as one path
+segment (dot-only references are rejected locally before URL normalization),
+the returned slug is added to the picker and selected, and
+publishing stays disabled until that verification succeeds — a failed or
+superseded lookup never falls back to another listed site or a new site.
+Typing in the lookup field makes no request; Enter or the lookup button
+submits it. A sequence fence makes the newest explicit choice win over
+late list or lookup responses, and a verified destination stays selected
+through the list refresh after a successful publish.
 
 ## Data model (D1, `packages/core/migrations`)
 
@@ -195,14 +347,32 @@ single `.zip` goes to `POST /api/v1/publish` instead. `.git/`, `node_modules/`,
 - `versions`: immutable manifests; `status` pending|ready; `manifest_hash` (identical republish = `unchanged`); `base_version_id` (409 `version_conflict`).
 - `version_files`: path -> sha256, size, content type.
 - `blobs` + `blob_scopes`: bytes exist once in R2; a scope (`t:<tenant>` or `s:<anonymous site>`) skips an upload only for bytes it has proven it holds, so dedupe never reveals another owner's files.
+- `upload_sessions` + `upload_parts` (`0007_multipart_uploads.sql`, `0008_multipart_session_cap.sql`): one unfinished session per pending manifest file (partial unique index) (R2 key/upload id, part size, status, expiry capped by any dwu_ capability that created it); part rows are the durable acknowledgements (number, size, etag, part digest) a client resumes from. Completion fenced by the session status assembles the R2 object, stream-hashes it, and only then registers the blob in the owner's scope; hourly cleanup aborts at most 100 expired sessions per run and keeps ownership rows when storage cleanup fails. Concurrent first-part writes are exclusive even for identical content (R2 etags identify writes, not hashes). Storage or acknowledgement failures release unacknowledged claims. A ten-minute-old lost claim is recovered by confirming abort of its whole old R2 handle before replacing the session, never by lease takeover of a physical part. Live application part buffers share a 96 MiB isolate budget and hashing is incremental; overload is retryable `503 upload_busy`.
 - `usage_counters`: active owned sites and unique bytes in ordinary sites' ready versions, plus each transfer's reserved bytes until purge (including deleted or held deliveries). Lifecycle transactions refresh counters; transfer insert/purge triggers preserve their retention charge. `recomputeUsage(dc, tenantId)` repairs drift; the midnight cron emits one `storage_snapshot` per tenant. Ordinary pending manifests are not charged; a transfer reserves its bytes before its initial deploy, so that deploy's `newBytes` is zero. `0003_scopes_usage.sql` extends the table from `0002_transfers.sql` without rewriting the applied migration.
+
+- `idempotency_keys` (`0005_publish_idempotency.sql`): authorization/operation/key
+  hashes, request hashes, an owner fence and the first result. D1 arbitrates
+  concurrent claims; failed operations release only their own pending claim.
+  Unknown outcomes fail closed until the 24-hour key expiry, rather than stealing
+  a live or interrupted operation's claim. Anonymous JSON publishing uses an
+  IP-scoped key (no replay when the IP is unavailable), so clients must choose
+  unpredictable keys and not share them with others behind the same network.
+  Hourly cleanup deletes at most 500 expired records per invocation, oldest expiry
+  first, including pending records; future-expiry owners and results remain intact.
+  Large replay responses use bounded `idempotency_result_chunks` rows (migration
+  `0006`), committed atomically with the owner-fenced completion. Small results
+  remain inline and existing records still replay. Chunk boundaries preserve UTF-16
+  surrogate pairs; each row stays below D1's 2 MB value/row limit. Parent deletion
+  cascades to payload rows; reclaiming an expired key removes the previous owner's
+  chunks. A persistence failure preserves the successful mutation's response and
+  leaves its claim pending (unknown replay outcome), without logging result secrets.
 
 Never edit an applied migration; add `000N_*.sql`. Extensions keep their own
 tables in their own migrations or their own D1 database.
 
 ## Extension points: `createDropway(options)`
 
-`@dropway/server` exports `EXTENSION_API_VERSION = 3` for this public embedding
+`@dropway/server` exports `EXTENSION_API_VERSION = 6` for this public embedding
 contract. Update it and the Extension API section in `CHANGELOG.md` when changing
 the contract. `test/extension-contract.test.ts` exercises every existing extension
 point with fake adapters and real emulated D1/R2/KV bindings; it runs in public CI.
@@ -232,6 +402,23 @@ export default createDropway({
 `dropway.context(env, ctx)` builds a `DropwayContext` outside a request (queue
 consumers, scripts, tests). Inside routes, use `c.get("dw")` and
 `c.get("principal")`.
+
+### Publish credentials (version 4)
+
+`Principal` includes `{ kind: "upload", versionId, expiresAt, ip }`. It authorizes
+only `upload_blob` and the four multipart-upload operations bound to that same
+pending version and manifest hash, never reads, publish or finalize. The default
+identity adapter accepts dwu_ credentials only on blob and multipart upload URLs;
+the services independently check pending state, deletion, expiry and exact
+manifest membership on every upload operation, and a capability-created
+multipart session keeps the capability's earlier expiry even for an owner.
+`DropwayConfig.urlFetchMaxBytes` (or `URL_FETCH_MAX_BYTES`) limits URL sources;
+per-file and one-shot limits still apply. Concurrent URL bodies debit one shared
+one-shot budget as each chunk arrives, before buffering it; a refusal cancels all
+sibling fetches and readers. Embedding Workers must retain
+`global_fetch_strictly_public` in their compatibility flags: hostname-string
+validation alone cannot prevent DNS-pointed private targets or rebinding. Custom
+fetchers are trusted deployment code and must enforce the same network boundary.
 
 ### Atomic mutation extensions (version 2)
 

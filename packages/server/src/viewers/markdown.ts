@@ -7,7 +7,10 @@ import type { Viewer } from "./index";
 import { carryDocLinks } from "./links";
 import { RESERVED_NAME, sanitizeHtml } from "./sanitize";
 
-const MD_VERSION = 3;
+// 4 was issued separately for the report print treatment plus shared-link
+// head tags and for the Phone disclosure in the viewer bar; neither 4
+// identifies the merged bytes, so the merged render moves to 5.
+const MD_VERSION = 5;
 
 export const MD_CSS = `
 .k-doc{max-width:46em;margin:0 auto;padding:var(--s7) var(--s7) var(--s10);font-size:17px;line-height:1.6;color:var(--ink);overflow-wrap:break-word}
@@ -122,6 +125,7 @@ export const markdownViewer: Viewer = {
     if (m) title = m[1]!.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
     return viewerPage(vc, {
       title,
+      print: true,
       tabs: standardTabs(vc, { source: true }),
       css: MD_CSS + HIGHLIGHT_CSS,
       body: `<article class="k-doc">${await carryDocLinks(m ? r.html.slice(m[0].length) : r.html, vc.url.pathname, vc.siteBase, viewerCarry(vc))}</article>`,

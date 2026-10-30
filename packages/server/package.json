@@ -16,9 +16,15 @@
   "files": [
     "src",
     "test/e2e-design/shared.mjs",
-    "test/e2e-design/shared.d.mts"
+    "test/e2e-design/shared.d.mts",
+    "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "dependencies": {
+    "@cfworker/json-schema": "4.1.1",
     "@dropway/core": "^0.1.0",
     "@modelcontextprotocol/server": "2.3.1",
     "agents": "0.30.0",

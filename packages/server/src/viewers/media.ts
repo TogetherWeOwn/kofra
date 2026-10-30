@@ -1,7 +1,7 @@
-import { extname } from "@dropway/core";
+import { detectFileKind, encodePath, extname, type LiveSite } from "@dropway/core";
 import { escapeHtml, formatBytes } from "../html";
 import { scriptHash, standardTabs, viewerCsp, viewerPage, type ViewerTab } from "./chrome";
-import type { ViewMode, Viewer, ViewerContext } from "./index";
+import type { ViewMode, Viewer, ViewerContext, ViewerFile } from "./index";
 
 /**
  * Images, SVG, PDF, video, audio and fonts. None of these read the whole file:
@@ -17,16 +17,52 @@ const MEDIA_CSS = `
 .dw-stage img{display:block;max-width:100%;max-height:calc(100vh - 10rem);height:auto;object-fit:contain}
 #dw-zoom:checked~.dw-stage{align-items:flex-start;justify-content:flex-start}
 #dw-zoom:checked~.dw-stage img{max-width:none;max-height:none}
+@media (max-width:640px){.dw-stage{min-height:0}}
 #dw-zoom:checked~.dw-mediabar label{border-color:var(--accent);color:var(--accent)}
+#dw-zoom:focus-visible~.dw-mediabar label{outline:2px solid var(--focus);outline-offset:2px}
 .dw-mediabar{display:flex;gap:.6rem;align-items:center;justify-content:center;flex-wrap:wrap}
+.dw-fnav{display:flex;gap:.6rem;align-items:center;justify-content:center;flex-wrap:wrap}
+.dw-fnav .dw-fname{display:inline-block;max-width:14rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .dw-pdf{width:100%;height:calc(100vh - 3.6rem);border:0;display:block;background:var(--paper-3)}
 .dw-video{max-width:100%;max-height:calc(100vh - 9rem);background:var(--paper-3)}
 .dw-audio{width:min(40rem,100%);margin-top:18vh}
 .dw-fallback{max-width:34rem;margin:0 auto;padding:15vh var(--s5) 0;text-align:center;color:var(--muted)}
 .dw-media>.dw-fallback{padding:10vh var(--s5) 0}
 @media (max-width:720px){.dw-fallback{padding:10vh var(--s4) 0}}
-@media (max-width:600px){.dw-stage{min-height:0}}
 `;
+
+const IMAGE_CSS = `
+body{height:100vh;height:100dvh;display:flex;flex-direction:column}
+/* Keep chrome in flow so native focus scrolling cannot hide controls below it. */
+.k-vbar{position:static;flex-shrink:0}
+#dw-main{flex:1;min-height:0;display:flex;flex-direction:column}
+#dw-main>.dw-media{flex:1;min-height:0}
+/* If controls exhaust the viewport, keep a usable stage in document overflow. */
+.dw-media:not(:has(#dw-zoom:checked))>.dw-stage{flex:1;min-height:8rem;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+.dw-media:not(:has(#dw-zoom:checked))>.dw-stage img{max-height:100%}
+.dw-media:has(#dw-zoom:checked){flex:none}
+.dw-media:has(#dw-zoom:checked)>.dw-stage{grid-template-columns:minmax(max-content,1fr);grid-template-rows:minmax(max-content,1fr)}
+/* A separate paint layer preserves inspection colors, not control colors. */
+.dw-media>.dw-stage{display:grid;isolation:isolate;background:none}
+.dw-stage::before{content:"";grid-area:1/1;align-self:stretch;justify-self:stretch;forced-color-adjust:none;z-index:-1;background-color:var(--paper-2);background-image:linear-gradient(45deg,var(--paper-3) 25%,transparent 25%),linear-gradient(-45deg,var(--paper-3) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,var(--paper-3) 75%),linear-gradient(-45deg,transparent 75%,var(--paper-3) 75%);background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0}
+.dw-stage img{grid-area:1/1;align-self:center;justify-self:center}
+#dw-zoom:checked~.dw-stage img{align-self:start;justify-self:start}
+.dw-backgrounds{display:flex;gap:.4rem;align-items:center;justify-content:center;flex-wrap:wrap}
+.dw-backgrounds label{display:inline-flex;align-items:center;gap:.35rem}
+.dw-backgrounds input{margin:0;accent-color:var(--accent)}
+.dw-backgrounds input:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.dw-backgrounds label:has(input:checked){border-color:var(--accent);font-weight:600}
+.dw-media:has(#dw-bg-light:checked)>.dw-stage::before{background:#fff}
+.dw-media:has(#dw-bg-dark:checked)>.dw-stage::before{background:#000}
+#dw-zoom:checked~.dw-stage img{flex-shrink:0}
+` + MEDIA_CSS;
+
+const IMAGE_BACKGROUNDS = `<div class="dw-backgrounds" role="radiogroup" aria-label="Image background">
+<span class="k-vmeta" aria-hidden="true">Background</span>
+<label class="k-btn k-sm k-ghost"><input type="radio" name="dw-background" id="dw-bg-checker" value="checker" checked>Checker</label>
+<label class="k-btn k-sm k-ghost"><input type="radio" name="dw-background" id="dw-bg-light" value="light">Light</label>
+<label class="k-btn k-sm k-ghost"><input type="radio" name="dw-background" id="dw-bg-dark" value="dark">Dark</label>
+</div>`;
 
 /** Pixel size from the first bytes of a PNG, GIF, JPEG, WebP or BMP file. */
 export function imageSize(b: Uint8Array): { width: number; height: number } | null {
@@ -74,8 +110,84 @@ function mediaTabs(vc: ViewerContext, label: string): ViewerTab[] {
 
 const topLevelOnly = (mode: ViewMode | undefined) => mode === "document" || mode === "view" || mode === undefined;
 
+/**
+ * The image/SVG files sharing `path`'s folder, in the listing's name order.
+ * Only direct children of the folder count (no recursion into subfolders),
+ * matching the folder gallery in ./listing.
+ */
+function folderImagePool(live: LiveSite, path: string): string[] {
+  const slash = path.lastIndexOf("/");
+  const dir = slash === -1 ? "" : path.slice(0, slash + 1);
+  const names: string[] = [];
+  for (const [p, [, , type]] of Object.entries(live.files)) {
+    if (!p.startsWith(dir)) continue;
+    const name = p.slice(dir.length);
+    if (!name || name.includes("/")) continue;
+    const kind = detectFileKind(p, type);
+    if (kind === "image" || kind === "svg") names.push(name);
+  }
+  names.sort((a, b) => a.localeCompare(b));
+  return names.map((n) => dir + n);
+}
+
+interface FolderNav {
+  prev?: string;
+  next?: string;
+  position: number;
+  total: number;
+}
+
+/** Previous/next neighbours of `path` within its folder pool, or null when it is alone (or not in the pool). */
+function folderNav(live: LiveSite, path: string): FolderNav | null {
+  const pool = folderImagePool(live, path);
+  const i = pool.indexOf(path);
+  if (i === -1 || pool.length < 2) return null;
+  return {
+    ...(i > 0 ? { prev: pool[i - 1] } : {}),
+    ...(i < pool.length - 1 ? { next: pool[i + 1] } : {}),
+    position: i + 1,
+    total: pool.length,
+  };
+}
+
+/**
+ * Pool identity for the ETag: any change to the ordered pool (a sibling
+ * added, removed, renamed or reordered by a republish) changes it, so a
+ * conditional request never revalidates stale Previous/Next links.
+ */
+function folderNavEtag(file: ViewerFile, live: LiveSite): string {
+  const pool = folderImagePool(live, file.path);
+  if (pool.length < 2 || !pool.includes(file.path)) return "";
+  let h = 0x811c9dc5;
+  const s = pool.join("\n");
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return `-nav${(h >>> 0).toString(36)}`;
+}
+
+/**
+ * Plain-link Previous/Next controls for flipping through a folder's images
+ * from the image you opened. No JavaScript: each link is an ordinary file
+ * URL, so the neighbour renders in its own viewer. Hidden in embed mode,
+ * where the app-origin file browser owns navigation.
+ */
+function folderNavHtml(vc: ViewerContext): string {
+  if (vc.embed) return "";
+  const nav = folderNav(vc.live, vc.file.path);
+  if (!nav) return "";
+  const href = (p: string) => escapeHtml(vc.siteBase + encodePath(p));
+  const name = (p: string) => escapeHtml(p.split("/").pop() ?? p);
+  const prev = nav.prev ? `<a class="k-btn k-sm k-ghost" rel="prev" href="${href(nav.prev)}"><span aria-hidden="true">←</span> Previous: <span class="dw-fname">${name(nav.prev)}</span></a>` : "";
+  const next = nav.next ? `<a class="k-btn k-sm k-ghost" rel="next" href="${href(nav.next)}">Next: <span class="dw-fname">${name(nav.next)}</span> <span aria-hidden="true">→</span></a>` : "";
+  return `<nav class="dw-fnav" aria-label="Other images in this folder">${prev}<span class="k-vmeta">${nav.position} of ${nav.total} in this folder</span>${next}</nav>`;
+}
+
 export const imageViewer: Viewer = {
   id: "image",
+  version: 5,
+  etagExtra: folderNavEtag,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "image" && topLevelOnly(mode),
   async render(vc) {
@@ -87,10 +199,11 @@ export const imageViewer: Viewer = {
       .join(" · ");
     return viewerPage(vc, {
       tabs: mediaTabs(vc, "Image"),
-      css: MEDIA_CSS,
+      css: IMAGE_CSS,
       body: `<div class="dw-media"><input type="checkbox" id="dw-zoom" class="k-toggle">
-<div class="dw-mediabar"><span class="k-vmeta">${escapeHtml(meta)}</span><label for="dw-zoom" class="k-btn k-sm k-ghost k-togglebtn">Actual size</label></div>
-<div class="dw-stage k-checker"><img src="${escapeHtml(vc.fileUrl)}" alt="${escapeHtml(name)}"${dim ? ` width="${dim.width}" height="${dim.height}"` : ""}></div></div>`,
+<div class="dw-mediabar">${folderNavHtml(vc)}<span class="k-vmeta">${escapeHtml(meta)}</span><label for="dw-zoom" class="k-btn k-sm k-ghost k-togglebtn">Actual size</label></div>
+${IMAGE_BACKGROUNDS}
+<label for="dw-zoom" class="dw-stage k-checker"><img src="${escapeHtml(vc.fileUrl)}" alt="${escapeHtml(name)}"${dim ? ` width="${dim.width}" height="${dim.height}"` : ""}></label></div>`,
       headers: dim ? { "X-Kofra-Image-Size": `${dim.width}x${dim.height}` } : {},
     });
   },
@@ -98,6 +211,8 @@ export const imageViewer: Viewer = {
 
 export const svgViewer: Viewer = {
   id: "svg",
+  version: 5,
+  etagExtra: folderNavEtag,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "svg" && topLevelOnly(mode),
   async render(vc) {
@@ -105,16 +220,21 @@ export const svgViewer: Viewer = {
     // Shown through <img>, so scripts inside the SVG never run.
     return viewerPage(vc, {
       tabs: standardTabs(vc, { rendered: "Image", source: true }),
-      css: MEDIA_CSS + ".dw-stage img{min-width:min(16rem,100%)}",
+      // Keep small SVGs legible without reading or embedding their markup.
+      css: ".dw-stage img{min-width:min(16rem,100%)}" + IMAGE_CSS,
       body: `<div class="dw-media"><input type="checkbox" id="dw-zoom" class="k-toggle">
-<div class="dw-mediabar"><span class="k-vmeta">${escapeHtml(`${formatBytes(vc.file.size)} · SVG (scripts inside it do not run here)`)}</span><label for="dw-zoom" class="k-btn k-sm k-ghost k-togglebtn">Actual size</label></div>
-<div class="dw-stage k-checker"><img src="${escapeHtml(vc.fileUrl)}" alt="${escapeHtml(name)}"></div></div>`,
+<div class="dw-mediabar">${folderNavHtml(vc)}<span class="k-vmeta">${escapeHtml(`${formatBytes(vc.file.size)} · SVG (scripts inside it do not run here)`)}</span><label for="dw-zoom" class="k-btn k-sm k-ghost k-togglebtn">Actual size</label></div>
+${IMAGE_BACKGROUNDS}
+<label for="dw-zoom" class="dw-stage k-checker"><img src="${escapeHtml(vc.fileUrl)}" alt="${escapeHtml(name)}"></label></div>`,
     });
   },
 };
 
 export const pdfViewer: Viewer = {
   id: "pdf",
+  // 3 was issued separately for the shared-link head tags and for the Phone
+  // disclosure, so the merged render moves to 4.
+  version: 4,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "pdf" && topLevelOnly(mode),
   async render(vc) {
@@ -153,7 +273,9 @@ const VIDEO_ERROR_SCRIPT = `(function(){var v=document.querySelector(".dw-video"
 
 export const videoViewer: Viewer = {
   id: "video",
-  version: 2,
+  // 3 was issued separately for the shared-link head tags and for the Phone
+  // disclosure, so the merged render moves to 4.
+  version: 4,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "video" && topLevelOnly(mode),
   async render(vc) {
@@ -171,6 +293,9 @@ export const videoViewer: Viewer = {
 
 export const audioViewer: Viewer = {
   id: "audio",
+  // 3 was issued separately for the shared-link head tags and for the Phone
+  // disclosure, so the merged render moves to 4.
+  version: 4,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "audio" && topLevelOnly(mode),
   async render(vc) {
@@ -188,6 +313,7 @@ const FONT_FORMATS: Record<string, string> = { woff2: "woff2", woff: "woff", ttf
 
 export const fontViewer: Viewer = {
   id: "font",
+  version: 4,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "font" && topLevelOnly(mode),
   async render(vc) {
@@ -202,17 +328,27 @@ export const fontViewer: Viewer = {
 .dw-font{max-width:60rem;margin:0 auto;padding:1.5rem 1.25rem 4rem}
 .dw-font .s{font-family:"dw-specimen",var(--mono)}
 .dw-font .big{font-size:clamp(5rem,16vw,11rem);line-height:1;margin:.5rem 0 1rem}
-.dw-font .set{font-size:1.6rem;line-height:1.5;word-break:break-all;margin:0 0 .6rem}
-.dw-font .try{font-size:2rem;line-height:1.35;border:1px dashed var(--rule);padding:1rem;margin:1.5rem 0}
+.dw-font .set{font-size:1.6rem;line-height:1.5;overflow-wrap:anywhere;margin:0 0 .6rem}
+.dw-font .try{display:block;box-sizing:border-box;width:100%;min-height:6rem;font-size:32px;line-height:1.35;color:inherit;background:transparent;border:1px dashed var(--rule);padding:1rem;margin:.6rem 0 1.5rem;resize:vertical;field-sizing:content;white-space:pre-wrap;overflow-wrap:anywhere}
 .dw-font .try:focus{border-color:var(--accent)}
 .dw-font .try:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.dw-font:has(#dw-sz-16:checked) .try{font-size:16px}
+.dw-font:has(#dw-sz-64:checked) .try{font-size:64px}
+.dw-sizes{border:0;padding:0;margin:1.5rem 0 0;min-width:0}
+.dw-sizes legend{padding:0;margin-bottom:.4rem;color:var(--muted);font-size:.85rem}
+.dw-sizes div{display:flex;flex-wrap:wrap;gap:.5rem}
+.dw-sizes label{display:inline-flex;gap:.35rem;align-items:center;border:1px solid var(--rule);padding:.3rem .6rem;font-size:.85rem;cursor:pointer}
+.dw-sizes label:has(:checked){border-color:var(--accent);font-weight:600}
+.dw-sizes label:has(:focus-visible){outline:2px solid var(--focus);outline-offset:2px}
 .dw-fs{display:flex;gap:1rem;align-items:baseline;border-top:1px solid var(--rule-soft);padding:.4rem 0}
 .dw-fs span{flex:none;width:3.5rem;color:var(--muted);font-size:.8rem;font-family:var(--mono)}
-.dw-fs p{margin:0;min-width:0;overflow-wrap:anywhere;font-family:"dw-specimen",var(--mono)}`,
+.dw-fs p{margin:0;min-width:0;overflow-wrap:anywhere;font-family:"dw-specimen",var(--mono)}
+@media (max-width:36rem){.dw-fs{flex-direction:column;gap:.1rem}.dw-fs span{width:auto}}`,
       body: `<div class="dw-font"><p class="k-small">${escapeHtml(`${name} · ${formatBytes(vc.file.size)} · ${vc.file.contentType.split(";")[0]}`)}</p>
 <div class="s big" aria-hidden="true">Aa Gg</div>
 <p class="s set">ABCDEFGHIJKLMNOPQRSTUVWXYZ<br>abcdefghijklmnopqrstuvwxyz<br>0123456789 !?&amp;@#%()[]{}.,;:'"-+=*/\\</p>
-<div class="s try" contenteditable="true" spellcheck="false" role="textbox" aria-multiline="true" aria-label="Type to try the font">Type here to try this font.</div>
+<fieldset class="dw-sizes"><legend>Sample size</legend><div>${[16, 32, 64].map((px) => `<label><input type="radio" name="dw-sz" id="dw-sz-${px}" value="${px}"${px === 32 ? " checked" : ""}>${px}px${px === 32 ? " (default)" : ""}</label>`).join("")}</div></fieldset>
+<textarea class="s try" rows="3" spellcheck="false" aria-label="Type to try the font">Type here to try this font.</textarea>
 ${sizes}</div>`,
     });
   },

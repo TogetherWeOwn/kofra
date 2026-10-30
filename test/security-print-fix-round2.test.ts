@@ -33,8 +33,8 @@ describe("one <main> and a skip link on every site-origin page (WCAG 2.4.1)", ()
     for (const path of ["/README.md", "/src/app.py", "/docs/r.pdf", "/index.html?view=1", "/index.html?view=source"]) {
       const html = await (await call(path)).text();
       expect(mains(html), path).toEqual(['<main id="dw-main" class="k-vbody">']);
-      expect(html.indexOf('<a class="k-skip" href="#dw-main">'), path).toBeGreaterThan(-1);
-      expect(html.indexOf('<a class="k-skip"'), path).toBeLessThan(html.indexOf('<header class="k-vbar"'));
+      expect(html.indexOf('<a class="k-skip dw-skip" href="#dw-main">'), path).toBeGreaterThan(-1);
+      expect(html.indexOf('<a class="k-skip"'), path).toBeLessThan(html.indexOf('<header class="k-vbar dw-vbar"'));
     }
   });
 
@@ -55,7 +55,7 @@ describe("one <main> and a skip link on every site-origin page (WCAG 2.4.1)", ()
     const { call } = await siteFixture();
     for (const path of ["/missing.html", "/src/"]) {
       const html = await (await call(path)).text();
-      expect(html.indexOf('<a class="k-skip" href="#dw-main">'), path).toBeGreaterThan(-1);
+      expect(html.indexOf('<a class="k-skip dw-skip" href="#dw-main">'), path).toBeGreaterThan(-1);
       expect(mains(html), path).toHaveLength(1);
     }
   });
@@ -99,10 +99,10 @@ describe("the header reads in its visual order at every width (WCAG 2.4.3)", () 
 });
 
 describe("text never breaks inside a token", () => {
-  it("phone ledger cards: the sub-line separator is drawn only when the sub-line has text, and the sub-line stays whole", () => {
-    expect(APP_CSS).toContain('.k-table td.k-num .k-sub:not(:empty)::before{content:"· "}');
-    expect(APP_CSS).not.toContain('.k-table td.k-num .k-sub::before{content:"· "}');
-    expect(APP_CSS).toMatch(/\.k-table td\.k-num \.k-sub\{display:inline;margin-left:\.3em;white-space:nowrap\}/);
+  it("phone ledger cards: the sub-line has a line of its own, so no drawn separator can start a wrapped line", () => {
+    expect(APP_CSS).not.toMatch(/\.k-sub[^{]*::before\{content:"· "\}/);
+    expect(APP_CSS).not.toMatch(/\.k-table td\.k-num \.k-sub\{display:inline/);
+    expect(APP_CSS).toMatch(/(?:^|\})\.k-sub\{display:block/);
   });
 
   it("the sites list draws no empty sub-line for a site with no live version, and keys and members label every fact", () => {
@@ -119,7 +119,7 @@ describe("text never breaks inside a token", () => {
     expect(urlCode("https://SITE.long-sites-domain.example.com/p/")).toBe('<code class="k-brk"><span>https://</span><wbr><span>SITE</span><wbr><span>.long-sites-domain</span><wbr><span>.example</span><wbr><span>.com/</span><wbr><span>p/</span></code>');
     expect(urlCode("npx skills add https://kofra.example.com")).toBe('<code class="k-brk"><span>npx</span> <span>skills</span> <span>add</span> <span>https://</span><wbr><span>kofra</span><wbr><span>.example</span><wbr><span>.com</span></code>');
     // Round 4: the parts stay whole wherever they sit in the code (a link inside it too), on both origins.
-    for (const css of [APP_CSS, SITE_CSS]) expect(css).toContain("code.k-tok,code.k-brk span{white-space:nowrap}");
+    for (const css of [APP_CSS, SITE_CSS]) expect(css).toContain("code.k-tok,code.k-brk span,a.k-brk span{white-space:nowrap}");
   });
 
   it("inline code keeps its padding when it wraps and only breaks a token longer than the line", () => {
@@ -246,6 +246,6 @@ describe("pinned behaviour of earlier fixes (Paperclip Review round 3)", () => {
     const m = /<span class="k-sum k-mini">(.*?)<\/span><\/div>/s.exec(html);
     expect(m, "viewer bar seal and checksum").toBeTruthy();
     expect(m![0]).not.toContain("k-hide-sm");
-    expect(m![1]).toMatch(/<details class="k-checksum"><summary>SHA-256 [0-9a-f]{12}…<\/summary><code>[0-9a-f]{64}<\/code><\/details>$/);
+    expect(m![1]).toMatch(/<details class="k-checksum"><summary>SHA-256 [0-9a-f]{12}<\/summary><code>[0-9a-f]{64}<\/code><\/details>$/);
   });
 });

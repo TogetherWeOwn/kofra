@@ -15,8 +15,13 @@
   },
   "files": [
     "src",
-    "migrations"
+    "migrations",
+    "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "dependencies": {
     "fflate": "^0.8.3"
   }

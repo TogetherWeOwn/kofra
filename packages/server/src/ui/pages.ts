@@ -2,6 +2,7 @@ import type { Context } from "hono";
 import { appOrigin, encodePath, isSetUp, looksLikeSlug, requestPathToFilePath, siteUrl, type DropwayContext } from "@dropway/core";
 import type { DropwayEnv } from "../env";
 import type { UiSlots } from "../extensions";
+import { mcpJsonSnippets } from "../discovery";
 import { escapeHtml, formatBytes } from "../html";
 import { TRUST_LINE } from "./chrome";
 import { SHORT_CODE, tok, urlCode } from "./code";
@@ -82,16 +83,12 @@ export async function homePage(c: Context<DropwayEnv>): Promise<Response> {
         "dw-s-mcp",
         "Add the MCP server",
         `claude mcp add --transport http kofra ${o}/mcp \\\n  --header "Authorization: Bearer $KOFRA_API_KEY"`,
-      )}<p class="k-small">Other clients (Streamable HTTP):</p>${codeblock(
-        "dw-s-mcpjson",
-        "MCP client config",
-        JSON.stringify({ mcpServers: { kofra: { type: "http", url: `${o}/mcp`, headers: { Authorization: "Bearer ${KOFRA_API_KEY}" } } } }, null, 2),
-      )}`,
+      )}${mcpJsonSnippets(o).map((sn, i) => `<p class="k-small">${e(sn.title)}:</p>${codeblock(i === 0 ? "dw-s-mcpjson" : "dw-s-vscodejson", sn.title, sn.code)}`).join("")}`,
     ],
     [
       "docs",
       "Agent docs",
-      `<p class="k-small">Point an agent at these; they describe this instance, not a generic one.</p><ul class="k-small"><li><a href="/llms.txt">/llms.txt</a>: how to publish, update and roll back</li><li><a href="/llms-full.txt">/llms-full.txt</a>: every endpoint, MCP tool and error code</li><li><a href="/skill.md">/skill.md</a>: Agent Skill (${urlCode(`npx skills add ${o}`)})</li><li><a href="/openapi.json">/openapi.json</a>: every REST operation</li><li>${urlCode(`${o}/mcp`)}: the MCP endpoint</li></ul>`,
+      `<p class="k-small">Point an agent at these; they describe this instance, not a generic one.</p><ul class="k-small"><li><a href="/connect">/connect</a>: one-line setup per agent client</li><li><a href="/llms.txt">/llms.txt</a>: how to publish, update and roll back</li><li><a href="/llms-full.txt">/llms-full.txt</a>: every endpoint, MCP tool and error code</li><li><a href="/skill.md">/skill.md</a>: Agent Skill (${urlCode(`npx skills add ${o}`)})</li><li><a href="/openapi.json">/openapi.json</a>: every REST operation</li><li>${urlCode(`${o}/mcp`)}: the MCP endpoint</li></ul>`,
     ],
   ];
   const tabList = tabs
@@ -313,7 +310,7 @@ export function viewerPage(c: Context<DropwayEnv>): Response | Promise<Response>
 <h1 class="k-sr" id="dw-vh">${e(path.split("/").filter(Boolean).pop() ?? slug)}</h1>
 <div class="k-toolbar"><div class="k-vfile" id="dw-fileinfo"><span class="k-crumbs"><span aria-current="page">${e(path || "/")}</span></span></div><div class="k-tools" id="dw-tools">${tools}</div></div>
 <p class="k-trust">${TRUST_LINE}</p>
-<iframe id="dw-frame" name="dw-frame" class="k-frame" src="${e(src)}" sandbox="${sandbox}" allow="clipboard-write; fullscreen; autoplay; encrypted-media; picture-in-picture" referrerpolicy="no-referrer" title="${e(`Preview of ${path || slug}`)}"></iframe>
+<div id="dw-view-panel" class="k-vpanel"><iframe id="dw-frame" name="dw-frame" class="k-frame" src="${e(src)}" sandbox="${sandbox}" allow="clipboard-write; fullscreen; autoplay; encrypted-media; picture-in-picture" referrerpolicy="no-referrer" title="${e(`Preview of ${path || slug}`)}"></iframe></div>
 </section></div>`;
   return renderAppPage(c, { title: path ? `${path.split("/").filter(Boolean).pop()} · ${slug}` : slug, page: "viewer", active: "/dashboard", wide: true, data: { slug, path, siteUrl: root, theme: pref }, body });
 }

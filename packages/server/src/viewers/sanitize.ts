@@ -11,7 +11,7 @@
  */
 
 /** Removed together with everything inside them. */
-const DROP = new Set([
+export const DROP = new Set([
   "script", "style", "iframe", "frame", "frameset", "object", "embed", "applet", "noscript", "noembed", "noframes", "template",
   "base", "meta", "link", "title", "head", "svg", "math", "textarea", "select", "option", "optgroup", "button", "datalist",
   "canvas", "portal", "dialog", "xmp", "plaintext", "param", "slot", "frameset", "output", "progress", "meter", "map", "area",
@@ -96,6 +96,12 @@ function safeSrcset(value: string, tag: string): boolean {
 
 /** Class and id names reserved for Kofra's own markup (design system k-*, page hooks dw-*). */
 export const RESERVED_NAME = /^(k|dw)-/i;
+/**
+ * Reserved classes that pass anyway: the notebook viewer sanitizes its whole render, cell frames included, and
+ * these only lay out cells (no banner, seal, button or other trust chrome).
+ */
+const NOTEBOOK_CLASS = /^dw-(?:cell|prompt|mdcell|out)$/;
+const reservedClass = (t: string) => RESERVED_NAME.test(t) && !NOTEBOOK_CLASS.test(t);
 
 /**
  * An attribute value as the browser will read it. HTMLRewriter hands back the source spelling, so
@@ -147,9 +153,9 @@ export async function sanitizeHtml(html: string): Promise<string> {
           // Tested as the browser will read them (character references decoded).
           if (n === "class") {
             const tokens = decodeAttr(v).split(CLASS_SEP).filter(Boolean);
-            if (!tokens.some((t) => RESERVED_NAME.test(t))) continue; // untouched
+            if (!tokens.some(reservedClass)) continue; // untouched
             // Rewritten from the decoded tokens: only plain ones, so nothing here needs escaping.
-            const kept = tokens.filter((t) => !RESERVED_NAME.test(t) && !/["&<>]/.test(t));
+            const kept = tokens.filter((t) => !reservedClass(t) && !/["&<>]/.test(t));
             if (kept.length) el.setAttribute(name, kept.join(" "));
             else el.removeAttribute(name);
             continue;

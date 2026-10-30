@@ -34,6 +34,14 @@ describe("k- prefixer", () => {
   });
 });
 
+describe("site bundle budget", () => {
+  it("stays within 24 KiB (24,576 bytes, minified UTF-8)", () => {
+    const { siteBudgetBytes } = JSON.parse(readFileSync(join(ROOT, "packages/server/design/bundles.json"), "utf8")) as { siteBudgetBytes: number };
+    expect(siteBudgetBytes).toBe(24_576);
+    expect(Buffer.byteLength(SITE_CSS, "utf8")).toBeLessThanOrEqual(siteBudgetBytes);
+  });
+});
+
 describe("generated design modules", () => {
   it("are in sync with packages/server/design (npm run design:check)", async () => {
     const { designTs, fontsTs } = await buildDesign();
@@ -92,9 +100,18 @@ describe("contrast: both modes pass WCAG AA", () => {
 
 /**
  * Literal colours allowed in component CSS (PORT-SPEC 8.3): E2 the user-content canvas (notebook output images, the
- * html viewer's frame) and the app viewer frame's Light backing (white in Light, the mode's paper in Dark).
+ * html viewer's frame, the image viewer's explicit Light and Dark inspection backgrounds), the app viewer frame's
+ * Light backing (white in Light, the mode's paper in Dark), the QR code's quiet zone (scanners need dark on white in
+ * every mode) and the report print block (paper output is black on white by definition).
  */
-const ALLOWED_LITERALS = [/\.frame\{[^}]*background:light-dark\(#fff,var\(--paper\)\)/, /\.k-frame\{[^}]*background:#fff/, /\.nb-out img\{[^}]*background:#fff/];
+const ALLOWED_LITERALS = [
+  /\.frame\{[^}]*background:light-dark\(#fff,var\(--paper\)\)/,
+  /\.k-frame\{[^}]*background:#fff/,
+  /\.(?:nb|dw)-out img\{[^}]*background:#fff/,
+  /\.dw-media:has\(#dw-bg-(?:light|dark):checked\)>\.dw-stage::before\{background:#(?:fff|000)\}/g,
+  /\.qr-img\{[^}]*background:#fff/,
+  /@media print\{(?:[^{}]|\{[^{}]*\})*\}/,
+];
 const LITERAL = /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|(?<![.\w-])(?:white|black|red|green|blue|gray|grey|silver|orange|yellow|purple)\b(?![-\w])/;
 
 function stripForcedColors(css: string): string {
@@ -173,10 +190,16 @@ function classesUsed(): Map<string, string> {
   return out;
 }
 
+/**
+ * dw- names that main's acceptance tests select by. They ride next to the k- class that styles the element
+ * (class="k-banner k-danger dw-error") and carry no style of their own.
+ */
+const HOOKS = ["dw-error", "dw-empty", "dw-badge", "dw-pagehead", "dw-muted", "dw-select", "dw-qr", "dw-vbar", "dw-skip", "dw-hide-sm", "dw-gal"];
+
 describe("class lint", () => {
   const used = classesUsed();
-  it("no retired presentational class is written anywhere", () => {
-    const left = [...used.entries()].filter(([c]) => RETIRED.includes(c));
+  it("no retired presentational class is written anywhere (test hooks excepted)", () => {
+    const left = [...used.entries()].filter(([c]) => RETIRED.includes(c) && !HOOKS.includes(c));
     expect(left).toEqual([]);
   });
   it("every k- class the server or the dashboard writes exists in the built CSS (or a viewer's own CSS)", () => {

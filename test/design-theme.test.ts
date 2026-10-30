@@ -290,7 +290,7 @@ describe("CSP: no inline script, no external font origin", () => {
     const base = new URL(pub.body.url as string).pathname;
     const sys = await dw.call(`${base}missing.html`, { headers: { Accept: "text/html" } });
     expect(sys.status).toBe(404);
-    expect(sys.headers.get("content-security-policy")).toMatch(/^default-src 'none'; style-src 'unsafe-inline'; font-src https:\/\/dropway\.test; img-src data:; form-action 'self'; base-uri 'none'/);
+    expect(sys.headers.get("content-security-policy")).toMatch(/^default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; font-src https:\/\/dropway\.test; img-src data:/);
     const page = await sys.text();
     expect(page).not.toContain("<script");
     expect(page).toContain(`src:url(${ORIGIN}/__dropway/fonts/`);
@@ -398,7 +398,7 @@ describe("file deliveries", () => {
     for (const query of ["", "?theme=dark"]) {
       const res = await dw.call(siteFile(t) + query, { headers: { Accept: "text/html", "Sec-Fetch-Dest": "document" } });
       expect(res.status).toBe(403);
-      expect(res.headers.get("content-security-policy")).toBe(`default-src 'none'; style-src 'unsafe-inline'; font-src ${ORIGIN}; img-src data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`);
+      expect(res.headers.get("content-security-policy")).toBe(`default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; font-src ${ORIGIN}; img-src data:; frame-ancestors 'none'`);
       const html = await res.text();
       expect(htmlTag(html)).toBe(query ? '<html lang="en" data-theme="dark">' : '<html lang="en">');
       expect(html).not.toContain("/__dropway/ui/");

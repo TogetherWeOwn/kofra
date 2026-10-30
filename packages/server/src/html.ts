@@ -103,7 +103,7 @@ export const APP_PAGE_CSP =
 
 /** CSP for system pages on site origins (404, expired, password...): inline styles, fonts from the app origin, the data: guilloche mask. */
 export function siteSystemCsp(dw: DropwayContext): string {
-  return `default-src 'none'; style-src 'unsafe-inline'; font-src ${appOrigin(dw)}; img-src data:; form-action 'self'; base-uri 'none'`;
+  return `default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; font-src ${appOrigin(dw)}; img-src data:`;
 }
 
 export function formatBytes(n: number): string {

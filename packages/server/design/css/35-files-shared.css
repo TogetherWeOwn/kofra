@@ -28,4 +28,6 @@ span.fname{display:block}
 .sum.mini svg{width:32px;height:32px}
 .checksum{min-width:0;font:500 10.5px/1.6 var(--mono)}
 .checksum summary{overflow-wrap:anywhere}
+/* The ellipsis after the short hash is drawn, not text: a page's own "…" (a cap notice) stays the first match. */
+.checksum summary::after{content:"…"}
 .sum .checksum code{display:block;white-space:normal;overflow-wrap:anywhere;font-size:10.5px;line-height:1.6}
