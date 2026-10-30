@@ -245,7 +245,9 @@ export class DropwayHttpClient {
       sent.set("X-Kofra-Client", this.clientName);
       sent.set(`${LEGACY_HEADER_PREFIX}Client`, this.clientName); // instances from before the rename
       if (token) sent.set("Authorization", `Bearer ${token}`);
-      if (opts.idempotencyKey) sent.set("Idempotency-Key", opts.idempotencyKey);
+      // Presence, not truthiness: a supplied empty key is a caller error the server refuses
+      // (invalid_idempotency_key). Dropping it would silently run an unkeyed mutation.
+      if (typeof opts.idempotencyKey === "string") sent.set("Idempotency-Key", opts.idempotencyKey);
       let res: Response;
       try {
         res = await this.doFetch(new Request(url, { method, headers: sent, body, redirect: "follow" }));
