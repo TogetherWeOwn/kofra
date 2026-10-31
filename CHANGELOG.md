@@ -20,12 +20,12 @@
   `-1`-style suffix without taking an existing heading's fragment destination. Raw-HTML ids
   are never rewritten; Markdown-before-raw and raw-vs-raw duplicates remain as authored.
   Comments and sanitizer-dropped content reserve no ids, and documents without the collision
-  render byte-identical output. Cached renders and ETags move from `markdown@3` to `markdown@9`
-  with the change. Notebook reservations span Markdown cells and Markdown/HTML outputs while
-  keeping per-fragment baseline numbering; notebook fragments and ETags move from `notebook@2`
-  to `notebook@6`. Raw ids are compared by decoded DOM value in served output order, including
-  dropped elements, script escapes, comments and tags completed by generated markup or viewer
-  wrappers. Suffix allocation and scanner inner searches advance without repeated rescanning.
+  render byte-identical output. Markdown and notebook render-version bumps retire cached
+  fragments and ETags from before the change. Notebook reservations span Markdown cells and
+  Markdown/HTML outputs while keeping per-fragment baseline numbering. Raw ids are compared by
+  decoded DOM value in served output order; the scanner handles dropped-element boundaries,
+  script escapes, comments and tags completed by generated markup or viewer wrappers. Suffix
+  allocation and scanner inner searches advance without repeated rescanning.
   SVG and MathML content is read by the sanitizer's own foreign-content rules, so `<style>`
   or `<title>` inside dropped foreign markup reserves no phantom id and cannot swallow a
   later raw heading.
