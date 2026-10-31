@@ -105,6 +105,21 @@ describe("scoped API keys and members", () => {
     expect((await dw.json("/api/v1/sites/member-site", { key: dw.ownerKey })).status).toBe(200);
   });
 
+  it("an admin cannot create a key for an owner", async () => {
+    const owner = (await dw.json("/api/v1/me", { key: dw.ownerKey })).body.member;
+    const admin = await dw.json("/api/v1/members", { key: dw.ownerKey, ...jsonBody({ email: "admin@example.com", role: "admin" }) });
+    expect(admin.status).toBe(201);
+    const adminKey = admin.body.apiKey.key;
+    const member = await dw.json("/api/v1/members", { key: dw.ownerKey, ...jsonBody({ email: "dev@example.com", role: "member" }) });
+    // Positive control: an admin can still create keys for members below the owner role.
+    expect((await dw.json("/api/v1/keys", { key: adminKey, ...jsonBody({ name: "for-member", memberId: member.body.member.id }) })).status).toBe(201);
+    const forOwner = await dw.json("/api/v1/keys", { key: adminKey, ...jsonBody({ name: "for-owner", memberId: owner.id }) });
+    expect(forOwner.status).toBe(403);
+    expect(forOwner.body.error.code).toBe("forbidden");
+    expect(forOwner.body.key).toBeUndefined();
+    expect((await dw.json("/api/v1/keys", { key: dw.ownerKey, ...jsonBody({ name: "owner-for-owner", memberId: owner.id }) })).status).toBe(201);
+  });
+
   it("the last owner cannot be removed", async () => {
     const me = await dw.json("/api/v1/me", { key: dw.ownerKey });
     const res = await dw.json(`/api/v1/members/${me.body.member.id}`, { method: "DELETE", key: dw.ownerKey });
