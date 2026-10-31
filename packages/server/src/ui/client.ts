@@ -460,9 +460,14 @@ export function dropwayClient() {
   }
 
   function safeNext(n) {
-    // Browsers discard tabs and newlines when parsing URLs, so /\t/host is
-    // a network-path redirect even though its second character is not '/'.
-    return n && n.charAt(0) === "/" && n.charAt(1) !== "/" && n.charAt(1) !== "\\" && !/[\x00-\x1f\x7f]/.test(n) ? n : "/dashboard";
+    // Same rule as localRedirectPath() on the server: resolve as the browser will, so
+    // //host, /\host and /<tab>/host (browsers drop tabs and newlines) cannot leave this origin.
+    if (!n || n.charAt(0) !== "/" || /[\x00-\x1f\x7f\\]/.test(n)) return "/dashboard";
+    try {
+      var u = new URL(n, location.origin);
+      if (u.origin === location.origin) return u.pathname + u.search + u.hash;
+    } catch (e) {}
+    return "/dashboard";
   }
 
   // ------------------------------------------------------------------ account

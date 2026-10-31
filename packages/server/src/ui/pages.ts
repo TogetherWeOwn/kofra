@@ -4,6 +4,7 @@ import type { DropwayEnv } from "../env";
 import type { UiSlots } from "../extensions";
 import { mcpJsonSnippets } from "../discovery";
 import { escapeHtml, formatBytes } from "../html";
+import { localRedirectPath } from "../local-redirect";
 import { renderAppPage, sitesCspSource, uiSlotsOf } from "./shell";
 
 const e = escapeHtml;
@@ -128,9 +129,9 @@ const AUTH_CSS = `.dw-auth{max-width:30rem;margin:4vh auto 0}.dw-auth h1{margin-
 export async function loginPage(c: Context<DropwayEnv>): Promise<Response> {
   const dw = c.get("dw");
   const session = uiSlotsOf(c).session;
-  const next = c.req.query("next");
+  const next = localRedirectPath(c.req.query("next"), new URL(c.req.url).origin);
   const sessionNote = session
-    ? `<p class="dw-callout">People sign in with their account: <a class="dw-btn primary small" href="${e(session.signInPath + (next && next.startsWith("/") && !next.startsWith("//") ? `${session.signInPath.includes("?") ? "&" : "?"}next=${encodeURIComponent(next)}` : ""))}">Sign in with your account</a> Agents and scripts can also sign in here with an API key.</p>`
+    ? `<p class="dw-callout">People sign in with their account: <a class="dw-btn primary small" href="${e(session.signInPath + (next ? `${session.signInPath.includes("?") ? "&" : "?"}next=${encodeURIComponent(next)}` : ""))}">Sign in with your account</a> Agents and scripts can also sign in here with an API key.</p>`
     : "";
   const setUp = await isSetUp(dw).catch(() => true);
   const bootstrapField = `<div class="dw-field"><label class="dw-label" for="%ID%">Bootstrap secret (ADMIN_BOOTSTRAP_KEY)</label><input class="dw-input" id="%ID%" name="secret" type="password" autocomplete="off" required><p class="dw-help">Sent once to this instance's API, never stored in the browser.</p></div>`;
