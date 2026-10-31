@@ -100,7 +100,9 @@ describe("one-shot publish request limits", () => {
   it("refuses a body over the cap, whether or not it declares a Content-Length", async () => {
     const dw = await freshInstance(LIMIT);
     const bytes = strToU8("x".repeat(200));
-    const declared = await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, headers: { "Content-Type": "text/html" }, body: bytes });
+    const declared = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey, headers: { "Content-Type": "text/html", "Content-Length": String(bytes.length) }, body: bytes,
+    });
     expect([declared.status, declared.body.error?.code]).toEqual([413, "request_too_large"]);
     const streamed = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(bytes); c.close(); } });
     const undeclared = await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, headers: { "Content-Type": "text/html" }, body: streamed });
