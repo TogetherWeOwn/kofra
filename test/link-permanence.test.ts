@@ -412,7 +412,7 @@ describe("R-59 deleted versions answer 410, never another site's bytes", () => {
   it("a deleted version's <slug>--v<N> answers 410 in path mode", async () => {
     const [v1] = await versionIds("versioned-site");
     const del = await dw.call(`/api/v1/sites/versioned-site/versions/${v1!.id}`, {
-      method: "DELETE",
+      method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: "versioned-site" }),
       key: dw.ownerKey,
     });
     expect(del.status).toBe(200);
@@ -459,7 +459,7 @@ describe("R-59 deleted versions answer 410, never another site's bytes", () => {
     await publish(split, "split-site", "v2-content");
     const list = await split.json("/api/v1/sites/split-site/versions", { key: split.ownerKey });
     const v1 = (list.body.versions as Array<{ id: string; number: number }>).find((v) => v.number === 1)!;
-    const del = await split.call(`/api/v1/sites/split-site/versions/${v1.id}`, { method: "DELETE", key: split.ownerKey });
+    const del = await split.call(`/api/v1/sites/split-site/versions/${v1.id}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: "split-site" }), key: split.ownerKey });
     expect(del.status).toBe(200);
     expect((await split.call(`${SITES}/split-site--v1/`, { headers: NAV })).status).toBe(410);
     expect((await split.call(`${SITES}/split-site--v2/`, { headers: NAV })).status).toBe(404);
@@ -483,7 +483,7 @@ describe("R-59 deleted versions answer 410, never another site's bytes", () => {
     await publish(sub, "versioned-site", "v2-content");
     const list = await sub.json("/api/v1/sites/versioned-site/versions", { key: sub.ownerKey });
     const v1 = (list.body.versions as Array<{ id: string; number: number }>).find((v) => v.number === 1)!;
-    const del = await sub.call(`/api/v1/sites/versioned-site/versions/${v1.id}`, { method: "DELETE", key: sub.ownerKey });
+    const del = await sub.call(`/api/v1/sites/versioned-site/versions/${v1.id}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: "versioned-site" }), key: sub.ownerKey });
     expect(del.status).toBe(200);
     const gone = await sub.call("https://versioned-site--v1.sites.test/docs/page.html", { headers: NAV });
     expect(gone.status).toBe(410);

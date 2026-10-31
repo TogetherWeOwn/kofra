@@ -95,6 +95,8 @@ and owner recovery (bootstrap key only), and HTML pages.
 | `url` (+ `headers`) | Files already online. https only, public hosts only (re-checked on each of up to 3 redirects), 25 MB, 30 s |
 | `sha256` + `size` | Bytes already stored are reused at once; otherwise the result is `awaiting_upload` with `upload.items` (PUT, then `finalize_version`) |
 | `copyFrom: { site?, version?, path? }` | A file you already published (same owner) |
+| `download_url` + `file_name` (+ `headers`) | A chat-client attachment: fetched under the same https/SSRF guards as `url`, stored at `file_name` |
+| `archiveUrl` (top level, instead of `files`) | A public https .zip the server downloads and unpacks like an uploaded zip |
 
 Sites can be named by slug, site id or any URL of the site. Versions by `live`,
 `v3`, `3` or id.
@@ -108,6 +110,12 @@ Sites can be named by slug, site id or any URL of the site. Versions by `live`,
 - `update_site_files` and `publish_site` take `baseVersionId`; a newer publish by
   someone else gives `409 version_conflict` with the live version in `details`.
 - Destructive tools need `confirm` (the slug, or the member's email).
+- `restore_version` and `delete_version` use the [version-action replay contract](OPERATIONS.md#version-action-replay):
+  fresh site authorization and canonical delete confirmation precede any replay;
+  target resolution is inside the claim. Callback exceptions retain an unknown
+  pending claim (409) rather than permit another effect. REST/MCP keys are scoped
+  separately. Retention is bounded to 24 hours, not an exactly-once guarantee;
+  never infer success from a subsequent 404 or live-pointer read.
 
 ## Extending (embedding applications)
 
