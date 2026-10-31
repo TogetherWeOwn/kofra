@@ -11,6 +11,7 @@ import { bool, int, parseArgs, str, UsageError, type FlagSpecs, type Parsed } fr
 import { CliError, DropwayClient, EXIT, normaliseApi, type FetchLike } from "./client.ts";
 import { linkKey, linkPath, readCredentials, readLink, removeCredentials, saveCredentials, writeLink, type ProjectLink } from "./config.ts";
 import { collectFiles } from "./files.ts";
+import { compareCancelled, compareDirectory, compareHuman } from "./compare.ts";
 import { encryptFiles } from "./encrypt.ts";
 import { explainConfig, explainConfigHuman } from "./explain-config.ts";
 import { withLegacyEnv } from "./legacy-brand.ts";
@@ -103,7 +104,7 @@ class Output {
 
   error(err: CliError) {
     this.progress(null);
-    if (this.json) {
+    if (this.json && err.code !== "compare_cancelled") {
       this.io.stdout(`${JSON.stringify({ ok: false, exitCode: err.exitCode, error: err.toJSON() }, null, 2)}\n`);
       return;
     }
@@ -1381,9 +1382,62 @@ Contract: https://github.com/TogetherWeOwn/kofra/blob/main/docs/CLI_DIAGNOSTICS.
   },
 };
 
+const compareCmd: Command = {
+  summary: "Compare a directory's hashes against a pinned remote version (read-only)",
+  usage: "kofra compare <path> --site <name> [--version <ref>] [--json] [--quiet] [--include-unchanged] [--limit <n>] [--max-files <n>] [--max-bytes <n>]",
+  flags: { site: { kind: "string", short: "s" }, version: { kind: "string" }, "include-unchanged": { kind: "boolean" },
+    limit: { kind: "string" }, "max-files": { kind: "string" }, "max-bytes": { kind: "string" } },
+  maxPositionals: 1,
+  details: "Flags, limits, output schema and safety guarantees: docs/CLI_COMPARE.md",
+  async run(p, io, out) {
+    const path = positional(p, 0, "path", this.usage);
+    const site = str(p, "site");
+    if (!site?.trim() || site.startsWith("-")) throw new UsageError("An explicit --site <name> is required for compare.");
+    const bound = (name: string, max: number, fallback: number) => {
+      const raw = str(p, name);
+      if (raw !== undefined && !/^[0-9]+$/.test(raw)) throw new UsageError(`--${name} requires plain integer bytes/counts.`);
+      return int(p, name, 1, max) ?? fallback;
+    };
+    const limit = bound("limit", 100000, 500);
+    const maxFiles = bound("max-files", 500000, 50000);
+    const maxBytes = bound("max-bytes", 10737418240, 2147483648);
+    const controller = new AbortController();
+    const cancel = () => controller.abort(compareCancelled());
+    process.once("SIGINT", cancel);
+    try {
+      const inst = await resolveInstance(p, io);
+      const key = requireKey(inst, "Comparing a directory");
+      controller.signal.throwIfAborted();
+      // The SDK retains its safe-GET retry defaults. A cancelled fetch becomes a
+      // local non-retryable response so it cannot start another network read.
+      const cancelled = () => new Response(JSON.stringify({ error: { code: "compare_cancelled", message: "Comparison cancelled." } }), { status: 400 });
+      const client = makeClient({ ...io, fetch: async request => {
+        if (controller.signal.aborted) return cancelled();
+        try {
+          return await (io.fetch ?? globalThis.fetch)(new Request(request, { signal: controller.signal }));
+        } catch (error) {
+          if (controller.signal.aborted) return cancelled();
+          throw error;
+        }
+      } }, inst.api, key);
+      const result = await compareDirectory(client, { path, cwd: io.cwd, site, requestedRef: str(p, "version") ?? "live",
+        limit, maxFiles, maxBytes, includeUnchanged: bool(p, "include-unchanged") === true, signal: controller.signal });
+      controller.signal.throwIfAborted();
+      out.result(result, () => compareHuman(result));
+      return EXIT.ok;
+    } catch (error) {
+      if (controller.signal.aborted) throw compareCancelled();
+      throw error;
+    } finally {
+      process.off("SIGINT", cancel);
+    }
+  },
+};
+
 const COMMANDS: Record<string, Command> = {
   publish: publishCmd,
   "explain-config": explainConfigCmd,
+  compare: compareCmd,
   duplicate: duplicateCmd,
   list: listCmd,
   site: siteCmd,

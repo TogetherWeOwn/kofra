@@ -1,8 +1,8 @@
 # `kofra compare`: local directory vs pinned remote manifest (spec, v1)
 
-Status: spec only, not implemented. This document is the source of truth for a
-future `compare` command. It authorizes design alignment only: no runtime code,
-no new endpoints, and no behaviour change to any existing command.
+Status: implemented. This document is the v1 source of truth for `kofra compare`.
+The command inspects directory hashes against a pinned remote manifest using
+existing read endpoints; it does not change any existing command.
 
 Tags: **P2** (beyond parity). No milestone is claimed; see `docs/ROADMAP.md`
 for ordering.
