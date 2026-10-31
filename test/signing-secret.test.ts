@@ -47,6 +47,10 @@ describe("signing secret", () => {
     const update = await call("/api/v1/publish", { key: dw.ownerKey, ...jsonBody({ site: "locked", files: [entry] }) });
     expect(update.status).toBe(503);
     expect(await versions()).toBe(before);
+    // A hash the site already stores needs no upload token, so it still publishes.
+    const stored = await manifestEntry("index.html", "private content");
+    const reuse = await call("/api/v1/publish", { key: dw.ownerKey, ...jsonBody({ site: "locked", files: [{ ...stored, path: "copy.html" }] }) });
+    expect(reuse.status).toBeLessThan(300);
 
     const page = await call(url);
     expect(page.status).toBe(503);
