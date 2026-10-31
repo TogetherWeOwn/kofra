@@ -18,7 +18,7 @@ your account; the drill in [Provenance](#6-provenance) used them.
 |---|---|---|---|
 | `DB` (D1) | database `dropway` | Everything metadata: tenants, members, API-key hashes and scopes, sites, versions, `version_files` (the manifest: path → SHA-256, size, content type), `blobs` + `blob_scopes`, `usage_counters`, idempotency keys, slug tombstones and redirects, transfers | **Yes** |
 | `FILES` (R2) | bucket `dropway-files` | `blobs/<sha256>`: immutable, content-addressed file bytes. R2 verifies the hash on write. Names are meaningless without the D1 manifest | No (bytes only) |
-| `CACHE` (KV) | namespace (auto-provisioned) | `live:<slug>` only: the hot "what is live" serving cache | No: any miss is rebuilt from D1 and rewritten (`live.ts`) |
+| `CACHE` (KV) | namespace (auto-provisioned) | `live:<slug>` only: the hot "what is live" serving cache | No: misses read D1; only mutations write KV (`live.ts`) |
 | `ANALYTICS` (AE) | dataset `dropway_hits` | One data point per served request: site id; slug, path, status, country, referrer, page-or-asset, version, tenant; count, latency ms, bytes | No, and nothing in D1 derives from it |
 | edge Cache API | — | Blob bytes and viewer fragments on custom domains; a no-op on `*.workers.dev` | No: ephemeral, rebuilds |
 
@@ -105,17 +105,18 @@ Two things the copy alone does not give you:
 `r2 bucket info` object counts lag on fresh buckets (eventual consistency);
 do not treat a zero count right after a copy as data loss.
 
-### 2.3 KV: no backup (rebuild path)
+### 2.3 KV: no backup (D1 fallback)
 
-`live:<slug>` entries are a pure cache. Deleting one changes nothing a
-visitor can see: the next read rebuilds it from D1 and rewrites KV
-(executed: delete → site still `200` → key repopulated). There is no manual
-rebuild step and none is needed. After a restore, warm the cache by reading
-each site homepage once, then confirm:
+`live:<slug>` entries are a pure cache. When an entry is missing or has an
+older manifest format, serving reads D1 and caches the result in isolate
+memory for five seconds. Reads deliberately do not repopulate KV: a delayed
+snapshot could otherwise overwrite a later publish, password change or deletion.
 
-```sh
-npx wrangler kv key list --binding CACHE --remote
-```
+No cache rebuild is required for correctness after a restore. Read each site
+homepage to verify the restored content, not to warm KV. Until the next
+serving-affecting mutation writes a current manifest, that site keeps using
+D1 after each isolate-memory expiry. This favors correctness over cache hit
+rate; an empty KV namespace does not mean content was lost.
 
 ### 2.4 Analytics Engine: no backup path (loss window)
 
@@ -199,7 +200,7 @@ about yourself; that is outside this runbook.
   A version whose blobs are missing reads `502` until R2 catches up.
 
 Deliberately absent: KV-only state. KV holds no unique data — `live:<slug>`
-is rebuilt from D1 on every miss — so there is nothing to lose. The edge
+is read from D1 on every miss — so there is nothing to lose. The edge
 Cache API is the same.
 
 ## 5. Cadence and retention math
