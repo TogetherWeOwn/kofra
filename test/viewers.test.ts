@@ -100,7 +100,7 @@ describe("viewer versions", () => {
   it("pins every registered viewer to its current render version", () => {
     expect(VIEWERS).toHaveLength(15);
     expect(Object.fromEntries(VIEWERS.map((v) => [v.id, v.version ?? 1]))).toEqual({
-      source: 5, "html-frame": 4, markdown: 10, notebook: 7, json: 5, csv: 5, svg: 5, image: 5,
+      source: 5, "html-frame": 4, markdown: 11, notebook: 8, json: 5, csv: 5, svg: 5, image: 5,
       pdf: 4, video: 4, audio: 4, font: 4, archive: 4, code: 5, binary: 5,
     });
   });
