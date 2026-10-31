@@ -351,8 +351,8 @@ application would use to add them without changing this repository.
    Cache API: blob/<sha256>,         sites, versions, files,       (screenshots, AI metadata,
      render/<viewer>/<sha256>,       blobs, folders, access,        search index, moderation,
      ptr/<slug> (10 s)               domains, variables, jobs       webhooks, rollups)
-   KV: live:<slug>, host:<name>  R2: blobs/<sha256>, thumbs/,      Cron: cleanup, rollups
-   R2: blobs/<sha256>                uploads/ (multipart)           Durable Objects: Site Data,
+   KV: live:<slug>, host:<name>  R2: blobs/<sha256>/<uuid>,        Cron: cleanup, rollups
+   R2: blobs/<sha256>/<uuid>         thumbs/, uploads/ (multipart)  Durable Objects: Site Data,
    Analytics Engine write        KV: OAUTH_KV (OAuth grants)          live reload (P2)
 ```
 
@@ -362,7 +362,7 @@ application would use to add them without changing this repository.
 |---|---|---|---|---|
 | Workers | Everything: app, API, MCP, serving, viewers | (the Worker) | yes | - |
 | D1 | Source of truth for metadata; FTS5 search | `DB` | yes | - |
-| R2 | File bytes, content-addressed (`blobs/<sha256>`); thumbnails; multipart staging | `FILES` | yes | - |
+| R2 | File bytes, one immutable generation per verified upload (`blobs/<sha256>/<uuid>`; legacy `blobs/<sha256>`); thumbnails; multipart staging | `FILES` | yes | - |
 | KV | `live:<slug>` pointer cache; `host:<hostname>` domain map | `CACHE` | yes | - |
 | Cache API | Per-data-center cache of blobs, rendered viewers, pointers | (runtime) | yes | - |
 | Analytics Engine | Per-site hits | `ANALYTICS` | no | analytics reads fall back to D1 daily counters |
@@ -783,7 +783,7 @@ run before core viewers. Section 10 lists core viewers.
 | Store | Keys and contents |
 |---|---|
 | D1 `DB` | All metadata (tables below). Times are unix epoch milliseconds |
-| R2 `FILES` | `blobs/<sha256>` file bytes (never overwritten); `thumbs/<versionId>.webp`, `og/<versionId>.png` (R-20); `uploads/<session id>` multipart staging (R-35, lifecycle 1 day); `manifests/<versionId>.json` (R-44) |
+| R2 `FILES` | `blobs/<sha256>/<uuid>` file bytes, one generation per verified upload (never overwritten); `blobs.storage_key` names the current generation, and a NULL `storage_key` means the legacy key `blobs/<sha256>`; `thumbs/<versionId>.webp`, `og/<versionId>.png` (R-20); `uploads/<session id>` multipart staging (R-35, lifecycle 1 day); `manifests/<versionId>.json` (R-44) |
 | KV `CACHE` | `live:<slug>` live pointer and manifest (exists); `host:<hostname>` mount map (R-33); `settings:instance` (R-42) |
 | KV `OAUTH_KV` | OAuth clients, grants and hashed tokens, owned by `workers-oauth-provider` (R-24) |
 | Durable Object `SITE_DATA` | One SQLite store per site with Site Data records (R-30) |
@@ -1726,7 +1726,7 @@ grant more than they hold. Keys can be limited to one site and, for drives, a pa
 ### 11.5 Integrity, privacy, SSRF, secrets
 
 - **Upload integrity.** R2 verifies the SHA-256 of every single-request upload. Multipart uploads land in
-  `uploads/`, are hashed with a streaming digest, and only then become `blobs/<sha256>`.
+  `uploads/`, are hashed with a streaming digest, and only then become a `blobs/<sha256>/<uuid>` generation.
 - **Dedupe privacy.** "Already have it" is answered only for hashes the caller's tenant (or anonymous
   claim) has proven it holds (`blob_scopes`). Other hashes are always requested, verified, and not rewritten
   if present. No unauthenticated endpoint reveals whether a hash exists.

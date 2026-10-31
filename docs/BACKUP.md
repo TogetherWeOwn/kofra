@@ -82,6 +82,15 @@ rclone copy r2:dropway-files r2:dropway-files-bk/    # to a second bucket
 
 `copy` never deletes at the destination; prefer it over `sync` for backups.
 
+Prefer the second bucket. A legacy `blobs/<sha256>` object and a
+`blobs/<sha256>/<uuid>` generation of the same hash can exist side by side
+(for example, an orphaned legacy object next to a fresh upload). R2 keys are
+flat, but a local filesystem cannot hold both a file and a directory named
+`blobs/<sha256>`, so a local-disk copy can fail on that one object. If that
+happens, rerun the copy after a later hourly cleanup has removed the orphaned
+object. The cleanup sweeps the bucket a page at a time, so the next run does not
+always fix it.
+
 Two things the copy alone does not give you:
 
 - **The manifest lives in D1.** A `blobs/<sha256>[/<uuid>]` object says nothing about
