@@ -44,7 +44,7 @@ repository) or `npx skills add https://<app>` (templated with that instance).
 - Auth: `Authorization: Bearer` with an API key (or the `dwc_` claim token of an
   anonymous site), resolved by the same identity adapter as the REST API.
   Missing or bad credentials get `401` with `WWW-Authenticate: Bearer`.
-- Narrowing: `?toolsets=core,sites,versions,keys,members` (default: all) and
+- Narrowing: `?toolsets=core,sites,versions,keys,members,folders,transfers` (default: all) and
   `?read_only=1`; or the headers `X-Kofra-Toolsets` and `X-Kofra-Read-Only`.
   All 31 tools (32 when `claim_site` is enabled) are about 9k tokens of definitions; `core` is about 5.5k.
 - Results: `structuredContent` matching the tool's `outputSchema`, plus one text
@@ -74,11 +74,14 @@ repository) or `npx skills add https://<app>` (templated with that instance).
 | `claim_site` | core | Claim an anonymous site (listed only when anonymous publishing is on) | `POST .../claim` |
 | `create_site` | sites | Reserve a site without files | `POST /api/v1/sites` |
 | `rename_site` | sites | New slug (the old URL stops working) | `POST .../rename` |
-| `duplicate_site` | sites | Copy the live version into a new slug, live at once (SPA mode only; re-apply a password) | `POST .../duplicate` |
+| `duplicate_site` | sites | Copy the live version into a new slug, live at once (only SPA mode carries over; re-apply a password) | `POST .../duplicate` |
+| `release_slug` | sites | Release a held site name early | `POST /api/v1/slugs/release` |
 | `get_version` | versions | One version; missing uploads of a pending one | `GET .../versions/{version}` |
 | `delete_version` | versions | Delete a non-live version (needs `confirm`) | `DELETE .../versions/{id}` |
 | `list_api_keys`, `create_api_key`, `revoke_api_key` | keys | Scoped keys | `/api/v1/keys` |
 | `list_members`, `add_member`, `update_member`, `remove_member` | members | Members and roles | `/api/v1/members` |
+| `delete_folder` | folders | Delete an organizer folder; its sites become unfiled (needs `confirm` = name) | `DELETE /api/v1/folders/{folder}` |
+| `create_transfer`, `get_transfer`, `update_transfer`, `revoke_transfers` | transfers | Expiring file deliveries | `/api/v1/transfers` |
 
 Not tools, on purpose: blob uploads (`PUT /api/v1/blobs/{sha256}`: raw bytes should
 not pass through a model; upload items carry ready `curl` lines), first-run setup
@@ -92,7 +95,7 @@ and owner recovery (bootstrap key only), and HTML pages.
 |---|---|
 | `content` (+ `encoding: "utf8"`, up to 1 MB) | Text the agent just wrote |
 | `content` + `encoding: "base64"` (up to 256 KB) | Small binaries only |
-| `url` (+ `headers`) | Files already online. https only, public hosts only (re-checked on each of up to 3 redirects), 25 MB, 30 s |
+| `url` (+ `headers`) | Files already online. https only, public hosts only (re-checked on each of up to 3 redirects), up to the per-file limit (100 MB by default), 30 s |
 | `sha256` + `size` | Bytes already stored are reused at once; otherwise the result is `awaiting_upload` with `upload.items` (PUT, then `finalize_version`) |
 | `copyFrom: { site?, version?, path? }` | A file you already published (same owner) |
 | `download_url` + `file_name` (+ `headers`) | A chat-client attachment: fetched under the same https/SSRF guards as `url`, stored at `file_name` |
