@@ -243,7 +243,10 @@ about yourself; that is outside this runbook.
       `wrangler.jsonc` carries the old account's resource IDs (the `DB`
       `database_id`, the `CACHE` `id`), remove them.
    2. `npx wrangler d1 create dropway`, set the printed `database_id` on the
-      `DB` entry, then run the two `d1 execute DB` commands above.
+      `DB` entry, then run the whole block above: the import (one per part,
+      in order, for a multi-part backup), both restored-inventory commands
+      and the `jq`/`diff` check. **Stop if it does not print "inventory
+      matches"**; do not create the bucket or deploy.
    3. `npx wrangler r2 bucket create dropway-files`. Create an R2 API token
       in the **new account**, scoped to that destination bucket, and configure
       a separate rclone remote named `r2-restored` using section 2.2's format
