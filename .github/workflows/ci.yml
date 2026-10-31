@@ -10,23 +10,21 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  # Typecheck and every test: Workers-runtime tests (D1, R2, KV emulated) and the CLI's
-  # unit and end-to-end tests against a local Worker.
+  # Typecheck, generated-artifact checks, package builds and the fast Node-side client tests.
   check:
     runs-on: ubuntu-latest
-    # Allow slow browser dependency downloads plus the full test and validation suite.
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm ci --prefix packages/cli/test/encrypted
-      - run: packages/cli/test/encrypted/node_modules/.bin/playwright install --with-deps chromium
       - run: npm run typecheck
-      - run: npm test
+      - run: npm run test:client
       - name: Validate generated OpenAPI 3.1 and required operation metadata
         run: npm run openapi:lint
       - name: Generated typed client is current
@@ -39,6 +37,44 @@ jobs:
           npm pack -w @dropway/server --dry-run
           npm pack -w @dropway/client --dry-run
 
+  # The slow suites of `npm test`, run in parallel instead of one after another: the
+  # Workers-runtime tests (D1, R2, KV emulated) and the CLI and browser-code tests, which
+  # drive Chromium through Playwright against a local Worker.
+  test:
+    name: test (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    # Allow slow browser dependency downloads plus the suite itself.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: workers
+            script: test:workers
+          - suite: cli
+            script: test:cli
+            browser: true
+          - suite: browser-code
+            script: test:browser-code
+            browser: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/cli/test/encrypted/package-lock.json
+      - run: npm ci
+      - if: matrix.browser
+        run: npm ci --prefix packages/cli/test/encrypted
+      - if: matrix.browser
+        run: packages/cli/test/encrypted/node_modules/.bin/playwright install --with-deps chromium
+      - run: npm run ${{ matrix.script }}
+
   # This repository is the single-tenant open-source product. Fails on any sign of the
   # hosted service's code: payment SDKs, private packages or markers, billing/pricing code.
   # Also fails while user-visible names from before the rename remain (fix: npm run rebrand).
@@ -46,8 +82,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
       - name: Guard rules catch planted examples
@@ -64,14 +102,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run build -w kofra
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
       - name: Run the bundle on Node 20
@@ -86,7 +126,7 @@ jobs:
   # job above succeeded (a failed, cancelled or skipped dependency all count as failure).
   ci-ok:
     if: always()
-    needs: [check, open-core-guard, cli-node20]
+    needs: [check, test, open-core-guard, cli-node20]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
