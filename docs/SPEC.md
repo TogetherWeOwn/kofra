@@ -142,7 +142,7 @@ Full matrix in section 10.
 | VIEW-02 | P0 types: HTML (real page, plus a viewer frame and source view), Markdown, images, SVG, PDF, video, audio, JSON, CSV/TSV, code (60+ languages), plain text, folder listing with image gallery and README | P0 | R-07, R-08 |
 | VIEW-03 | P1 types: Jupyter notebooks, Mermaid and math inside Markdown, YAML/TOML tree, sortable and filterable CSV, JSON search, font specimens, diffs and patches, binary info page | P1 | R-34 |
 | VIEW-04 | P2 types: Office documents (via Markdown conversion), archives (entry list), 3D models, GeoJSON maps, EPUB | P2 | R-51 |
-| VIEW-05 | App-origin viewer page `<app>/view/{site}/{path}` with tabs and a version picker; user content stays in an iframe on the sites origin | P1 | R-22 |
+| VIEW-05 | App-origin viewer page `<app>/v/{site}/{path}` (`/view/` redirects) with tabs and a version picker; user content stays in an iframe on the sites origin | P1 | Partial: live tabs and accessible ancestor breadcrumbs implemented (see [architecture](ARCHITECTURE.md#app-origin-ui-packagesserversrcui)); version picker remains R-22; deployment verification pending |
 | VIEW-06 | Per-site switches: `renderMarkdown` (exists) and `viewers: false` (always raw) | P0/P1 | Partial; R-27 |
 
 ### 4.4 Versions (VER)
