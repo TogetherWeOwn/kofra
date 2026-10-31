@@ -95,7 +95,7 @@ and owner recovery (bootstrap key only), and HTML pages.
 |---|---|
 | `content` (+ `encoding: "utf8"`, up to 1 MB) | Text the agent just wrote |
 | `content` + `encoding: "base64"` (up to 256 KB) | Small binaries only |
-| `url` (+ `headers`) | Files already online. https only, public hosts only (re-checked on each of up to 3 redirects), up to the per-file limit (100 MB by default), 30 s |
+| `url` (+ `headers`) | Files already online. https only, public hosts only (re-checked on each of up to 3 redirects), up to the per-file limit (100 MB by default) and 25 MB in total per call (`ONESHOT_MAX_BYTES`), 30 s |
 | `sha256` + `size` | Bytes already stored are reused at once; otherwise the result is `awaiting_upload` with `upload.items` (PUT, then `finalize_version`) |
 | `copyFrom: { site?, version?, path? }` | A file you already published (same owner) |
 | `download_url` + `file_name` (+ `headers`) | A chat-client attachment: fetched under the same https/SSRF guards as `url`, stored at `file_name` |
