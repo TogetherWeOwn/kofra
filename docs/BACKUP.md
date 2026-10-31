@@ -44,16 +44,23 @@ For retention beyond the window, and before every upgrade, take a portable
 export (schema and data as SQL). Pause all writers (including scheduled
 cleanup) and drain in-flight work while recording the inventory and
 exporting, so both describe the same snapshot; save the counts beside the
-SQL file for the import check:
+SQL file for the import check. The inventory counts the rows of every table
+(sites and versions, but also tenants, members, API keys, usage counters,
+transfers, slug holds, idempotency and upload state, and `d1_migrations`).
+It reads the table list from `sqlite_master`, so tables added by later
+migrations are included without editing the query:
 
 ```sh
-npx wrangler d1 execute dropway --remote --json --command \
-  "SELECT 'sites' AS table_name, count(*) AS rows FROM sites UNION ALL SELECT 'versions', count(*) FROM versions UNION ALL SELECT 'version_files', count(*) FROM version_files;" \
-  > ./dropway-2026-10-27-counts.json
+INVENTORY_SQL="SELECT group_concat('SELECT ''' || name || ''' AS table_name, count(*) AS rows FROM \"' || name || '\"', ' UNION ALL ') AS q FROM (SELECT name FROM sqlite_master WHERE type = 'table' AND substr(name, 1, 7) <> 'sqlite_' AND substr(name, 1, 4) <> '_cf_' ORDER BY name);"
+npx wrangler d1 execute dropway --remote --json --command "$INVENTORY_SQL" \
+  | jq -r '.[0].results[0].q' > ./inventory.sql
+npx wrangler d1 execute dropway --remote --json --command "$(cat ./inventory.sql)" \
+  | jq -S '.[0].results | sort_by(.table_name)' > ./dropway-2026-10-27-counts.json
 npx wrangler d1 export dropway --remote --output=./dropway-2026-10-27.sql
 ```
 
-Check both commands succeeded before resuming writers. For a multi-part
+Check every command succeeded, and that the counts file is a non-empty
+JSON array, before resuming writers. For a multi-part
 backup, also retain the ordered list of SQL parts. Each part must contain
 complete SQL statements; arbitrary byte/line splitting can corrupt imports.
 
@@ -192,18 +199,23 @@ about yourself; that is outside this runbook.
    npx wrangler d1 create dropway-restored
    # set the DB entry's database_name to dropway-restored and database_id to the printed id
    npx wrangler d1 execute DB --remote --file=./dropway-2026-10-27.sql
-   npx wrangler d1 execute DB --remote --json --command \
-     "SELECT 'sites' AS table_name, count(*) AS rows FROM sites UNION ALL SELECT 'versions', count(*) FROM versions UNION ALL SELECT 'version_files', count(*) FROM version_files;" \
-     > ./restored-counts.json
+   # INVENTORY_SQL as set in section 2.1, now run against the restored database
+   npx wrangler d1 execute DB --remote --json --command "$INVENTORY_SQL" \
+     | jq -r '.[0].results[0].q' > ./restored-inventory.sql
+   npx wrangler d1 execute DB --remote --json --command "$(cat ./restored-inventory.sql)" \
+     | jq -S '.[0].results | sort_by(.table_name)' > ./restored-counts.json
+   jq -e 'length > 0' ./dropway-2026-10-27-counts.json ./restored-counts.json > /dev/null \
+     && diff ./dropway-2026-10-27-counts.json ./restored-counts.json && echo "inventory matches"
    ```
 
    For a multi-part backup, replace the single `--file` import above with
    one import per part in the backup's recorded order, exactly once. Stop
    on the first failed import; do not continue with later parts or deploy a
    partially imported database. Run the count query only after the last
-   part. Compare all three counts in `restored-counts.json` with the saved
-   backup inventory: **abort on any mismatch**, including an unexpected
-   zero, before rebinding a Worker. A successful SQL command alone does not
+   part. The `diff` compares every table's row count in
+   `restored-counts.json` with the saved backup inventory: **abort on any
+   difference**, including a missing table or an unexpected zero, before
+   rebinding a Worker. A successful SQL command alone does not
    prove completeness. If the backup has no inventory, establish the
    expected contents from trusted backup records/a prior restore drill
    before proceeding; do not declare the import complete from its own count.
@@ -433,3 +445,5 @@ redeploy step is the repo's own `npm run deploy`. The 2026-10-28 additions
 ordered multi-part import, the combined homepage/raw verification sequence,
 and new-account rclone configuration) have not been drilled end to end;
 they were checked against the service code and vendor documentation only.
+The 2026-10-31 all-table inventory (`INVENTORY_SQL`) was run locally against
+a SQLite database built from `packages/core/migrations/`, not against remote D1.
