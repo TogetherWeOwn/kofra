@@ -1,3 +1,4 @@
+import { signingSecret } from "../config";
 import type { DropwayContext } from "../context";
 import { siteUrl } from "../context";
 import { readBlob, readBlobRange } from "./blobs";
@@ -31,7 +32,7 @@ export const transferCookieName = (t: TransferRow) => `__Host-dw_transfer_${t.id
 export async function makeTransferGrant(dc: DropwayContext, t: PublicTransfer): Promise<string> {
   const until = Math.min(Date.now() + 15 * 60_000, t.expires_at);
   const value = String(until);
-  return `${value}.${await hmacHex(dc.config.signingSecret, `transfer:${t.id}:${t.password_hash}:${value}`)}`;
+  return `${value}.${await hmacHex(signingSecret(dc.config), `transfer:${t.id}:${t.password_hash}:${value}`)}`;
 }
 export async function transferUnlocked(dc: DropwayContext, t: PublicTransfer, request: Request): Promise<boolean> {
   if (!t.password_hash) return true;
@@ -41,7 +42,7 @@ export async function transferUnlocked(dc: DropwayContext, t: PublicTransfer, re
     if (!grant || grant.length > 100) continue;
     const [until, signature] = grant.split(".");
     if (!until || !signature || !/^\d+$/.test(until) || Number(until) < Date.now() || Number(until) > Date.now() + 15 * 60_000) continue;
-    const expected = await hmacHex(dc.config.signingSecret, `transfer:${t.id}:${t.password_hash}:${until}`);
+    const expected = await hmacHex(signingSecret(dc.config), `transfer:${t.id}:${t.password_hash}:${until}`);
     if (timingSafeEqualStr(signature, expected)) return true;
   }
   return false;
@@ -68,13 +69,13 @@ async function spendUnlock(dc: DropwayContext, bucket: string, cap: number) {
 }
 /** Separate namespaces prevent site password attempts from consuming transfer budgets. */
 export async function spendSitePasswordAttempt(dc: DropwayContext, siteId: string, ip: string) {
-  await spendUnlock(dc, `site-ip:${await sha256Hex(`${dc.config.signingSecret}:${ip}`)}`, 10);
+  await spendUnlock(dc, `site-ip:${await sha256Hex(`${signingSecret(dc.config)}:${ip}`)}`, 10);
   await spendUnlock(dc, `site:${siteId}`, 30);
 }
 
 export async function unlockTransfer(dc: DropwayContext, t: PublicTransfer, password: unknown, ip: string) {
   checkTransferGate(t);
-  await spendUnlock(dc, `ip:${await sha256Hex(`${dc.config.signingSecret}:${ip}`)}`, 10);
+  await spendUnlock(dc, `ip:${await sha256Hex(`${signingSecret(dc.config)}:${ip}`)}`, 10);
   await spendUnlock(dc, `transfer:${t.id}`, 30);
   const value = validateTransferPassword(password);
   if (!value || !t.password_hash || !await verifyPassword(value, t.password_hash)) throw forbidden("Incorrect password.", "Ask the sender for the delivery password.", "transfer_locked");
