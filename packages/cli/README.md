@@ -24,6 +24,7 @@ Zero runtime dependencies. Node.js 20 or newer.
 | `duplicate <source> <new-slug>` | Copy an explicit live site into a new slug (`--message`, `--idempotency-key`, offline `--dry-run`) |
 | `list` | Your sites (`--all` for every page) |
 | `site <name>` | One site: URL, live version, settings |
+| `settings <site>` | Inspect non-secret site settings, PATCH explicit fields, or plan a patch offline with `--dry-run` |
 | `rename <source> <new-slug> --yes` | Rename an explicit site; offline `--dry-run`; saved local project mappings remain unchanged |
 | `files <name>` | Files of the live version (or `--version <ref>` with `live`, `v3`, `3` or a version id, read directly) with their URLs |
 | `read-file <site> <path>` | One file's content, one bounded page (`--version`, `--offset`, `--length`, `--encoding`) |
@@ -50,6 +51,77 @@ kofra keys ls --all --json  # every member's keys (needs members:write) as one J
 `*` marks the current key and terminal control characters are shown as visible `\uXXXX` escapes,
 keeping each key on one row. `--json` preserves the original metadata values. Create and revoke
 keys with the generic command, e.g. `kofra api POST /keys --data '{"name":"ci"}'`.
+
+## Site settings
+
+Always supply one explicit site **slug**, even if `dropway.json` maps this folder to a site.
+`settings` never infers a target, creates a site, publishes, changes credentials or writes config.
+
+```sh
+kofra settings disposable-report --json                    # inspect: authenticated GET only
+kofra settings disposable-report --title 'Report' --json   # write: PATCH only this title
+kofra settings disposable-report --spa false --render-markdown false --cross-origin-isolation true --json
+kofra settings disposable-report --title '' --description '' --json  # clear both to null
+kofra settings disposable-report --spa false --dry-run --json       # offline; no credential needed
+```
+
+| Flag | Accepted value / PATCH field |
+|---|---|
+| `--title <text>` | Literal string, including spaces; `''` clears `title` to `null` |
+| `--description <text>` | Literal string; `''` clears `description` to `null` |
+| `--spa true\|false` | Lower-case literal boolean / `spa` |
+| `--render-markdown true\|false` | Lower-case literal boolean / `renderMarkdown` |
+| `--cross-origin-isolation true\|false` | Lower-case literal boolean / `crossOriginIsolation` |
+| `--dry-run` | Requires at least one explicit field; prints the exact normalized patch offline |
+
+Use each option only once. `--flag=value` also works; boolean field flags still require an explicit
+`true` or `false` (no `1`, `0`, `yes`, `--no-spa` or implicit toggle). Unknown options, extra/missing
+sites, repeated flags and unsupported controls fail with exit 2 **before any request**. Passwords,
+access modes, key management, tenant/runtime settings and instance limits are not supported by this
+command and are never forwarded. Omitted fields are not sent, so existing values survive. Empty
+strings are the only CLI clearing spelling; the literal string `null` is just text.
+
+Inspect needs an authenticated site read; member keys changing settings need both `sites:read`
+and `sites:write`. A write sends only the
+existing PATCH, with no preliminary GET. Reapplying the same patch preserves the settings and
+version history (server timestamps may change). Site bytes and version identity are not republished.
+`--dry-run` does not contact the instance, read credentials or write local state; it checks CLI syntax,
+not site existence, permission or server policy. No non-TTY prompt or fallback to another command
+occurs, including on errors.
+
+JSON success is exactly one object on stdout; progress goes to stderr. The response is allowlisted:
+
+```json
+{"ok":true,"site":{"id":"site_example","slug":"disposable-report","title":null,"description":null,"currentVersionId":"ver_example","settings":{"spa":false,"renderMarkdown":true,"crossOriginIsolation":false}}}
+```
+
+`site.id` is a stable string on current instances and `null` on older instances that omit it;
+human output omits a missing id. Existing site slugs up to 63 characters remain supported.
+Authenticated requests require HTTPS except for loopback HTTP development instances.
+
+No claim token, visitor password, key or other access data is included. Dry-run returns a versioned
+plan with the explicit slug, never an invented stable id:
+
+```json
+{"ok":true,"schemaVersion":1,"dryRun":true,"site":"disposable-report","patch":{"spa":false}}
+```
+
+Errors use the normal `{ok:false,exitCode,error}` envelope and preserve the server's code, hint,
+HTTP status, request id, retryability, next-call array and retry delay when present. See the exit-code
+table below; this command never changes the target or falls back to publish/setup after a refusal.
+
+Disposable, agent-runnable verification from the repository root (no remote account, deployment or
+production request; builds the CLI, starts a temporary local Worker, applies local migrations and
+checks inspect/PATCH/reapply against isolated D1/R2/KV):
+
+```sh
+npm ci --include=dev --no-audit --no-fund
+npm run build -w kofra
+npm run test:cli -- test/site-settings/
+```
+
+The suite also observes wire requests, checks exact offline plans without credentials, fingerprints
+local config before/after, and exercises invalid flags, explicit false, secret projection and errors.
 
 ## Versions
 

@@ -86,6 +86,7 @@ export type {
 export type { BytesResult, CallOptions };
 
 export { movedTo };
+export { isCredentialSafeUrl, isLoopbackHostname } from "@dropway/client";
 
 /** Normalise an instance URL, throwing a CliError (exit 2) for bad input. */
 export function normaliseApi(input: string): string {
@@ -99,6 +100,9 @@ export function normaliseApi(input: string): string {
 
 function exitCodeFor(error: DropwayError, fallback: ExitCode): ExitCode {
   if (error.status !== undefined) return exitCodeForStatus(error.status);
+  // The same refusal normaliseApi raises at construction: a configuration
+  // error the caller fixes by changing the URL, not an unexpected failure.
+  if (error.code === "invalid_api_url") return EXIT.usage;
   if (error.code === "network_error") return EXIT.unavailable;
   return fallback;
 }

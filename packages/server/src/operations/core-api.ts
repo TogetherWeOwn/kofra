@@ -903,6 +903,7 @@ export const CORE_API_OPERATIONS = [
     method: "PATCH",
     path: "/api/v1/sites/{slug}",
     summary: "Change site settings",
+    cli: { command: ["settings"] },
     toolset: "core",
     scopes: ["sites:write"],
     description:

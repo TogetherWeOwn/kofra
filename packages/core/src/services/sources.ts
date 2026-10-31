@@ -562,7 +562,7 @@ async function completeVersion(
     url: siteUrl(dc, fresh.slug),
     versionUrl: await versionPreviewUrl(dc, actor, fresh, version!),
     slug: fresh.slug,
-    site: { id: fresh.id, ...serializeSite(dc, fresh, live) },
+    site: serializeSite(dc, fresh, live),
     version: versionOut,
     files: {
       total: files.length,
@@ -834,7 +834,7 @@ export async function finalizeVersionByRef(dc: DropwayContext, p: Principal, sit
       url: siteUrl(dc, fresh.slug),
       versionUrl: await versionPreviewUrl(dc, p, fresh, result.version),
       slug: fresh.slug,
-      site: { id: fresh.id, ...serializeSite(dc, fresh, live) },
+      site: serializeSite(dc, fresh, live),
       version: serializeVersion(result.version, fresh.current_version_id),
       warnings: result.warnings,
       next: [] as NextStep[],

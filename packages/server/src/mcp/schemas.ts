@@ -81,7 +81,10 @@ export const VERSION_OUT: Schema = {
 
 export const SITE_OUT: Schema = {
   type: "object",
-  properties: { slug: { type: "string" }, url: { type: "string" }, currentVersionId: { type: ["string", "null"] } },
+  // id is typed but not required: idempotency receipts stored before sites
+  // serialized an id replay unchanged and must keep validating, never be
+  // refused (or re-executed) for lacking it.
+  properties: { id: { type: "string" }, slug: { type: "string" }, url: { type: "string" }, currentVersionId: { type: ["string", "null"] } },
   required: ["slug", "url"],
 };
 
