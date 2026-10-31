@@ -143,9 +143,11 @@ async function loadVersionFiles(dc: DropwayContext, siteId: string, versionId: s
     .bind(versionId)
     .all<{ path: string; sha256: string; size: number; content_type: string }>();
   for (const f of results) files[f.path] = [f.sha256, f.size, f.content_type];
-  if (cacheFiles) {
+  if (cacheFiles && results.length > 0) {
     // Finalized versions never change. A delayed fill can only cache those
     // exact files, not revive a slug, change its password or replace its pointer.
+    // No rows means the version was deleted after the site row was read (files
+    // are deleted atomically); caching {} would outlive it, e.g. across a D1 restore.
     dc.waitUntil(dc.env.CACHE.put(key, JSON.stringify(files), { expirationTtl: 86_400 }).catch(() => {}));
   }
   return files;

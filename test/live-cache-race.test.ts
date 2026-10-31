@@ -192,4 +192,73 @@ describe("live cache miss races", () => {
     expect(page.status).toBe(200);
     expect(await page.text()).toBe("new");
   });
+
+  it("does not cache an empty file map when the selected version is deleted mid-read", async () => {
+    const dw = await freshInstance();
+    const slug = "cache-files-deleted";
+    const v1 = await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, body: form({ "index.html": "one" }, { slug }) });
+    expect(v1.status).toBe(201);
+    const v2 = await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, body: form({ "index.html": "two" }, { slug }) });
+    expect(v2.status).toBe(200);
+    await env.CACHE.delete(liveKey(slug));
+    clearLiveMemoryCache();
+
+    let release!: () => void;
+    let captured!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const siteRead = new Promise<void>((resolve) => { captured = resolve; });
+    // Hold the file query until after the read selected v2 as current: it then
+    // runs after v2 was rolled back and deleted, and returns no rows.
+    const db = new Proxy(env.DB, {
+      get(target, prop) {
+        if (prop === "prepare") return (query: string) => {
+          const statement = target.prepare(query);
+          if (!query.startsWith("SELECT path, sha256, size, content_type FROM version_files")) return statement;
+          return new Proxy(statement, {
+            get(target, prop) {
+              if (prop === "bind") return (...args: unknown[]) => {
+                const bound = target.bind(...args);
+                return new Proxy(bound, {
+                  get(target, prop) {
+                    if (prop === "all") return async () => {
+                      captured();
+                      await gate;
+                      return target.all();
+                    };
+                    const value = Reflect.get(target, prop, target);
+                    return typeof value === "function" ? value.bind(target) : value;
+                  },
+                });
+              };
+              const value = Reflect.get(target, prop, target);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        };
+        const value = Reflect.get(target, prop, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const pending: Promise<unknown>[] = [];
+    const base = dw.dropway.context(env as unknown as ServerBindings, createExecutionContext());
+    const read = getLiveSite({ ...base, env: { ...base.env, DB: db }, waitUntil: (p: Promise<unknown>) => { pending.push(p); } }, slug);
+    try {
+      await siteRead;
+      const restored = await dw.json(`/api/v1/sites/${slug}/versions/${v1.body.version.id}/restore`, { method: "POST", key: dw.ownerKey });
+      expect(restored.status).toBe(200);
+      const deleted = await dw.json(`/api/v1/sites/${slug}/versions/${v2.body.version.id}`, {
+        method: "DELETE", key: dw.ownerKey, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: slug }),
+      });
+      expect(deleted.status).toBe(200);
+    } finally {
+      release();
+    }
+    const stale = await read;
+    await Promise.all(pending);
+    expect(stale?.versionId).toBe(v2.body.version.id);
+    expect(await env.CACHE.get(`live-files:v1:${stale!.siteId}:${v2.body.version.id}`)).toBeNull();
+    const page = await dw.call(`/s/${slug}/?raw=1`);
+    expect(page.status).toBe(200);
+    expect(await page.text()).toBe("one");
+  });
 });
