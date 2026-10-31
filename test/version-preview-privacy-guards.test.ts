@@ -117,7 +117,7 @@ for (const topology of topologies) {
         key: dw.ownerKey, ...jsonBody({ site: SLUG, files: [{ path: "index.html", content: "<p>newer</p>" }] }),
       });
       expect(newer.status).toBe(200);
-      const deleted = await dw.call(`/api/v1/sites/${SLUG}/versions/${first.version.id}`, { method: "DELETE", key: dw.ownerKey });
+      const deleted = await dw.call(`/api/v1/sites/${SLUG}/versions/${first.version.id}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: SLUG }), key: dw.ownerKey });
       expect(deleted.status).toBe(200);
       for (const url of [versionRoot, `${versionRoot}${ASSET}`, first.versionUrl]) {
         const gone = await dw.call(url, { headers: NAV });

@@ -49,6 +49,12 @@ export interface ViewerContext {
   mode: ViewMode;
   /** Render without the viewer bar (set by &embed=1). */
   embed: boolean;
+  /**
+   * Serving an authorized version preview rather than the live public site
+   * (set by preview serving; absent/false means live). Shared chrome must
+   * not advertise a canonical public handoff for a preview address.
+   */
+  preview?: boolean;
   /** URL path of the file on this origin, no query: navigations get the default view, sub-resources the bytes. */
   fileUrl: string;
   /** Same path + ?view=1. */
@@ -71,7 +77,7 @@ export interface ViewerContext {
 
 export interface Viewer {
   id: string;
-  /** Bump when the output changes: it is part of the ETag and of the render cache key. Default 1. */
+  /** Bump when this viewer's own output changes: it is part of the ETag and of the render cache key. (Shared viewerPage chrome carries its own ETag revision, so chrome changes need no bump here.) Default 1. */
   version?: number;
   /**
    * Extra render identity beyond the file's own bytes (e.g. neighbours the
@@ -118,4 +124,4 @@ export function findViewer(file: ViewerFile, live: LiveSite, viewers: readonly V
   return null;
 }
 
-export { VIEWER_CSP, viewerCsp } from "./chrome";
+export { VIEWER_CHROME_VERSION, VIEWER_CSP, viewerCsp } from "./chrome";

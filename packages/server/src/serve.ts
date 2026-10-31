@@ -7,6 +7,8 @@ import {
   hmacHex,
   isHtml,
   isTextual,
+  isApiError,
+  spendSitePasswordAttempt,
   meter,
   emit,
   precompressed,
@@ -15,12 +17,13 @@ import {
   requestPathToFilePath,
   resolveSlugRedirect,
   siteUrl,
+  timingSafeEqualStr,
   verifyPassword,
   type DropwayContext,
   type LiveSite,
 } from "@dropway/core";
 import { escapeHtml, systemPage } from "./html";
-import { findViewer, toViewerFile, VIEWER_CSP, VIEWERS, type ViewMode, type Viewer } from "./viewers";
+import { findViewer, toViewerFile, VIEWER_CHROME_VERSION, VIEWER_CSP, VIEWERS, type ViewMode, type Viewer } from "./viewers";
 import { renderListing } from "./viewers/listing";
 import { MAX_CSS_REWRITE_BYTES, rewriteCss, rewriteHtml, type PathRewrite } from "./path-rewrite";
 import { PATH_SHIM_VERSION, pathShimScript } from "./path-shim";
@@ -44,6 +47,8 @@ export interface ServeMode {
   rewrite: PathRewrite | null;
   /** Keep runtime URLs in path scope when a preview suppresses the Referer. */
   pathShim?: boolean;
+  /** Authorized version-preview serving, not the live site (set only by the preview path). */
+  preview?: boolean;
 }
 
 export const INDEX_NAMES = ["index.html", "index.htm", "index.md", "README.md", "readme.md"];
@@ -53,6 +58,11 @@ export const SITE_SANDBOX =
   "sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation allow-orientation-lock";
 
 const PASSWORD_PATH = "__dropway/password";
+const PASSWORD_FORM_TTL = 15 * 60_000;
+/** Edges' clocks differ slightly: a form issued by one may look this far ahead to another. */
+const PASSWORD_FORM_CLOCK_SKEW = 60_000;
+/** Cloudflare's shared source address for cross-zone Worker subrequests; the edge-added CF-Worker header names the zone. */
+const CROSS_ZONE_WORKER_IP = "2a06:98c0:3600::103";
 /** Reserved at a site root: the provider-served live-version badge (a published file of this name is not served). */
 const BADGE_PATH = "badge.svg";
 
@@ -212,12 +222,54 @@ function readCookie(req: Request, name: string): string | null {
   return null;
 }
 
+/** The trusted edge's view of the visitor. Forwarding headers are never identity; only the synthetic address is split by zone. */
+function passwordVisitor(req: Request): string {
+  const ip = req.headers.get("CF-Connecting-IP") ?? "unknown";
+  const zone = req.headers.get("CF-Worker");
+  return zone && ip.toLowerCase() === CROSS_ZONE_WORKER_IP ? `${ip}|worker:${zone}` : ip;
+}
+
+async function passwordFormSignature(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, until: number): Promise<string> {
+  return hmacHex(dw.config.signingSecret, JSON.stringify([
+    "site-password-form", new URL(req.url).origin, mode.base, live.siteId, live.passwordHash,
+    passwordVisitor(req), until,
+  ]));
+}
+
+async function passwordSubmissionAllowed(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode): Promise<boolean> {
+  const origin = req.headers.get("Origin");
+  const site = req.headers.get("Sec-Fetch-Site");
+  if (origin && origin !== "null") return origin === new URL(req.url).origin && site !== "cross-site" && site !== "same-site";
+  if (origin !== "null") return site !== "cross-site" && site !== "same-site";
+  // Sandboxes and no-referrer pages can both send Origin: null. Require the
+  // visitor's short-lived form proof without reading or charging its body.
+  const token = new URL(req.url).searchParams.get("dw_form") ?? "";
+  const match = /^(\d{1,16})\.([a-f0-9]{64})$/.exec(token);
+  if (!match) return false;
+  const until = Number(match[1]);
+  const now = Date.now();
+  if (!Number.isSafeInteger(until) || until <= now || until > now + PASSWORD_FORM_TTL + PASSWORD_FORM_CLOCK_SKEW) return false;
+  return timingSafeEqualStr(match[2]!, await passwordFormSignature(dw, req, live, mode, until));
+}
+
 async function handlePassword(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, filePath: string): Promise<Response | null> {
   if (!live.passwordHash) return null;
   const expected = await passwordCookieValue(dw, live);
   if (readCookie(req, cookieName(live, mode)) === expected || readCookie(req, cookieName(live, mode, true)) === expected) return null;
 
   if (req.method === "POST" && filePath === PASSWORD_PATH) {
+    if (!await passwordSubmissionAllowed(dw, req, live, mode)) {
+      return systemResponse(dw, req, mode, live, 403, "403", "Password form refused", "Reload this site's password form and try again.");
+    }
+    try {
+      await spendSitePasswordAttempt(dw, live.siteId, passwordVisitor(req));
+    } catch (error) {
+      const limited = isApiError(error) && error.status === 429;
+      const response = systemResponse(dw, req, mode, live, limited ? 429 : 503, limited ? "429" : "503",
+        limited ? "Too many password attempts" : "Password unlock unavailable", "Please try again later.");
+      response.headers.set("Retry-After", String(limited ? error.retryAfterSeconds : 1));
+      return response;
+    }
     const form = await req.formData().catch(() => null);
     const password = form?.get("password");
     const next = String(form?.get("next") ?? mode.base);
@@ -244,8 +296,10 @@ async function handlePassword(dw: DropwayContext, req: Request, live: LiveSite, 
   return passwordForm(dw, req, live, mode, u.pathname + u.search, false);
 }
 
-function passwordForm(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, next: string, failed: boolean): Response {
-  const extra = `<form method="post" action="${escapeHtml(mode.base + PASSWORD_PATH)}" style="display:flex;gap:.5rem">
+async function passwordForm(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, next: string, failed: boolean): Promise<Response> {
+  const until = Date.now() + PASSWORD_FORM_TTL;
+  const action = `${mode.base}${PASSWORD_PATH}?dw_form=${until}.${await passwordFormSignature(dw, req, live, mode, until)}`;
+  const extra = `<form method="post" action="${escapeHtml(action)}" style="display:flex;gap:.5rem">
 <input type="hidden" name="next" value="${escapeHtml(next)}">
 <input type="password" name="password" placeholder="Password" required autofocus style="flex:1;padding:.6rem .8rem;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--fg)">
 <button style="padding:.6rem 1rem;border:0;border-radius:8px;background:var(--accent);color:#fff;cursor:pointer">Open</button></form>
@@ -423,7 +477,7 @@ export async function serveSiteContent(
       `</ul></nav>`;
     response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", `There is no file at <code>/${escapeHtml(filePath).replaceAll("{", "&#123;")}</code> on this site.`, recovery);
   } else if (resolved.kind === "listing") {
-    response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`, url.searchParams.get("sort"));
+    response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`, url.searchParams.get("sort"), url.origin);
     securityHeaders(response.headers, live, mode);
   } else {
     response = await serveFile(req, dw, url, live, mode, resolved.path, resolved.status, viewers);
@@ -458,12 +512,16 @@ async function serveFile(
   // Rendered views: see ./viewers (one per file kind, plus ?view=source).
   if (viewer && viewMode) {
     const embed = flag(sp, "embed");
-    // The shared bar links live siblings even when this file's bytes are unchanged.
-    // Images/SVG have their own validator; embeds do not render the shared bar.
-    const folderVariant = !embed && viewer.id !== "image" && viewer.id !== "svg" ? `-folder${live.versionId}` : "";
-    const etag = `W/"${etagSegment(viewer.id)}@${viewer.version ?? 1}-${sha256}${etagSegment(viewer.etagExtra?.(file, live) ?? "")}${folderVariant}${embed ? "-e" : ""}${reportVariant}"`;
+    // Every page, including image/SVG and embeds, names manifest metadata.
+    // A sole-file root can resolve to a new path with identical bytes, and MIME
+    // can change independently too. Content-only render fragments stay reusable.
+    const folderVariant = `-folder${live.versionId}`;
+    // The shared chrome revision retires every full-page validator when
+    // viewerPage markup/CSS changes, including extension viewers whose own
+    // version cannot know about an internal chrome change.
+    const etag = `W/"${etagSegment(viewer.id)}@${viewer.version ?? 1}-${sha256}${etagSegment(viewer.etagExtra?.(file, live) ?? "")}${folderVariant}-chrome${VIEWER_CHROME_VERSION}${embed ? "-e" : ""}${reportVariant}"`;
     const h = new Headers();
-    if (etagMatches(req, etag)) {
+    if (status === 200 && etagMatches(req, etag)) {
       h.set("ETag", etag);
       securityHeaders(h, live, mode);
       return new Response(null, { status: 304, headers: h });
@@ -483,6 +541,7 @@ async function serveFile(
       file,
       mode: viewMode,
       embed,
+      preview: mode.preview === true,
       fileUrl,
       viewUrl: `${fileUrl}?view=1`,
       sourceUrl: `${fileUrl}?view=source`,
@@ -503,9 +562,9 @@ async function serveFile(
     // withhold the success ETag: revalidating the fallback as if it were
     // the healthy render would strand browsers on it after recovery.
     const viewerCacheControl = out.get("Cache-Control");
-    if (viewerCacheControl?.includes("no-store")) out.delete("ETag");
+    if (status >= 400 || viewerCacheControl?.includes("no-store")) out.delete("ETag");
     else out.set("ETag", etag);
-    out.set("Cache-Control", live.passwordHash ? "private, no-store" : viewerCacheControl ?? "public, max-age=0, must-revalidate");
+    out.set("Cache-Control", status >= 400 || live.passwordHash ? "private, no-store" : viewerCacheControl ?? "public, max-age=0, must-revalidate");
     out.set("Vary", "Accept, Sec-Fetch-Dest");
     // Headers.set throws on CR, LF and NUL: a viewer id containing them would
     // 500 an otherwise healthy render. Omit this diagnostic header for such
@@ -516,6 +575,13 @@ async function serveFile(
     out.delete("Content-Length");
     securityHeaders(out, live, mode);
     let page = new Response(head ? null : rendered.body, { status, headers: out });
+    // Only generated viewer pages pass here: leave authored error HTML/raw bytes
+    // alone, but never advertise a fallback file as the missing resource.
+    if (status >= 400 && !head) {
+      page = new HTMLRewriter().on('head meta[property^="og:"], head meta[name="description"], head meta[name^="twitter:"]', {
+        element(el) { el.remove(); },
+      }).transform(page);
+    }
     if (mode.rewrite && !head) page = rewriteHtml(page, mode.rewrite);
     return report && !head ? injectReportLink(page, reportUrl) : page;
   }

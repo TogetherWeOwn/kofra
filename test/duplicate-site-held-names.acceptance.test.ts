@@ -234,7 +234,7 @@ describe("duplicate refusal preserves prior held-name protection", () => {
       expect(input).toMatchObject({ tenantId: f.sourceRow.tenant_id, fileCount: 3, newBytes: 0 });
       const b = await publish(f.dw, SOURCE, NEXT, 200);
       expect(b.version.id).not.toBe(f.source.version.id);
-      const deleted = await f.dw.json(`/api/v1/sites/${SOURCE}/versions/${f.source.version.id}`, { method: "DELETE", key: f.dw.ownerKey });
+      const deleted = await f.dw.json(`/api/v1/sites/${SOURCE}/versions/${f.source.version.id}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: SOURCE }), key: f.dw.ownerKey });
       expect(deleted.status, JSON.stringify(deleted.body)).toBe(200);
       expect(await env.DB.prepare("SELECT id FROM versions WHERE id = ?").bind(f.source.version.id).first()).toBeNull();
       expect((await env.DB.prepare("SELECT * FROM version_files WHERE version_id = ?").bind(f.source.version.id).all()).results).toEqual([]);

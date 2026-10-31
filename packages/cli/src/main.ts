@@ -809,7 +809,7 @@ const restoreCmd: Command = {
     const inst = await resolveInstance(p, io);
     const client = makeClient(io, inst.api, requireKey(inst));
     const v = await resolveVersion(client, slug, p.positionals[1]);
-    const { data } = await client.post<{ restored: boolean; alreadyLive: boolean; version: VersionInfo; url: string }>(`/sites/${enc(slug)}/versions/${enc(v.id)}/restore`, {}, { retry: "safe" });
+    const { data } = await client.post<{ restored: boolean; alreadyLive: boolean; version: VersionInfo; url: string }>(`/sites/${enc(slug)}/versions/${enc(v.id)}/restore`, {}, { retry: "none", idempotencyKey: crypto.randomUUID() });
     out.result(data, () => (data.alreadyLive ? `${slug} v${data.version.number} is already live.\n${data.url}` : `Restored ${slug} to v${data.version.number}.\n${data.url}`));
     return EXIT.ok;
   },
@@ -828,7 +828,8 @@ const deleteCmd: Command = {
     if (ref) {
       const v = await resolveVersion(client, slug, ref);
       await confirm(io, out, p, slug, `delete version v${v.number} of ${slug}`);
-      const { data } = await client.request("DELETE", `/sites/${enc(slug)}/versions/${enc(v.id)}`);
+      const { site: canonicalSlug } = await getVersionDirect(client, slug, v.id);
+      const { data } = await client.request("DELETE", `/sites/${enc(slug)}/versions/${enc(v.id)}`, { json: { confirm: canonicalSlug }, retry: "none", idempotencyKey: crypto.randomUUID() });
       out.result({ ...data, slug, version: v.number }, `Deleted version v${v.number} of ${slug}.`);
       return EXIT.ok;
     }

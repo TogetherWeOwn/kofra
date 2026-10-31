@@ -16,6 +16,7 @@ import { IDEMPOTENCY_KEY } from "./schemas";
 import { requireOperationScopes } from "../operations";
 import { dereference, validate as validateSchema, type OutputUnit, type Schema, type ValidationResult } from "@cfworker/json-schema";
 import { withLegacyHeaderNames } from "../legacy-brand";
+import { isReplayReceipt } from "../replay-receipt";
 
 /**
  * Remote MCP server at /mcp: Streamable HTTP, stateless, built with createMcpHandler
@@ -58,7 +59,7 @@ export function mcpInstructions(dw: DropwayContext): string {
   return `${dw.config.instanceName} publishes files, folders and small static sites to live URLs. Every publish is an immutable version you can roll back.
 
 How to work:
-- Publish: publish_site with files [{path, ...one source}]. Sources: content (text; base64 only for small binaries), url (the server downloads a public https URL; best for big or binary files already online), sha256+size (then PUT the bytes to the returned upload link and call finalize_version), copyFrom (reuse a file you already published). Put index.html (or index.md / README.md) at the root.
+- Publish: publish_site with files [{path, ...one source}]. Sources: content (text; base64 only for small binaries), url (the server downloads a public https URL; best for big or binary files already online), sha256+size (then PUT the bytes to the returned upload link and call finalize_version), copyFrom (reuse a file you already published), or a chat attachment {download_url, file_name}; or archiveUrl alone for a public https .zip. Put index.html (or index.md / README.md) at the root.
 - Share the url field exactly as returned. Never build site URLs yourself; their shape depends on the instance.
 - Edit: update_site_files writes, deletes or moves some files and keeps the rest. Pass baseVersionId from your last result; version_conflict means someone published since: re-read, re-apply, retry.
 - Roll back: list_versions, then restore_version ("v3", "3" or an id).
@@ -242,7 +243,9 @@ function buildServer(compiled: CompiledTool[], ctx: { dw: DropwayContext; princi
           }
           const args = { ...((rawArgs ?? {}) as Record<string, unknown>) };
           const idempotencyKey = def.idempotent ? validateIdempotencyKey(args.idempotencyKey) : null;
-          delete args.idempotencyKey;
+          // Self-managed operation schemas may carry a key into a core service
+          // that authorizes and binds immutable identity before looking up replay.
+          if (def.idempotent) delete args.idempotencyKey;
           const toolCtx = { dw, principal, request, client: clientName(server, request), idempotencyKey };
           const { result, replayed } = await withIdempotency(
             dw,
@@ -252,15 +255,16 @@ function buildServer(compiled: CompiledTool[], ctx: { dw: DropwayContext; princi
           if (replayed) await def.beforeReplay?.(args, toolCtx);
           const data: Record<string, unknown> = result && typeof result === "object" && !Array.isArray(result) ? { ...(result as Record<string, unknown>) } : { result };
           if (replayed) data.replayed = true;
+          const historical = replayed || isReplayReceipt(result);
           let line: string;
           try {
             line = def.summarize ? def.summarize(data, args) : `${def.name}: done.`;
           } catch {
             line = `${def.name}: done.`;
           }
-          if (replayed) line = `Replayed the first result for this idempotencyKey. ${line}`;
+          if (historical) line = `Replayed the first result for this idempotencyKey. This is a historical receipt, not current site state. ${line}`;
           const content: Array<Record<string, unknown>> = [{ type: "text", text: `${line}\n${JSON.stringify(data)}` }];
-          if (typeof data.url === "string") {
+          if (!historical && typeof data.url === "string") {
             content.push({ type: "resource_link", uri: data.url, name: typeof data.slug === "string" ? data.slug : data.url, description: "Live URL. Share it exactly as returned." });
           }
           return { content, structuredContent: data } as never;
