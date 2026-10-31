@@ -412,7 +412,7 @@ Notes that shape the design:
    `ptr/<slug>` (10 s) -> KV `live:<slug>` (`cacheTtl` 30 s) -> D1.
 3. Manifest `versionId -> { path: [sha256, size, type] }`: immutable, cached forever (isolate LRU ->
    Cache API -> D1; R2 `manifests/<versionId>.json` when D1 grows, section 7.5).
-4. Bytes: Cache API `blob/<sha256>` (immutable) -> R2 `blobs/<sha256>` on a miss. Range requests and
+4. Bytes: Cache API `blob/<sha256>` (immutable) -> D1 `blobs.storage_key` -> R2 generation on a miss. Range requests and
    files above about 25 MB stream from R2 and skip the Cache API.
 5. Rendered viewers: Cache API `render/<viewer>@<viewerVersion>/<sha256>`.
 6. One Analytics Engine data point per top-level view, 404 or bot hit, written without awaiting.
@@ -430,8 +430,10 @@ URL in the publish response is correct at once; `X-Kofra-Version` on every site 
    with `url`, `headers`, `curl`), `upload.expiresAt` (1 hour), `versionUrl`.
 2. Upload each missing blob: `PUT <app>/api/v1/blobs/<sha256>` with `Authorization: Bearer dwu_...`
    (upload token) or the caller's key. The Worker streams into
-   `R2.put("blobs/<sha256>", body, { sha256 })`; R2 rejects bytes that do not match the hash. Bytes that
-   already exist physically are verified and not rewritten. Files above 95 MiB use resumable multipart
+   `R2.put("blobs/<sha256>/<uuid>", body, { sha256 })`; R2 rejects bytes that do not match the hash.
+   A D1 upload reservation fences attachment against GC. Verified generations are deduplicated by
+   hash, with `blobs.storage_key` selecting the winner; unused physical generations are reclaimed.
+   Legacy `blobs/<sha256>` objects remain readable when `storage_key` is NULL. Files above 95 MiB use resumable multipart
    instead: `POST /api/v1/uploads` `{versionId, sha256, partSize?}` (10-95 MiB parts, default 50 MiB)
    starts a real R2 multipart upload staged at `uploads/<session id>`, bound to that one pending
    manifest file. An atomic D1 constraint permits only one unfinished session per `(versionId, sha256)`;
@@ -443,14 +445,14 @@ URL in the publish response is correct at once; `X-Kofra-Version` on every site 
    replay; every overlapping PUT of an in-flight part gets retryable `409 part_busy`, even for
    identical bytes; changed acknowledged bytes are refused), `GET /api/v1/uploads/{id}` lists acknowledged parts for
    resume, and `POST /api/v1/uploads/{id}/complete` assembles the parts, stream-hashes the result and
-   only then promotes it to `blobs/<sha256>` in the caller's scope. Sessions expire within a day (a
+   only then promotes it to a fresh `blobs/<sha256>/<uuid>` generation (same reservation fence) in the caller's scope. Sessions expire within a day (a
    dwu_-created session keeps the token's earlier expiry) and the hourly cleanup aborts expired ones
    in slices of at most 100, retaining ownership records on transient storage failures so later runs retry.
    Scope registration and completion are fenced against current ownership, pending state and lifetime
    in D1; a concurrent anonymous-site claim cannot strand a blob in the old scope. Corrupt staged
    bytes enter a durable cleanup-intent state before deletion, releasing the unfinished slot only
    after storage cleanup succeeds. Core hourly housekeeping reserves capacity for all phases
-   (at most 785 binding calls before embedding hooks, below the Free invocation's 1000-call budget).
+   (at most 791 binding calls before embedding hooks, below the Free invocation's 1000-call budget).
    Part buffers share a 96 MiB per-isolate admission budget; excess concurrent requests get retryable
    `503 upload_busy`. Part hashing is incremental, without a second whole-part digest buffer. This
    bounds application part buffers, not all isolate memory; deployed memory profiling is still pending.
