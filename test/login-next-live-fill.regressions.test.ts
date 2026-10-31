@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { dropwayClient } from "../packages/server/src/ui/client";
-import { clearLiveMemoryCache, getLiveSite, liveKey, READ_FILL_TTL_SECONDS, refreshLive, type DropwayContext } from "@dropway/core";
+import { clearLiveMemoryCache, getLiveSite, liveKey, loadLiveSiteFromD1, refreshLive, type DropwayContext, type LiveSite } from "@dropway/core";
 import type { ServerBindings } from "@dropway/server";
 import { freshInstance, jsonBody, type Instance } from "./helpers";
 
@@ -61,34 +61,48 @@ describe("live manifest read-path fill cannot stick", () => {
   async function publish(dw: Instance, slug: string) {
     const res = await dw.json("/api/v1/publish", { key: dw.ownerKey, ...jsonBody({ slug, files: [{ path: "index.html", content: "<p>hi</p>" }] }) });
     expect(res.status).toBe(201);
-    return res.body as { slug: string; siteId?: string; site?: { id: string } };
+    return res.body as { slug: string };
   }
 
-  function livePuts(spy: { mock: { calls: unknown[][] } }, slug: string) {
-    return spy.mock.calls.filter((c) => c[0] === liveKey(slug)).map((c) => (c[2] ?? {}) as KVNamespacePutOptions);
-  }
-
-  it("a KV miss refills with a short expirationTtl", async () => {
+  it("a fill whose D1 read lost a race with a deploy does not overwrite the deploy's manifest", async () => {
     const dw = await freshInstance();
-    const { slug } = await publish(dw, "live-fill-ttl");
+    const { slug } = await publish(dw, "live-fill-race");
+    await env.CACHE.delete(liveKey(slug));
+    clearLiveMemoryCache();
+    const put = env.CACHE.put.bind(env.CACHE);
+    let raced = false;
+    await withDc(dw, async (dc) => {
+      // The fill read D1 before the deploy; hold its put until the deploy has committed and refreshed KV.
+      vi.spyOn(env.CACHE, "put").mockImplementation(async (key, value, opts) => {
+        if (key === liveKey(slug) && !raced) {
+          raced = true;
+          await env.DB.prepare("UPDATE sites SET spa = 1 WHERE slug = ?").bind(slug).run();
+          const fresh = await loadLiveSiteFromD1(dc, { slug });
+          await refreshLive(dc, fresh!.siteId);
+        }
+        return put(key, value, opts);
+      });
+      expect((await getLiveSite(dc, slug))!.spa).toBe(false);
+    });
+    expect(raced).toBe(true);
+    const kv = await env.CACHE.get<LiveSite>(liveKey(slug), "json");
+    expect(kv === null || kv.spa === true).toBe(true);
+    vi.restoreAllMocks();
+    clearLiveMemoryCache();
+    expect((await withDc(dw, (dc) => getLiveSite(dc, slug)))!.spa).toBe(true);
+  });
+
+  it("a fill for an unchanged site stays cached without an expiry", async () => {
+    const dw = await freshInstance();
+    const { slug } = await publish(dw, "live-fill-durable");
     await env.CACHE.delete(liveKey(slug));
     clearLiveMemoryCache();
     const put = vi.spyOn(env.CACHE, "put");
-    await withDc(dw, (dc) => getLiveSite(dc, slug));
-    const puts = livePuts(put, slug);
-    expect(puts).toHaveLength(1);
-    expect(puts[0]!.expirationTtl).toBe(READ_FILL_TTL_SECONDS);
-  });
-
-  it("refreshLive keeps writing a long-lived entry", async () => {
-    const dw = await freshInstance();
-    const { slug } = await publish(dw, "live-fill-refresh");
-    clearLiveMemoryCache();
-    const siteId = await withDc(dw, async (dc) => (await getLiveSite(dc, slug))!.siteId);
-    const put = vi.spyOn(env.CACHE, "put");
-    await withDc(dw, (dc) => refreshLive(dc, siteId));
-    const puts = livePuts(put, slug);
-    expect(puts).toHaveLength(1);
-    expect(puts[0]!.expirationTtl).toBeUndefined();
+    const live = await withDc(dw, (dc) => getLiveSite(dc, slug));
+    const fills = put.mock.calls.filter((c) => c[0] === liveKey(slug));
+    expect(fills).toHaveLength(1);
+    expect((fills[0]![2] as KVNamespacePutOptions | undefined)?.expirationTtl).toBeUndefined();
+    const kv = await env.CACHE.get<LiveSite>(liveKey(slug), "json");
+    expect(kv?.versionId).toBe(live!.versionId);
   });
 });

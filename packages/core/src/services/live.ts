@@ -33,9 +33,6 @@ export const liveKey = (slug: string) => `live:${slug}`;
 
 const LIVE_VERSION = 4;
 
-/** KV's minimum expirationTtl; caps how long a read-path fill (possibly stale) can live. */
-export const READ_FILL_TTL_SECONDS = 60;
-
 /** Copy own file entries into a prototype-less map, preserving an own __proto__ key. */
 function ownFiles(files: LiveSite["files"]): LiveSite["files"] {
   const out: LiveSite["files"] = Object.create(null);
@@ -69,10 +66,31 @@ export async function getLiveSite(dc: DropwayContext, slug: string): Promise<Liv
   }
   const live = await loadLiveSiteFromD1(dc, { slug });
   remember(slug, live);
-  // A read-path fill can race a deploy: this D1 read may predate the fresher entry refreshLive just wrote.
-  // Give it a short TTL so a stale fill cannot stick; only refreshLive writes long-lived entries.
-  if (live) dc.waitUntil(putLive(dc, live, READ_FILL_TTL_SECONDS).catch(() => {}));
+  if (live) dc.waitUntil(fillLive(dc, live).catch(() => {}));
   return live;
+}
+
+/**
+ * Read-path fill. The D1 read above may predate a deploy whose refreshLive lands before this put, so
+ * the put could overwrite a fresher manifest. Re-read D1 after the put: a change committed before the
+ * re-read is seen and the key is dropped (the next read rebuilds it); one committed after it is
+ * followed by its own refreshLive, which lands after this put. Either way a stale fill cannot stick.
+ */
+async function fillLive(dc: DropwayContext, live: LiveSite): Promise<void> {
+  await putLive(dc, live);
+  const now = await loadLiveSiteFromD1(dc, { siteId: live.siteId }).catch(() => undefined);
+  if (!now || !sameLive(now, live)) await dropLive(dc, live.slug);
+}
+
+/** Field-by-field equality; file order is not significant (the files query has no ORDER BY). */
+function sameLive(a: LiveSite, b: LiveSite): boolean {
+  const { files: af, ...ar } = a;
+  const { files: bf, ...br } = b;
+  const keys = Object.keys(ar) as (keyof typeof ar)[];
+  if (keys.length !== Object.keys(br).length || keys.some((k) => ar[k] !== br[k])) return false;
+  const paths = Object.keys(af);
+  if (paths.length !== Object.keys(bf).length) return false;
+  return paths.every((p) => Object.hasOwn(bf, p) && af[p]!.every((x, i) => x === bf[p]![i]));
 }
 
 export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string; siteId?: string }): Promise<LiveSite | null> {
@@ -120,13 +138,12 @@ export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string
   };
 }
 
-async function putLive(dc: DropwayContext, live: LiveSite, maxTtlSeconds?: number): Promise<void> {
+async function putLive(dc: DropwayContext, live: LiveSite): Promise<void> {
   const opts: KVNamespacePutOptions = {};
   if (live.expiresAt) {
     // Keep the key a little past expiry so visitors get a clear "expired" page, then let KV drop it.
     opts.expirationTtl = Math.max(60, Math.ceil((live.expiresAt - Date.now()) / 1000) + 3600);
   }
-  if (maxTtlSeconds !== undefined) opts.expirationTtl = Math.min(opts.expirationTtl ?? maxTtlSeconds, maxTtlSeconds);
   await dc.env.CACHE.put(liveKey(live.slug), JSON.stringify(live), opts);
 }
 
