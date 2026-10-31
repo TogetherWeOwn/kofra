@@ -72,7 +72,7 @@ What Kofra is not:
 5. **Never make the caller build URLs.** Responses carry `url`, and per file `viewUrl`, `rawUrl` and
    `downloadUrl`. URL shapes differ between modes and will change when an instance gets a domain.
 6. **Same names everywhere.** The MCP tool `list_versions` is the OpenAPI `operationId: list_versions`
-   and the CLI command `kofra versions ls`.
+   and the CLI command `kofra versions <name>`.
 7. **The live instance is the truth.** Each instance describes itself (`whoami`, `/openapi.json`,
    `/llms.txt`, its skill), so self-hosted instances with fewer optional features are described correctly.
 8. **Agents check their own work** (`check_site`, read-back, version preview URLs, `--wait`).
@@ -349,10 +349,10 @@ application would use to add them without changing this repository.
    hot path (sites)              control plane (API, MCP)          async
    isolate memo (5 s)            D1: tenants, members, keys,       Queues: post-publish jobs
    Cache API: blob/<sha256>,         sites, versions, files,       (screenshots, AI metadata,
-     render/<viewer>/<sha256>,       blobs, folders, access,        search index, moderation,
-     ptr/<slug> (10 s)               domains, variables, jobs       webhooks, rollups)
-   KV: live:<slug>, host:<name>  R2: blobs/<sha256>, thumbs/,      Cron: cleanup, rollups
-   R2: blobs/<sha256>                uploads/ (multipart)           Durable Objects: Site Data,
+     render/<viewer>/<sha256>        blobs, folders, access,        search index, moderation,
+                                     domains, variables, jobs       webhooks, rollups)
+   KV: live:<slug>, host:<name>  R2: blobs/<sha256>/<uuid>,        Cron: cleanup, rollups
+   R2: blobs/<sha256>/<uuid>         thumbs/, uploads/ (multipart)  Durable Objects: Site Data,
    Analytics Engine write        KV: OAUTH_KV (OAuth grants)          live reload (P2)
 ```
 
@@ -362,7 +362,7 @@ application would use to add them without changing this repository.
 |---|---|---|---|---|
 | Workers | Everything: app, API, MCP, serving, viewers | (the Worker) | yes | - |
 | D1 | Source of truth for metadata; FTS5 search | `DB` | yes | - |
-| R2 | File bytes, content-addressed (`blobs/<sha256>`); thumbnails; multipart staging | `FILES` | yes | - |
+| R2 | File bytes, one immutable generation per verified upload (`blobs/<sha256>/<uuid>`; legacy `blobs/<sha256>`); thumbnails; multipart staging | `FILES` | yes | - |
 | KV | `live:<slug>` pointer cache; `host:<hostname>` domain map | `CACHE` | yes | - |
 | Cache API | Per-data-center cache of blobs, rendered viewers, pointers | (runtime) | yes | - |
 | Analytics Engine | Per-site hits | `ANALYTICS` | no | analytics reads fall back to D1 daily counters |
@@ -408,13 +408,13 @@ Notes that shape the design:
 ### 5.4 Serving hot path (R-14)
 
 1. Route by host and path (no I/O).
-2. Live pointer `slug -> { siteId, versionId, settings, access }`: isolate memo (5 s) -> Cache API
-   `ptr/<slug>` (10 s) -> KV `live:<slug>` (`cacheTtl` 30 s) -> D1.
+2. Live pointer `slug -> { siteId, versionId, settings, access }`: isolate memo (5 s) -> KV
+   `live:<slug>` (`cacheTtl` 30 s) -> D1.
 3. Manifest `versionId -> { path: [sha256, size, type] }`: immutable, cached forever (isolate LRU ->
    Cache API -> D1; R2 `manifests/<versionId>.json` when D1 grows, section 7.5).
-4. Bytes: Cache API `blob/<sha256>` (immutable) -> R2 `blobs/<sha256>` on a miss. Range requests and
-   files above about 25 MB stream from R2 and skip the Cache API.
-5. Rendered viewers: Cache API `render/<viewer>@<viewerVersion>/<sha256>`.
+4. Bytes: Cache API `blob/<sha256>` (immutable) -> D1 `blobs.storage_key` -> R2 generation on a miss. Range requests and
+   files above 50 MiB stream from R2 and skip the Cache API.
+5. Rendered viewers: Cache API `render/<viewer>@<viewerVersion>/<variant>/<sha256>`.
 6. One Analytics Engine data point per top-level view, 404 or bot hit, written without awaiting.
 
 Because bytes are addressed by hash, a publish never purges a cache: it only moves the pointer.
@@ -430,8 +430,10 @@ URL in the publish response is correct at once; `X-Kofra-Version` on every site 
    with `url`, `headers`, `curl`), `upload.expiresAt` (1 hour), `versionUrl`.
 2. Upload each missing blob: `PUT <app>/api/v1/blobs/<sha256>` with `Authorization: Bearer dwu_...`
    (upload token) or the caller's key. The Worker streams into
-   `R2.put("blobs/<sha256>", body, { sha256 })`; R2 rejects bytes that do not match the hash. Bytes that
-   already exist physically are verified and not rewritten. Files above 95 MiB use resumable multipart
+   `R2.put("blobs/<sha256>/<uuid>", body, { sha256 })`; R2 rejects bytes that do not match the hash.
+   A D1 upload reservation fences attachment against GC. Verified generations are deduplicated by
+   hash, with `blobs.storage_key` selecting the winner; unused physical generations are reclaimed.
+   Legacy `blobs/<sha256>` objects remain readable when `storage_key` is NULL. Files above 95 MiB use resumable multipart
    instead: `POST /api/v1/uploads` `{versionId, sha256, partSize?}` (10-95 MiB parts, default 50 MiB)
    starts a real R2 multipart upload staged at `uploads/<session id>`, bound to that one pending
    manifest file. An atomic D1 constraint permits only one unfinished session per `(versionId, sha256)`;
@@ -443,14 +445,14 @@ URL in the publish response is correct at once; `X-Kofra-Version` on every site 
    replay; every overlapping PUT of an in-flight part gets retryable `409 part_busy`, even for
    identical bytes; changed acknowledged bytes are refused), `GET /api/v1/uploads/{id}` lists acknowledged parts for
    resume, and `POST /api/v1/uploads/{id}/complete` assembles the parts, stream-hashes the result and
-   only then promotes it to `blobs/<sha256>` in the caller's scope. Sessions expire within a day (a
+   only then promotes it to a fresh `blobs/<sha256>/<uuid>` generation (same reservation fence) in the caller's scope. Sessions expire within a day (a
    dwu_-created session keeps the token's earlier expiry) and the hourly cleanup aborts expired ones
    in slices of at most 100, retaining ownership records on transient storage failures so later runs retry.
    Scope registration and completion are fenced against current ownership, pending state and lifetime
    in D1; a concurrent anonymous-site claim cannot strand a blob in the old scope. Corrupt staged
    bytes enter a durable cleanup-intent state before deletion, releasing the unfinished slot only
    after storage cleanup succeeds. Core hourly housekeeping reserves capacity for all phases
-   (at most 785 binding calls before embedding hooks, below the Free invocation's 1000-call budget).
+   (at most 791 binding calls before embedding hooks, below the Free invocation's 1000-call budget).
    Part buffers share a 96 MiB per-isolate admission budget; excess concurrent requests get retryable
    `503 upload_busy`. Part hashing is incremental, without a second whole-part digest buffer. This
    bounds application part buffers, not all isolate memory; deployed memory profiling is still pending.
@@ -781,7 +783,7 @@ run before core viewers. Section 10 lists core viewers.
 | Store | Keys and contents |
 |---|---|
 | D1 `DB` | All metadata (tables below). Times are unix epoch milliseconds |
-| R2 `FILES` | `blobs/<sha256>` file bytes (never overwritten); `thumbs/<versionId>.webp`, `og/<versionId>.png` (R-20); `uploads/<session id>` multipart staging (R-35, lifecycle 1 day); `manifests/<versionId>.json` (R-44) |
+| R2 `FILES` | `blobs/<sha256>/<uuid>` file bytes, one generation per verified upload (never overwritten); `blobs.storage_key` names the current generation, and a NULL `storage_key` means the legacy key `blobs/<sha256>`; `thumbs/<versionId>.webp`, `og/<versionId>.png` (R-20); `uploads/<session id>` multipart staging (R-35, lifecycle 1 day); `manifests/<versionId>.json` (R-44) |
 | KV `CACHE` | `live:<slug>` live pointer and manifest (exists); `host:<hostname>` mount map (R-33); `settings:instance` (R-42) |
 | KV `OAUTH_KV` | OAuth clients, grants and hashed tokens, owned by `workers-oauth-provider` (R-24) |
 | Durable Object `SITE_DATA` | One SQLite store per site with Site Data records (R-30) |
@@ -1118,7 +1120,7 @@ are sampled, not written one by one. Reads use the SQL API when the operator set
 - D1 has a hard 10 GB cap per database. `version_files` grows with versions x files. When the database
   passes about 2 GB, R-44 moves file lists to immutable `manifests/<versionId>.json` in R2 and keeps only
   blob reference counts in D1.
-- Deleted sites are soft-deleted (`deleted_at`), purged by the hourly cron after 24 h; blobs no scope
+- Deleted sites are soft-deleted (`deleted_at`), purged by the hourly cron once they are over 1 h old (25 per run); blobs no scope
   references are deleted after a grace period.
 - Anonymous sites are deleted at `expires_at`.
 - Idempotency keys 24 h; email codes and login links 15 min; jobs 30 days; audit log kept unless the
@@ -1136,7 +1138,8 @@ are sampled, not written one by one. Reads use the SQL API when the operator set
   session cookie (dashboard only, with Origin checks). None: anonymous publish when enabled.
 - Path parameters: `{site}` = slug or site id; `{version}` = `live`, `v12`, `12` or a version id;
   `{path}` = file path with segments percent-encoded.
-- Pagination: `?limit=` (1-200, default 50) and `?cursor=`; responses carry `nextCursor`.
+- Pagination: `?limit=` and `?cursor=`; responses carry `nextCursor`. Sites: limit 1-200, default 50.
+  Files: limit 1-1000, default 200. Versions: limit 1-500, default 50, newest first, no cursor.
 - `Idempotency-Key` header on every POST that creates something (24 h; same key + different body =
   `422 idempotency_key_reused`; still running = `409 idempotency_in_progress`, retryable).
   Anonymous JSON publishing scopes replay by client IP, operation and key; use an unpredictable UUID
@@ -1382,7 +1385,7 @@ Initial catalog (R-03 makes it complete and generates `/docs/errors.md`):
 | `inline_too_large`, `file_too_large`, `site_too_large`, `request_too_large` | 413 | no | Over a cap; the hint names the right upload path |
 | `too_many_files` | 400 | no | Over the file cap; remove source maps or duplicates, never drop files silently |
 | `fetch_failed`, `fetch_blocked` | 422 | upstream 5xx only | URL source problems |
-| `unauthorized`, `invalid_api_key`, `key_expired` | 401 | no | Credential problems |
+| `unauthorized`, `invalid_api_key`, `api_key_expired` | 401 | no | Credential problems |
 | `insufficient_scope`, `scope_not_grantable`, `forbidden` | 403 | no | Permission problems |
 | `site_not_found`, `version_not_found`, `file_not_found`, `folder_not_found`, `route_not_found` | 404 | no | The hint names the list call |
 | `slug_taken`, `version_conflict`, `version_is_live`, `missing_blobs`, `already_claimed` | 409 | no | Conflicts, with details and `next` |
@@ -1390,15 +1393,15 @@ Initial catalog (R-03 makes it complete and generates `/docs/errors.md`):
 | `idempotency_key_reused` | 422 | no | Same key, different request |
 | `upload_expired`, `site_expired` | 410 | no | Publish again (unchanged files are reused) |
 | `confirm_mismatch` | 400 | no | Set `confirm` to the exact value in `details` |
-| `claim_token_invalid` | 403 | no | Use the token from the publish response |
-| `anonymous_disabled` | 401 | no | This instance requires an API key; ask its owner |
+| `invalid_claim_token` | 401 | no | Use the token from the publish response |
+| `anonymous_publish_disabled` | 401 | no | This instance requires an API key; ask its owner |
 | `anonymous_challenge_required` | 403 | no | A human opens `details.challengeUrl` once |
 | `limit_reached` | 403 (adapters may choose) | no | `details: { limit, used, resetsAt? }` plus adapter links |
 | `rate_limited` | 429 | yes | Wait `retryAfterSeconds` |
 | `feature_unavailable` | 501 | no | `details.requires` names the binding or setting |
 | `invalid_policy_quota` | 500 | no | Adapter must return null or a non-negative integer |
 | `folder_not_found` | 404 | no | No folder accessible to this credential; list and retry |
-| `blob_missing`, `service_unavailable` | 502/503 | yes | Retry after `Retry-After` |
+| `blob_missing`, `temporarily_unavailable` | 502/503 | yes | Retry after `Retry-After` |
 | `internal_error` | 500 | once | Retry; report `requestId` if it repeats |
 
 ---
@@ -1588,7 +1591,7 @@ CLI hashes and uploads from disk. Credentials as for the CLI.
    `/__dropway/assets/`. User content is always escaped or run through an allowlist sanitizer (Markdown
    and notebook HTML: no `<script>`, event handlers, `<base>`, `<meta http-equiv>`, `<form>` or
    `javascript:` URLs).
-7. Rendered output is cached by `render/<viewer>@<version>/<sha256>`.
+7. Rendered output is cached by `render/<viewer>@<version>/<variant>/<sha256>`.
 8. Per site: `renderMarkdown: false` serves `.md` raw; `viewers: false` turns every viewer off.
 9. `Accept: text/markdown` on a navigation returns a Markdown rendering instead of HTML (R-34).
 10. Light and dark themes follow `prefers-color-scheme`; tables, headings and controls are accessible by keyboard.
@@ -1724,7 +1727,7 @@ grant more than they hold. Keys can be limited to one site and, for drives, a pa
 ### 11.5 Integrity, privacy, SSRF, secrets
 
 - **Upload integrity.** R2 verifies the SHA-256 of every single-request upload. Multipart uploads land in
-  `uploads/`, are hashed with a streaming digest, and only then become `blobs/<sha256>`.
+  `uploads/`, are hashed with a streaming digest, and only then become a `blobs/<sha256>/<uuid>` generation.
 - **Dedupe privacy.** "Already have it" is answered only for hashes the caller's tenant (or anonymous
   claim) has proven it holds (`blob_scopes`). Other hashes are always requested, verified, and not rewritten
   if present. No unauthenticated endpoint reveals whether a hash exists.
@@ -1753,8 +1756,8 @@ grant more than they hold. Keys can be limited to one site and, for drives, a pa
 - **Variables** are encrypted with AES-256-GCM (key from the `VARIABLES_KEY` secret, versioned), are
   write-only through every surface, and are injected only into proxy requests to pinned upstreams.
 - **Agent mistakes.** `confirm` on destructive MCP tools, `--yes` in the CLI, `baseVersionId` conflicts,
-  immutable versions, `delete_version` refuses the live version, deleted sites are recoverable for 24 h by
-  the operator (soft delete).
+  immutable versions, `delete_version` refuses the live version, deleted sites are soft-deleted and
+  stay recoverable by the operator for at least an hour, until the hourly purge removes them.
 
 ### 11.6 Anonymous publish controls
 
@@ -1785,7 +1788,7 @@ The link alone is not an operational reporting channel.
 | Files per version | 2,500 | `MAX_FILES` |
 | Bytes per version | 10 GB | `MAX_SITE_BYTES` |
 | One-shot publish body | 25 MB | `ONESHOT_MAX_BYTES` |
-| Inline content per file / per call | 1 MB / 4 MB (base64 256 KB / 1 MB) | `INLINE_MAX_BYTES` (R-04) |
+| Inline content per file / per call | 1 MB / 4 MB (base64 256 KB / 1 MB) | `INLINE_UTF8_MAX_BYTES`, `INLINE_BASE64_MAX_BYTES` (R-04) |
 | URL source per file | 100 MB, 30 s, 3 redirects | `URL_FETCH_MAX_BYTES` (R-04) |
 | Pending version lifetime | 1 hour | - |
 | Anonymous: lifetime / per-IP per hour / file / site | 24 h / 60 / 25 MB / 250 MB | `ANON_TTL_HOURS`, `ANON_SITES_PER_HOUR`, `ANON_MAX_FILE_BYTES`, `ANON_MAX_SITE_BYTES` |

@@ -29,7 +29,7 @@ The first three feature branches are merged into `main` on top of the baseline b
 
 | Item | State | What landed |
 |---|---|---|
-| R-01 | Done | Open-core guard and self-test in CI (npm, Yarn, pnpm and Bun text locks); `EXTENSION_API_VERSION = 1`, Extension API changelog and contract tests for every existing extension point. |
+| R-01 | Done | Open-core guard and self-test in CI (npm, Yarn, pnpm and Bun text locks); `EXTENSION_API_VERSION`, Extension API changelog and contract tests for every existing extension point. |
 | R-04 | Partial | File sources (`content`, `url`, `sha256` + upload link, `copyFrom`) and idempotency keys for agent writes. |
 | R-05 | Done | Canonical `/versions` routes with `/deploys` kept as aliases, partial updates (`PATCH /api/v1/sites/:slug/files`), `GET` version status returning fresh upload items, fresh upload items in `missing_blobs`, rename. |
 | R-13 | Done | Exact ready-version previews in path and subdomain modes, owner credentials or 24-hour signed links, preview-root cookies, private/no-store privacy headers and stale-live-KV bypass. |
@@ -61,7 +61,7 @@ Delivers: OPS-08 (part). Depends: none.
 - Done: `scripts/guard-open-core.mjs` (`npm run guard`) runs in CI and fails on: the private-code SPDX
   marker (the guard holds the exact string), payment SDK dependencies in any `package.json` or lockfile, a `.gitmodules`
   file, or code that imports a package outside this repo's `@dropway/*` and declared dependencies.
-- `packages/server` exports `EXTENSION_API_VERSION = 1`; `CHANGELOG.md` has an "Extension API" section.
+- `packages/server` exports `EXTENSION_API_VERSION`; `CHANGELOG.md` has an "Extension API" section.
 - `test/extension-contract.test.ts` exercises every existing extension point with fakes: identity,
   policy limits and refusals (`beforeCreateSite`, `beforeDeploy`), metering events (all 5 kinds), all 3
   hooks, an API route override, an app route, an MCP tool registration, UI slots, a viewer, `scheduled`.

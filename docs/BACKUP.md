@@ -20,7 +20,7 @@ and `wrangler secret` have no local variant: they always act on your account.
 | Binding | Default resource | Contents | Source of truth? |
 |---|---|---|---|
 | `DB` (D1) | database `dropway` | Everything metadata: tenants, members, API-key hashes and scopes, sites, versions, `version_files` (the manifest: path → SHA-256, size, content type), `blobs` + `blob_scopes`, `usage_counters`, idempotency keys, slug tombstones and redirects, transfers | **Yes** |
-| `FILES` (R2) | bucket `dropway-files` | `blobs/<sha256>`: immutable, content-addressed file bytes. R2 verifies the hash on write. Names are meaningless without the D1 manifest | No (bytes only) |
+| `FILES` (R2) | bucket `dropway-files` | `blobs/<sha256>/<uuid>`: immutable, hash-verified file generations (`blobs/<sha256>` for legacy objects); `blobs.storage_key` selects the current generation. R2 verifies the hash on write. Names are meaningless without the D1 manifest | No (bytes only) |
 | `CACHE` (KV) | namespace (auto-provisioned) | `live:<slug>` only: the hot "what is live" serving cache | No: any miss is rebuilt from D1 and rewritten (`live.ts`). A hit is served without reading D1, so entries go stale when D1 changes outside the app (a restore) |
 | `ANALYTICS` (AE) | dataset `dropway_hits` | One data point per served request: site id; slug, path, status, country, referrer, page-or-asset, version, tenant; count, latency ms, bytes | No, and nothing in D1 derives from it |
 | edge Cache API | — | Blob bytes and viewer fragments on custom domains; a no-op on `*.workers.dev` | No: ephemeral, rebuilds |
@@ -79,7 +79,7 @@ restore drill ([Provenance](#6-provenance)).
 ### 2.2 R2: bulk copy over the S3 API
 
 Blobs are immutable, so a bucket copy is incremental forever: each run copies
-only new hashes. Copy the whole bucket with rclone
+only new physical keys. Copy the whole bucket with rclone
 ([R2 rclone docs](https://developers.cloudflare.com/r2/examples/rclone/)).
 With an API token created per
 [R2 authentication](https://developers.cloudflare.com/r2/api/tokens/):
@@ -102,23 +102,33 @@ rclone copy r2:dropway-files r2:dropway-files-bk/    # to a second bucket
 
 `copy` never deletes at the destination; prefer it over `sync` for backups.
 
+Prefer the second bucket. A legacy `blobs/<sha256>` object and a
+`blobs/<sha256>/<uuid>` generation of the same hash can exist side by side
+(for example, an orphaned legacy object next to a fresh upload). R2 keys are
+flat, but a local filesystem cannot hold both a file and a directory named
+`blobs/<sha256>`, so a local-disk copy can fail on that one object. If that
+happens, rerun the copy after a later hourly cleanup has removed the orphaned
+object. The cleanup sweeps the bucket a page at a time, so the next run does not
+always fix it.
+
 Two things the copy alone does not give you:
 
-- **The manifest lives in D1.** A `blobs/<sha256>` object says nothing about
+- **The manifest lives in D1.** A `blobs/<sha256>[/<uuid>]` object says nothing about
   which site or path it belongs to. Enumerate the referenced set from the
   database you backed up in 2.1:
 
   ```sh
   npx wrangler d1 execute dropway --remote \
-    --command "SELECT DISTINCT sha256 FROM version_files;"
+    --command "SELECT DISTINCT vf.sha256, COALESCE(b.storage_key, 'blobs/' || b.sha256) AS storage_key FROM version_files vf JOIN blobs b ON b.sha256 = vf.sha256;"
   ```
 
-  Objects in the bucket but not in that list are orphans awaiting the hourly
+  Compare physical `storage_key` values, not just hashes. Objects in the bucket
+  but not in that list are orphans awaiting the hourly
   cleanup; harmless to keep.
 - **Spot-check one object** after the copy, comparing bytes:
 
   ```sh
-  npx wrangler r2 object get dropway-files/blobs/<sha256> --remote --file ./spot.bin
+  npx wrangler r2 object get dropway-files/<storage_key-from-query> --remote --file ./spot.bin
   sha256sum ./spot.bin   # must equal <sha256>
   ```
 
@@ -290,7 +300,9 @@ about yourself; that is outside this runbook.
    Blob bytes and viewer fragments in the edge Cache API are keyed by
    SHA-256, so they cannot go stale and need nothing.
 
-3. **R2.** Copy the bytes back, then verify against the restored manifest.
+3. **R2.** Copy the bytes back, then use the query in [section 2.2](#22-r2-bulk-copy-over-the-s3-api)
+   against the restored D1 database to obtain each referenced `storage_key` and
+   its expected `sha256`. Verify the copied object using that physical key.
    Set `RESTORE_REMOTE=r2` for the existing account, or
    `RESTORE_REMOTE=r2-restored` for the new-account remote configured in step 1.
    Verify that remote's endpoint and credentials match the account Wrangler
@@ -298,7 +310,7 @@ about yourself; that is outside this runbook.
 
    ```sh
    rclone copy ./bk-r2-2026-10-27/ "${RESTORE_REMOTE:?Set the verified destination remote}:dropway-files"
-   npx wrangler r2 object get dropway-files/blobs/<sha256-from-version_files> \
+   npx wrangler r2 object get dropway-files/<storage_key-from-query> \
      --remote --file ./spot.bin && sha256sum ./spot.bin
    ```
 
@@ -399,7 +411,7 @@ fragments: nothing to lose and nothing to invalidate.
 - **Weekly**: `d1 export`. Cheap: a two-file demo database exports to 14 KB;
   size tracks the D1 size in the dashboard (megabytes for most instances).
 - **Monthly**: full `rclone copy` of R2. Immutable blobs make each run copy
-  only new hashes; keep the last two copies.
+  only new physical keys; keep the last two copies.
 - **Retention math, honestly**: D1 recovery point is the better of (last
   export, Time Travel window at minute granularity) — inside the window you
   lose minutes, outside it you lose everything since the export. R2 recovery

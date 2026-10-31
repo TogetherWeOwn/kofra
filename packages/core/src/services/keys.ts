@@ -1,5 +1,5 @@
 import type { DropwayContext } from "../context";
-import { ApiError, badRequest, notFound, unauthorized } from "../errors";
+import { ApiError, badRequest, forbidden, notFound, unauthorized } from "../errors";
 import { newId, newSecret, sha256Hex } from "../lib/crypto";
 import {
   ROLE_SCOPES,
@@ -96,6 +96,8 @@ export async function createApiKey(
       .bind(String(input.memberId), caller.tenantId)
       .first<{ id: string; role: Role }>();
     if (!m) throw notFound("member_not_found", `No active member ${String(input.memberId)} in this tenant.`, "List members with GET /api/v1/members.");
+    // A key acts as its member, so a key for an owner carries the owner role.
+    if (m.role === "owner" && caller.role !== "owner") throw forbidden("Only owners can create keys for owners.", "Ask an owner to create the key.");
     memberId = m.id;
     memberRole = m.role;
   }

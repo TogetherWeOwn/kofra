@@ -37,7 +37,7 @@
   transaction, including an anonymous site claimed during assembly. Corrupt
   staging has durable cleanup intent before deletion, so a later D1 failure
   cannot wedge its unfinished-session slot. Cleanup reserves capacity for every
-  phase: at most 100 multipart sessions and 785 core binding calls per invocation.
+  phase: at most 100 multipart sessions and 791 core binding calls per invocation.
 - The CLI uses multipart above 95 MiB (the raw PUT at or below), resuming from
   the server's acknowledged parts when retrying the same pending version, with
   the existing retries and dedupe. Separate CLI invocations create new versions;
