@@ -72,10 +72,13 @@ async function checkAncestors(dir: string, cwd: string): Promise<void> {
   const trusted = (path: string) => cwd === path || cwd.startsWith(path.endsWith(sep) ? path : path + sep);
   const ancestors: string[] = [];
   for (let path = dirname(dir); path !== dirname(path); path = dirname(path)) ancestors.push(path);
-  for (const path of ancestors.reverse()) {
+  // A missing ancestor never stops the walk: a symlink must be refused even
+  // when the path below it does not exist yet (`link/sub/out` with
+  // `link -> outside`), so the result cannot depend on visit order.
+  for (const path of ancestors) {
     if (trusted(path)) continue;
     const info = await localStat(path);
-    if (!info) return;
+    if (!info) continue;
     if (!info.isDirectory() || info.isSymbolicLink()) {
       throw new CliError({ code: "invalid_pull_directory", message: "A parent of the pull destination is a symlink or not a directory.", hint: "Choose a destination whose parent directories are plain directories.", exitCode: EXIT.usage });
     }
@@ -96,7 +99,7 @@ function pathSegments(path: string): string[] {
 }
 
 /** Never follow local symlinks in the server-controlled part of the destination. */
-async function fileTarget(dir: string, segments: string[], existingPaths: ReadonlySet<string>): Promise<string> {
+export async function fileTarget(dir: string, segments: string[], existingPaths: ReadonlySet<string>): Promise<string> {
   await mkdir(dir, { recursive: true });
   let parent = dir;
   for (const segment of segments.slice(0, -1)) {

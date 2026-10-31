@@ -6,6 +6,7 @@ import { mkdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pullHarness, sha256, tree } from "./fixtures/pull-harness";
+import { fileTarget } from "../src/pull.ts";
 
 const api = "https://pull-guards.example";
 const site = "guards";
@@ -48,6 +49,17 @@ describe("pull guards", () => {
     expect(await tree(outside)).toEqual({});
   });
 
+  it.each(["link/sub/shot", "link/sub/deep/out"])("refuses %s when the path below the symlink does not exist yet", async target => {
+    const outside = join(h.work, "outside");
+    await mkdir(outside);
+    await symlink(outside, join(h.cwd, "link"), "dir");
+    const r = await pull(target);
+    expect(r.code, r.stdout + r.stderr).toBe(2);
+    // The missing intermediate directory must not hide `link` from the walk.
+    expect(await tree(outside)).toEqual({});
+    expect(await tree(join(h.cwd, "link", "sub")).catch(() => ({}))).toEqual({});
+  });
+
   it("gives verified files the normal umask-adjusted mode, not 0600", async () => {
     const previous = process.umask(0o022);
     try {
@@ -76,6 +88,19 @@ describe("pull guards", () => {
     expect(r.code, r.stdout + r.stderr).toBeGreaterThan(0);
     expect(JSON.parse(r.stdout).failures).toEqual([expect.objectContaining({ path: "bytes.txt", code: "invalid_pull_response" })]);
     expect(await tree(join(h.cwd, "out"))).toEqual({});
+  });
+
+  it("refuses to overwrite a file reached by a different manifest path", async () => {
+    // On a case-insensitive disk "README.md" and an existing "readme.md" resolve
+    // to one inode. That cannot be reproduced on a case-sensitive test disk, so
+    // the guard is pinned directly: an existing file whose exact manifest path
+    // was not present before this pull must not be replaced.
+    const dir = join(h.cwd, "alias");
+    await mkdir(dir);
+    await writeFile(join(dir, "extra.bin"), "keep");
+    await expect(fileTarget(dir, ["extra.bin"], new Set<string>())).rejects.toMatchObject({ code: "pull_path_collision" });
+    // A path that was present before the pull is still replaceable.
+    await expect(fileTarget(dir, ["extra.bin"], new Set(["extra.bin"]))).resolves.toBe(join(dir, "extra.bin"));
   });
 
   it("still pulls into an existing plain-directory destination", async () => {
