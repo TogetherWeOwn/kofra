@@ -538,7 +538,12 @@ async function registerVerifiedUpload(dc: DropwayContext, p: Principal, session:
       dc.env.DB.prepare(`INSERT OR IGNORE INTO blob_scopes (scope, sha256, created_at)
         SELECT CASE WHEN s.tenant_id IS NULL THEN 's:' || s.id ELSE 't:' || s.tenant_id END, u.sha256, ? ${current}${proven}`)
         .bind(now, ...binds, ...(storageKey ? [storageKey] : [])),
-      ...(completed ? [dc.env.DB.prepare("UPDATE upload_sessions SET status = 'completed', completed_at = ? WHERE id = ?").bind(now, session.id)] : []),
+      // While attaching, complete only if the reservation survived; otherwise a
+      // retry would short-circuit on 'completed' without ever proving scope.
+      ...(completed
+        ? [dc.env.DB.prepare(`UPDATE upload_sessions SET status = 'completed', completed_at = ? WHERE id = ?${attach ? " AND EXISTS (SELECT 1 FROM blob_uploads WHERE storage_key = ?)" : ""}`)
+          .bind(now, session.id, ...(attach ? [storageKey] : []))]
+        : []),
       ...(attach ? [attach.select, attach.release] : []),
       dc.env.DB.prepare("SELECT tenant_id FROM sites WHERE id = ?").bind(session.site_id),
     ]);
