@@ -320,6 +320,30 @@ Keep `"workers_dev": true`, set `APP_ORIGIN` to the new origin and list the old 
   Other methods (webhooks, form posts) are served in place.
 - Browser sessions are per host: people sign in again on the new origin.
 
+## Caching and freshness
+
+What a request reads, in order: isolate memory (5 s), the Cache API pointer memo (10 s, shared by
+every isolate in the data center), then KV (which has its own edge cache, 30 s minimum), then D1.
+File bytes come from the Cache API keyed by SHA-256 (immutable), then R2. Files over 25 MB and
+Range requests go straight to R2 and never touch the Cache API. A publish, settings change or
+delete rewrites or drops the memo in the data center that handled it; other data centers pick the
+change up within the memo's 10 s plus KV's cache TTL.
+
+Measure how long a change takes to appear on your own deployment (it overwrites `measure.txt` on
+the site you name, once per sample):
+
+```sh
+KOFRA_API_KEY=<owner key> node scripts/measure-freshness.mjs \
+  --api https://<worker>.<you>.workers.dev --site freshness --samples 20 --json
+```
+
+It prints `p50Ms` and `p95Ms` from "publish returned" to "the live URL served the new bytes".
+
+### Measured on workers.dev
+
+Not measured yet: the numbers and the answer to "do `cf-cache-status` and Cache API hits work on
+`*.workers.dev`?" are added here from a real deployment (date, sample count, p50/p95, probe result).
+
 ## Upgrades, backups, removal
 
 - **Upgrade**: pull the latest code (or sync your copy on GitHub), then `npm run deploy` (pushing

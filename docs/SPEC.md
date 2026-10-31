@@ -122,7 +122,7 @@ What Kofra is not:
 | SRV-03 | Index resolution: `index.html`, `index.htm`, `index.md`, `README.md`; a one-file site serves that file at `/`; folders without an index get a listing; `404.html`; SPA fallback | P0 | Done |
 | SRV-04 | Headers: `ETag` (sha256), `Range`/206, pre-compressed `.br`/`.gz` with `Content-Encoding`, `X-Kofra-Version`, `X-Robots-Tag: noindex` on expiring sites, `X-Content-Type-Options: nosniff` | P0 | Done |
 | SRV-05 | Cache policy matrix (HTML and unfingerprinted files revalidate; fingerprinted files immutable; gated sites `private, no-store`; sites with `.wasm` revalidate) | P0 | Partial; R-27 |
-| SRV-06 | Content-addressed edge cache (Cache API by sha256, pointer memo). Live URL shows a new version within about 60 s worldwide, the version URL at once | P0 | R-14 |
+| SRV-06 | Content-addressed edge cache (Cache API by sha256, pointer memo). Live URL shows a new version within about 60 s worldwide, the version URL at once | P0 | Partial: blob cache, 10 s Cache API pointer memo and `scripts/measure-freshness.mjs` done; the `workers.dev` p50/p95 and cache probe are recorded in [SELF_HOST.md](SELF_HOST.md) when measured |
 | SRV-07 | Version preview URLs `<slug>--v<N>` for the owner (signed links for others) | P0 | Done: exact ready version from D1 in both modes; owner Authorization or 24 h signed link with preview-root cookie, noindex/no-referrer |
 | SRV-08 | Cross-origin isolation per site (COOP/COEP for `SharedArrayBuffer` and threaded WebAssembly) | P0 | Done |
 | SRV-09 | `_redirects` and `_headers` files at the site root (Netlify/Cloudflare Pages syntax subset), parsed at finalize, never served | P1 | R-27 |
