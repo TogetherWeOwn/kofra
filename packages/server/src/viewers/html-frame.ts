@@ -9,7 +9,9 @@ import type { Viewer } from "./index";
  */
 export const htmlFrameViewer: Viewer = {
   id: "html-frame",
-  version: 2,
+  // 3 was issued separately for the shared-link head tags and for the Phone
+  // disclosure, so the merged render moves to 4.
+  version: 4,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "html" && mode === "view",
   async render(vc) {

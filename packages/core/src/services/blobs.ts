@@ -79,6 +79,34 @@ export async function putVerifiedBlob(
   size: number,
   contentType: string | null,
 ): Promise<void> {
+  const storageKey = await writeVerifiedBlob(dc, sha, body, size, contentType);
+  const db = dc.env.DB;
+  const now = Date.now();
+  const attach = attachStatements(dc, sha, size, storageKey, now);
+  const result = await db.batch<{ storage_key: string | null }>([
+    attach.insert,
+    db.prepare(`INSERT OR IGNORE INTO blob_scopes (scope, sha256, created_at)
+      SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM blob_uploads WHERE storage_key = ?)
+      AND EXISTS (SELECT 1 FROM blobs WHERE sha256 = ?)`)
+      .bind(scope, sha, now, storageKey, sha),
+    attach.select,
+    attach.release,
+  ]);
+  await settleAttach(dc, storageKey, result[2]?.results[0]);
+}
+
+/**
+ * Storage only: reserve a fresh generation and let R2 verify the SHA-256 while
+ * it streams in. The caller attaches the returned key with attachStatements in
+ * its own D1 batch (multipart completion fences that against live ownership).
+ */
+export async function writeVerifiedBlob(
+  dc: DropwayContext,
+  sha: string,
+  body: ReadableStream | ArrayBuffer | Uint8Array,
+  size: number,
+  contentType: string | null,
+): Promise<string> {
   const storageKey = `${blobKey(sha)}/${crypto.randomUUID()}`;
   const db = dc.env.DB;
   await db.prepare("INSERT INTO blob_uploads (storage_key, created_at) VALUES (?, ?)")
@@ -103,21 +131,29 @@ export async function putVerifiedBlob(
     if (/length|size|bytes/i.test(msg)) throw badRequest("size_mismatch", "The upload length does not match Content-Length.", "Send the raw file as the body.");
     throw e;
   }
-  const now = Date.now();
-  const result = await db.batch<{ storage_key: string | null }>([
-    db.prepare(`INSERT OR IGNORE INTO blobs (sha256, size, created_at, storage_key)
+  return storageKey;
+}
+
+/**
+ * Batch pieces that attach a reserved generation: `insert` before any scope
+ * statement, then `select` (pass its row to settleAttach) and `release` last.
+ * Without the reservation (GC retired it) nothing attaches.
+ */
+export function attachStatements(dc: DropwayContext, sha: string, size: number, storageKey: string, now: number) {
+  const db = dc.env.DB;
+  return {
+    insert: db.prepare(`INSERT OR IGNORE INTO blobs (sha256, size, created_at, storage_key)
       SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM blob_uploads WHERE storage_key = ?)`)
       .bind(sha, size, now, storageKey, storageKey),
-    db.prepare(`INSERT OR IGNORE INTO blob_scopes (scope, sha256, created_at)
-      SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM blob_uploads WHERE storage_key = ?)
-      AND EXISTS (SELECT 1 FROM blobs WHERE sha256 = ?)`)
-      .bind(scope, sha, now, storageKey, sha),
-    db.prepare(`SELECT storage_key FROM blobs WHERE sha256 = ?
+    select: db.prepare(`SELECT storage_key FROM blobs WHERE sha256 = ?
       AND EXISTS (SELECT 1 FROM blob_uploads WHERE storage_key = ?)`)
       .bind(sha, storageKey),
-    db.prepare("DELETE FROM blob_uploads WHERE storage_key = ?").bind(storageKey),
-  ]);
-  const stored = result[2]?.results[0];
+    release: db.prepare("DELETE FROM blob_uploads WHERE storage_key = ?").bind(storageKey),
+  };
+}
+
+/** Interpret attachStatements' `select` row once the batch has committed. */
+export async function settleAttach(dc: DropwayContext, storageKey: string, stored: { storage_key: string | null } | undefined): Promise<void> {
   // A slow/crashed writer's reservation may have been retired by GC. It must
   // not attach bytes after GC decided to delete this physical key.
   if (!stored) {

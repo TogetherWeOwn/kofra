@@ -17,6 +17,7 @@ import {
 import type { DropwayEnv } from "./env";
 import type { McpToolDefinition } from "./extensions";
 import { readJson } from "./routes/api";
+import { isReplayReceipt, markReplayReceipt } from "./replay-receipt";
 
 export interface OperationContext {
   dw: DropwayContext;
@@ -162,7 +163,9 @@ export function requireOperationScopes(principal: Principal, scopes: readonly Sc
 
 function authorizeOperation(op: OperationDefinition, ctx: OperationContext): void {
   if (ctx.principal.kind === "upload") {
-    if (op.id === "upload_blob") return;
+    // The services re-bind every one of these to the token's single pending
+    // version and manifest hash; no other operation may dispatch at all.
+    if (["upload_blob", "create_multipart_upload", "get_multipart_upload", "upload_multipart_part", "complete_multipart_upload"].includes(op.id)) return;
     throw new ApiError(403, "forbidden", "Upload tokens only authorize blob uploads.", "Use an API key for this operation.");
   }
   if (op.bootstrap) {
@@ -210,7 +213,8 @@ async function runOperation(op: OperationDefinition, parsed: unknown, ctx: Opera
     throw new ApiError(500, "invalid_operation_output", `The ${op.id} handler returned an invalid result.`, "Report the requestId to the instance operator.");
   }
   // JSON omits optional undefined fields; MCP's schema adapter rejects them before serialization.
-  return JSON.parse(JSON.stringify(output.data));
+  const normalized = JSON.parse(JSON.stringify(output.data));
+  return isReplayReceipt(result) ? markReplayReceipt(normalized) : normalized;
 }
 
 export function operationTools(operations: readonly OperationDefinition[]): McpToolDefinition[] {

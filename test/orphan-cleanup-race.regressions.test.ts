@@ -212,7 +212,7 @@ describe("generation migration and stale snapshots", () => {
   it("preserves existing verified bytes and scope proofs through the additive migration", async () => {
     const dw = await freshInstance();
     await reset();
-    await applyD1Migrations(env.DB, env.TEST_MIGRATIONS.filter((m) => !/^0007/.test(m.name)));
+    await applyD1Migrations(env.DB, env.TEST_MIGRATIONS.filter((m) => !/^0009/.test(m.name)));
     const file = await manifestEntry("legacy.txt", "legacy migration bytes");
     await env.FILES.put(`blobs/${file.sha256}`, file.bytes);
     await env.DB.batch([

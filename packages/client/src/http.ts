@@ -116,9 +116,10 @@ export interface RequestOptions {
   headers?: Record<string, string>;
   /**
    * "safe": retry on 429, 5xx and network errors (GET, PUT blob, finalize: all idempotent).
-   * "rate-limit": retry only on 429 (the server refused before doing anything).
+   * "rate-limit": retry only on 429 (use only when refusal is known to be pre-effect).
+   * "none": one attempt, including on 429; required for uncertain mutations.
    */
-  retry?: "safe" | "rate-limit";
+  retry?: "safe" | "rate-limit" | "none";
   /** Override the bearer token for this call (null = none). */
   token?: string | null;
   /** Allowed non-2xx statuses that should be returned instead of thrown. */
@@ -170,7 +171,7 @@ export interface CallOptions {
   token?: string | null;
   accept?: number[];
   idempotencyKey?: string;
-  retry?: "safe" | "rate-limit";
+  retry?: RequestOptions["retry"];
 }
 
 function queryValue(value: unknown): string[] {
@@ -233,17 +234,28 @@ export class DropwayHttpClient {
     headers: Record<string, string>,
     opts: RequestOptions,
   ): Promise<Response> {
+    const key = opts.idempotencyKey;
+    // Refuse invalid options before they can erase a caller-retained replay header.
+    if (key !== undefined && (typeof key !== "string" || key.length === 0 || key.length > 255 || /[^\x21-\x7e]/.test(key))) {
+      throw new DropwayError({
+        code: "invalid_idempotency_key",
+        message: "The idempotency key must be 1-255 printable ASCII characters without spaces.",
+        hint: "Use a fresh UUID per logical operation, and reuse it only for that same operation.",
+        retryable: false,
+      });
+    }
     const token = opts.token === undefined ? this.token : opts.token;
     const retry = opts.retry ?? (method === "GET" || method === "HEAD" ? "safe" : "rate-limit");
     let lastError: DropwayError | null = null;
 
-    for (let attempt = 1; attempt <= this.attempts; attempt++) {
+    const attempts = retry === "none" ? 1 : this.attempts;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
       const sent = new Headers(headers);
       sent.set("Accept", "application/json");
       sent.set("X-Kofra-Client", this.clientName);
       sent.set(`${LEGACY_HEADER_PREFIX}Client`, this.clientName); // instances from before the rename
       if (token) sent.set("Authorization", `Bearer ${token}`);
-      if (opts.idempotencyKey) sent.set("Idempotency-Key", opts.idempotencyKey);
+      if (key !== undefined) sent.set("Idempotency-Key", key);
       let res: Response;
       try {
         res = await this.doFetch(new Request(url, { method, headers: sent, body, redirect: "follow" }));
@@ -254,7 +266,7 @@ export class DropwayHttpClient {
           hint: "Check the instance URL (--api or KOFRA_API) and your network, then retry.",
           retryable: true,
         });
-        if (retry === "safe" && attempt < this.attempts) {
+        if (retry === "safe" && attempt < attempts) {
           await sleep(this.backoff(attempt));
           continue;
         }
@@ -274,7 +286,7 @@ export class DropwayHttpClient {
 
       const err = await errorFromResponse(res);
       const retryable = res.status === 429 || (retry === "safe" && res.status >= 500);
-      if (retryable && attempt < this.attempts) {
+      if (retryable && attempt < attempts) {
         const ra = Number(res.headers.get("retry-after"));
         if (res.status === 429 && Number.isFinite(ra) && ra > this.maxRetryAfter) throw err;
         await sleep(res.status === 429 && Number.isFinite(ra) && ra > 0 ? ra * 1000 : this.backoff(attempt));

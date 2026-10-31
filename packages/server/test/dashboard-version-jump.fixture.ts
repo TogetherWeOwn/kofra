@@ -2,6 +2,7 @@
  * No selectors or business logic are injected into production. Deferred responses
  * deliberately ignore abort signals: abort alone cannot guarantee ordering. */
 import vm from "node:vm";
+import { webcrypto } from "node:crypto";
 import { expect } from "vitest";
 import { CLIENT_SCRIPT } from "../src/ui/assets.ts";
 import { FakeDocument, FakeElement, isHidden } from "./dashboard-version-jump.helpers.ts";
@@ -167,6 +168,7 @@ export async function mount(f = fixture(), options: { requested?: string; prior?
       clipboardWrites.push(text);
       await options.writeClipboard?.(text);
     } } },
+    crypto: webcrypto,
     URL: ObjectURL, URLSearchParams, Headers, Response, Blob, AbortController, DOMException,
     setTimeout, clearTimeout, queueMicrotask, console,
     addEventListener(type: string, fn: (event: unknown) => void) {

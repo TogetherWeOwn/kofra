@@ -62,5 +62,5 @@ export async function serveVersionPreview(
     url.pathname = mode.base;
     return previewResponse(new Response(null, { status: 301, headers: { Location: url.toString() } }));
   }
-  return previewResponse(await serveSiteContent(request, dw, preview.live, pathname, { ...mode, pathShim: mode.kind === "path" }, viewers));
+  return previewResponse(await serveSiteContent(request, dw, preview.live, pathname, { ...mode, preview: true, pathShim: mode.kind === "path" }, viewers));
 }
