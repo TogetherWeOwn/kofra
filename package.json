@@ -53,6 +53,9 @@
       "ADMIN_BOOTSTRAP_KEY": {
         "description": "A long random string, used once to create the owner of this instance: `curl -X POST <your worker URL>/api/v1/setup -H \"Authorization: Bearer <ADMIN_BOOTSTRAP_KEY>\"`. Generate one with `openssl rand -hex 32`."
       },
+      "SIGNING_SECRET": {
+        "description": "A second long random string, different from ADMIN_BOOTSTRAP_KEY, that signs password cookies, upload and preview links and salts IP hashes. Generate one with `openssl rand -hex 32`."
+      },
       "APP_ORIGIN": {
         "description": "Optional. Public origin of the app and API, for example `https://dropway.<you>.workers.dev`. Leave empty to use the origin of each request."
       },

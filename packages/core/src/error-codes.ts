@@ -101,6 +101,7 @@ export const ERROR_CODES: Readonly<Record<string, ErrorCode>> = {
   feature_unavailable: { status: 501, retryable: false, hint: "Use a supported alternative; for access modes, use password instead of private or restricted." },
   mcp_not_enabled: { status: 501, retryable: false, hint: "Use the REST API (see /openapi.json) or update the instance." },
   blob_missing: { status: 502, retryable: true, hint: "Retry shortly; report the requestId if the contents remain unavailable." },
+  signing_secret_missing: { status: 503, retryable: false, hint: "The operator must set SIGNING_SECRET (or ADMIN_BOOTSTRAP_KEY) as a Worker secret." },
   slug_generation_failed: { status: 503, retryable: true, hint: "Retry the request after the indicated delay." },
   temporarily_unavailable: { status: 503, retryable: true, hint: "Retry the request after the indicated delay." },
   invalid_transfer: { status: 400, retryable: false, hint: "Correct the delivery fields and retry." },

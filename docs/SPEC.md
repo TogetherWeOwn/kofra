@@ -1716,6 +1716,7 @@ allow-orientation-lock`), never `allow-same-origin`.
 | Session | random cookie `__Host-dw_session` | SHA-256 in `sessions` | 30 days, sliding; revocable |
 | OAuth tokens | issued by `workers-oauth-provider` | hashed in `OAUTH_KV` | access 1 h, refresh rotates, grant 30 days |
 | Bootstrap secret | `ADMIN_BOOTSTRAP_KEY` secret | Worker secret | setup and recovery only |
+| Signing secret | `SIGNING_SECRET` secret (falls back to `ADMIN_BOOTSTRAP_KEY`) | Worker secret | signs upload, preview and password capabilities and salts IP hashes; with neither set they fail closed with `503 signing_secret_missing` |
 
 Scopes: `sites:read`, `sites:write`, `keys:write`, `members:write`, `sites:delete`, `data:write`,
 `secrets:write`, `admin` (implemented; migration `0003_scopes_usage.sql` gives `sites:delete` to existing `sites:write` keys after the transfer schema in `0002_transfers.sql`).
