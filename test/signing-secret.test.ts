@@ -41,6 +41,12 @@ describe("signing secret", () => {
     const publish = await call("/api/v1/publish", { key: dw.ownerKey, ...jsonBody({ site: "manifest", files: [entry] }) });
     expect(publish.status).toBe(503);
     expect(((await publish.json()) as { error: { code: string } }).error.code).toBe("signing_secret_missing");
+    // Refused before any pending version is written, also for an existing site.
+    const versions = () => env.DB.prepare("SELECT COUNT(*) AS n FROM versions").first<number>("n");
+    const before = await versions();
+    const update = await call("/api/v1/publish", { key: dw.ownerKey, ...jsonBody({ site: "locked", files: [entry] }) });
+    expect(update.status).toBe(503);
+    expect(await versions()).toBe(before);
 
     const page = await call(url);
     expect(page.status).toBe(503);

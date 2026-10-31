@@ -1,4 +1,4 @@
-import type { Limits } from "../config";
+import { signingSecret, type Limits } from "../config";
 import type { DropwayContext } from "../context";
 import { appOrigin, siteUrl } from "../context";
 import { ApiError, badRequest, forbidden, notFound, tooLarge } from "../errors";
@@ -485,6 +485,11 @@ export interface NextStep {
   why: string;
 }
 
+/** Files sent without bytes may need dwu_ upload items: refuse before a pending version exists, not after. */
+function requireUploadSigning(dc: DropwayContext, files: ResolvedFile[]): void {
+  if (files.some((f) => f.bytes === null && f.source !== "copy")) signingSecret(dc.config);
+}
+
 async function loadSite(dc: DropwayContext, id: string): Promise<SiteRow> {
   return (await dc.env.DB.prepare("SELECT * FROM sites WHERE id = ?").bind(id).first<SiteRow>())!;
 }
@@ -667,6 +672,7 @@ export async function publishSources(dc: DropwayContext, p: Principal, input: Pu
 
   const fields: Record<string, unknown> = { slug };
   for (const k of ["title", "description", "spa", "renderMarkdown", "crossOriginIsolation", "password"] as const) if (input[k] !== undefined) fields[k] = input[k];
+  requireUploadSigning(dc, resolved.files);
   const manifest = resolved.files.map((f) => ({ path: f.path, size: f.size, sha256: f.sha256, contentType: f.contentType }));
   const target = await resolvePublishTarget(dc, p, fields, manifest);
   const site = target.site;
@@ -803,6 +809,7 @@ export async function updateSiteFiles(dc: DropwayContext, p: Principal, siteRef:
   }
   const byPath = new Map(resolved.files.map((f) => [f.path, f]));
   const all: ResolvedFile[] = [...tree.entries()].map(([path, f]) => byPath.get(path) ?? { path, size: f.size, sha256: f.sha256, contentType: f.contentType, bytes: null, source: "copy" });
+  requireUploadSigning(dc, all);
   const deploy = await createDeploy(dc, p, site, all.map((f) => ({ path: f.path, size: f.size, sha256: f.sha256, contentType: f.contentType })), {
     source: input.source ?? "mcp",
     message: input.message,
