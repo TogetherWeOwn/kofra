@@ -173,7 +173,7 @@ Variables go in `vars` in `wrangler.jsonc`; secrets with `npx wrangler secret pu
 | `APP_ORIGIN` | request origin | Public origin of the app and API |
 | `LEGACY_APP_ORIGINS` | empty | Former app origins (comma-separated), after a move to a new `APP_ORIGIN`. See [Moving the app](#moving-the-app-to-a-new-origin) |
 | `LEGACY_DEPRECATED_AT` | none | Date of that move (ISO 8601 or Unix seconds), sent as `Deprecation: @<seconds>`; unset = no `Deprecation` header (the successor `Link` is still sent) |
-| `SITES_MODE` | `path` | `path` or `subdomain` (see below) |
+| `SITES_MODE` | `path` (`subdomain` when `SITES_DOMAIN` is set) | `path` or `subdomain` (see below) |
 | `SITES_DOMAIN` | empty | Subdomain mode: sites at `https://<name>.<SITES_DOMAIN>/` |
 | `SITES_ORIGIN` | empty | Path mode: origin of a second, sites-only deployment of the same Worker. Ignored in subdomain mode |
 | `LEGACY_SITES_ORIGINS` | empty | Former path-mode sites origins (comma-separated): `<origin>/<name>/<path>` answers `308` to the site's current URL, path and query kept (not cached) |

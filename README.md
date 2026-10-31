@@ -31,8 +31,8 @@ Prefer not to self-host? A hosted version is coming.
   output and stable exit codes, an installable Agent Skill (`npx skills add TogetherWeOwn/dropway`),
   `/openapi.json`, `/llms.txt` and `/llms-full.txt` on every instance. Every error has a stable `code`
   and a `hint`; writes take idempotency keys.
-- **Scoped API keys** (`sites:read`, `sites:write`, `keys:write`, `members:write`, optional single-site
-  restriction); only hashes are stored.
+- **Scoped API keys** (`sites:read`, `sites:write`, `sites:delete`, `keys:write`, `members:write`,
+  `data:write`, `secrets:write`, `admin`; optional single-site restriction); only hashes are stored.
 - **Single tenant**: an owner plus optional members. No signup and no billing.
 - **Cheap and fast**: one Worker with D1, R2 (each file stored once, by SHA-256), KV and Analytics Engine.
 
@@ -200,7 +200,9 @@ Node.js 22 or newer.
 
 ```sh
 npm install
-npm run check      # open-core guard, typecheck, all tests
+npm ci --prefix packages/cli/test/encrypted       # Playwright for the browser tests (typecheck needs it too)
+packages/cli/test/encrypted/node_modules/.bin/playwright install chromium
+npm run check      # open-core guard, error catalog, typecheck, all tests
 npm test           # Workers-runtime tests (D1, R2, KV emulated) + CLI tests against a local Worker
 npm run dev        # wrangler dev; put ADMIN_BOOTSTRAP_KEY in .dev.vars
 ```
