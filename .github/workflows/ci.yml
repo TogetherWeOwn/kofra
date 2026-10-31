@@ -11,6 +11,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   # Typecheck, generated-artifact checks, package builds and the fast Node-side client tests.
+  # No browser download: the Playwright suites run in the test matrix below.
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -22,7 +23,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/cli/test/encrypted/package-lock.json
       - run: npm ci
+      # Typecheck covers the browser tests, which import Playwright's types from here.
+      - run: npm ci --prefix packages/cli/test/encrypted
       - run: npm run typecheck
       - run: npm run test:client
       - name: Validate generated OpenAPI 3.1 and required operation metadata
