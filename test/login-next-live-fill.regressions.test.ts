@@ -105,4 +105,29 @@ describe("live manifest read-path fill cannot stick", () => {
     const kv = await env.CACHE.get<LiveSite>(liveKey(slug), "json");
     expect(kv?.versionId).toBe(live!.versionId);
   });
+
+  it("a fill whose D1 verification fails stays cached, capped to a short TTL", async () => {
+    const dw = await freshInstance();
+    const { slug } = await publish(dw, "live-fill-d1-down");
+    await env.CACHE.delete(liveKey(slug));
+    clearLiveMemoryCache();
+    const put = env.CACHE.put.bind(env.CACHE);
+    const prepare = env.DB.prepare.bind(env.DB);
+    let d1Down = false;
+    const puts = vi.spyOn(env.CACHE, "put").mockImplementation(async (key, value, opts) => {
+      // D1 goes away right after the fill's first put, so the verification read fails.
+      if (key === liveKey(slug)) d1Down = true;
+      return put(key, value, opts);
+    });
+    vi.spyOn(env.DB, "prepare").mockImplementation((sql) => {
+      if (d1Down) throw new Error("D1 unavailable");
+      return prepare(sql);
+    });
+    const live = await withDc(dw, (dc) => getLiveSite(dc, slug));
+    const fills = puts.mock.calls.filter((c) => c[0] === liveKey(slug));
+    vi.restoreAllMocks();
+    const kv = await env.CACHE.get<LiveSite>(liveKey(slug), "json");
+    expect(kv?.versionId).toBe(live!.versionId);
+    expect((fills.at(-1)![2] as KVNamespacePutOptions | undefined)?.expirationTtl).toBeLessThanOrEqual(60);
+  });
 });

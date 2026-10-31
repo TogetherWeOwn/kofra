@@ -33,6 +33,9 @@ export const liveKey = (slug: string) => `live:${slug}`;
 
 const LIVE_VERSION = 4;
 
+/** KV's minimum expirationTtl; caps a read-path fill that D1 could not verify. */
+const UNVERIFIED_FILL_TTL_SECONDS = 60;
+
 /** Copy own file entries into a prototype-less map, preserving an own __proto__ key. */
 function ownFiles(files: LiveSite["files"]): LiveSite["files"] {
   const out: LiveSite["files"] = Object.create(null);
@@ -75,10 +78,18 @@ export async function getLiveSite(dc: DropwayContext, slug: string): Promise<Liv
  * the put could overwrite a fresher manifest. Re-read D1 after the put: a change committed before the
  * re-read is seen and the key is dropped (the next read rebuilds it); one committed after it is
  * followed by its own refreshLive, which lands after this put. Either way a stale fill cannot stick.
+ * If the re-read itself fails, keep serving the fill (D1 may be down) but cap it to KV's minimum TTL
+ * so an unverified entry is re-checked soon instead of living on.
  */
 async function fillLive(dc: DropwayContext, live: LiveSite): Promise<void> {
   await putLive(dc, live);
-  const now = await loadLiveSiteFromD1(dc, { siteId: live.siteId }).catch(() => undefined);
+  let now: LiveSite | null;
+  try {
+    now = await loadLiveSiteFromD1(dc, { siteId: live.siteId });
+  } catch {
+    await putLive(dc, live, UNVERIFIED_FILL_TTL_SECONDS);
+    return;
+  }
   if (!now || !sameLive(now, live)) await dropLive(dc, live.slug);
 }
 
@@ -138,12 +149,13 @@ export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string
   };
 }
 
-async function putLive(dc: DropwayContext, live: LiveSite): Promise<void> {
+async function putLive(dc: DropwayContext, live: LiveSite, maxTtlSeconds?: number): Promise<void> {
   const opts: KVNamespacePutOptions = {};
   if (live.expiresAt) {
     // Keep the key a little past expiry so visitors get a clear "expired" page, then let KV drop it.
     opts.expirationTtl = Math.max(60, Math.ceil((live.expiresAt - Date.now()) / 1000) + 3600);
   }
+  if (maxTtlSeconds !== undefined) opts.expirationTtl = Math.min(opts.expirationTtl ?? maxTtlSeconds, maxTtlSeconds);
   await dc.env.CACHE.put(liveKey(live.slug), JSON.stringify(live), opts);
 }
 
