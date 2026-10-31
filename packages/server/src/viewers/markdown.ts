@@ -126,6 +126,8 @@ interface ParsedTag {
   closing: boolean;
   name: string;
   id: string | undefined;
+  /** `a[name]` is a fragment destination too, after HTML reference decoding. */
+  nameValue: string | undefined;
   inputType: string | undefined;
   /** `annotation-xml[encoding]` decides whether its children are HTML. */
   encoding: string | undefined;
@@ -146,6 +148,7 @@ function parseTag(html: string, start: number): ParsedTag | "eof" | null {
   const name = asciiLower(m[2]!);
   let i = TAG_OPEN.lastIndex;
   let id: string | undefined;
+  let nameValue: string | undefined;
   let inputType: string | undefined;
   let encoding: string | undefined;
   let selfClosing = false;
@@ -180,11 +183,12 @@ function parseTag(html: string, start: number): ParsedTag | "eof" | null {
     // HTML keeps the first duplicate attribute. A slash is part of an
     // unquoted value, not a self-closing marker: id=install/ means install/.
     if (attr === "id" && id === undefined) id = value;
+    if (attr === "name" && nameValue === undefined) nameValue = value;
     if (attr === "type" && inputType === undefined) inputType = value;
     if (attr === "encoding" && encoding === undefined) encoding = value;
   }
   if (i === html.length) return "eof";
-  return { closing, name, id, inputType, encoding, selfClosing, end: i + 1 };
+  return { closing, name, id, nameValue, inputType, encoding, selfClosing, end: i + 1 };
 }
 
 type AnchorEvent = { kind: "md"; index: number } | { kind: "raw"; id: string; heading: boolean };
@@ -396,8 +400,15 @@ function scanHtml(html: string, nonce: string, projecting: boolean) {
       if (isDrop) dropped++;
       if (!foreign && RAWTEXT.has(tag.name)) { rawText = tag.name; escaped = 0; }
     }
-    if (tag.id && !tag.id.startsWith(prefix) && dropped === 0) {
-      rawAt.push({ pos: lt, id: headingKey(tag.id), heading: /^h[1-6]$/.test(tag.name) });
+    // `a[name]` is a second fragment destination on the same element. An
+    // empty destination is not one: the indicated-part lookup skips it.
+    if (dropped === 0) {
+      if (tag.id !== undefined && !tag.id.startsWith(prefix) && tag.id !== "") {
+        rawAt.push({ pos: lt, id: headingKey(tag.id), heading: /^h[1-6]$/.test(tag.name) });
+      }
+      if (tag.name === "a" && tag.nameValue) {
+        rawAt.push({ pos: lt, id: headingKey(tag.nameValue), heading: false });
+      }
     }
   }
 }
@@ -412,18 +423,25 @@ function scanHtml(html: string, nonce: string, projecting: boolean) {
 function scanProbe(html: string, nonce: string): AnchorEvent[] {
   const prefix = `kofra-md-${nonce}-`;
   const digits = /\d+/y;
-  const mdAt: Array<{ pos: number; index: number }> = [];
-  let at = html.indexOf(prefix);
-  while (at >= 0) {
-    digits.lastIndex = at + prefix.length;
-    const num = digits.exec(html);
-    if (num) mdAt.push({ pos: at, index: Number(num[0]) });
-    at = html.indexOf(prefix, at + prefix.length);
-  }
 
   const first = scanHtml(html, nonce, true);
+  const omitted = first.omitted;
+  const mdAt: Array<{ pos: number; index: number }> = [];
+  // Omissions are emitted in ascending, non-overlapping order, and the sentinel
+  // search below is ascending too: one pointer keeps this linear.
+  let omit = 0;
+  let at = html.indexOf(prefix);
+  while (at >= 0) {
+    while (omit < omitted.length && omitted[omit]![1] <= at) omit++;
+    digits.lastIndex = at + prefix.length;
+    const num = digits.exec(html);
+    // A heading inside a dropped subtree or a removed comment never reaches
+    // the served bytes, so it must not spend a replacement suffix either.
+    if (num && !(omit < omitted.length && at >= omitted[omit]![0])) mdAt.push({ pos: at, index: Number(num[0]) });
+    at = html.indexOf(prefix, at + prefix.length);
+  }
   let rawAt = first.rawAt;
-  if (first.omitted.length) {
+  if (omitted.length) {
     const parts: string[] = [];
     const spans: Array<{ offset: number; start: number }> = [];
     let from = 0;
@@ -434,7 +452,7 @@ function scanProbe(html: string, nonce: string): AnchorEvent[] {
       parts.push(html.slice(from, end));
       offset += end - from;
     };
-    for (const [start, end] of first.omitted) {
+    for (const [start, end] of omitted) {
       append(start);
       from = end;
     }
@@ -483,8 +501,14 @@ function randomNonce(): string {
  */
 function assignIds(events: AnchorEvent[], bases: string[], baselines: string[]): string[] {
   const rawAll = new Set<string>();
-  for (const e of events) if (e.kind === "raw") rawAll.add(e.id);
-  const baselineAll = new Set(baselines);
+  const liveBaselines = new Set<string>();
+  for (const e of events) {
+    if (e.kind === "raw") rawAll.add(e.id);
+    else if (e.index < baselines.length) liveBaselines.add(baselines[e.index]!);
+  }
+  // Only headings that survive to the served bytes reserve a future fragment:
+  // a heading inside dropped markup is absent from the output, so its baseline
+  // is free again.
   const finals: Array<string | undefined> = new Array(bases.length);
   const assigned = new Set<string>();
   const rawSeen = new Set<string>();
@@ -502,7 +526,7 @@ function assignIds(events: AnchorEvent[], bases: string[], baselines: string[]):
     } else {
       let n = nextSuffix.get(base) ?? 1;
       let cand = `${base}-${n}`;
-      while (rawAll.has(cand) || baselineAll.has(cand) || assigned.has(cand)) {
+      while (rawAll.has(cand) || liveBaselines.has(cand) || assigned.has(cand)) {
         n++;
         cand = `${base}-${n}`;
       }
