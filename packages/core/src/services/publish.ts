@@ -1,4 +1,5 @@
-import { unzipSync } from "fflate";
+import { Inflate, unzipSync } from "fflate";
+import type { Limits } from "../config";
 import type { DropwayContext } from "../context";
 import { appOrigin, siteUrl } from "../context";
 import { ApiError, badRequest, forbidden, tooLarge } from "../errors";
@@ -8,7 +9,8 @@ import { contentTypeFor, normaliseContentType } from "../lib/mime";
 import { normaliseFilePath, stripCommonRoot } from "../lib/paths";
 import type { Principal } from "../principal";
 import { blobScope, putVerifiedBlob } from "./blobs";
-import { createDeploy, finalizeDeploy, parseDeployOptions, precheckManifest } from "./deploys";
+import { createDeploy, deployWarnings, finalizeDeploy, parseDeployOptions, precheckManifest, validateManifest, type Warning } from "./deploys";
+import { versionPreviewUrl } from "./previews";
 import { createSite, discardNewSite, findSite, getSiteFor, parseSettings, serializeSite, updateSite, type SiteRow, type VersionRow } from "./sites";
 
 /** A file held in memory for one-shot publishing. */
@@ -143,25 +145,152 @@ function defaultNameFor(ctype: string): string {
   throw badRequest("path_required", `Cannot pick a file name for a ${t} body.`, "Add ?path=<name.ext> (or an X-Kofra-Path header) to say what the file is called.");
 }
 
-function unzipFiles(bytes: Uint8Array, maxBytes: number): InlineFile[] {
+interface CentralEntry {
+  compression: number;
+  compressedSize: number;
+  size: number;
+  localOffset: number;
+}
+
+/**
+ * Central-directory entry locations, in directory order; null when the
+ * directory is missing or not a classic single-disk one. A streamed entry
+ * written with a data descriptor records its lengths only here, so these
+ * recorded boundaries — not a sequential local-header scan, which mistakes
+ * signatures inside an embedded archive for outer entries — decide where
+ * each entry's compressed bytes sit.
+ */
+function centralDirectory(bytes: Uint8Array): CentralEntry[] | null {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let eocd = -1;
+  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 0xffff); i--) {
+    if (dv.getUint32(i, true) === 0x06054b50 && i + 22 + dv.getUint16(i + 20, true) === bytes.length) { eocd = i; break; }
+  }
+  if (eocd < 0) return null;
+  const count = dv.getUint16(eocd + 10, true);
+  const cdSize = dv.getUint32(eocd + 12, true);
+  const cdOffset = dv.getUint32(eocd + 16, true);
+  if (count === 0xffff || cdSize === 0xffffffff || cdOffset === 0xffffffff || cdOffset + cdSize > bytes.length) return null;
+  const entries: CentralEntry[] = [];
+  let pos = cdOffset;
+  for (let n = 0; n < count; n++) {
+    if (pos + 46 > bytes.length || dv.getUint32(pos, true) !== 0x02014b50) return null;
+    const nameLen = dv.getUint16(pos + 28, true);
+    const extraLen = dv.getUint16(pos + 30, true);
+    const commentLen = dv.getUint16(pos + 32, true);
+    let compressedSize = dv.getUint32(pos + 20, true);
+    let size = dv.getUint32(pos + 24, true);
+    let localOffset = dv.getUint32(pos + 42, true);
+    // A ZIP64 extra field carries the real value of any 0xFFFFFFFF field,
+    // in uncompressed, compressed, local-offset order.
+    let extra = pos + 46 + nameLen;
+    const extraEnd = extra + extraLen;
+    if (extraEnd > bytes.length) return null;
+    while (extra + 4 <= extraEnd) {
+      const len = dv.getUint16(extra + 2, true);
+      const fieldEnd = extra + 4 + len;
+      if (fieldEnd > extraEnd) return null;
+      if (dv.getUint16(extra, true) === 0x0001) {
+        let p = extra + 4;
+        const read = () => {
+          if (p + 8 > fieldEnd) return -1;
+          const v = dv.getBigUint64(p, true);
+          p += 8;
+          return v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : -1;
+        };
+        if (size === 0xffffffff) size = read();
+        if (compressedSize === 0xffffffff) compressedSize = read();
+        if (localOffset === 0xffffffff) localOffset = read();
+        if (size < 0 || compressedSize < 0 || localOffset < 0) return null;
+      }
+      extra = fieldEnd;
+    }
+    entries.push({ compression: dv.getUint16(pos + 10, true), compressedSize, size, localOffset });
+    pos += 46 + nameLen + extraLen + commentLen;
+  }
+  return entries;
+}
+
+/** Unpack a zip without letting declared sizes or object keys control retained output. */
+export function unzipFiles(bytes: Uint8Array, maxBytes: number): InlineFile[] {
+  const ignored = (name: string) => name.endsWith("/") || name.startsWith("__MACOSX/") || /(^|\/)\.DS_Store$/.test(name);
+  const invalidZip = () => badRequest("invalid_zip", "Could not read the zip file or its entry lengths disagree.", "Send a standard .zip (deflate or stored).");
+  const overBudget = () => tooLarge("zip_too_large", `The zip expands to more than ${maxBytes} bytes.`, "Use the manifest flow for bigger sites.");
+  // One slot per central-directory entry (null for ignored ones), so the
+  // extraction pass below aligns plans with recorded entry locations by
+  // position rather than by decoded name.
+  const ordered: Array<{ path: string; size: number; compression: number; compressedSize: number } | null> = [];
+  const paths = new Set<string>();
+  const files: InlineFile[] = [];
+  let declared = 0;
   let total = 0;
-  let entries: Record<string, Uint8Array>;
   try {
-    entries = unzipSync(bytes, {
-      filter: (f) => {
-        if (f.name.endsWith("/") || f.name.startsWith("__MACOSX/") || /(^|\/)\.DS_Store$/.test(f.name)) return false;
-        total += f.originalSize;
-        if (total > maxBytes) throw tooLarge("zip_too_large", `The zip expands to more than ${maxBytes} bytes.`, "Use the manifest flow for bigger sites.");
-        return true;
-      },
+    // Inspect the central directory without inflating anything. Capture each
+    // entry before the library's filename-keyed result could overwrite it.
+    unzipSync(bytes, { filter: (entry) => {
+      if (ignored(entry.name)) { ordered.push(null); return false; }
+      if (/^[\\/]/.test(entry.name)) throw badRequest("invalid_path", `Zip entry "${entry.name}" is an absolute path.`, "Zip entries must use relative paths inside the site root.");
+      const path = normaliseFilePath(entry.name);
+      if (paths.has(path)) throw badRequest("duplicate_path", `The path "${path}" appears more than once.`);
+      paths.add(path);
+      declared += entry.compression === 0 ? entry.size : entry.originalSize;
+      if (declared > maxBytes) throw overBudget();
+      ordered.push({ path, size: entry.originalSize, compression: entry.compression, compressedSize: entry.size });
+      return false;
+    } });
+    const directory = centralDirectory(bytes);
+    if (!directory || directory.length !== ordered.length) throw invalidZip();
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    ordered.forEach((plan, index) => {
+      if (!plan) return;
+      const entry = directory[index]!;
+      if (entry.compression !== plan.compression || entry.compressedSize !== plan.compressedSize || entry.size !== plan.size) throw invalidZip();
+      const head = entry.localOffset;
+      if (head + 30 > bytes.length || dv.getUint32(head, true) !== 0x04034b50) throw invalidZip();
+      const start = head + 30 + dv.getUint16(head + 26, true) + dv.getUint16(head + 28, true);
+      const end = start + entry.compressedSize;
+      if (end > bytes.length) throw invalidZip();
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      // Check real output bytes before retaining each chunk, not after
+      // whole-file inflation.
+      const retain = (chunk: Uint8Array) => {
+        size += chunk.length;
+        total += chunk.length;
+        if (total > maxBytes) throw overBudget();
+        if (size > plan.size) throw invalidZip();
+        chunks.push(chunk);
+      };
+      if (plan.compression === 0) {
+        if (entry.compressedSize !== plan.size) throw invalidZip();
+        retain(bytes.subarray(start, end));
+      } else if (plan.compression === 8) {
+        // Small input slices bound each synchronous inflate emission.
+        const inflate = new Inflate((chunk) => retain(chunk));
+        for (let offset = start; offset < end; offset += 1024) {
+          inflate.push(bytes.subarray(offset, Math.min(offset + 1024, end)), offset + 1024 >= end);
+        }
+      } else throw invalidZip();
+      if (size !== plan.size) throw invalidZip();
+      const data = new Uint8Array(size);
+      let offset = 0;
+      for (const part of chunks) { data.set(part, offset); offset += part.length; }
+      files.push({ path: plan.path, bytes: data, contentType: contentTypeFor(plan.path) });
     });
   } catch (e) {
     if (e instanceof ApiError) throw e;
-    throw badRequest("invalid_zip", "Could not read the zip file.", "Send a standard .zip (deflate or stored).");
+    throw invalidZip();
   }
-  const files = Object.entries(entries).map(([name, data]) => ({ path: normaliseFilePath(name), bytes: data, contentType: contentTypeFor(name) }));
   const hasRootIndex = files.some((f) => /^(index\.html?|index\.md|readme\.md)$/i.test(f.path));
   return hasRootIndex ? files : stripCommonRoot(files);
+}
+
+/** Validate known paths and byte sizes before spending work on file digests. */
+export function validateInlineFiles(files: InlineFile[], lim: Limits): void {
+  validateManifest(files.map((file, index) => ({
+    path: file.path, size: file.bytes.length, contentType: file.contentType,
+    sha256: index.toString(16).padStart(64, "0"),
+  })), lim);
 }
 
 /**
@@ -176,12 +305,14 @@ export async function resolvePublishTarget(dc: DropwayContext, p: Principal, fie
     if (!row) throw forbidden("The site for this claim token no longer exists.");
     if (slug && slug !== row.slug) throw forbidden("A claim token can only publish to its own site.", `Omit slug, or use slug "${row.slug}".`);
     const site = await getSiteFor(dc, p, row.slug, "sites:write");
+    if (manifest !== undefined) validateManifest(manifest, await dc.adapters.policy.limits(p, { siteId: site.id, tenantId: site.tenant_id }, dc));
     return { site: Object.keys(settings).length ? await updateSite(dc, p, site.slug, settings) : site, claimToken: null, created: false };
   }
   if (slug && p.kind === "member") {
     const existing = await findSite(dc, slug);
     if (existing && existing.tenant_id === p.tenantId) {
       const site = await getSiteFor(dc, p, slug, "sites:write");
+      if (manifest !== undefined) validateManifest(manifest, await dc.adapters.policy.limits(p, { siteId: site.id, tenantId: site.tenant_id }, dc));
       return { site: Object.keys(settings).length ? await updateSite(dc, p, site.slug, settings) : site, claimToken: null, created: false };
     }
   }
@@ -198,6 +329,13 @@ export async function resolvePublishTarget(dc: DropwayContext, p: Principal, fie
 export async function publishFiles(dc: DropwayContext, p: Principal, input: PublishInput, opts: { client?: string | null } = {}) {
   const metadata = parseDeployOptions({ message: input.fields.message, baseVersionId: input.fields.baseVersionId });
   input = { ...input, fields: { ...input.fields, ...metadata } };
+  const slug = input.fields.slug ? stringField(input.fields.slug, "slug").trim().toLowerCase() : null;
+  const existing = p.kind === "claim"
+    ? await dc.env.DB.prepare("SELECT * FROM sites WHERE id = ? AND deleted_at IS NULL").bind(p.siteId).first<SiteRow>()
+    : slug && p.kind === "member" ? await findSite(dc, slug) : null;
+  const owned = existing && (p.kind === "claim" ? existing.tenant_id === null : p.kind === "member" && existing.tenant_id === p.tenantId) ? existing : null;
+  const lim = await dc.adapters.policy.limits(p, { siteId: owned?.id ?? null, tenantId: owned ? owned.tenant_id : p.kind === "member" ? p.tenantId : null }, dc);
+  validateInlineFiles(input.files, lim);
   const hashed = await Promise.all(input.files.map(async (f) => ({ ...f, sha256: await sha256Hex(f.bytes) })));
   const manifest = hashed.map((f) => ({ path: f.path, size: f.bytes.length, sha256: f.sha256, contentType: f.contentType }));
   const target = await resolvePublishTarget(dc, p, input.fields, manifest);
@@ -230,7 +368,8 @@ async function publishToTarget(
   });
 
   let uploaded = 0;
-  let warnings: Array<{ code: string; message: string }> = [];
+  // An unchanged republish still reports the live version's warnings, like finalize does.
+  let warnings: Warning[] = deploy.unchanged ? await deployWarnings(dc, site, deploy.deploy.id) : [];
   let versionId = deploy.deploy.id;
   if (!deploy.unchanged) {
     const missing = new Set(deploy.missing);
@@ -253,6 +392,7 @@ async function publishToTarget(
   const described = serializeSite(dc, site, version);
   return {
     url: siteUrl(dc, site.slug),
+    versionUrl: await versionPreviewUrl(dc, actor, site, version!),
     slug: site.slug,
     created: target.created,
     unchanged: deploy.unchanged,

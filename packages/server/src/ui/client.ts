@@ -2,11 +2,11 @@
 /**
  * Browser code for the app-origin pages (home, sign-in, dashboard, file viewer).
  *
- * This whole file is ONE self-contained function. ./assets.ts serves its
+ * This file is ONE function, receiving only the shared QR factory. ./assets.ts serves its
  * source text (Function.prototype.toString) as /__dropway/ui/app-<hash>.js, so
  * there is no build step and no bundler config for embedding apps to copy.
  * Rules for editing:
- * - Never reference anything outside dropwayClient() (no imports, no module-level values).
+ * - No external references: assets.ts passes the closure-free QR factory as arguments[0].
  * - Plain modern JavaScript; TypeScript annotations would survive into the browser.
  * - Never put API data into innerHTML: build DOM with h() / text nodes.
  * - Every action calls the public REST API (/api/v1), the same one agents use.
@@ -109,6 +109,15 @@ export function dropwayClient() {
     } catch (e) {
       return url;
     }
+  }
+
+  function versionIntentKey() {
+    // getRandomValues also works on HTTP self-hosts, unlike randomUUID.
+    var random = crypto.getRandomValues(new Uint8Array(16));
+    random[6] = (random[6] & 15) | 64;
+    random[8] = (random[8] & 63) | 128;
+    var hex = Array.from(random, function (value) { return value.toString(16).padStart(2, "0"); }).join("");
+    return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join("-");
   }
 
   async function api(path, opts) {
@@ -232,6 +241,23 @@ export function dropwayClient() {
     var days = Math.round(hr / 24);
     if (days < 30) return days + (days === 1 ? " day ago" : " days ago");
     return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  }
+  function expiry(iso) {
+    if (!iso) return "";
+    var date = new Date(iso);
+    var t = date.getTime();
+    if (!Number.isFinite(t)) return "";
+    var remaining = t - Date.now();
+    if (remaining < 0) return "Expired " + ago(iso);
+    var s = Math.round(remaining / 1000);
+    if (s < 45) return "Expires in under a minute";
+    var m = Math.round(s / 60);
+    if (m < 60) return "Expires in " + m + " min";
+    var hr = Math.round(m / 60);
+    if (hr < 24) return "Expires in " + hr + " h";
+    var days = Math.round(hr / 24);
+    if (days < 30) return "Expires in " + days + (days === 1 ? " day" : " days");
+    return "Expires " + date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
   }
   function encodePath(p) {
     return p.split("/").map(encodeURIComponent).join("/");
@@ -720,7 +746,24 @@ export function dropwayClient() {
     // run() sends. Every setItems call resets it to the complete review.
     var nav = { q: "", cat: "all", order: "path" };
     var navEls = null;
+    // Explicit update destination (opts.site, or the slug lookup below). The
+    // sites list is only its first page, so a nonempty explicit destination
+    // is verified with the existing single-site GET and the slug it returns
+    // is what gets selected and published to. destSeq fences races: every
+    // newer explicit choice (a lookup, a picker change, new-site focus, a
+    // finished publish) invalidates older in-flight lookups, whose late
+    // responses are ignored. While destState is "pending" or "failed" the
+    // update destination is unresolved and publishing stays disabled; it
+    // never falls back to the first listed site or to a new site.
+    var destSeq = 0;
+    var destState = "idle"; // idle | pending | resolved | failed
+    var destSite = null; // { slug, title } returned by the verifying GET
+    var initialSite = opts.site && String(opts.site).trim() ? String(opts.site).trim() : null;
     var siteSelect = h("select", { class: "dw-select", id: "dw-pub-site", "aria-label": "Site to update" }, h("option", { value: "", text: "Loading sites…" }));
+    var lookupInput = h("input", { class: "dw-input", id: "dw-pub-lookup", "aria-label": "Site slug to look up", placeholder: "exact site slug", autocomplete: "off", spellcheck: "false", style: "flex:1 1 10rem;width:auto;min-width:0" });
+    var lookupBtn = h("button", { type: "button", class: "dw-btn", text: "Look up site" });
+    var destStatus = h("div", { class: "dw-small dw-muted", role: "status" });
+    var destError = h("div", { hidden: true });
     var slugInput = h("input", { class: "dw-input", id: "dw-pub-slug", placeholder: "generated if empty", autocomplete: "off", spellcheck: "false", pattern: "[a-z0-9][a-z0-9-]{1,62}" });
     var modeNew = h("input", { type: "radio", name: "dw-pub-mode", value: "new", checked: !opts.site });
     var modeUpd = h("input", { type: "radio", name: "dw-pub-mode", value: "update", checked: !!opts.site });
@@ -953,7 +996,7 @@ export function dropwayClient() {
         renderReview();
         review.open = wasOpen;
       }
-      publishBtn.disabled = !keep.length || state.busy || !!errors.length;
+      refreshPublishBtn();
       clearBtn.hidden = !keep.length;
     }
 
@@ -1054,6 +1097,8 @@ export function dropwayClient() {
       modeUpd.disabled = on;
       slugInput.disabled = on;
       siteSelect.disabled = on;
+      lookupInput.disabled = on;
+      lookupBtn.disabled = on;
       chooseDirBtn.disabled = on;
       chooseFileBtn.disabled = on;
       clearBtn.disabled = on;
@@ -1061,6 +1106,9 @@ export function dropwayClient() {
 
     async function run() {
       if (state.busy || !state.items.length || state.errors.length) return;
+      // An unresolved explicit update must never publish to whatever the
+      // picker happens to show (see the destination state above).
+      if (!anonymous && modeUpd.checked && destUnresolved()) return;
       state.seq++;
       state.busy = true;
       publishBtn.disabled = true;
@@ -1107,7 +1155,11 @@ export function dropwayClient() {
         var dep = await api("/sites/" + encodeURIComponent(slug) + "/deploys", { method: "POST", body: { files: manifest, message: msg }, key: auth });
         if (dep.unchanged) {
           setProgress(1, "Nothing changed.");
-          showResult({ slug: slug, unchanged: true, version: dep.deploy });
+          // Unchanged needs a live version, so it is reachable only when updating
+          // an existing site (the new-site leg above just created an empty one).
+          // Recover that site's authoritative URL with an authorized read.
+          if (updating) await showUnchangedResult(slug, dep.deploy, auth);
+          else showResult({ slug: slug, unchanged: true, version: dep.deploy });
           return;
         }
         var uploads = dep.uploads || [];
@@ -1141,14 +1193,28 @@ export function dropwayClient() {
         state.busy = false;
         setDestinationDisabled(false);
         setNavDisabled(false);
-        publishBtn.disabled = !state.items.length || !!state.errors.length;
+        refreshPublishBtn();
       }
     }
 
-    function showResult(r) {
+    function showResult(r, opts) {
       setItems([]);
       clear(result);
       var url = r.url || null;
+      var linkRetry = null;
+      if (r.linkUnavailable) {
+        linkRetry = h("button", {
+          type: "button",
+          class: "dw-btn small",
+          text: "Retry getting the link",
+          onclick: function () {
+            if (linkRetry.disabled || !r.onLinkRetry) return;
+            linkRetry.disabled = true;
+            linkRetry.textContent = "Retrying…";
+            r.onLinkRetry();
+          },
+        });
+      }
       add(
         result,
         h(
@@ -1165,7 +1231,17 @@ export function dropwayClient() {
             h("a", { class: "dw-btn", href: "/v/" + encodeURIComponent(r.slug) + "/", text: "Browse files" }),
             key ? h("a", { class: "dw-btn", href: "/dashboard/sites/" + encodeURIComponent(r.slug), text: "Manage" }) : null,
           ),
-          receiptBlock(r),
+          r.linkUnavailable
+            ? h(
+                "div",
+                { class: "dw-small", style: "margin-top:.6rem" },
+                h("p", { text: "The public link could not be retrieved. The publish itself succeeded — nothing changed and nothing was uploaded. Retrying only reads the site link again; it does not publish again." }),
+                h("div", { class: "dw-row", style: "margin-top:.4rem" }, linkRetry),
+              )
+            : null,
+          // No receipt without a usable link: it would record a public
+          // identity with nowhere to open it.
+          r.linkUnavailable ? null : receiptBlock(r),
           r.warnings && r.warnings.length
             ? h("ul", { class: "dw-small" }, r.warnings.map(function (w) {
                 return h("li", { text: w.message });
@@ -1181,26 +1257,208 @@ export function dropwayClient() {
             : null,
         ),
       );
-      if (key) {
+      if (opts && opts.restoreFocus) {
+        var nextAction = linkRetry || $("a.dw-btn", result);
+        if (nextAction) nextAction.focus();
+      }
+      if (key && !(opts && opts.keepDestination)) {
         modeUpd.checked = true;
         slugInput.value = "";
+        // The slug just published to is verified; keep it selected as the
+        // update destination even if the refreshed first page omits it.
+        destSeq++;
+        destState = "resolved";
+        destSite = { slug: r.slug, title: destSite && destSite.slug === r.slug ? destSite.title : null };
+        clear(destError);
+        destError.hidden = true;
+        destStatus.textContent = "Resolved destination: " + r.slug;
+        lookupInput.value = r.slug;
         loadSites(r.slug);
+      }
+    }
+
+    function destUnresolved() {
+      return destState === "pending" || destState === "failed";
+    }
+
+    function refreshPublishBtn() {
+      publishBtn.disabled = !state.items.length || state.busy || !!state.errors.length || (modeUpd.checked && destUnresolved());
+    }
+
+    /** A deliberate newer destination choice supersedes any in-flight lookup. */
+    function invalidateDest() {
+      destSeq++;
+      destState = "idle";
+      destSite = null;
+      clear(destError);
+      destError.hidden = true;
+      destStatus.textContent = "";
+    }
+
+    /** Add the verified site as an option unless the list already has it. */
+    function ensureDestOption(site) {
+      var found = false;
+      Array.prototype.forEach.call(siteSelect.children, function (o) {
+        if (o.value === site.slug) found = true;
+      });
+      if (!found) add(siteSelect, h("option", { value: site.slug, text: site.title ? site.title + " (" + site.slug + ")" : site.slug }));
+    }
+
+    function failDest(err) {
+      destState = "failed";
+      destSite = null;
+      destStatus.textContent = "";
+      var box = errorBox(err, "Could not look up that site");
+      add(box, h("div", { class: "dw-small", text: "Check the slug and look it up again, or choose a site from the list. Nothing was published." }));
+      add(destError, box);
+      destError.hidden = false;
+      refreshPublishBtn();
+    }
+
+    /**
+     * Verify one explicit destination with the existing single-site GET.
+     * The reference is encoded as exactly one path segment and the slug the
+     * server returns (never the typed reference) is selected. Typing alone
+     * never calls this; only the initial explicit destination, Enter in the
+     * lookup field or the lookup button do.
+     */
+    async function lookupDest(reference) {
+      var ref = String(reference === null || reference === undefined ? "" : reference).trim();
+      if (!ref) {
+        destStatus.textContent = "Enter a site slug to look up.";
+        return;
+      }
+      if (!key || state.busy) return;
+      var seq = ++destSeq;
+      destState = "pending";
+      destSite = null;
+      modeUpd.checked = true;
+      clear(destError);
+      destError.hidden = true;
+      destStatus.textContent = "Looking up site " + ref + "…";
+      siteSelect.value = "";
+      refreshPublishBtn();
+      // URL parsing normalizes dot segments even after encodeURIComponent.
+      // Reject them locally after retiring any older lookup's intent.
+      if (/^\.+$/.test(ref)) {
+        failDest(apiError(400, null, "That is not a site slug."));
+        return;
+      }
+      var res;
+      try {
+        res = await api("/sites/" + encodeURIComponent(ref));
+      } catch (e) {
+        if (seq !== destSeq) return; // a newer choice superseded this lookup
+        failDest(e);
+        return;
+      }
+      if (seq !== destSeq) return;
+      var site = res && res.site;
+      if (!site || !site.slug) {
+        failDest(apiError(0, null, "The server did not return that site."));
+        return;
+      }
+      destSite = { slug: site.slug, title: site.title || null };
+      destState = "resolved";
+      ensureDestOption(destSite);
+      siteSelect.value = destSite.slug;
+      lookupInput.value = destSite.slug;
+      destStatus.textContent = "Resolved destination: " + destSite.slug;
+      refreshPublishBtn();
+    }
+
+    /**
+     * Show an unchanged update with its live link. The unchanged deploy itself
+     * returns the version identity but no URL, so read the site (get_site) with
+     * the publish's own credentials and use only the authoritative URL it
+     * returns — never its live-version pointer, which may have moved on, and
+     * never a URL rebuilt from the slug. A failed or unusable read keeps the
+     * successful "nothing changed" result and offers a retry of the read only.
+     */
+    async function showUnchangedResult(slug, version, auth, restoreFocus) {
+      // A retry runs after run() has finished: hold the same in-flight locks
+      // while it reads, so a new selection cannot race its result rendering.
+      var holdBusy = !state.busy;
+      if (holdBusy) {
+        state.busy = true;
+        publishBtn.disabled = true;
+        setDestinationDisabled(true);
+        setNavDisabled(true);
+      }
+      try {
+        var url = null;
+        try {
+          var res = await api("/sites/" + encodeURIComponent(slug), { key: auth });
+          url = publicReceiptUrl(res && res.site && res.site.url);
+        } catch (e) {
+          url = null;
+        }
+        if (url) {
+          showResult({ slug: slug, unchanged: true, version: version, url: url }, { keepDestination: true, restoreFocus: restoreFocus });
+          return;
+        }
+        showResult(
+          {
+            slug: slug,
+            unchanged: true,
+            version: version,
+            linkUnavailable: true,
+            onLinkRetry: function () {
+              return showUnchangedResult(slug, version, auth, true);
+            },
+          },
+          { keepDestination: true, restoreFocus: restoreFocus },
+        );
+      } finally {
+        if (holdBusy) {
+          state.busy = false;
+          setDestinationDisabled(false);
+          setNavDisabled(false);
+          refreshPublishBtn();
+        }
       }
     }
 
     async function loadSites(select) {
       if (!key) return;
+      var listSeq = destSeq;
       try {
         var res = await api("/sites?limit=200");
+        var current = siteSelect.value;
+        var currentOption = siteSelect.options[siteSelect.selectedIndex];
         clear(siteSelect);
-        if (!res.sites.length) add(siteSelect, h("option", { value: "", text: "No sites yet" }));
+        if (!res.sites.length && !(destState === "resolved" && destSite)) add(siteSelect, h("option", { value: "", text: "No sites yet" }));
         res.sites.forEach(function (s) {
           add(siteSelect, h("option", { value: s.slug, text: s.title ? s.title + " (" + s.slug + ")" : s.slug }));
         });
-        if (select) siteSelect.value = select;
+        // A deliberate picker choice may be a previously verified off-page
+        // option. Keep its label and identity before restoring its value.
+        if (current && currentOption && !res.sites.some(function (s) { return s.slug === current; })) add(siteSelect, currentOption);
+        // Decide the selection when the list lands, not when it was asked
+        // for: a destination verified (or still resolving) meanwhile wins
+        // over the stale select request and over the first listed site.
+        if (destState === "resolved" && destSite) {
+          ensureDestOption(destSite);
+          siteSelect.value = destSite.slug;
+        } else if (destUnresolved()) {
+          siteSelect.value = "";
+        } else if (current && destSeq !== listSeq) {
+          // A newer explicit choice (e.g. the picker) landed while this
+          // list was in flight; the older list response must not move it.
+          siteSelect.value = current;
+        } else if (select) {
+          siteSelect.value = select;
+        } else if (current) {
+          siteSelect.value = current;
+        }
       } catch (e) {
         clear(siteSelect);
-        add(siteSelect, h("option", { value: "", text: "Could not load sites" }));
+        if (destState === "resolved" && destSite) {
+          ensureDestOption(destSite);
+          siteSelect.value = destSite.slug;
+        } else {
+          add(siteSelect, h("option", { value: "", text: "Could not load sites" }));
+        }
       }
     }
 
@@ -1213,14 +1471,54 @@ export function dropwayClient() {
           h("legend", { class: "dw-label", text: "Publish to" }),
           h("div", { class: "dw-grid2" },
             h("label", { class: "dw-check" }, modeNew, h("span", {}, "A new site", h("span", { class: "dw-sub" }, "Name (optional)"), slugInput)),
-            h("label", { class: "dw-check" }, modeUpd, h("span", { style: "flex:1" }, "A new version of", h("span", { class: "dw-sub" }, "Site"), siteSelect)),
+            h(
+              "label",
+              { class: "dw-check" },
+              modeUpd,
+              h(
+                "span",
+                { style: "flex:1" },
+                "A new version of",
+                h("span", { class: "dw-sub" }, "Site"),
+                siteSelect,
+                h("span", { class: "dw-sub" }, "Site slug (if it is not in the list)"),
+                h("div", { class: "dw-row" }, lookupInput, lookupBtn),
+                h("p", { class: "dw-help", text: "The list shows recent sites only. To update an older site, enter its exact slug and look it up; the verified site becomes the destination." }),
+                destStatus,
+                destError,
+              ),
+            ),
           ),
         );
     slugInput.addEventListener("focus", function () {
       modeNew.checked = true;
+      invalidateDest();
+      refreshPublishBtn();
     });
     siteSelect.addEventListener("change", function () {
       modeUpd.checked = true;
+      invalidateDest();
+      refreshPublishBtn();
+    });
+    modeNew.addEventListener("change", function () {
+      invalidateDest();
+      refreshPublishBtn();
+    });
+    modeUpd.addEventListener("change", function () {
+      refreshPublishBtn();
+    });
+    lookupInput.addEventListener("focus", function () {
+      modeUpd.checked = true;
+      refreshPublishBtn();
+    });
+    lookupInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        lookupDest(lookupInput.value);
+      }
+    });
+    lookupBtn.addEventListener("click", function () {
+      lookupDest(lookupInput.value);
     });
     add(
       root,
@@ -1234,1532 +1532,21 @@ export function dropwayClient() {
       status,
       result,
     );
-    if (key) loadSites(opts.site);
+    if (key) {
+      loadSites(opts.site);
+      // Verify an explicit destination independently of (and without
+      // waiting for) the first list page above.
+      if (initialSite) lookupDest(initialSite);
+    }
   }
 
-  // ------------------------------------------------------------------ QR encoder (vendored)
-  //
-  // Matrix core of QR Code Generator for JavaScript (qrcode-generator 2.0.4),
-  // Copyright (c) 2009 Kazuhiko Arase, MIT license. Renderers (table, SVG,
-  // GIF, ASCII, canvas), the GIF writer, the SJIS helper and the UMD wrapper
-  // are stripped: the dashboard needs only addData/make/isDark/getModuleCount
-  // in byte mode, and draws the modules to its own canvas, so no image
-  // endpoint or third-party request is needed at runtime.
-  //
-  // MIT License permission notice: Permission is hereby granted, free of
-  // charge, to any person obtaining a copy of this software and associated
-  // documentation files (the "Software"), to deal in the Software without
-  // restriction, including without limitation the rights to use, copy, modify,
-  // merge, publish, distribute, sublicense, and/or sell copies of the Software,
-  // and to permit persons to whom the Software is furnished to do so, subject
-  // to the following conditions: The above copyright notice and this permission
-  // notice shall be included in all copies or substantial portions of the
-  // Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-  // EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-  // MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-  // NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-  // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
-  // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-  // USE OR OTHER DEALINGS IN THE SOFTWARE.
-  var qrcode = function() {
-
-  //---------------------------------------------------------------------
-  // qrcode
-  //---------------------------------------------------------------------
-
-  /**
-   * qrcode
-   * @param typeNumber 1 to 40
-   * @param errorCorrectionLevel 'L','M','Q','H'
-   */
-  var qrcode = function(typeNumber, errorCorrectionLevel) {
-
-    var PAD0 = 0xEC;
-    var PAD1 = 0x11;
-
-    var _typeNumber = typeNumber;
-    var _errorCorrectionLevel = QRErrorCorrectionLevel[errorCorrectionLevel];
-    var _modules = null;
-    var _moduleCount = 0;
-    var _dataCache = null;
-    var _dataList = [];
-
-    var _this = {};
-
-    var makeImpl = function(test, maskPattern) {
-
-      _moduleCount = _typeNumber * 4 + 17;
-      _modules = function(moduleCount) {
-        var modules = new Array(moduleCount);
-        for (var row = 0; row < moduleCount; row += 1) {
-          modules[row] = new Array(moduleCount);
-          for (var col = 0; col < moduleCount; col += 1) {
-            modules[row][col] = null;
-          }
-        }
-        return modules;
-      }(_moduleCount);
-
-      setupPositionProbePattern(0, 0);
-      setupPositionProbePattern(_moduleCount - 7, 0);
-      setupPositionProbePattern(0, _moduleCount - 7);
-      setupPositionAdjustPattern();
-      setupTimingPattern();
-      setupTypeInfo(test, maskPattern);
-
-      if (_typeNumber >= 7) {
-        setupTypeNumber(test);
-      }
-
-      if (_dataCache == null) {
-        _dataCache = createData(_typeNumber, _errorCorrectionLevel, _dataList);
-      }
-
-      mapData(_dataCache, maskPattern);
-    };
-
-    var setupPositionProbePattern = function(row, col) {
-
-      for (var r = -1; r <= 7; r += 1) {
-
-        if (row + r <= -1 || _moduleCount <= row + r) continue;
-
-        for (var c = -1; c <= 7; c += 1) {
-
-          if (col + c <= -1 || _moduleCount <= col + c) continue;
-
-          if ( (0 <= r && r <= 6 && (c == 0 || c == 6) )
-              || (0 <= c && c <= 6 && (r == 0 || r == 6) )
-              || (2 <= r && r <= 4 && 2 <= c && c <= 4) ) {
-            _modules[row + r][col + c] = true;
-          } else {
-            _modules[row + r][col + c] = false;
-          }
-        }
-      }
-    };
-
-    var getBestMaskPattern = function() {
-
-      var minLostPoint = 0;
-      var pattern = 0;
-
-      for (var i = 0; i < 8; i += 1) {
-
-        makeImpl(true, i);
-
-        var lostPoint = QRUtil.getLostPoint(_this);
-
-        if (i == 0 || minLostPoint > lostPoint) {
-          minLostPoint = lostPoint;
-          pattern = i;
-        }
-      }
-
-      return pattern;
-    };
-
-    var setupTimingPattern = function() {
-
-      for (var r = 8; r < _moduleCount - 8; r += 1) {
-        if (_modules[r][6] != null) {
-          continue;
-        }
-        _modules[r][6] = (r % 2 == 0);
-      }
-
-      for (var c = 8; c < _moduleCount - 8; c += 1) {
-        if (_modules[6][c] != null) {
-          continue;
-        }
-        _modules[6][c] = (c % 2 == 0);
-      }
-    };
-
-    var setupPositionAdjustPattern = function() {
-
-      var pos = QRUtil.getPatternPosition(_typeNumber);
-
-      for (var i = 0; i < pos.length; i += 1) {
-
-        for (var j = 0; j < pos.length; j += 1) {
-
-          var row = pos[i];
-          var col = pos[j];
-
-          if (_modules[row][col] != null) {
-            continue;
-          }
-
-          for (var r = -2; r <= 2; r += 1) {
-
-            for (var c = -2; c <= 2; c += 1) {
-
-              if (r == -2 || r == 2 || c == -2 || c == 2
-                  || (r == 0 && c == 0) ) {
-                _modules[row + r][col + c] = true;
-              } else {
-                _modules[row + r][col + c] = false;
-              }
-            }
-          }
-        }
-      }
-    };
-
-    var setupTypeNumber = function(test) {
-
-      var bits = QRUtil.getBCHTypeNumber(_typeNumber);
-
-      for (var i = 0; i < 18; i += 1) {
-        var mod = (!test && ( (bits >> i) & 1) == 1);
-        _modules[Math.floor(i / 3)][i % 3 + _moduleCount - 8 - 3] = mod;
-      }
-
-      for (var i = 0; i < 18; i += 1) {
-        var mod = (!test && ( (bits >> i) & 1) == 1);
-        _modules[i % 3 + _moduleCount - 8 - 3][Math.floor(i / 3)] = mod;
-      }
-    };
-
-    var setupTypeInfo = function(test, maskPattern) {
-
-      var data = (_errorCorrectionLevel << 3) | maskPattern;
-      var bits = QRUtil.getBCHTypeInfo(data);
-
-      // vertical
-      for (var i = 0; i < 15; i += 1) {
-
-        var mod = (!test && ( (bits >> i) & 1) == 1);
-
-        if (i < 6) {
-          _modules[i][8] = mod;
-        } else if (i < 8) {
-          _modules[i + 1][8] = mod;
-        } else {
-          _modules[_moduleCount - 15 + i][8] = mod;
-        }
-      }
-
-      // horizontal
-      for (var i = 0; i < 15; i += 1) {
-
-        var mod = (!test && ( (bits >> i) & 1) == 1);
-
-        if (i < 8) {
-          _modules[8][_moduleCount - i - 1] = mod;
-        } else if (i < 9) {
-          _modules[8][15 - i - 1 + 1] = mod;
-        } else {
-          _modules[8][15 - i - 1] = mod;
-        }
-      }
-
-      // fixed module
-      _modules[_moduleCount - 8][8] = (!test);
-    };
-
-    var mapData = function(data, maskPattern) {
-
-      var inc = -1;
-      var row = _moduleCount - 1;
-      var bitIndex = 7;
-      var byteIndex = 0;
-      var maskFunc = QRUtil.getMaskFunction(maskPattern);
-
-      for (var col = _moduleCount - 1; col > 0; col -= 2) {
-
-        if (col == 6) col -= 1;
-
-        while (true) {
-
-          for (var c = 0; c < 2; c += 1) {
-
-            if (_modules[row][col - c] == null) {
-
-              var dark = false;
-
-              if (byteIndex < data.length) {
-                dark = ( ( (data[byteIndex] >>> bitIndex) & 1) == 1);
-              }
-
-              var mask = maskFunc(row, col - c);
-
-              if (mask) {
-                dark = !dark;
-              }
-
-              _modules[row][col - c] = dark;
-              bitIndex -= 1;
-
-              if (bitIndex == -1) {
-                byteIndex += 1;
-                bitIndex = 7;
-              }
-            }
-          }
-
-          row += inc;
-
-          if (row < 0 || _moduleCount <= row) {
-            row -= inc;
-            inc = -inc;
-            break;
-          }
-        }
-      }
-    };
-
-    var createBytes = function(buffer, rsBlocks) {
-
-      var offset = 0;
-
-      var maxDcCount = 0;
-      var maxEcCount = 0;
-
-      var dcdata = new Array(rsBlocks.length);
-      var ecdata = new Array(rsBlocks.length);
-
-      for (var r = 0; r < rsBlocks.length; r += 1) {
-
-        var dcCount = rsBlocks[r].dataCount;
-        var ecCount = rsBlocks[r].totalCount - dcCount;
-
-        maxDcCount = Math.max(maxDcCount, dcCount);
-        maxEcCount = Math.max(maxEcCount, ecCount);
-
-        dcdata[r] = new Array(dcCount);
-
-        for (var i = 0; i < dcdata[r].length; i += 1) {
-          dcdata[r][i] = 0xff & buffer.getBuffer()[i + offset];
-        }
-        offset += dcCount;
-
-        var rsPoly = QRUtil.getErrorCorrectPolynomial(ecCount);
-        var rawPoly = qrPolynomial(dcdata[r], rsPoly.getLength() - 1);
-
-        var modPoly = rawPoly.mod(rsPoly);
-        ecdata[r] = new Array(rsPoly.getLength() - 1);
-        for (var i = 0; i < ecdata[r].length; i += 1) {
-          var modIndex = i + modPoly.getLength() - ecdata[r].length;
-          ecdata[r][i] = (modIndex >= 0)? modPoly.getAt(modIndex) : 0;
-        }
-      }
-
-      var totalCodeCount = 0;
-      for (var i = 0; i < rsBlocks.length; i += 1) {
-        totalCodeCount += rsBlocks[i].totalCount;
-      }
-
-      var data = new Array(totalCodeCount);
-      var index = 0;
-
-      for (var i = 0; i < maxDcCount; i += 1) {
-        for (var r = 0; r < rsBlocks.length; r += 1) {
-          if (i < dcdata[r].length) {
-            data[index] = dcdata[r][i];
-            index += 1;
-          }
-        }
-      }
-
-      for (var i = 0; i < maxEcCount; i += 1) {
-        for (var r = 0; r < rsBlocks.length; r += 1) {
-          if (i < ecdata[r].length) {
-            data[index] = ecdata[r][i];
-            index += 1;
-          }
-        }
-      }
-
-      return data;
-    };
-
-    var createData = function(typeNumber, errorCorrectionLevel, dataList) {
-
-      var rsBlocks = QRRSBlock.getRSBlocks(typeNumber, errorCorrectionLevel);
-
-      var buffer = qrBitBuffer();
-
-      for (var i = 0; i < dataList.length; i += 1) {
-        var data = dataList[i];
-        buffer.put(data.getMode(), 4);
-        buffer.put(data.getLength(), QRUtil.getLengthInBits(data.getMode(), typeNumber) );
-        data.write(buffer);
-      }
-
-      // calc num max data.
-      var totalDataCount = 0;
-      for (var i = 0; i < rsBlocks.length; i += 1) {
-        totalDataCount += rsBlocks[i].dataCount;
-      }
-
-      if (buffer.getLengthInBits() > totalDataCount * 8) {
-        throw 'code length overflow. ('
-          + buffer.getLengthInBits()
-          + '>'
-          + totalDataCount * 8
-          + ')';
-      }
-
-      // end code
-      if (buffer.getLengthInBits() + 4 <= totalDataCount * 8) {
-        buffer.put(0, 4);
-      }
-
-      // padding
-      while (buffer.getLengthInBits() % 8 != 0) {
-        buffer.putBit(false);
-      }
-
-      // padding
-      while (true) {
-
-        if (buffer.getLengthInBits() >= totalDataCount * 8) {
-          break;
-        }
-        buffer.put(PAD0, 8);
-
-        if (buffer.getLengthInBits() >= totalDataCount * 8) {
-          break;
-        }
-        buffer.put(PAD1, 8);
-      }
-
-      return createBytes(buffer, rsBlocks);
-    };
-
-    _this.addData = function(data, mode) {
-
-      mode = mode || 'Byte';
-
-      var newData = null;
-
-      switch(mode) {
-      case 'Numeric' :
-        newData = qrNumber(data);
-        break;
-      case 'Alphanumeric' :
-        newData = qrAlphaNum(data);
-        break;
-      case 'Byte' :
-        newData = qr8BitByte(data);
-        break;
-      case 'Kanji' :
-        newData = qrKanji(data);
-        break;
-      default :
-        throw 'mode:' + mode;
-      }
-
-      _dataList.push(newData);
-      _dataCache = null;
-    };
-
-    _this.isDark = function(row, col) {
-      if (row < 0 || _moduleCount <= row || col < 0 || _moduleCount <= col) {
-        throw row + ',' + col;
-      }
-      return _modules[row][col];
-    };
-
-    _this.getModuleCount = function() {
-      return _moduleCount;
-    };
-
-    _this.make = function() {
-      if (_typeNumber < 1) {
-        var typeNumber = 1;
-
-        for (; typeNumber < 40; typeNumber++) {
-          var rsBlocks = QRRSBlock.getRSBlocks(typeNumber, _errorCorrectionLevel);
-          var buffer = qrBitBuffer();
-
-          for (var i = 0; i < _dataList.length; i++) {
-            var data = _dataList[i];
-            buffer.put(data.getMode(), 4);
-            buffer.put(data.getLength(), QRUtil.getLengthInBits(data.getMode(), typeNumber) );
-            data.write(buffer);
-          }
-
-          var totalDataCount = 0;
-          for (var i = 0; i < rsBlocks.length; i++) {
-            totalDataCount += rsBlocks[i].dataCount;
-          }
-
-          if (buffer.getLengthInBits() <= totalDataCount * 8) {
-            break;
-          }
-        }
-
-        _typeNumber = typeNumber;
-      }
-
-      makeImpl(false, getBestMaskPattern() );
-    };
-
-    return _this;
-  };
-
-  //---------------------------------------------------------------------
-  // qrcode.stringToBytes
-  //---------------------------------------------------------------------
-
-  qrcode.stringToBytesFuncs = {
-    'default' : function(s) {
-      var bytes = [];
-      for (var i = 0; i < s.length; i += 1) {
-        var c = s.charCodeAt(i);
-        bytes.push(c & 0xff);
-      }
-      return bytes;
-    }
-  };
-
-  qrcode.stringToBytes = qrcode.stringToBytesFuncs['default'];
-
-  //---------------------------------------------------------------------
-  // QRMode
-  //---------------------------------------------------------------------
-
-  var QRMode = {
-    MODE_NUMBER :    1 << 0,
-    MODE_ALPHA_NUM : 1 << 1,
-    MODE_8BIT_BYTE : 1 << 2,
-    MODE_KANJI :     1 << 3
-  };
-
-  //---------------------------------------------------------------------
-  // QRErrorCorrectionLevel
-  //---------------------------------------------------------------------
-
-  var QRErrorCorrectionLevel = {
-    L : 1,
-    M : 0,
-    Q : 3,
-    H : 2
-  };
-
-  //---------------------------------------------------------------------
-  // QRMaskPattern
-  //---------------------------------------------------------------------
-
-  var QRMaskPattern = {
-    PATTERN000 : 0,
-    PATTERN001 : 1,
-    PATTERN010 : 2,
-    PATTERN011 : 3,
-    PATTERN100 : 4,
-    PATTERN101 : 5,
-    PATTERN110 : 6,
-    PATTERN111 : 7
-  };
-
-  //---------------------------------------------------------------------
-  // QRUtil
-  //---------------------------------------------------------------------
-
-  var QRUtil = function() {
-
-    var PATTERN_POSITION_TABLE = [
-      [],
-      [6, 18],
-      [6, 22],
-      [6, 26],
-      [6, 30],
-      [6, 34],
-      [6, 22, 38],
-      [6, 24, 42],
-      [6, 26, 46],
-      [6, 28, 50],
-      [6, 30, 54],
-      [6, 32, 58],
-      [6, 34, 62],
-      [6, 26, 46, 66],
-      [6, 26, 48, 70],
-      [6, 26, 50, 74],
-      [6, 30, 54, 78],
-      [6, 30, 56, 82],
-      [6, 30, 58, 86],
-      [6, 34, 62, 90],
-      [6, 28, 50, 72, 94],
-      [6, 26, 50, 74, 98],
-      [6, 30, 54, 78, 102],
-      [6, 28, 54, 80, 106],
-      [6, 32, 58, 84, 110],
-      [6, 30, 58, 86, 114],
-      [6, 34, 62, 90, 118],
-      [6, 26, 50, 74, 98, 122],
-      [6, 30, 54, 78, 102, 126],
-      [6, 26, 52, 78, 104, 130],
-      [6, 30, 56, 82, 108, 134],
-      [6, 34, 60, 86, 112, 138],
-      [6, 30, 58, 86, 114, 142],
-      [6, 34, 62, 90, 118, 146],
-      [6, 30, 54, 78, 102, 126, 150],
-      [6, 24, 50, 76, 102, 128, 154],
-      [6, 28, 54, 80, 106, 132, 158],
-      [6, 32, 58, 84, 110, 136, 162],
-      [6, 26, 54, 82, 110, 138, 166],
-      [6, 30, 58, 86, 114, 142, 170]
-    ];
-    var G15 = (1 << 10) | (1 << 8) | (1 << 5) | (1 << 4) | (1 << 2) | (1 << 1) | (1 << 0);
-    var G18 = (1 << 12) | (1 << 11) | (1 << 10) | (1 << 9) | (1 << 8) | (1 << 5) | (1 << 2) | (1 << 0);
-    var G15_MASK = (1 << 14) | (1 << 12) | (1 << 10) | (1 << 4) | (1 << 1);
-
-    var _this = {};
-
-    var getBCHDigit = function(data) {
-      var digit = 0;
-      while (data != 0) {
-        digit += 1;
-        data >>>= 1;
-      }
-      return digit;
-    };
-
-    _this.getBCHTypeInfo = function(data) {
-      var d = data << 10;
-      while (getBCHDigit(d) - getBCHDigit(G15) >= 0) {
-        d ^= (G15 << (getBCHDigit(d) - getBCHDigit(G15) ) );
-      }
-      return ( (data << 10) | d) ^ G15_MASK;
-    };
-
-    _this.getBCHTypeNumber = function(data) {
-      var d = data << 12;
-      while (getBCHDigit(d) - getBCHDigit(G18) >= 0) {
-        d ^= (G18 << (getBCHDigit(d) - getBCHDigit(G18) ) );
-      }
-      return (data << 12) | d;
-    };
-
-    _this.getPatternPosition = function(typeNumber) {
-      return PATTERN_POSITION_TABLE[typeNumber - 1];
-    };
-
-    _this.getMaskFunction = function(maskPattern) {
-
-      switch (maskPattern) {
-
-      case QRMaskPattern.PATTERN000 :
-        return function(i, j) { return (i + j) % 2 == 0; };
-      case QRMaskPattern.PATTERN001 :
-        return function(i, j) { return i % 2 == 0; };
-      case QRMaskPattern.PATTERN010 :
-        return function(i, j) { return j % 3 == 0; };
-      case QRMaskPattern.PATTERN011 :
-        return function(i, j) { return (i + j) % 3 == 0; };
-      case QRMaskPattern.PATTERN100 :
-        return function(i, j) { return (Math.floor(i / 2) + Math.floor(j / 3) ) % 2 == 0; };
-      case QRMaskPattern.PATTERN101 :
-        return function(i, j) { return (i * j) % 2 + (i * j) % 3 == 0; };
-      case QRMaskPattern.PATTERN110 :
-        return function(i, j) { return ( (i * j) % 2 + (i * j) % 3) % 2 == 0; };
-      case QRMaskPattern.PATTERN111 :
-        return function(i, j) { return ( (i * j) % 3 + (i + j) % 2) % 2 == 0; };
-
-      default :
-        throw 'bad maskPattern:' + maskPattern;
-      }
-    };
-
-    _this.getErrorCorrectPolynomial = function(errorCorrectLength) {
-      var a = qrPolynomial([1], 0);
-      for (var i = 0; i < errorCorrectLength; i += 1) {
-        a = a.multiply(qrPolynomial([1, QRMath.gexp(i)], 0) );
-      }
-      return a;
-    };
-
-    _this.getLengthInBits = function(mode, type) {
-
-      if (1 <= type && type < 10) {
-
-        // 1 - 9
-
-        switch(mode) {
-        case QRMode.MODE_NUMBER    : return 10;
-        case QRMode.MODE_ALPHA_NUM : return 9;
-        case QRMode.MODE_8BIT_BYTE : return 8;
-        case QRMode.MODE_KANJI     : return 8;
-        default :
-          throw 'mode:' + mode;
-        }
-
-      } else if (type < 27) {
-
-        // 10 - 26
-
-        switch(mode) {
-        case QRMode.MODE_NUMBER    : return 12;
-        case QRMode.MODE_ALPHA_NUM : return 11;
-        case QRMode.MODE_8BIT_BYTE : return 16;
-        case QRMode.MODE_KANJI     : return 10;
-        default :
-          throw 'mode:' + mode;
-        }
-
-      } else if (type < 41) {
-
-        // 27 - 40
-
-        switch(mode) {
-        case QRMode.MODE_NUMBER    : return 14;
-        case QRMode.MODE_ALPHA_NUM : return 13;
-        case QRMode.MODE_8BIT_BYTE : return 16;
-        case QRMode.MODE_KANJI     : return 12;
-        default :
-          throw 'mode:' + mode;
-        }
-
-      } else {
-        throw 'type:' + type;
-      }
-    };
-
-    _this.getLostPoint = function(qrcode) {
-
-      var moduleCount = qrcode.getModuleCount();
-
-      var lostPoint = 0;
-
-      // LEVEL1
-
-      for (var row = 0; row < moduleCount; row += 1) {
-        for (var col = 0; col < moduleCount; col += 1) {
-
-          var sameCount = 0;
-          var dark = qrcode.isDark(row, col);
-
-          for (var r = -1; r <= 1; r += 1) {
-
-            if (row + r < 0 || moduleCount <= row + r) {
-              continue;
-            }
-
-            for (var c = -1; c <= 1; c += 1) {
-
-              if (col + c < 0 || moduleCount <= col + c) {
-                continue;
-              }
-
-              if (r == 0 && c == 0) {
-                continue;
-              }
-
-              if (dark == qrcode.isDark(row + r, col + c) ) {
-                sameCount += 1;
-              }
-            }
-          }
-
-          if (sameCount > 5) {
-            lostPoint += (3 + sameCount - 5);
-          }
-        }
-      };
-
-      // LEVEL2
-
-      for (var row = 0; row < moduleCount - 1; row += 1) {
-        for (var col = 0; col < moduleCount - 1; col += 1) {
-          var count = 0;
-          if (qrcode.isDark(row, col) ) count += 1;
-          if (qrcode.isDark(row + 1, col) ) count += 1;
-          if (qrcode.isDark(row, col + 1) ) count += 1;
-          if (qrcode.isDark(row + 1, col + 1) ) count += 1;
-          if (count == 0 || count == 4) {
-            lostPoint += 3;
-          }
-        }
-      }
-
-      // LEVEL3
-
-      for (var row = 0; row < moduleCount; row += 1) {
-        for (var col = 0; col < moduleCount - 6; col += 1) {
-          if (qrcode.isDark(row, col)
-              && !qrcode.isDark(row, col + 1)
-              &&  qrcode.isDark(row, col + 2)
-              &&  qrcode.isDark(row, col + 3)
-              &&  qrcode.isDark(row, col + 4)
-              && !qrcode.isDark(row, col + 5)
-              &&  qrcode.isDark(row, col + 6) ) {
-            lostPoint += 40;
-          }
-        }
-      }
-
-      for (var col = 0; col < moduleCount; col += 1) {
-        for (var row = 0; row < moduleCount - 6; row += 1) {
-          if (qrcode.isDark(row, col)
-              && !qrcode.isDark(row + 1, col)
-              &&  qrcode.isDark(row + 2, col)
-              &&  qrcode.isDark(row + 3, col)
-              &&  qrcode.isDark(row + 4, col)
-              && !qrcode.isDark(row + 5, col)
-              &&  qrcode.isDark(row + 6, col) ) {
-            lostPoint += 40;
-          }
-        }
-      }
-
-      // LEVEL4
-
-      var darkCount = 0;
-
-      for (var col = 0; col < moduleCount; col += 1) {
-        for (var row = 0; row < moduleCount; row += 1) {
-          if (qrcode.isDark(row, col) ) {
-            darkCount += 1;
-          }
-        }
-      }
-
-      var ratio = Math.abs(100 * darkCount / moduleCount / moduleCount - 50) / 5;
-      lostPoint += ratio * 10;
-
-      return lostPoint;
-    };
-
-    return _this;
-  }();
-
-  //---------------------------------------------------------------------
-  // QRMath
-  //---------------------------------------------------------------------
-
-  var QRMath = function() {
-
-    var EXP_TABLE = new Array(256);
-    var LOG_TABLE = new Array(256);
-
-    // initialize tables
-    for (var i = 0; i < 8; i += 1) {
-      EXP_TABLE[i] = 1 << i;
-    }
-    for (var i = 8; i < 256; i += 1) {
-      EXP_TABLE[i] = EXP_TABLE[i - 4]
-        ^ EXP_TABLE[i - 5]
-        ^ EXP_TABLE[i - 6]
-        ^ EXP_TABLE[i - 8];
-    }
-    for (var i = 0; i < 255; i += 1) {
-      LOG_TABLE[EXP_TABLE[i] ] = i;
-    }
-
-    var _this = {};
-
-    _this.glog = function(n) {
-
-      if (n < 1) {
-        throw 'glog(' + n + ')';
-      }
-
-      return LOG_TABLE[n];
-    };
-
-    _this.gexp = function(n) {
-
-      while (n < 0) {
-        n += 255;
-      }
-
-      while (n >= 256) {
-        n -= 255;
-      }
-
-      return EXP_TABLE[n];
-    };
-
-    return _this;
-  }();
-
-  //---------------------------------------------------------------------
-  // qrPolynomial
-  //---------------------------------------------------------------------
-
-  function qrPolynomial(num, shift) {
-
-    if (typeof num.length == 'undefined') {
-      throw num.length + '/' + shift;
-    }
-
-    var _num = function() {
-      var offset = 0;
-      while (offset < num.length && num[offset] == 0) {
-        offset += 1;
-      }
-      var _num = new Array(num.length - offset + shift);
-      for (var i = 0; i < num.length - offset; i += 1) {
-        _num[i] = num[i + offset];
-      }
-      return _num;
-    }();
-
-    var _this = {};
-
-    _this.getAt = function(index) {
-      return _num[index];
-    };
-
-    _this.getLength = function() {
-      return _num.length;
-    };
-
-    _this.multiply = function(e) {
-
-      var num = new Array(_this.getLength() + e.getLength() - 1);
-
-      for (var i = 0; i < _this.getLength(); i += 1) {
-        for (var j = 0; j < e.getLength(); j += 1) {
-          num[i + j] ^= QRMath.gexp(QRMath.glog(_this.getAt(i) ) + QRMath.glog(e.getAt(j) ) );
-        }
-      }
-
-      return qrPolynomial(num, 0);
-    };
-
-    _this.mod = function(e) {
-
-      if (_this.getLength() - e.getLength() < 0) {
-        return _this;
-      }
-
-      var ratio = QRMath.glog(_this.getAt(0) ) - QRMath.glog(e.getAt(0) );
-
-      var num = new Array(_this.getLength() );
-      for (var i = 0; i < _this.getLength(); i += 1) {
-        num[i] = _this.getAt(i);
-      }
-
-      for (var i = 0; i < e.getLength(); i += 1) {
-        num[i] ^= QRMath.gexp(QRMath.glog(e.getAt(i) ) + ratio);
-      }
-
-      // recursive call
-      return qrPolynomial(num, 0).mod(e);
-    };
-
-    return _this;
-  };
-
-  //---------------------------------------------------------------------
-  // QRRSBlock
-  //---------------------------------------------------------------------
-
-  var QRRSBlock = function() {
-
-    var RS_BLOCK_TABLE = [
-
-      // L
-      // M
-      // Q
-      // H
-
-      // 1
-      [1, 26, 19],
-      [1, 26, 16],
-      [1, 26, 13],
-      [1, 26, 9],
-
-      // 2
-      [1, 44, 34],
-      [1, 44, 28],
-      [1, 44, 22],
-      [1, 44, 16],
-
-      // 3
-      [1, 70, 55],
-      [1, 70, 44],
-      [2, 35, 17],
-      [2, 35, 13],
-
-      // 4
-      [1, 100, 80],
-      [2, 50, 32],
-      [2, 50, 24],
-      [4, 25, 9],
-
-      // 5
-      [1, 134, 108],
-      [2, 67, 43],
-      [2, 33, 15, 2, 34, 16],
-      [2, 33, 11, 2, 34, 12],
-
-      // 6
-      [2, 86, 68],
-      [4, 43, 27],
-      [4, 43, 19],
-      [4, 43, 15],
-
-      // 7
-      [2, 98, 78],
-      [4, 49, 31],
-      [2, 32, 14, 4, 33, 15],
-      [4, 39, 13, 1, 40, 14],
-
-      // 8
-      [2, 121, 97],
-      [2, 60, 38, 2, 61, 39],
-      [4, 40, 18, 2, 41, 19],
-      [4, 40, 14, 2, 41, 15],
-
-      // 9
-      [2, 146, 116],
-      [3, 58, 36, 2, 59, 37],
-      [4, 36, 16, 4, 37, 17],
-      [4, 36, 12, 4, 37, 13],
-
-      // 10
-      [2, 86, 68, 2, 87, 69],
-      [4, 69, 43, 1, 70, 44],
-      [6, 43, 19, 2, 44, 20],
-      [6, 43, 15, 2, 44, 16],
-
-      // 11
-      [4, 101, 81],
-      [1, 80, 50, 4, 81, 51],
-      [4, 50, 22, 4, 51, 23],
-      [3, 36, 12, 8, 37, 13],
-
-      // 12
-      [2, 116, 92, 2, 117, 93],
-      [6, 58, 36, 2, 59, 37],
-      [4, 46, 20, 6, 47, 21],
-      [7, 42, 14, 4, 43, 15],
-
-      // 13
-      [4, 133, 107],
-      [8, 59, 37, 1, 60, 38],
-      [8, 44, 20, 4, 45, 21],
-      [12, 33, 11, 4, 34, 12],
-
-      // 14
-      [3, 145, 115, 1, 146, 116],
-      [4, 64, 40, 5, 65, 41],
-      [11, 36, 16, 5, 37, 17],
-      [11, 36, 12, 5, 37, 13],
-
-      // 15
-      [5, 109, 87, 1, 110, 88],
-      [5, 65, 41, 5, 66, 42],
-      [5, 54, 24, 7, 55, 25],
-      [11, 36, 12, 7, 37, 13],
-
-      // 16
-      [5, 122, 98, 1, 123, 99],
-      [7, 73, 45, 3, 74, 46],
-      [15, 43, 19, 2, 44, 20],
-      [3, 45, 15, 13, 46, 16],
-
-      // 17
-      [1, 135, 107, 5, 136, 108],
-      [10, 74, 46, 1, 75, 47],
-      [1, 50, 22, 15, 51, 23],
-      [2, 42, 14, 17, 43, 15],
-
-      // 18
-      [5, 150, 120, 1, 151, 121],
-      [9, 69, 43, 4, 70, 44],
-      [17, 50, 22, 1, 51, 23],
-      [2, 42, 14, 19, 43, 15],
-
-      // 19
-      [3, 141, 113, 4, 142, 114],
-      [3, 70, 44, 11, 71, 45],
-      [17, 47, 21, 4, 48, 22],
-      [9, 39, 13, 16, 40, 14],
-
-      // 20
-      [3, 135, 107, 5, 136, 108],
-      [3, 67, 41, 13, 68, 42],
-      [15, 54, 24, 5, 55, 25],
-      [15, 43, 15, 10, 44, 16],
-
-      // 21
-      [4, 144, 116, 4, 145, 117],
-      [17, 68, 42],
-      [17, 50, 22, 6, 51, 23],
-      [19, 46, 16, 6, 47, 17],
-
-      // 22
-      [2, 139, 111, 7, 140, 112],
-      [17, 74, 46],
-      [7, 54, 24, 16, 55, 25],
-      [34, 37, 13],
-
-      // 23
-      [4, 151, 121, 5, 152, 122],
-      [4, 75, 47, 14, 76, 48],
-      [11, 54, 24, 14, 55, 25],
-      [16, 45, 15, 14, 46, 16],
-
-      // 24
-      [6, 147, 117, 4, 148, 118],
-      [6, 73, 45, 14, 74, 46],
-      [11, 54, 24, 16, 55, 25],
-      [30, 46, 16, 2, 47, 17],
-
-      // 25
-      [8, 132, 106, 4, 133, 107],
-      [8, 75, 47, 13, 76, 48],
-      [7, 54, 24, 22, 55, 25],
-      [22, 45, 15, 13, 46, 16],
-
-      // 26
-      [10, 142, 114, 2, 143, 115],
-      [19, 74, 46, 4, 75, 47],
-      [28, 50, 22, 6, 51, 23],
-      [33, 46, 16, 4, 47, 17],
-
-      // 27
-      [8, 152, 122, 4, 153, 123],
-      [22, 73, 45, 3, 74, 46],
-      [8, 53, 23, 26, 54, 24],
-      [12, 45, 15, 28, 46, 16],
-
-      // 28
-      [3, 147, 117, 10, 148, 118],
-      [3, 73, 45, 23, 74, 46],
-      [4, 54, 24, 31, 55, 25],
-      [11, 45, 15, 31, 46, 16],
-
-      // 29
-      [7, 146, 116, 7, 147, 117],
-      [21, 73, 45, 7, 74, 46],
-      [1, 53, 23, 37, 54, 24],
-      [19, 45, 15, 26, 46, 16],
-
-      // 30
-      [5, 145, 115, 10, 146, 116],
-      [19, 75, 47, 10, 76, 48],
-      [15, 54, 24, 25, 55, 25],
-      [23, 45, 15, 25, 46, 16],
-
-      // 31
-      [13, 145, 115, 3, 146, 116],
-      [2, 74, 46, 29, 75, 47],
-      [42, 54, 24, 1, 55, 25],
-      [23, 45, 15, 28, 46, 16],
-
-      // 32
-      [17, 145, 115],
-      [10, 74, 46, 23, 75, 47],
-      [10, 54, 24, 35, 55, 25],
-      [19, 45, 15, 35, 46, 16],
-
-      // 33
-      [17, 145, 115, 1, 146, 116],
-      [14, 74, 46, 21, 75, 47],
-      [29, 54, 24, 19, 55, 25],
-      [11, 45, 15, 46, 46, 16],
-
-      // 34
-      [13, 145, 115, 6, 146, 116],
-      [14, 74, 46, 23, 75, 47],
-      [44, 54, 24, 7, 55, 25],
-      [59, 46, 16, 1, 47, 17],
-
-      // 35
-      [12, 151, 121, 7, 152, 122],
-      [12, 75, 47, 26, 76, 48],
-      [39, 54, 24, 14, 55, 25],
-      [22, 45, 15, 41, 46, 16],
-
-      // 36
-      [6, 151, 121, 14, 152, 122],
-      [6, 75, 47, 34, 76, 48],
-      [46, 54, 24, 10, 55, 25],
-      [2, 45, 15, 64, 46, 16],
-
-      // 37
-      [17, 152, 122, 4, 153, 123],
-      [29, 74, 46, 14, 75, 47],
-      [49, 54, 24, 10, 55, 25],
-      [24, 45, 15, 46, 46, 16],
-
-      // 38
-      [4, 152, 122, 18, 153, 123],
-      [13, 74, 46, 32, 75, 47],
-      [48, 54, 24, 14, 55, 25],
-      [42, 45, 15, 32, 46, 16],
-
-      // 39
-      [20, 147, 117, 4, 148, 118],
-      [40, 75, 47, 7, 76, 48],
-      [43, 54, 24, 22, 55, 25],
-      [10, 45, 15, 67, 46, 16],
-
-      // 40
-      [19, 148, 118, 6, 149, 119],
-      [18, 75, 47, 31, 76, 48],
-      [34, 54, 24, 34, 55, 25],
-      [20, 45, 15, 61, 46, 16]
-    ];
-
-    var qrRSBlock = function(totalCount, dataCount) {
-      var _this = {};
-      _this.totalCount = totalCount;
-      _this.dataCount = dataCount;
-      return _this;
-    };
-
-    var _this = {};
-
-    var getRsBlockTable = function(typeNumber, errorCorrectionLevel) {
-
-      switch(errorCorrectionLevel) {
-      case QRErrorCorrectionLevel.L :
-        return RS_BLOCK_TABLE[(typeNumber - 1) * 4 + 0];
-      case QRErrorCorrectionLevel.M :
-        return RS_BLOCK_TABLE[(typeNumber - 1) * 4 + 1];
-      case QRErrorCorrectionLevel.Q :
-        return RS_BLOCK_TABLE[(typeNumber - 1) * 4 + 2];
-      case QRErrorCorrectionLevel.H :
-        return RS_BLOCK_TABLE[(typeNumber - 1) * 4 + 3];
-      default :
-        return undefined;
-      }
-    };
-
-    _this.getRSBlocks = function(typeNumber, errorCorrectionLevel) {
-
-      var rsBlock = getRsBlockTable(typeNumber, errorCorrectionLevel);
-
-      if (typeof rsBlock == 'undefined') {
-        throw 'bad rs block @ typeNumber:' + typeNumber +
-            '/errorCorrectionLevel:' + errorCorrectionLevel;
-      }
-
-      var length = rsBlock.length / 3;
-
-      var list = [];
-
-      for (var i = 0; i < length; i += 1) {
-
-        var count = rsBlock[i * 3 + 0];
-        var totalCount = rsBlock[i * 3 + 1];
-        var dataCount = rsBlock[i * 3 + 2];
-
-        for (var j = 0; j < count; j += 1) {
-          list.push(qrRSBlock(totalCount, dataCount) );
-        }
-      }
-
-      return list;
-    };
-
-    return _this;
-  }();
-
-  //---------------------------------------------------------------------
-  // qrBitBuffer
-  //---------------------------------------------------------------------
-
-  var qrBitBuffer = function() {
-
-    var _buffer = [];
-    var _length = 0;
-
-    var _this = {};
-
-    _this.getBuffer = function() {
-      return _buffer;
-    };
-
-    _this.getAt = function(index) {
-      var bufIndex = Math.floor(index / 8);
-      return ( (_buffer[bufIndex] >>> (7 - index % 8) ) & 1) == 1;
-    };
-
-    _this.put = function(num, length) {
-      for (var i = 0; i < length; i += 1) {
-        _this.putBit( ( (num >>> (length - i - 1) ) & 1) == 1);
-      }
-    };
-
-    _this.getLengthInBits = function() {
-      return _length;
-    };
-
-    _this.putBit = function(bit) {
-
-      var bufIndex = Math.floor(_length / 8);
-      if (_buffer.length <= bufIndex) {
-        _buffer.push(0);
-      }
-
-      if (bit) {
-        _buffer[bufIndex] |= (0x80 >>> (_length % 8) );
-      }
-
-      _length += 1;
-    };
-
-    return _this;
-  };
-
-  //---------------------------------------------------------------------
-  // qrNumber
-  //---------------------------------------------------------------------
-
-  var qrNumber = function(data) {
-
-    var _mode = QRMode.MODE_NUMBER;
-    var _data = data;
-
-    var _this = {};
-
-    _this.getMode = function() {
-      return _mode;
-    };
-
-    _this.getLength = function(buffer) {
-      return _data.length;
-    };
-
-    _this.write = function(buffer) {
-
-      var data = _data;
-
-      var i = 0;
-
-      while (i + 2 < data.length) {
-        buffer.put(strToNum(data.substring(i, i + 3) ), 10);
-        i += 3;
-      }
-
-      if (i < data.length) {
-        if (data.length - i == 1) {
-          buffer.put(strToNum(data.substring(i, i + 1) ), 4);
-        } else if (data.length - i == 2) {
-          buffer.put(strToNum(data.substring(i, i + 2) ), 7);
-        }
-      }
-    };
-
-    var strToNum = function(s) {
-      var num = 0;
-      for (var i = 0; i < s.length; i += 1) {
-        num = num * 10 + chatToNum(s.charAt(i) );
-      }
-      return num;
-    };
-
-    var chatToNum = function(c) {
-      if ('0' <= c && c <= '9') {
-        return c.charCodeAt(0) - '0'.charCodeAt(0);
-      }
-      throw 'illegal char :' + c;
-    };
-
-    return _this;
-  };
-
-  //---------------------------------------------------------------------
-  // qrAlphaNum
-  //---------------------------------------------------------------------
-
-  var qrAlphaNum = function(data) {
-
-    var _mode = QRMode.MODE_ALPHA_NUM;
-    var _data = data;
-
-    var _this = {};
-
-    _this.getMode = function() {
-      return _mode;
-    };
-
-    _this.getLength = function(buffer) {
-      return _data.length;
-    };
-
-    _this.write = function(buffer) {
-
-      var s = _data;
-
-      var i = 0;
-
-      while (i + 1 < s.length) {
-        buffer.put(
-          getCode(s.charAt(i) ) * 45 +
-          getCode(s.charAt(i + 1) ), 11);
-        i += 2;
-      }
-
-      if (i < s.length) {
-        buffer.put(getCode(s.charAt(i) ), 6);
-      }
-    };
-
-    var getCode = function(c) {
-
-      if ('0' <= c && c <= '9') {
-        return c.charCodeAt(0) - '0'.charCodeAt(0);
-      } else if ('A' <= c && c <= 'Z') {
-        return c.charCodeAt(0) - 'A'.charCodeAt(0) + 10;
-      } else {
-        switch (c) {
-        case ' ' : return 36;
-        case '$' : return 37;
-        case '%' : return 38;
-        case '*' : return 39;
-        case '+' : return 40;
-        case '-' : return 41;
-        case '.' : return 42;
-        case '/' : return 43;
-        case ':' : return 44;
-        default :
-          throw 'illegal char :' + c;
-        }
-      }
-    };
-
-    return _this;
-  };
-
-  //---------------------------------------------------------------------
-  // qr8BitByte
-  //---------------------------------------------------------------------
-
-  var qr8BitByte = function(data) {
-
-    var _mode = QRMode.MODE_8BIT_BYTE;
-    var _data = data;
-    var _bytes = qrcode.stringToBytes(data);
-
-    var _this = {};
-
-    _this.getMode = function() {
-      return _mode;
-    };
-
-    _this.getLength = function(buffer) {
-      return _bytes.length;
-    };
-
-    _this.write = function(buffer) {
-      for (var i = 0; i < _bytes.length; i += 1) {
-        buffer.put(_bytes[i], 8);
-      }
-    };
-
-    return _this;
-  };
-
-  //---------------------------------------------------------------------
-  // qrKanji
-  //---------------------------------------------------------------------
-
-  var qrKanji = function(data) {
-
-    var _mode = QRMode.MODE_KANJI;
-    var _data = data;
-
-    var stringToBytes = qrcode.stringToBytesFuncs['SJIS'];
-    if (!stringToBytes) {
-      throw 'sjis not supported.';
-    }
-    !function(c, code) {
-      // self test for sjis support.
-      var test = stringToBytes(c);
-      if (test.length != 2 || ( (test[0] << 8) | test[1]) != code) {
-        throw 'sjis not supported.';
-      }
-    }('\u53cb', 0x9746);
-
-    var _bytes = stringToBytes(data);
-
-    var _this = {};
-
-    _this.getMode = function() {
-      return _mode;
-    };
-
-    _this.getLength = function(buffer) {
-      return ~~(_bytes.length / 2);
-    };
-
-    _this.write = function(buffer) {
-
-      var data = _bytes;
-
-      var i = 0;
-
-      while (i + 1 < data.length) {
-
-        var c = ( (0xff & data[i]) << 8) | (0xff & data[i + 1]);
-
-        if (0x8140 <= c && c <= 0x9FFC) {
-          c -= 0x8140;
-        } else if (0xE040 <= c && c <= 0xEBBF) {
-          c -= 0xC140;
-        } else {
-          throw 'illegal char at ' + (i + 1) + '/' + c;
-        }
-
-        c = ( (c >>> 8) & 0xff) * 0xC0 + (c & 0xff);
-
-        buffer.put(c, 13);
-
-        i += 2;
-      }
-
-      if (i < data.length) {
-        throw 'illegal char at ' + (i + 1);
-      }
-    };
-
-    return _this;
-  };
-
-  qrcode.stringToBytesFuncs['UTF-8'] = function(s) {
-    // http://stackoverflow.com/questions/18729405/how-to-convert-utf8-string-to-byte-array
-    function toUTF8Array(str) {
-      var utf8 = [];
-      for (var i=0; i < str.length; i++) {
-        var charcode = str.charCodeAt(i);
-        if (charcode < 0x80) utf8.push(charcode);
-        else if (charcode < 0x800) {
-          utf8.push(0xc0 | (charcode >> 6),
-              0x80 | (charcode & 0x3f));
-        }
-        else if (charcode < 0xd800 || charcode >= 0xe000) {
-          utf8.push(0xe0 | (charcode >> 12),
-              0x80 | ((charcode>>6) & 0x3f),
-              0x80 | (charcode & 0x3f));
-        }
-        // surrogate pair
-        else {
-          i++;
-          // UTF-16 encodes 0x10000-0x10FFFF by
-          // subtracting 0x10000 and splitting the
-          // 20 bits of 0x0-0xFFFFF into two halves
-          charcode = 0x10000 + (((charcode & 0x3ff)<<10)
-            | (str.charCodeAt(i) & 0x3ff));
-          utf8.push(0xf0 | (charcode >>18),
-              0x80 | ((charcode>>12) & 0x3f),
-              0x80 | ((charcode>>6) & 0x3f),
-              0x80 | (charcode & 0x3f));
-        }
-      }
-      return utf8;
-    }
-    return toUTF8Array(s);
-  };
-
-  qrcode.stringToBytes = qrcode.stringToBytesFuncs['UTF-8'];
-
-  return qrcode;
-}();
+  // The shared, closure-free matrix factory is supplied by assets.ts.
+  var qrcode = arguments[0]();
 
   // ------------------------------------------------------------------ site QR code
   //
   // The site page shows a QR code that opens the live site on a phone. The
-  // matrix comes from the vendored encoder above and is drawn to a canvas, so
+  // matrix comes from the shared vendored encoder and is drawn to a canvas, so
   // the PNG data URL is generated entirely client-side: no new endpoint, no
   // image service, no third-party request, and no CSP change (img-src data:
   // is already allowed). The payload is always the site's clean public live
@@ -2834,6 +1621,26 @@ export function dropwayClient() {
           h("p", { "data-testid": "site-qr-url", style: "margin:0 0 .5rem;overflow-wrap:anywhere" }, h("a", { href: url, target: "_blank", rel: "noopener", text: url }), " ", copyButton(url, "Copy site URL")),
           gated ? h("p", { class: "dw-small", "data-testid": "site-qr-gated-notice", style: "margin:0", text: "Visitors need the site password after scanning." }) : null,
         ),
+      ),
+    );
+  }
+
+  /** Embed snippet for the provider-served live-version badge. Public sites with a live URL only; nothing is rendered otherwise. */
+  function siteBadgeSection(url, gated) {
+    if (!url || gated) return null;
+    var badge = url + "badge.svg";
+    var markdown = "[![kofra](" + badge + ")](" + url + ")";
+    return h(
+      "section",
+      { class: "dw-section", "data-testid": "site-badge-snippet" },
+      h("header", {}, h("h2", { text: "Embed a version badge" }), h("span", { class: "dw-small dw-muted", text: "Shows the live version and how recently it changed" })),
+      h(
+        "div",
+        { class: "dw-pad" },
+        h("p", { style: "margin:0 0 .5rem" }, h("img", { "data-testid": "site-badge-preview", src: badge, alt: "kofra live version badge", height: "20", style: "height:20px;vertical-align:middle" })),
+        h("code", { "data-testid": "site-badge-markdown", class: "dw-mono", style: "display:block;margin:0 0 .5rem;overflow-wrap:anywhere", text: markdown }),
+        copyButton(markdown, "Copy badge Markdown"),
+        h("p", { class: "dw-small dw-muted", style: "margin:.5rem 0 0", text: "Paste into a README or any page. It never shows exact times, and it stays generic if the site is password protected, expired or removed." }),
       ),
     );
   }
@@ -2947,7 +1754,8 @@ export function dropwayClient() {
     var badges = [];
     if (s.settings && s.settings.passwordProtected) badges.push(h("span", { class: "dw-badge warn", text: "Password" }));
     if (s.settings && s.settings.spa) badges.push(h("span", { class: "dw-badge", text: "SPA" }));
-    if (s.expiresAt) badges.push(h("span", { class: "dw-badge warn", title: s.expiresAt, text: "Expires " + new Date(s.expiresAt).toLocaleDateString() }));
+    var expires = expiry(s.expiresAt);
+    if (expires) badges.push(h("span", { class: "dw-badge warn", title: s.expiresAt, text: expires }));
     if (!v) badges.push(h("span", { class: "dw-badge", text: "Empty" }));
     return h(
       "tr",
@@ -3286,6 +2094,7 @@ export function dropwayClient() {
       dlg.showModal();
       destination.focus();
     }
+    var expires = expiry(site.expiresAt);
     var head = h(
       "div",
       { class: "dw-pagehead" },
@@ -3294,6 +2103,7 @@ export function dropwayClient() {
         { style: "min-width:0" },
         h("h1", { class: "dw-h1", text: site.title || site.slug }),
         h("p", {}, h("span", { class: "dw-url" }, h("a", { href: site.url, target: "_blank", rel: "noopener", text: site.url }), copyButton(site.url, "Copy site URL"))),
+        expires ? h("p", { class: "dw-small dw-muted", title: site.expiresAt, text: expires + " · " + new Date(site.expiresAt).toLocaleString() }) : null,
         site.description ? h("p", { text: site.description }) : null,
       ),
       h(
@@ -3314,6 +2124,28 @@ export function dropwayClient() {
         button.disabled = pending;
       });
     }
+    function versionDownload(v) {
+      var path = "/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id) + "/export";
+      var limits = "Browser ZIP downloads support at most 16 MiB of stored version bytes and 1,000 files; archive responses are limited to 32 MiB.";
+      var pending = v.status === "pending" || !v.finalizedAt;
+      var eligible = !pending && Number.isSafeInteger(v.totalBytes) && v.totalBytes >= 0 && v.totalBytes <= 16 * 1024 * 1024
+        && Number.isSafeInteger(v.fileCount) && v.fileCount >= 0 && v.fileCount <= 1000;
+      var fallback = h("p", { class: "dw-help" }, "For larger or unknown sizes, use the authenticated REST/CLI export route: ", h("code", { text: "GET " + boot.api + path }), ". Use your API client with a sites:read credential; server export limits still apply.");
+      var result = h("div");
+      var btn = h("button", {
+        type: "button", class: "dw-btn small", text: "Download ZIP",
+        onclick: function () { downloadVersionZip(path, v.id, btn, result); },
+      });
+      btn.disabled = !eligible;
+      return h("div", { class: "dw-pad" },
+        btn,
+        h("p", { class: "dw-help", text: limits }),
+        pending ? h("p", { class: "dw-help", text: "This version is pending. Upload missing files and finalize it, then reload versions before downloading." }) : null,
+        !eligible && !pending ? h("p", { class: "dw-help", text: "This version exceeds the browser limits or its stored size/file count is unknown. No archive has been requested." }) : null,
+        fallback, result,
+      );
+    }
+
     var vBody = h("tbody");
     versions.forEach(function (v) {
       vBody.appendChild(
@@ -3340,7 +2172,7 @@ export function dropwayClient() {
                     if (siteMutationPending) return;
                     setSiteMutationPending(true);
                     try {
-                      await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id) + "/restore", { method: "POST" });
+                      await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id) + "/restore", { method: "POST", headers: { "Idempotency-Key": versionIntentKey() } });
                       toast("v" + v.number + " is live again.");
                       pages.site();
                     } catch (e) {
@@ -3366,7 +2198,7 @@ export function dropwayClient() {
                     try {
                       var ok = await confirmBox({ title: "Delete v" + v.number + "?", message: "The version and its file list are removed for good (use this for a version that leaked something). Other versions are not affected.", confirmText: "Delete version" });
                       if (!ok) return;
-                      await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id), { method: "DELETE" });
+                      await api("/sites/" + encodeURIComponent(slug) + "/versions/" + encodeURIComponent(v.id), { method: "DELETE", body: { confirm: site.slug }, headers: { "Idempotency-Key": versionIntentKey() } });
                       toast("v" + v.number + " deleted.");
                       // A successful deletion must not reload its now-invalid
                       // explicit link; unrelated inspected versions stay put.
@@ -3592,7 +2424,8 @@ export function dropwayClient() {
         clear(filesSection);
         add(
           filesSection,
-          h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", text: "0 files" }), filter)),
+          h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", "aria-live": "polite", "aria-atomic": "true", text: plural(rows.length, "loaded file") + " in this selected version · " + exactBytes(0) }), filter)),
+          versionDownload(v),
           h("div", { class: "dw-empty" }, h("h3", { text: "No files in this version" }), h("p", { class: "dw-small", text: "This version has an empty manifest." })),
         );
         commitSelection(mv, opts, my);
@@ -3664,11 +2497,50 @@ export function dropwayClient() {
         if (sortField === "path") return 0;
         return cmpText(a.path, b.path);
       }
+      // Filter feedback is derived only from the already-loaded rows for this
+      // selected version: updating it never fetches, writes storage or moves
+      // focus (the filter keeps focus while typing). One persistent status
+      // element is updated in place so live announcements are not lost.
+      // aria-live (not role="status") so the checksum copy announcements keep
+      // the section's single status region and existing contracts hold.
+      var filterStatus = h("span", { class: "dw-small dw-muted", "aria-live": "polite", "aria-atomic": "true", text: "" });
+      var noMatch = h("div", { class: "dw-empty", hidden: true, text: "" });
+      var clearFilter = h("button", {
+        type: "button",
+        class: "dw-btn small",
+        text: "Clear filter",
+        hidden: true,
+        onclick: function () {
+          // Reset only the query: sort, checksums, downloads and the
+          // selected immutable version are untouched. Focus returns to the
+          // filter so keyboard users land where they were.
+          filter.value = "";
+          applyFilter();
+          filter.focus();
+        },
+      });
       function applyFilter() {
-        var q = filter.value.trim().toLowerCase();
+        var raw = filter.value;
+        var q = raw.trim().toLowerCase();
+        var matching = 0;
+        var matchingBytes = 0;
         items.forEach(function (it) {
-          it.row.hidden = q && it.row.getAttribute("data-search").indexOf(q) < 0;
+          var show = !q || it.row.getAttribute("data-search").indexOf(q) >= 0;
+          it.row.hidden = !show;
+          if (show) {
+            matching++;
+            matchingBytes += it.file.size || 0;
+          }
         });
+        filterStatus.textContent = q
+          ? matching + " of " + plural(items.length, "loaded file") + " in this selected version match · " + exactBytes(matchingBytes) + " matching"
+          : plural(items.length, "loaded file") + " in this selected version · " + exactBytes(matchingBytes);
+        clearFilter.hidden = !raw;
+        // The query is quoted back as inert text (textContent), never markup;
+        // a nonempty manifest with zero matches is not an empty version.
+        var noMatches = !!q && matching === 0;
+        noMatch.hidden = !noMatches;
+        noMatch.textContent = noMatches ? 'No matching files for "' + raw + '" in the loaded files for this selected version. Clear the filter to show every loaded file.' : "";
       }
       function applySort() {
         items
@@ -3746,9 +2618,11 @@ export function dropwayClient() {
       clear(filesSection);
       add(
         filesSection,
-        h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, h("span", { class: "dw-small dw-muted", text: plural(rows.length, "file") }), sortBar, filter)),
+        h("header", {}, h("h2", { text: "Files in v" + mv.number + (mv.live ? " (live)" : "") }), h("div", { class: "dw-row" }, filterStatus, sortBar, filter, clearFilter)),
+        versionDownload(v),
         h("p", { class: "dw-pad dw-small dw-muted", style: "margin:0", text: "SHA-256 manifest checksums for the selected version (v" + mv.number + ", " + mv.id + "). A checksum is not proof of authenticity, provenance, safe content, or independent verification, and does not show the current live download matches — compare it against a trusted source you already have." }),
         h("div", { class: "dw-scroll" }, h("table", { class: "dw-table" }, h("thead", {}, h("tr", {}, sortTh("path", "Path"), sortTh("kind", "Kind", "dw-hide-sm"), sortTh("size", "Size", "num"), h("th", { scope: "col", text: "SHA-256" }), h("th", { scope: "col" }))), tb)),
+        noMatch,
         copyStatus,
         mv.live ? null : h("p", { class: "dw-pad dw-small dw-muted", style: "margin:0", text: "Older versions are not served publicly. Restore this version to view it on the site, or download single files." }),
       );
@@ -3914,7 +2788,7 @@ export function dropwayClient() {
       ),
     );
     var qrSection = siteQrSection(site.url, !!(site.settings && site.settings.passwordProtected));
-    add(root, head, qrSection, versionsSection, filesSection, h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "Settings" })), form), renameSection, danger);
+    add(root, head, qrSection, siteBadgeSection(site.url, !!(site.settings && site.settings.passwordProtected)), versionsSection, filesSection, h("section", { class: "dw-section" }, h("header", {}, h("h2", { text: "Settings" })), form), renameSection, danger);
     var live = versions.filter(function (v) {
       return v.live;
     })[0];
@@ -3953,6 +2827,84 @@ export function dropwayClient() {
       else filesSection.hidden = true;
     }
   };
+
+  async function downloadVersionZip(path, versionId, btn, result) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+    clear(result);
+    var controller = new AbortController();
+    var reader, res, objectUrl, a;
+    var complete = false;
+    try {
+      var headers = new Headers({ "Accept": "application/zip", "X-Kofra-Client": "dashboard/1" });
+      var key = getKey();
+      if (key) headers.set("Authorization", "Bearer " + key);
+      res = await fetch(boot.api + path, { method: "GET", headers: headers, credentials: "same-origin", redirect: "error", signal: controller.signal });
+      if (res.ok) {
+        if (res.headers.get("X-Kofra-Version") !== versionId) throw new Error("Archive version identity did not match the selected version. Reload versions and retry.");
+        if ((res.headers.get("Content-Type") || "").split(";")[0].trim().toLowerCase() !== "application/zip") throw new Error("The server did not return a ZIP response. Retry or use the authenticated REST/CLI export.");
+      }
+      var disposition = res.headers.get("Content-Disposition") || "";
+      // Only the server's inert slug-vN.zip attachment contract is accepted.
+      var filename = /^attachment;\s*filename="([a-z0-9][a-z0-9-]*-v[1-9][0-9]*\.zip)"$/i.exec(disposition);
+      if (res.ok && !filename) throw new Error("The ZIP attachment filename is missing or invalid. Reload versions and retry.");
+      var limit = res.ok ? 32 * 1024 * 1024 : 64 * 1024;
+      var limitLabel = res.ok ? "32 MiB" : "64 KiB";
+      var length = res.headers.get("Content-Length");
+      var expected = length === null ? null : Number(length);
+      if (expected !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(expected) || expected > limit)) {
+        throw new Error("The response exceeds the browser limit (" + limitLabel + ") or has an invalid length. Use the authenticated REST/CLI export.");
+      }
+      if (!res.body) throw new Error("The archive response is incomplete. Retry the download.");
+      reader = res.body.getReader();
+      var chunks = [], size = 0;
+      while (true) {
+        var next = await reader.read();
+        if (next.done) break;
+        size += next.value.byteLength;
+        // Check before retaining each chunk, even without a truthful Content-Length.
+        if (size > limit) throw new Error("The response exceeds the browser limit (" + limitLabel + "). Use the authenticated REST/CLI export or read files file-by-file.");
+        chunks.push(next.value);
+      }
+      if (expected !== null && size !== expected) throw new Error("The archive response was truncated or its length did not match. Retry the download.");
+      if (!res.ok) {
+        var data = null;
+        try { data = JSON.parse(await new Blob(chunks).text()); } catch (parseError) {}
+        throw apiError(res.status, data);
+      }
+      if (!size) throw new Error("The archive response is empty. Retry the download.");
+      // Never navigate to user bytes on the app origin, or offer a partial stream.
+      objectUrl = URL.createObjectURL(new Blob(chunks, { type: "application/zip" }));
+      a = h("a", { href: objectUrl, download: filename[1] });
+      d.body.appendChild(a);
+      a.click();
+      complete = true;
+    } catch (e) {
+      var failure = {
+        message: e.name === "AbortError" ? "ZIP download cancelled." : e.message || "ZIP download failed.",
+        hint: (e.hint ? e.hint + " " : "") + "Retry, reload versions, or use the authenticated REST/CLI export route above.",
+      };
+      // The selection may have changed mid-download, detaching this container.
+      if (result.isConnected === false) toast("Could not download ZIP for " + versionId + ": " + failure.message, true);
+      else add(result, errorBox(failure, "Could not download ZIP"));
+    } finally {
+      if (!complete) {
+        controller.abort();
+        try {
+          if (reader) await reader.cancel();
+          else if (res && res.body) await res.body.cancel();
+        } catch (cancelError) {}
+      }
+      if (reader) reader.releaseLock();
+      if (objectUrl) {
+        // Keep the URL alive for the browser's attachment handoff, then release it.
+        setTimeout(function () { URL.revokeObjectURL(objectUrl); a.remove(); }, 1000);
+      }
+      btn.disabled = false;
+      btn.removeAttribute("aria-busy");
+    }
+  }
 
   async function downloadFile(slug, path, versionId, btn) {
     if (btn) btn.disabled = true;
@@ -4061,6 +3013,8 @@ export function dropwayClient() {
         }
         var tb = h("tbody");
         res.keys.forEach(function (k) {
+          var expires = expiry(k.expiresAt);
+          var exactExpiry = expires ? h("span", { id: "dw-key-expiry-" + k.id, class: "dw-sub", hidden: true }) : null;
           tb.appendChild(
             h(
               "tr",
@@ -4070,7 +3024,20 @@ export function dropwayClient() {
                 return h("span", { class: "dw-badge", style: "margin:0 .2rem .2rem 0", text: sc });
               }), k.siteId ? h("span", { class: "dw-sub", text: "One site only" }) : null),
               h("td", { class: "num dw-small dw-muted dw-hide-sm" }, h("span", { title: k.createdAt, text: "Created " + ago(k.createdAt) }), h("span", { class: "dw-sub", text: k.lastUsedAt ? "Used " + ago(k.lastUsedAt) : "Never used" })),
-              h("td", { class: "num dw-small dw-hide-sm", text: k.expiresAt ? "Expires " + new Date(k.expiresAt).toLocaleDateString() : "No expiry" }),
+              h("td", { class: "num dw-small dw-hide-sm", title: expires ? k.expiresAt : null }, expires ? [
+                h("button", {
+                  type: "button", class: "dw-btn small ghost", text: expires,
+                  "aria-label": "Expiry details for " + (k.name || k.prefix) + ": " + expires,
+                  "aria-expanded": "false", "aria-controls": exactExpiry.id,
+                  onclick: function (e) {
+                    var show = e.currentTarget.getAttribute("aria-expanded") !== "true";
+                    exactExpiry.textContent = show ? new Date(k.expiresAt).toLocaleString() : "";
+                    exactExpiry.hidden = !show;
+                    e.currentTarget.setAttribute("aria-expanded", String(show));
+                  },
+                }),
+                exactExpiry,
+              ] : k.expiresAt ? "" : "No expiry"),
               h(
                 "td",
                 { class: "act" },
@@ -4311,6 +3278,8 @@ export function dropwayClient() {
     var tools = d.getElementById("dw-tools");
     var info = d.getElementById("dw-fileinfo");
     var current = P.path || "";
+    var currentMode = null;
+    var panel = d.getElementById("dw-view-panel");
     var manifest = null;
 
     function fileByPath(p) {
@@ -4333,6 +3302,11 @@ export function dropwayClient() {
       return base + "?view=1&embed=1";
     }
 
+    function validMode(p, mode) {
+      var f = fileByPath(p);
+      if (mode === "source" && (!f || TEXT_KINDS.indexOf(f.kind) >= 0)) return mode;
+      return mode === "raw" ? mode : "view";
+    }
     function renderTools(p, mode) {
       clear(tools);
       clear(info);
@@ -4340,19 +3314,47 @@ export function dropwayClient() {
       var isDir = !p || p.charAt(p.length - 1) === "/";
       var kind = f ? f.kind : null;
       var url = siteUrlFor(p);
+      var tabs = [];
+      panel.removeAttribute("role");
+      panel.removeAttribute("aria-labelledby");
       function tab(label, m, enabled) {
         if (!enabled) return null;
-        return h("button", {
+        var button = h("button", {
+          id: "dw-view-tab-" + m,
           type: "button",
           role: "tab",
+          tabindex: mode === m ? 0 : -1,
+          "aria-controls": panel.id,
           "aria-selected": mode === m ? "true" : "false",
           text: label,
+          onfocus: function (ev) {
+            tabs.forEach(function (t) { t.tabIndex = t === ev.currentTarget ? 0 : -1; });
+          },
+          onkeydown: function (ev) {
+            if (ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+            var i = tabs.indexOf(ev.currentTarget);
+            if (ev.key === "ArrowRight") i = (i + 1) % tabs.length;
+            else if (ev.key === "ArrowLeft") i = (i + tabs.length - 1) % tabs.length;
+            else if (ev.key === "Home") i = 0;
+            else if (ev.key === "End") i = tabs.length - 1;
+            else return;
+            ev.preventDefault();
+            tabs[i].focus();
+          },
+          // Native button Enter/Space already dispatch one click. Focus-only keys never navigate.
           onclick: function () {
+            if (mode === m) return;
+            var keepFocus = tabs.indexOf(d.activeElement) >= 0;
             go(p, m, true);
+            if (keepFocus) d.getElementById("dw-view-tab-" + m).focus();
           },
         });
+        tabs.push(button);
+        return button;
       }
       if (!isDir) {
+        panel.setAttribute("role", "tabpanel");
+        panel.setAttribute("aria-labelledby", "dw-view-tab-" + mode);
         add(
           tools,
           h(
@@ -4398,8 +3400,10 @@ export function dropwayClient() {
     }
 
     function go(p, mode, push) {
+      mode = validMode(p, mode);
+      if (push && p === current && mode === currentMode) return;
       current = p;
-      mode = mode || "view";
+      currentMode = mode;
       var src = viewSrc(p, mode);
       if (frame.src !== src) {
         // A fresh iframe instead of a new src: changing src would add a history entry
@@ -4478,7 +3482,7 @@ export function dropwayClient() {
       go(st.p !== undefined ? st.p : P.path || "", st.mode || "view", false);
     });
 
-    var mode = new URLSearchParams(location.search).get("mode") || "view";
+    var mode = validMode(current, new URLSearchParams(location.search).get("mode"));
     renderTools(current, mode);
     if (!authed()) {
       clear(tree);
@@ -4563,10 +3567,15 @@ export function dropwayClient() {
       emptyNote,
       treeBox,
     );
-    go(current, mode, false);
+    // The manifest load rebuilds the toolbar; a mode tab focused while it was in flight must keep focus.
+    var heldTab = tools.contains(d.activeElement) && d.activeElement.getAttribute("role") === "tab" ? d.activeElement.id : "";
+    go(current, currentMode || mode, false);
+    // If the manifest removed the held tab (Source on an image/binary), land on the tab that replaced it.
+    var heldEl = heldTab && (d.getElementById(heldTab) || d.getElementById("dw-view-tab-" + currentMode));
+    if (heldEl) heldEl.focus();
     // Push entries carry {p, mode}; record the same for the loaded entry so
     // Back restores the prior file and view mode instead of losing the mode.
-    history.replaceState({ p: current, mode: mode }, "");
+    history.replaceState({ p: current, mode: currentMode }, "");
     var cur = $("a[aria-current]", tree);
     if (cur) cur.scrollIntoView({ block: "nearest" });
   };

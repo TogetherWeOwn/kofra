@@ -6,7 +6,10 @@ import { HIGHLIGHT_CSS, highlight, hljsLanguage } from "./highlight";
 import type { Viewer } from "./index";
 import { sanitizeHtml } from "./sanitize";
 
-const MD_VERSION = 2;
+// 4 was issued separately for the report print treatment plus shared-link
+// head tags and for the Phone disclosure in the viewer bar; neither 4
+// identifies the merged bytes, so the merged render moves to 5.
+const MD_VERSION = 5;
 
 const MD_CSS = `
 .dw-md{max-width:48rem;margin:0 auto;padding:2.5rem 1.25rem 5rem}
@@ -112,6 +115,7 @@ export const markdownViewer: Viewer = {
     if (m) title = m[1]!.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
     return viewerPage(vc, {
       title,
+      print: true,
       tabs: standardTabs(vc, { source: true }),
       css: MD_CSS + HIGHLIGHT_CSS,
       body: `<article class="dw-md">${m ? r.html.slice(m[0].length) : r.html}</article>`,

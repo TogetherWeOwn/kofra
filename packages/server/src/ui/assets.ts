@@ -1,3 +1,4 @@
+import { createQrEncoder, QR_LICENSE } from "../qr.js";
 import { dropwayClient } from "./client";
 
 /**
@@ -11,7 +12,8 @@ import { dropwayClient } from "./client";
  * around it.
  */
 export const CLIENT_SCRIPT = `/*! Kofra dashboard (MIT) https://github.com/TogetherWeOwn/dropway */
-(function(){"use strict";var __name=function(t){return t};(${dropwayClient.toString()})();})();
+${QR_LICENSE}
+(function(){"use strict";var __name=function(t){return t};(${dropwayClient.toString()})(${createQrEncoder.toString()});})();
 `;
 
 /** 32-bit FNV-1a, hex: enough to bust caches when the script changes. */

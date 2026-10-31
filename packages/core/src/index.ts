@@ -21,15 +21,18 @@ export * from "./lib/mime";
 export * from "./lib/paths";
 export * from "./lib/slug";
 export * from "./lib/filetypes";
+export * from "./lib/secrets";
 
 export * from "./services/events";
 export * from "./services/identity";
 export * from "./services/keys";
 export * from "./services/tenants";
 export * from "./services/live";
+export * from "./services/previews";
 export * from "./services/blobs";
 export * from "./services/sites";
 export * from "./services/deploys";
+export * from "./services/version-actions";
 export * from "./services/publish";
 export * from "./services/cleanup";
 export * from "./services/idempotency";

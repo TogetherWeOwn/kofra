@@ -66,7 +66,7 @@ ${where}
 
 ## Publish
 
-MCP: \`publish_site\` with \`files\`, each \`{ path, content }\` (text; base64 only for small binaries), \`{ path, url }\` (the server downloads a public https file), \`{ path, sha256, size }\` (then PUT the bytes to the returned upload link and call \`finalize_version\`) or \`{ path, copyFrom }\`.
+MCP: \`publish_site\` with \`files\`, each \`{ path, content }\` (text; base64 only for small binaries), \`{ path, url }\` (the server downloads a public https file), \`{ path, sha256, size }\` (then PUT the bytes to the returned upload link and call \`finalize_version\`), \`{ path, copyFrom }\` or a chat attachment \`{ download_url, file_name }\`; or \`archiveUrl\` alone for a public https .zip.
 
 REST, one call (form field name = file path):
 
@@ -237,7 +237,8 @@ export function llmsFullTxt(origin: string, config: DropwayConfig, tools: readon
 - Site: a slug (DNS label, e.g. bright-otter-x7k2) with settings and a live version. Tools accept a slug, a site id or any URL of the site.
 - Version: an immutable set of files (path -> sha256, size, content type) with a number (v1, v2...). Publishing makes a new version live atomically; restore flips the live pointer back. Version arguments accept "live", "v3", "3" or an id.
 - Files are stored once per owner by SHA-256: unchanged files are never uploaded twice, across versions and sites.
-- File sources (MCP publish_site and update_site_files, REST PATCH .../files): each file has a path and exactly one of content (+encoding utf8 up to 1 MB or base64 up to 256 KB), url (+headers; public https only, up to 25 MB, 3 redirects, 30 s), sha256 (+size; reused if stored, otherwise an upload link is returned) or copyFrom {site?, version?, path?}.
+- File sources (MCP publish_site and update_site_files, REST PATCH .../files): each file has a path and exactly one of content (+encoding utf8 up to 1 MB or base64 up to 256 KB), url (+headers; public https only, up to 25 MB, 3 redirects, 30 s), sha256 (+size; reused if stored, otherwise an upload link is returned), copyFrom {site?, version?, path?} or a chat attachment {download_url, file_name} (fetched like url, file_name becomes the path). publish_site also accepts archiveUrl alone: a public https .zip downloaded and unpacked like an uploaded zip.
+- Large files (REST/CLI): above 95 MiB the CLI stages bytes through POST /api/v1/uploads, PUT /api/v1/uploads/{id}/parts/{n} (10-95 MiB parts, resumable via GET /api/v1/uploads/{id}) and POST /api/v1/uploads/{id}/complete; the server hash-verifies the assembled file before finalize.
 - status: "live" (the URL serves it now), "unchanged" (identical to the live version; nothing created) or "awaiting_upload" (PUT each upload.items[].url with the raw bytes and the same Authorization header, then finalize_version).
 - Idempotency: writes accept idempotencyKey (MCP) or the Idempotency-Key header (REST PATCH .../files). The same key and arguments within 24 hours replay the first result (replayed: true); a different body returns 422 idempotency_key_reused. Secrets (new API keys) are not replayed.
 - Viewers: navigations to a file get a rendered view chosen by type; sub-resource requests (img, script, fetch) always get raw bytes. ?raw=1 raw bytes (text types as text/plain), ?download=1 download, ?view=1 force the viewer.
