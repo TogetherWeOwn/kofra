@@ -68,52 +68,13 @@ with a wrong outcome. Investigate:
 - Test weakening in this PR: deleted or loosened assertions, new skips, or
   a `scripts/open-core-allowlist.txt` entry without the required reason.
 
-## This repository: where defects hide
+## This repository
 
-- **Origin isolation (highest stakes):** published user content is untrusted.
-  It must never render or execute on the app/dashboard origin. Viewers in
-  `packages/server/src/viewers/` (Markdown, SVG, HTML, notebooks) must escape
-  or sanitize on the actual render path — including foreign-content edge
-  cases such as CDATA and embedded markup. A Critical finding needs the
-  traced path from stored file content to the unescaped sink on the wrong
-  origin; otherwise report a Warning that names the untraced hop.
-- **Authorization and keys** (`packages/core/src/principal.ts`,
-  `packages/core/src/lib/crypto.ts`, `packages/core/src/lib/secrets.ts`):
-  every operation enforces the authorization its documented contract defines
-  (principal scopes, or a validated capability such as a signed preview link).
-  Issuing a key is additive: other valid keys stay usable by design. Expiry,
-  reset, revocation, or replacement must leave the targeted credential
-  unusable, and an empty/missing key is never accepted as a credential.
-  Secrets never reach logs or error hints. Delivery and idempotent replay of
-  newly minted secrets follow the documented contracts and their tests; flag
-  only a deviation from those contracts.
-- **Publish pipeline** (manifest `{path, size, sha256}`, finalize, versions):
-  content addressing must verify size and digest of what was actually
-  uploaded; finalize is atomic; `baseVersionId` stale-write protection and
-  publish idempotency must hold under retries and concurrent publishes —
-  one conditional write, not read-check-write. Identical republish reports
-  `unchanged` and creates no version.
-- **Uploads and holds** (multipart sessions/caps, slug holds, transfers in
-  `packages/core/migrations/`): session caps and expiry are enforced on the
-  write path, holds cannot be taken over by another principal, and
-  abandoned sessions release their claims. Never edit an applied migration;
-  add a new numbered file, backward-compatible with the deployed code.
-- **Errors as contract:** services throw `ApiError` with a stable snake_case
-  `code` and `hint`; renaming a code, changing an HTTP status, or dropping a
-  header (including legacy pre-rename `X-*` headers) is a compatibility finding only
-  with the consuming client/CLI path shown.
-- **Open-core boundary:** this repo is the single-tenant open-source product.
-  New billing, pricing, payment, signup-quota, or hosted-layer code here is a
-  defect (`scripts/guard-open-core.mjs`); do not suggest working around the
-  guard.
-- **CLI and client** (`packages/cli`, `packages/client`): Node runtime, not
-  Workers; CLI `src/publish.ts` and `src/client.ts` stay fetch-only, and CLI
-  `src/` stays erasable TypeScript (no enums/namespaces/parameter
-  properties). Generated client output must match its generator input; flag hand-edits to generated files.
-- **Bundled third-party code:** when a PR bundles, minifies, or inlines a
-  third-party library into served assets, its license notice must survive
-  into the production-built output users actually receive, not only exist in
-  the source package.
+The source of truth for behaviour is the code's documented contracts:
+`SPEC*`, `docs/ARCHITECTURE.md`, `docs/OPERATIONS*`, `AGENTS.md`, and the
+acceptance tests under `test/`. Judge a change against those, not against
+this file. Report a deviation from a documented contract with the contract
+and the code path that breaks it.
 
 ## Skip
 
