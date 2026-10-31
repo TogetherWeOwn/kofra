@@ -867,5 +867,15 @@ export async function getFile(dc: DropwayContext, site: SiteRow, path: string, v
   if (site.mode === "transfer") throw forbidden("Transfer bytes are only available as sites-host downloads.", "Use the transfer page's download links.", "transfer_download_required");
   const vid = versionId ?? site.current_version_id;
   if (!vid) return null;
-  return dc.env.DB.prepare("SELECT path, sha256, size, content_type FROM version_files WHERE version_id = ? AND path = ?").bind(vid, path).first<FileRow>();
+  // The version must belong to this site, and a pending version's bytes are only
+  // readable once this owner has uploaded them: its manifest can name any sha256.
+  return dc.env.DB.prepare(
+    `SELECT vf.path, vf.sha256, vf.size, vf.content_type
+       FROM version_files vf
+       JOIN versions v ON v.id = vf.version_id AND v.site_id = ?
+      WHERE vf.version_id = ? AND vf.path = ?
+        AND (v.status = 'ready' OR EXISTS (SELECT 1 FROM blob_scopes bs WHERE bs.sha256 = vf.sha256 AND bs.scope = ?))`,
+  )
+    .bind(site.id, vid, path, blobScope(siteOwner(site)))
+    .first<FileRow>();
 }
