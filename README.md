@@ -188,6 +188,7 @@ Every instance describes itself:
 - [Self-hosting and configuration](docs/SELF_HOST.md)
 - [CLI reference](packages/cli/README.md)
 - [Site recovery spec: `kofra pull`](docs/CLI_PULL.md) (proposed, design only)
+- [Sender-scoped delivery inventory spec](docs/DELIVERY_INVENTORY.md) (proposed, design only)
 - [Architecture and extension points](docs/ARCHITECTURE.md)
 - [Agents: MCP server, REST twins, skill](docs/MCP.md)
 - [Embeddable live-version badge](docs/SITE_BADGE.md)
