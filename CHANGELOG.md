@@ -14,6 +14,22 @@
   at whole CSS pixels per module; native document scrolling exposes larger
   grids in short viewports without clipping or fractional scaling.
 
+### Markdown viewer
+
+- A Markdown heading that would duplicate an earlier raw-HTML heading id now takes a free
+  `-1`-style suffix without taking an existing heading's fragment destination. Raw-HTML ids
+  are never rewritten; Markdown-before-raw and raw-vs-raw duplicates remain as authored.
+  Comments and sanitizer-dropped content reserve no ids, and documents without the collision
+  render byte-identical output. Markdown and notebook render-version bumps retire cached
+  fragments and ETags from before the change. Notebook reservations span Markdown cells and
+  Markdown/HTML outputs while keeping per-fragment baseline numbering. Raw ids are compared by
+  decoded DOM value in served output order; the scanner handles dropped-element boundaries,
+  script escapes, comments and tags completed by generated markup or viewer wrappers. Suffix
+  allocation and scanner inner searches advance without repeated rescanning.
+  SVG and MathML content is read by the sanitizer's own foreign-content rules, so `<style>`
+  or `<title>` inside dropped foreign markup reserves no phantom id and cannot swallow a
+  later raw heading.
+
 ### Resumable large uploads and URL archive sources
 
 - Large files stage through a resumable R2 multipart protocol bound to one

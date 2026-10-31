@@ -152,7 +152,7 @@ describe("viewer Phone: served public-file contract", () => {
   // against markup that now includes the Phone disclosure. New versions pin
   // the merged Phone/unfurl render; historical pre-Phone validators stay fixed.
   it.each([
-    ["notes.md", "markdown", 3, 5], ["data.json", "json", 2, 5], ["data.json", "json", 3, 5],
+    ["notes.md", "markdown", 3, 11], ["data.json", "json", 2, 5], ["data.json", "json", 3, 5],
     ["table.csv", "csv", 3, 5], ["plain.txt", "code", 3, 5], ["page.html", "html-frame", 1, 4],
     ["vector/shape.svg", "svg", 3, 5], ["raster/pixel.png", "image", 3, 5],
   ] as const)("invalidates the pre-Phone %s %s@%i validator, then correctly revalidates refreshed markup", async (path, id, oldVersion, newVersion) => {
@@ -297,7 +297,7 @@ describe("viewer Phone: validator versions", () => {
   // Reverting a bump could strand cached pages from either parent on a 304.
   it("pins every built-in viewer at its exact post-Phone version", () => {
     const expected: Record<string, number> = {
-      source: 5, "html-frame": 4, markdown: 5, notebook: 4, json: 5, csv: 5,
+      source: 5, "html-frame": 4, markdown: 11, notebook: 8, json: 5, csv: 5,
       svg: 5, image: 5, pdf: 4, video: 4, audio: 4, font: 4, archive: 4,
       code: 5, binary: 5,
     };

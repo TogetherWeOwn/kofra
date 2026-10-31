@@ -4,7 +4,7 @@ import { standardTabs, viewerPage } from "./chrome";
 import { containOutputMarkup } from "./contain";
 import { HIGHLIGHT_CSS, highlight, hljsLanguage } from "./highlight";
 import type { Viewer } from "./index";
-import { renderMarkdown } from "./markdown";
+import { createMarkdownAnchors } from "./markdown";
 import { sanitizeHtml } from "./sanitize";
 
 /**
@@ -14,10 +14,9 @@ import { sanitizeHtml } from "./sanitize";
  * native initially-open <details> so a reader can fold a long result without
  * hiding the code that produced it. Nothing executes.
  */
-// 4: output folding with containment and report print treatment with
-// shared-link head tags each changed the page after branching; neither
-// parent's 3 identifies the merged bytes.
-const NB_VERSION = 4;
+// 8 retires anchor plans that could steal a non-heading destination or reserve
+// a raw heading removed by foreign content lifetimes or sanitizer tag policy.
+const NB_VERSION = 8;
 const MAX_OUTPUT_TEXT = 100_000;
 
 const NB_CSS = `
@@ -43,7 +42,7 @@ const text = (v: unknown): string => (Array.isArray(v) ? v.join("") : typeof v =
 const stripAnsi = (s: string) => s.replace(/\u001b\[[0-9;]*[A-Za-z]/g, "");
 const clip = (s: string) => (s.length > MAX_OUTPUT_TEXT ? `${s.slice(0, MAX_OUTPUT_TEXT)}\n…` : s);
 
-function output(o: Json): string {
+function output(o: Json, anchors: ReturnType<typeof createMarkdownAnchors>): string {
   const type = o.output_type;
   if (type === "stream") return `<pre>${escapeHtml(clip(stripAnsi(text(o.text))))}</pre>`;
   if (type === "error") {
@@ -62,7 +61,7 @@ function output(o: Json): string {
     return `<img src="data:image/svg+xml;base64,${btoa(bin)}" alt="output">`;
   }
   if (data["text/html"]) return `<div>${containOutputMarkup(text(data["text/html"]))}</div>`;
-  if (data["text/markdown"]) return `<div>${containOutputMarkup(renderMarkdown(text(data["text/markdown"]), "output.md").html)}</div>`;
+  if (data["text/markdown"]) return `<div>${containOutputMarkup(anchors.render(text(data["text/markdown"]), "output.md").html)}</div>`;
   if (data["text/plain"]) return `<pre>${escapeHtml(clip(text(data["text/plain"])))}</pre>`;
   if (data["application/json"]) return `<pre>${escapeHtml(clip(JSON.stringify(data["application/json"], null, 2)))}</pre>`;
   return "";
@@ -73,18 +72,20 @@ export function renderNotebook(nb: Json): string {
   const meta = (nb.metadata ?? {}) as Json;
   const lang = hljsLanguage(String(((meta.language_info ?? {}) as Json).name ?? ((meta.kernelspec ?? {}) as Json).language ?? "python"));
   const cells = Array.isArray(nb.cells) ? (nb.cells as Json[]) : [];
-  return cells
+  const anchors = createMarkdownAnchors();
+  const html = cells
     .map((cell) => {
       const src = text(cell.source);
-      if (cell.cell_type === "markdown") return `<div class="dw-cell"><div class="dw-prompt"></div><div class="dw-mdcell">${renderMarkdown(src, "cell.md").html}</div></div>`;
+      if (cell.cell_type === "markdown") return `<div class="dw-cell"><div class="dw-prompt"></div><div class="dw-mdcell">${anchors.render(src, "cell.md").html}</div></div>`;
       if (cell.cell_type === "raw") return `<div class="dw-cell"><div class="dw-prompt">raw</div><pre>${escapeHtml(src)}</pre></div>`;
       const n = cell.execution_count == null ? " " : String(cell.execution_count);
-      const outs = Array.isArray(cell.outputs) ? (cell.outputs as Json[]).map(output).filter(Boolean) : [];
+      const outs = Array.isArray(cell.outputs) ? (cell.outputs as Json[]).map((o) => output(o, anchors)).filter(Boolean) : [];
       return `<div class="dw-cell"><div class="dw-prompt">In [${escapeHtml(n)}]:</div><div><pre><code class="hljs">${highlight(src, lang)}</code></pre>${
         outs.length ? `<details class="dw-out" open><summary>Outputs (${outs.length})</summary>${outs.join("")}</details>` : ""
       }</div></div>`;
     })
     .join("");
+  return anchors.resolve(html, "</main>");
 }
 
 export const notebookViewer: Viewer = {
