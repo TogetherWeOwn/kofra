@@ -81,3 +81,20 @@ jobs:
           node packages/cli/dist/dropway.mjs --help > /dev/null
           node packages/cli/dist/dropway.mjs publish packages/cli/src --dry-run --json > /tmp/dry.json
           node -e 'const r = JSON.parse(require("fs").readFileSync("/tmp/dry.json", "utf8")); if (!r.ok || !r.files.length) process.exit(1); console.log("dry run ok: " + r.files.length + " files")'
+
+  # Single stable check name for the default-branch ruleset to require. Fails unless every
+  # job above succeeded (a failed, cancelled or skipped dependency all count as failure).
+  ci-ok:
+    if: always()
+    needs: [check, open-core-guard, cli-node20]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: All required jobs succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "needs results: $RESULTS"
+          for r in $RESULTS; do
+            [ "$r" = success ] || { echo "::error::a required CI job did not succeed ($r)"; exit 1; }
+          done

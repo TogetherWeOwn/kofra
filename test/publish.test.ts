@@ -188,10 +188,10 @@ describe("versions", () => {
     expect(site.body.site.currentVersionId).toBe(v1.body.version.id);
 
     // The live version cannot be deleted; the other one can.
-    const delLive = await dw.json(`/api/v1/sites/history/versions/${v1.body.version.id}`, { method: "DELETE", key: dw.ownerKey });
+    const delLive = await dw.json(`/api/v1/sites/history/versions/${v1.body.version.id}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: "history" }), key: dw.ownerKey });
     expect(delLive.status).toBe(409);
     const other = list.body.versions[0].id;
-    const del = await dw.json(`/api/v1/sites/history/versions/${other}`, { method: "DELETE", key: dw.ownerKey });
+    const del = await dw.json(`/api/v1/sites/history/versions/${other}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: "history" }), key: dw.ownerKey });
     expect(del.status).toBe(200);
   });
 });

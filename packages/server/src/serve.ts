@@ -7,6 +7,8 @@ import {
   hmacHex,
   isHtml,
   isTextual,
+  isApiError,
+  spendSitePasswordAttempt,
   meter,
   emit,
   precompressed,
@@ -15,16 +17,18 @@ import {
   requestPathToFilePath,
   resolveSlugRedirect,
   siteUrl,
+  timingSafeEqualStr,
   verifyPassword,
   type DropwayContext,
   type LiveSite,
 } from "@dropway/core";
 import { escapeHtml, systemPage } from "./html";
-import { findViewer, toViewerFile, VIEWER_CSP, VIEWERS, type ViewMode, type Viewer } from "./viewers";
+import { findViewer, toViewerFile, VIEWER_CHROME_VERSION, VIEWER_CSP, VIEWERS, type ViewMode, type Viewer } from "./viewers";
 import { renderListing } from "./viewers/listing";
 import { MAX_CSS_REWRITE_BYTES, rewriteCss, rewriteHtml, type PathRewrite } from "./path-rewrite";
 import { PATH_SHIM_VERSION, pathShimScript } from "./path-shim";
 import { injectReportLink, REPORT_LINK_VERSION } from "./report-link";
+import { badgeFor, badgeResponse } from "./site-badge";
 import { serveTransfer } from "./transfers";
 import { attachmentDisposition } from "./content-disposition";
 
@@ -41,6 +45,10 @@ export interface ServeMode {
   sandbox: boolean;
   /** Path mode: prefix root-relative URLs in HTML and CSS (null = serve bytes untouched). */
   rewrite: PathRewrite | null;
+  /** Keep runtime URLs in path scope when a preview suppresses the Referer. */
+  pathShim?: boolean;
+  /** Authorized version-preview serving, not the live site (set only by the preview path). */
+  preview?: boolean;
 }
 
 export const INDEX_NAMES = ["index.html", "index.htm", "index.md", "README.md", "readme.md"];
@@ -50,6 +58,13 @@ export const SITE_SANDBOX =
   "sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation allow-orientation-lock";
 
 const PASSWORD_PATH = "__dropway/password";
+const PASSWORD_FORM_TTL = 15 * 60_000;
+/** Edges' clocks differ slightly: a form issued by one may look this far ahead to another. */
+const PASSWORD_FORM_CLOCK_SKEW = 60_000;
+/** Cloudflare's shared source address for cross-zone Worker subrequests; the edge-added CF-Worker header names the zone. */
+const CROSS_ZONE_WORKER_IP = "2a06:98c0:3600::103";
+/** Reserved at a site root: the provider-served live-version badge (a published file of this name is not served). */
+const BADGE_PATH = "badge.svg";
 
 export type Resolved =
   | { kind: "file"; path: string; status: number }
@@ -73,6 +88,24 @@ function isPrivatePath(p: string): boolean {
 function hasVisibleChildren(files: LiveSite["files"], dir: string): boolean {
   for (const k in files) if (k.startsWith(dir) && !isPrivatePath(k)) return true;
   return false;
+}
+
+/**
+ * The longest proper ancestor directory of `filePath` (with trailing "/")
+ * that prefixes at least one non-private path in the live manifest, or null when no
+ * ancestor folder has files. The site root never counts. Computed from the
+ * already-loaded manifest only. Object.keys keeps an ancestor folder named
+ * `__proto__` ordinary manifest data.
+ */
+function nearestManifestAncestor(files: LiveSite["files"], filePath: string): string | null {
+  // Empty segments (leading, trailing or repeated "/") are filtered out below.
+  const segments = filePath.split("/").filter(Boolean);
+  const paths = Object.keys(files);
+  for (let len = segments.length - 1; len >= 1; len--) {
+    const dir = `${segments.slice(0, len).join("/")}/`;
+    if (paths.some((k) => k.startsWith(dir) && !isPrivatePath(k))) return dir;
+  }
+  return null;
 }
 
 /**
@@ -189,12 +222,54 @@ function readCookie(req: Request, name: string): string | null {
   return null;
 }
 
+/** The trusted edge's view of the visitor. Forwarding headers are never identity; only the synthetic address is split by zone. */
+function passwordVisitor(req: Request): string {
+  const ip = req.headers.get("CF-Connecting-IP") ?? "unknown";
+  const zone = req.headers.get("CF-Worker");
+  return zone && ip.toLowerCase() === CROSS_ZONE_WORKER_IP ? `${ip}|worker:${zone}` : ip;
+}
+
+async function passwordFormSignature(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, until: number): Promise<string> {
+  return hmacHex(dw.config.signingSecret, JSON.stringify([
+    "site-password-form", new URL(req.url).origin, mode.base, live.siteId, live.passwordHash,
+    passwordVisitor(req), until,
+  ]));
+}
+
+async function passwordSubmissionAllowed(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode): Promise<boolean> {
+  const origin = req.headers.get("Origin");
+  const site = req.headers.get("Sec-Fetch-Site");
+  if (origin && origin !== "null") return origin === new URL(req.url).origin && site !== "cross-site" && site !== "same-site";
+  if (origin !== "null") return site !== "cross-site" && site !== "same-site";
+  // Sandboxes and no-referrer pages can both send Origin: null. Require the
+  // visitor's short-lived form proof without reading or charging its body.
+  const token = new URL(req.url).searchParams.get("dw_form") ?? "";
+  const match = /^(\d{1,16})\.([a-f0-9]{64})$/.exec(token);
+  if (!match) return false;
+  const until = Number(match[1]);
+  const now = Date.now();
+  if (!Number.isSafeInteger(until) || until <= now || until > now + PASSWORD_FORM_TTL + PASSWORD_FORM_CLOCK_SKEW) return false;
+  return timingSafeEqualStr(match[2]!, await passwordFormSignature(dw, req, live, mode, until));
+}
+
 async function handlePassword(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, filePath: string): Promise<Response | null> {
   if (!live.passwordHash) return null;
   const expected = await passwordCookieValue(dw, live);
   if (readCookie(req, cookieName(live, mode)) === expected || readCookie(req, cookieName(live, mode, true)) === expected) return null;
 
   if (req.method === "POST" && filePath === PASSWORD_PATH) {
+    if (!await passwordSubmissionAllowed(dw, req, live, mode)) {
+      return systemResponse(dw, req, mode, live, 403, "403", "Password form refused", "Reload this site's password form and try again.");
+    }
+    try {
+      await spendSitePasswordAttempt(dw, live.siteId, passwordVisitor(req));
+    } catch (error) {
+      const limited = isApiError(error) && error.status === 429;
+      const response = systemResponse(dw, req, mode, live, limited ? 429 : 503, limited ? "429" : "503",
+        limited ? "Too many password attempts" : "Password unlock unavailable", "Please try again later.");
+      response.headers.set("Retry-After", String(limited ? error.retryAfterSeconds : 1));
+      return response;
+    }
     const form = await req.formData().catch(() => null);
     const password = form?.get("password");
     const next = String(form?.get("next") ?? mode.base);
@@ -221,8 +296,10 @@ async function handlePassword(dw: DropwayContext, req: Request, live: LiveSite, 
   return passwordForm(dw, req, live, mode, u.pathname + u.search, false);
 }
 
-function passwordForm(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, next: string, failed: boolean): Response {
-  const extra = `<form method="post" action="${escapeHtml(mode.base + PASSWORD_PATH)}" style="display:flex;gap:.5rem">
+async function passwordForm(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, next: string, failed: boolean): Promise<Response> {
+  const until = Date.now() + PASSWORD_FORM_TTL;
+  const action = `${mode.base}${PASSWORD_PATH}?dw_form=${until}.${await passwordFormSignature(dw, req, live, mode, until)}`;
+  const extra = `<form method="post" action="${escapeHtml(action)}" style="display:flex;gap:.5rem">
 <input type="hidden" name="next" value="${escapeHtml(next)}">
 <input type="password" name="password" placeholder="Password" required autofocus style="flex:1;padding:.6rem .8rem;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--fg)">
 <button style="padding:.6rem 1rem;border:0;border-radius:8px;background:var(--accent);color:#fff;cursor:pointer">Open</button></form>
@@ -262,6 +339,18 @@ function etagMatches(req: Request, etag: string): boolean {
   });
 }
 
+// Viewer ids and etagExtra output may be any string — including lone
+// (unpaired) UTF-16 surrogates, on which encodeURIComponent throws URIError.
+// Normalize those to U+FFFD first (same approach as content-disposition.ts);
+// valid surrogate pairs pass through untouched.
+function etagSegment(value: string): string {
+  return encodeURIComponent(
+    value.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, (m) =>
+      m.length === 2 ? m : "\uFFFD",
+    ),
+  );
+}
+
 const flag = (sp: URLSearchParams, name: string) => sp.has(name) && sp.get(name) !== "0" && sp.get(name) !== "false";
 
 /** Which view a request asks for: ?view=source, ?view=1, or a browser navigation (top level or iframe). null = raw bytes. */
@@ -286,16 +375,21 @@ export async function serveSite(
   mode: ServeMode,
   viewers: readonly Viewer[] = VIEWERS,
 ): Promise<Response> {
-  const started = Date.now();
   const url = new URL(req.url);
   const method = req.method.toUpperCase();
   // Transfer gates never depend on an eventually consistent live manifest.
   const transfer = await dw.env.DB.prepare("SELECT mode FROM sites WHERE slug = ? UNION ALL SELECT 'transfer' AS mode FROM transfer_slug_tombstones WHERE slug = ? AND NOT EXISTS (SELECT 1 FROM sites WHERE slug = ?) LIMIT 1").bind(slug, slug, slug).first<{ mode: string }>();
+  const badge = (method === "GET" || method === "HEAD") && requestPathToFilePath(pathname) === BADGE_PATH;
   if (transfer?.mode === "transfer") {
+    // The badge never reaches the transfer handler: no download is counted or attributed.
+    if (badge) return badgeResponse(badgeFor(null), method);
     const path = requestPathToFilePath(pathname);
     if (path === null) return new Response("Not found", { status: 404 });
     return serveTransfer(req, dw, slug, path);
   }
+  // Credentials, cookies and Fetch Metadata are never read: the same bytes for everyone.
+  // Not recorded as a site request (no analytics point, no usage meter, no hook).
+  if (badge) return badgeResponse(badgeFor(await getLiveSite(dw, slug)), method);
   if (method === "OPTIONS") {
     // Password-protected sites are not readable cross-origin, so their preflights grant nothing.
     const gated = !!(await getLiveSite(dw, slug))?.passwordHash;
@@ -324,6 +418,23 @@ export async function serveSite(
     }
     return systemResponse(dw, req, mode, null, 404, "404", "Nothing is published here", "There is no site at this address. It may have been deleted. See {app}.");
   }
+  return serveSiteContent(req, dw, live, pathname, mode, viewers);
+}
+
+/** Serve an already resolved manifest. Preview callers authorize and load their version in D1 first. */
+export async function serveSiteContent(
+  req: Request,
+  dw: DropwayContext,
+  live: LiveSite,
+  pathname: string,
+  mode: ServeMode,
+  viewers: readonly Viewer[] = VIEWERS,
+): Promise<Response> {
+  const started = Date.now();
+  const url = new URL(req.url);
+  const method = req.method.toUpperCase();
+  const filePath = requestPathToFilePath(pathname);
+  if (filePath === null) return systemResponse(dw, req, mode, live, 400, "400", "Bad request", "That address could not be decoded.");
   // Anonymous sites are untrusted: sandbox them even where other sites are not.
   if (!mode.sandbox && live.tenantId === null && dw.config.sitesSandboxAnonymous) mode = { ...mode, sandbox: true };
   if (live.expiresAt && live.expiresAt < Date.now()) {
@@ -347,7 +458,7 @@ export async function serveSite(
   if (method !== "GET" && method !== "HEAD") {
     return new Response("Method not allowed", { status: 405, headers: { Allow: "GET, HEAD, OPTIONS" } });
   }
-  if (!live.versionId) return systemResponse(dw, req, mode, live, 404, "EMPTY", "Nothing published yet", "This site exists but has no live version yet.");
+  if (!live.versionId) return systemResponse(dw, req, mode, live, 404, "EMPTY", "Nothing published yet", "This site exists but has no live version yet. See {app}.");
 
   const resolved = resolvePath(live, filePath, req, mode);
   let response: Response;
@@ -356,9 +467,17 @@ export async function serveSite(
     response = new Response(null, { status: 301, headers: { Location: resolved.location } });
     securityHeaders(response.headers, live, mode);
   } else if (resolved.kind === "not_found") {
-    response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", `There is no file at <code>/${escapeHtml(filePath)}</code> on this site.`);
+    // Post-gate only (like listings): lead back to the site instead of a dead end.
+    const ancestor = nearestManifestAncestor(live.files, filePath);
+    const recovery =
+      `<nav aria-label="Where to go next"><ul>` +
+      `<li><a href="${escapeHtml(mode.base)}">Site home</a></li>` +
+      (ancestor ? `<li><a href="${escapeHtml(mode.base + encodePath(ancestor))}">Folder: /${escapeHtml(ancestor)}</a></li>` : "") +
+      `<li><a href="${escapeHtml(`${appOrigin(dw)}/v/${live.slug}/${encodePath(ancestor ?? "")}`)}">Browse files</a></li>` +
+      `</ul></nav>`;
+    response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", `There is no file at <code>/${escapeHtml(filePath).replaceAll("{", "&#123;")}</code> on this site.`, recovery);
   } else if (resolved.kind === "listing") {
-    response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`, url.searchParams.get("sort"));
+    response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`, url.searchParams.get("sort"), url.origin);
     securityHeaders(response.headers, live, mode);
   } else {
     response = await serveFile(req, dw, url, live, mode, resolved.path, resolved.status, viewers);
@@ -393,9 +512,16 @@ async function serveFile(
   // Rendered views: see ./viewers (one per file kind, plus ?view=source).
   if (viewer && viewMode) {
     const embed = flag(sp, "embed");
-    const etag = `W/"${viewer.id}@${viewer.version ?? 1}-${sha256}${viewer.etagExtra?.(file, live) ?? ""}${embed ? "-e" : ""}${reportVariant}"`;
+    // Every page, including image/SVG and embeds, names manifest metadata.
+    // A sole-file root can resolve to a new path with identical bytes, and MIME
+    // can change independently too. Content-only render fragments stay reusable.
+    const folderVariant = `-folder${live.versionId}`;
+    // The shared chrome revision retires every full-page validator when
+    // viewerPage markup/CSS changes, including extension viewers whose own
+    // version cannot know about an internal chrome change.
+    const etag = `W/"${etagSegment(viewer.id)}@${viewer.version ?? 1}-${sha256}${etagSegment(viewer.etagExtra?.(file, live) ?? "")}${folderVariant}-chrome${VIEWER_CHROME_VERSION}${embed ? "-e" : ""}${reportVariant}"`;
     const h = new Headers();
-    if (etagMatches(req, etag)) {
+    if (status === 200 && etagMatches(req, etag)) {
       h.set("ETag", etag);
       securityHeaders(h, live, mode);
       return new Response(null, { status: 304, headers: h });
@@ -415,6 +541,7 @@ async function serveFile(
       file,
       mode: viewMode,
       embed,
+      preview: mode.preview === true,
       fileUrl,
       viewUrl: `${fileUrl}?view=1`,
       sourceUrl: `${fileUrl}?view=source`,
@@ -435,14 +562,26 @@ async function serveFile(
     // withhold the success ETag: revalidating the fallback as if it were
     // the healthy render would strand browsers on it after recovery.
     const viewerCacheControl = out.get("Cache-Control");
-    if (viewerCacheControl?.includes("no-store")) out.delete("ETag");
+    if (status >= 400 || viewerCacheControl?.includes("no-store")) out.delete("ETag");
     else out.set("ETag", etag);
-    out.set("Cache-Control", live.passwordHash ? "private, no-store" : viewerCacheControl ?? "public, max-age=0, must-revalidate");
+    out.set("Cache-Control", status >= 400 || live.passwordHash ? "private, no-store" : viewerCacheControl ?? "public, max-age=0, must-revalidate");
     out.set("Vary", "Accept, Sec-Fetch-Dest");
-    out.set("X-Kofra-Viewer", viewer.id);
+    // Headers.set throws on CR, LF and NUL: a viewer id containing them would
+    // 500 an otherwise healthy render. Omit this diagnostic header for such
+    // ids; the ETag above already carries the encoded identity.
+    if (!viewer.id.includes("\r") && !viewer.id.includes("\n") && !viewer.id.includes("\0")) {
+      out.set("X-Kofra-Viewer", viewer.id);
+    }
     out.delete("Content-Length");
     securityHeaders(out, live, mode);
     let page = new Response(head ? null : rendered.body, { status, headers: out });
+    // Only generated viewer pages pass here: leave authored error HTML/raw bytes
+    // alone, but never advertise a fallback file as the missing resource.
+    if (status >= 400 && !head) {
+      page = new HTMLRewriter().on('head meta[property^="og:"], head meta[name="description"], head meta[name^="twitter:"]', {
+        element(el) { el.remove(); },
+      }).transform(page);
+    }
     if (mode.rewrite && !head) page = rewriteHtml(page, mode.rewrite);
     return report && !head ? injectReportLink(page, reportUrl) : page;
   }
@@ -450,8 +589,8 @@ async function serveFile(
   // Path mode: HTML and CSS get root-relative URLs prefixed with the site base.
   const rewriteKind = mode.rewrite && !raw && !download && !precompressed(path) ? (isHtml(contentType) ? "html" : baseType(contentType) === "text/css" && size <= MAX_CSS_REWRITE_BYTES ? "css" : null) : null;
   if (rewriteKind || report) {
-    // Sandboxed pages send no Referer, so their HTML also carries the run-time shim (./path-shim).
-    const shim = rewriteKind === "html" && mode.sandbox;
+    // Sandboxed pages and private previews send no Referer, so they need runtime URL repair.
+    const shim = rewriteKind === "html" && (mode.sandbox || mode.pathShim === true);
     const etag = `W/"${rewriteKind ? "pm-" : ""}${sha256}${shim ? `-js${PATH_SHIM_VERSION}` : ""}${reportVariant}"`;
     const h = new Headers({ "Content-Type": contentType, ETag: etag, "Cache-Control": cacheControlFor(path, live) });
     if (rewriteKind) h.set("X-Kofra-Rewritten", "path-prefix");
@@ -459,7 +598,7 @@ async function serveFile(
     if (etagMatches(req, etag)) return new Response(null, { status: 304, headers: h });
     if (head) return new Response(null, { status, headers: h });
     const blob = await readBlob(dw, sha256, size);
-    if (!blob) return blobMissing(dw, req, mode, live);
+    if (!blob) return blobMissing(dw, req, mode, live, path);
     if (rewriteKind === "css" && mode.rewrite) {
       const css = blob.body ? await new Response(blob.body).text() : "";
       return new Response(rewriteCss(css, mode.rewrite), { status, headers: h });
@@ -504,19 +643,22 @@ async function serveFile(
     init.status = 206;
     if (head) return new Response(null, init);
     const body = await readBlobRange(dw, sha256, range);
-    if (!body) return blobMissing(dw, req, mode, live);
+    if (!body) return blobMissing(dw, req, mode, live, path);
     return new Response(body, init);
   }
   h.set("Content-Length", String(size));
   if (head || size === 0) return new Response(null, init);
   const blob = await readBlob(dw, sha256, size);
-  if (!blob) return blobMissing(dw, req, mode, live);
+  if (!blob) return blobMissing(dw, req, mode, live, path);
   return new Response(blob.body, init);
 }
 
-function blobMissing(dw: DropwayContext, req: Request, mode: ServeMode, live: LiveSite): Response {
+function blobMissing(dw: DropwayContext, req: Request, mode: ServeMode, live: LiveSite, path: string): Response {
   console.error(JSON.stringify({ event: "blob_missing", slug: live.slug, version: live.versionId, url: req.url }));
-  return systemResponse(dw, req, mode, live, 502, "502", "File unavailable", "This file is listed in the site but its contents could not be read. Try again shortly.");
+  // Rebuild the retry href from the serving base and the manifest path only:
+  // never copy the raw request URL or its query into the page.
+  const retry = `<p><a href="${escapeHtml(mode.base + encodePath(path))}">Try again</a></p>`;
+  return systemResponse(dw, req, mode, live, 502, "502", "File unavailable", "This file is listed in the site but its contents could not be read. Try again shortly.", retry);
 }
 
 function recordHit(dw: DropwayContext, req: Request, live: LiveSite, path: string, status: number, bytes: number, ms: number) {

@@ -68,13 +68,25 @@ export async function getSiteByRef(dc: DropwayContext, p: Principal, ref: unknow
 }
 
 /**
+ * True when a version reference means "the live version at execution time"
+ * ("live" or empty), as opposed to an explicit version id or number.
+ * Callers that resolve early must carry this intent to the service, whose
+ * fresh anchor is the only correct interpretation.
+ */
+export function isLiveVersionRef(ref: unknown): boolean {
+  if (ref === undefined || ref === null) return true;
+  const raw = String(ref).trim();
+  return raw === "" || raw.toLowerCase() === "live";
+}
+
+/**
  * Resolve a version reference on a site: "live" (or empty) for the live version,
  * "v12" or "12" for version number 12, otherwise a version id.
  */
 export async function resolveVersionRef(dc: DropwayContext, site: SiteRow, ref: unknown): Promise<VersionRow> {
   const raw = ref === undefined || ref === null ? "live" : String(ref).trim();
   const listHint = "List versions with list_versions (GET /api/v1/sites/{site}/versions).";
-  if (raw === "" || raw.toLowerCase() === "live") {
+  if (isLiveVersionRef(ref)) {
     if (!site.current_version_id) throw notFound("version_not_found", `Site ${site.slug} has no live version yet.`, "Publish files first with publish_site.");
     const v = await dc.env.DB.prepare("SELECT * FROM versions WHERE id = ?").bind(site.current_version_id).first<VersionRow>();
     if (!v) throw notFound("version_not_found", `Site ${site.slug} has no live version.`, listHint);
@@ -338,7 +350,7 @@ export async function readFileSlice(
   const offset = Math.max(0, Math.floor(Number(opts.offset ?? 0)) || 0);
   if (offset > file.size) throw badRequest("invalid_range", `offset ${offset} is past the end of the file (${file.size} bytes).`);
   const length = Math.min(READ_FILE_MAX_BYTES, Math.max(1, Math.floor(Number(opts.length ?? READ_FILE_DEFAULT_BYTES)) || READ_FILE_DEFAULT_BYTES));
-  const end = Math.min(file.size, offset + length);
+  let end = Math.min(file.size, offset + length);
   const wanted = String(opts.encoding ?? "auto");
   if (!["auto", "text", "base64"].includes(wanted)) throw badRequest("invalid_encoding", 'encoding must be "auto", "text" or "base64".');
   const textual = isTextual(file.content_type) || isHtml(file.content_type);
@@ -346,15 +358,35 @@ export async function readFileSlice(
 
   let bytes = new Uint8Array(0);
   if (end > offset) {
+    // Look ahead far enough to complete a UTF-8 code point at the page boundary.
+    const readEnd = encoding === "text" ? Math.min(file.size, end + 3) : end;
     const body =
-      offset === 0 && end === file.size ? (await readBlob(dc, file.sha256, file.size))?.body : await readBlobRange(dc, file.sha256, { offset, length: end - offset });
+      offset === 0 && readEnd === file.size ? (await readBlob(dc, file.sha256, file.size))?.body : await readBlobRange(dc, file.sha256, { offset, length: readEnd - offset });
     if (body === undefined || body === null) {
       if (file.size > 0) throw new ApiError(502, "blob_missing", "The file is listed but its contents could not be read.", "Retry shortly.", { retryable: true });
     } else {
       bytes = new Uint8Array(await new Response(body).arrayBuffer());
+      const boundary = end - offset;
+      if (encoding === "text" && boundary < bytes.length && (bytes[boundary]! & 0xc0) === 0x80) {
+        let start = boundary - 1;
+        while (start > 0 && (bytes[start]! & 0xc0) === 0x80 && boundary - start < 4) start--;
+        const lead = bytes[start]!;
+        const width = lead >= 0xc2 && lead <= 0xdf ? 2 : lead >= 0xe0 && lead <= 0xef ? 3 : lead >= 0xf0 && lead <= 0xf4 ? 4 : 0;
+        if (width && start + width > boundary && start + width <= bytes.length) {
+          try {
+            new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes.subarray(start, start + width));
+            // Extend short pages for progress, but keep the hard response cap:
+            // leave a character that would exceed it for the next page.
+            end = offset + (start + width <= READ_FILE_MAX_BYTES ? start + width : start);
+          } catch {
+            // Invalid UTF-8 retains the normal replacement-character behavior.
+          }
+        }
+      }
+      bytes = bytes.subarray(0, end - offset);
     }
   }
-  const content = encoding === "text" ? new TextDecoder().decode(bytes) : bytesToBase64(bytes);
+  const content = encoding === "text" ? new TextDecoder("utf-8", { fatal: false, ignoreBOM: offset > 0 }).decode(bytes) : bytesToBase64(bytes);
   return {
     path,
     versionId,

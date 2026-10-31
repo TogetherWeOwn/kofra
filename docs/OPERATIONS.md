@@ -80,7 +80,14 @@ remediation hint; both transports preserve it.
 - For declarative destructive confirmation, set `confirm: "name"` (or `slug`,
   `email`, `domain`) and include required string `confirm` and target fields in
   the input schema. Both generated transports reject a mismatch before execution.
-  Existing legacy REST destructive routes retain their original wire contract.
+  Legacy REST destructive routes otherwise retain their original wire contract.
+  Version deletion is an explicit breaking exception: HTTP
+  `DELETE /api/v1/sites/{slug}/versions/{id}` requires a JSON body
+  `{"confirm":"<canonical-site-slug>"}`. Its compatibility handler resolves the
+  site before comparing confirmation, so an ID/URL reference is not itself a
+  valid confirmation value. CLI, dashboard and generated SDK callers send the
+  same field; missing input fails schema validation and a mismatch returns
+  `confirm_mismatch` before any deletion.
 - An operation appears as an MCP tool unless `mcp: { exclude: "reason" }` is set.
   Raw request-body operations require an exclusion. `mcp.alwaysLoad` is available
   for essential tools. Tool filtering and the existing MCP idempotency behavior
@@ -125,6 +132,43 @@ budget. New definitions should not need adapters. Notably:
 - Member/key endpoints and site/version management retain their existing paths.
   Bootstrap setup remains REST-only. Old aliases such as `/accounts` and blob
   POST still work and are documented as deprecated aliases.
+
+### Version-action replay
+
+Restore (`POST /api/v1/sites/{slug}/versions/{id}/restore`) and version delete
+(`DELETE /api/v1/sites/{slug}/versions/{id}` with canonical-slug `confirm`) accept an
+optional REST `Idempotency-Key`; their MCP tools accept `idempotencyKey`.
+Keys are 1–255 printable ASCII characters without spaces. An explicitly empty key
+is rejected; omitting the key remains compatible but has no result-replay guarantee.
+
+Core services authorize the current credential/site and validate delete confirmation
+before consulting replay. The input hash binds the authorized immutable site ID,
+the original submitted version reference and, for deletion, confirmation. The key
+is scoped to the credential's current restrictions and operation; REST and MCP
+have independent namespaces. No target is re-resolved on a completed replay, even
+when it has since been deleted or `live`/a number now names something different.
+The original result is returned with `replayed: true`; current URLs/pointers do not
+replace the stored receipt. MCP labels replayed results as historical receipts and
+omits live resource links: a saved URL may no longer identify the same site.
+Another site's acquisition of an old slug cannot replay its previous holder's result.
+
+Changed input under the same key returns 422 `idempotency_key_reused`. Concurrent
+or unknown outcomes return 409 `idempotency_in_progress`, without another action.
+These workflows opt into `withIdempotency`'s `retainOnError`: callback errors leave
+the pending claim intact, since a D1 response or post-commit cache refresh can fail
+after the mutation. Result-persistence failure preserves the first successful
+response and its pending claim, rather than permitting re-execution. Other services
+retain their existing claim-release behavior by default.
+
+Records expire after 24 hours (completed-result retention starts on completion).
+After expiry a key may be reclaimed; this is not unlimited exactly-once execution.
+Never infer a replay receipt from a later 404 or live-pointer read. CLI and dashboard
+version actions generate a new UUID per deliberate invocation/click, do not persist
+it, and never auto-retry; a later action is fresh intent. Typed SDK actions also
+never auto-retry and can carry a caller-retained key. The SDK rejects invalid
+`idempotencyKey` options before transport, rather than replacing a valid raw header
+with an empty key; omitting the option preserves a raw `Idempotency-Key` header.
+In particular, 429 is surfaced, not presumed to prove a pre-effect refusal.
 
 Run `npm run check` and `npm run openapi:lint`. CI validates the emitted OpenAPI
 3.1 document with Redocly and requires ids, summaries, descriptions, successful

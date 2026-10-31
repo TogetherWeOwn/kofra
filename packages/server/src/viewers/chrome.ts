@@ -1,13 +1,24 @@
 import { encodePath, KIND_LABELS } from "@dropway/core";
 import { escapeHtml, formatBytes, htmlPage } from "../html";
 import type { ViewerContext } from "./index";
+import { viewerPhone } from "./phone";
+import { compareNames } from "./listing";
 import { REPORT_PRINT_CSS } from "./print";
+import { unfurlHead } from "./unfurl";
 
 /**
  * The shared frame of every viewer page: one slim bar (kind, path, size, type;
  * view tabs; Download; a link to the app-origin file browser) above the body.
  * The bar is plain links, so it works with JavaScript off.
  */
+
+/**
+ * Revision of this shared frame (bar markup and VIEWER_CSS). It is part of
+ * every full-page viewer ETag, so a chrome change retires cached pages for
+ * extension viewers using viewerPage() too, not just the built-ins whose own
+ * `version` is bumped by hand. Bump it whenever the shared output changes.
+ */
+export const VIEWER_CHROME_VERSION = 2;
 
 /** CSP for viewer pages: no scripts, so user-authored markup inside e.g. Markdown cannot execute. */
 export const VIEWER_CSP =
@@ -76,8 +87,27 @@ function crumbs(vc: ViewerContext): string {
   return out.join('<span class="dw-sep">/</span>');
 }
 
+/** Direct files in listing name order; image/SVG viewers keep their own stage navigation. */
+function siblingLinks(vc: ViewerContext): string {
+  if (vc.mode !== "source" && (vc.file.kind === "image" || vc.file.kind === "svg")) return "";
+  const slash = vc.file.path.lastIndexOf("/");
+  const dir = vc.file.path.slice(0, slash + 1);
+  const names = Object.keys(vc.live.files)
+    // .dropway/* is stored but never served, so listings (and these links) do not name it.
+    .filter((path) => path !== ".dropway" && !path.startsWith(".dropway/"))
+    .filter((path) => path.startsWith(dir) && !path.slice(dir.length).includes("/"))
+    .map((path) => path.slice(dir.length))
+    .sort(compareNames);
+  const i = names.indexOf(vc.file.path.slice(dir.length));
+  if (i < 0 || names.length < 2) return "";
+  const link = (name: string | undefined, rel: string, label: string) => name === undefined ? "" :
+    `<a href="${escapeHtml(vc.siteBase + encodePath(dir + name))}" rel="${rel}" title="${escapeHtml(name)}" aria-label="${escapeHtml(`${label}: ${name}`)}">${label}</a>`;
+  return link(names[i - 1], "prev", "Previous") + link(names[i + 1], "next", "Next");
+}
+
 export function viewerBar(vc: ViewerContext, tabs: ViewerTab[], extra = ""): string {
   if (vc.embed) return "";
+  const siblings = siblingLinks(vc);
   const kind = KIND_LABELS[vc.file.kind] ?? "File";
   const type = vc.file.contentType.split(";")[0]!;
   return `<header class="dw-vbar" role="banner">
@@ -85,7 +115,7 @@ export function viewerBar(vc: ViewerContext, tabs: ViewerTab[], extra = ""): str
 <nav class="dw-vtabs" aria-label="View">${tabs
     .map((t) => `<a href="${escapeHtml(t.href)}"${t.current ? ' aria-current="page"' : ""} rel="nofollow">${escapeHtml(t.label)}</a>`)
     .join("")}</nav>
-<nav class="dw-vact" aria-label="File">${extra}<a href="${escapeHtml(vc.downloadUrl)}" rel="nofollow" download>Download</a><a href="${escapeHtml(vc.appViewerUrl)}" rel="nofollow" title="Browse every file of this site">Files</a></nav>
+<nav class="dw-vact" aria-label="File"${siblings ? ' style="flex-wrap:wrap;flex-shrink:1;max-width:100%"' : ""}>${siblings}${extra}${viewerPhone(vc)}<a href="${escapeHtml(vc.downloadUrl)}" rel="nofollow" download>Download</a><a href="${escapeHtml(vc.appViewerUrl)}" rel="nofollow" title="Browse every file of this site">Files</a></nav>
 </header>`;
 }
 
@@ -103,8 +133,14 @@ export const VIEWER_CSS = `
 .dw-vtabs a{padding:.28rem .7rem;text-decoration:none;color:var(--muted);border-left:1px solid var(--line)}
 .dw-vtabs a:first-child{border-left:0}.dw-vtabs a:hover{color:var(--fg);background:var(--code)}
 .dw-vtabs a[aria-current]{color:var(--fg);background:var(--card);font-weight:600;box-shadow:inset 0 -2px 0 var(--accent)}
-.dw-vact{display:flex;gap:.4rem;flex:none;align-items:center}
-.dw-vact a,.dw-vact label,.dw-btn{padding:.28rem .65rem;border:1px solid var(--line);border-radius:7px;text-decoration:none;color:var(--fg);background:var(--card);cursor:pointer;font-size:.82rem;line-height:1.3;user-select:none}
+.dw-vact{display:flex;gap:.4rem;flex:none;align-items:center;flex-wrap:wrap;max-width:100%}
+.dw-phone summary{list-style:none}.dw-phone summary::-webkit-details-marker{display:none}
+.dw-phone summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.dw-vbar:has(.dw-phone[open]){position:relative}
+.dw-phone-panel{position:absolute;right:.6rem;top:100%;width:min(20rem,calc(100vw - 1.2rem));box-sizing:border-box;padding:1rem;border:1px solid var(--line);border-radius:8px;background:var(--card);box-shadow:0 .5rem 1.5rem #0003}
+.dw-phone-panel p{margin:0 0 .75rem}.dw-phone-panel svg{display:block;max-width:100%;height:auto;margin:0 auto .75rem}
+.dw-vact .dw-phone-panel a{display:block;overflow-wrap:anywhere;white-space:normal;padding:0;border:0;border-radius:0;background:none;color:var(--accent);text-decoration:underline;user-select:text}
+.dw-vact a,.dw-vact label,.dw-phone summary,.dw-btn{padding:.28rem .65rem;border:1px solid var(--line);border-radius:7px;text-decoration:none;color:var(--fg);background:var(--card);cursor:pointer;font-size:.82rem;line-height:1.3;user-select:none}
 .dw-vact a:hover,.dw-vact label:hover,.dw-btn:hover{border-color:var(--accent);color:var(--accent)}
 .dw-toggle{position:absolute;opacity:0;pointer-events:none}
 .dw-toggle:focus-visible+label{outline:2px solid var(--accent);outline-offset:2px}
@@ -120,10 +156,17 @@ export function viewerPage(
   vc: ViewerContext,
   opts: { title?: string; body: string; css?: string; print?: boolean; tabs: ViewerTab[]; barExtra?: string; csp?: string; script?: string; headers?: Record<string, string> },
 ): Response {
+  const title = opts.title ?? `${vc.file.path.split("/").pop()} · ${vc.live.slug}`;
   const page = htmlPage({
-    title: opts.title ?? `${vc.file.path.split("/").pop()} · ${vc.live.slug}`,
+    title,
     css: VIEWER_CSS + (opts.css ?? "") + (opts.print ? REPORT_PRINT_CSS : ""),
-    head: '<meta name="robots" content="noindex">',
+    head: unfurlHead({
+      title,
+      description: `${KIND_LABELS[vc.file.kind] ?? "File"} · ${formatBytes(vc.file.size)} · ${vc.file.contentType.split(";")[0]}`,
+      // Live badge.svg is reserved for provider status; previews serve the uploaded path directly.
+      url: vc.url.origin + vc.siteBase + (!vc.preview && vc.file.path === "badge.svg" ? "" : encodePath(vc.file.path)),
+      image: vc.file.kind === "image",
+    }),
     // File path only: never copy request/capability URLs into printed context, even when embedded.
     body: viewerBar(vc, opts.tabs, opts.barExtra) + (opts.print ? `<p class="dw-print-title">${escapeHtml(vc.file.path)}</p>` : "") + opts.body + (opts.script ? `<script>${opts.script}</script>` : ""),
   });

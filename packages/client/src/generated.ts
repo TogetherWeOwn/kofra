@@ -17,21 +17,25 @@ export interface WhoamiOutput {
 }
 
 export interface PublishSiteInput {
-  /** Every file of the site. */
-  files: ({
-    /** Path inside the site, e.g. "index.html" or "docs/guide.md". */
-    path: string;
-    /** Text (encoding "utf8", up to 1 MB) or base64 bytes (up to 256 KB). For bigger/binary files prefer url or sha256. */
+  /** Every file of the site. Omit when archiveUrl is given. */
+  files?: ({
+    /** Path in the site, e.g. "index.html", "assets/app.js". Omit for attachments. */
+    path?: string;
+    /** Attachment URL (public https, like url); pair with file_name. */
+    download_url?: string;
+    /** Attachment name; becomes the path. */
+    file_name?: string;
+    /** Inline: "utf8" up to 1 MB, "base64" up to 256 KB; prefer url/sha256 when bigger or binary. */
     content?: string;
-    /** Default "utf8". */
+    /** Content encoding. Default "utf8". */
     encoding?: "utf8" | "base64";
     /** Public https URL (URL_FETCH_MAX_BYTES default 100 MiB; 30 s, 3 redirects; other caps). */
     url?: string;
-    /** Headers for the url download, e.g. Authorization; used once, never stored. */
+    /** Headers for the url download; used once, never stored. */
     headers?: Record<string, string>;
-    /** Hex SHA-256 of the bytes. Stored: reused at once. Not stored: the result lists an upload link (PUT, then finalize_version). */
+    /** Hex SHA-256. Stored bytes are reused; otherwise an upload link is returned (PUT, then finalize_version). */
     sha256?: string;
-    /** Bytes; required with sha256 if not stored yet. */
+    /** Bytes; required with an unstored sha256. */
     size?: number;
     /** Copy a published file: site you can read (default: this site), version (default: live), path (default: same). */
     copyFrom?: {
@@ -44,6 +48,8 @@ export interface PublishSiteInput {
     /** MIME type; default from extension. */
     contentType?: string;
   })[];
+  /** Public https .zip to unpack, instead of files (never both). */
+  archiveUrl?: string;
   /** Optional. Slug, id or URL of your existing site to replace, or a new slug (3-56 chars: a-z, 0-9, single hyphens). */
   site?: string;
   /** Title shown in lists. */
@@ -69,7 +75,7 @@ export interface PublishSiteOutput {
   /** Live URL. Share it exactly as returned. */
   url: string;
   slug: string;
-  /** Dashboard link pinned by version id. */
+  /** 24 h signed preview; bearer capability. */
   versionUrl?: string;
   site?: {
     slug: string;
@@ -95,7 +101,11 @@ export interface PublishSiteOutput {
 
 export interface UpdateSiteFilesInput {
   files?: ({
-    path: string;
+    path?: string;
+    /** Chat attachment URL fetched like url; pair with file_name. */
+    download_url?: string;
+    /** Chat attachment file name; becomes the path. */
+    file_name?: string;
     content?: string;
     encoding?: "utf8" | "base64";
     /** Public https URL the server downloads. */
@@ -129,7 +139,7 @@ export interface UpdateSiteFilesOutput {
   status?: "live" | "unchanged" | "awaiting_upload";
   url?: string;
   slug?: string;
-  /** Owner dashboard link pinned to the exact version id; requires the owner's API key in the dashboard. */
+  /** 24 h signed preview; bearer capability. */
   versionUrl?: string;
   site?: {
     slug?: string;
@@ -682,6 +692,8 @@ export interface GetVersionOutput {
 export interface DeleteVersionInput {
   slug: string;
   id: string;
+  /** Must equal the site's slug (destructive confirmation). */
+  confirm: string;
   [key: string]: unknown;
 }
 
@@ -694,6 +706,80 @@ export interface ExportVersionInput {
 }
 
 export type ExportVersionOutput = Record<string, unknown>;
+
+export interface CreateMultipartUploadInput {
+  /** Pending version id returned with status awaiting_upload. */
+  versionId: string;
+  /** SHA-256 of the whole file, as listed in the pending manifest. */
+  sha256: string;
+  /** Part size in bytes, 10485760-99614720; default 52428800. */
+  partSize?: number;
+}
+
+export interface CreateMultipartUploadOutput {
+  id: string;
+  versionId?: string;
+  sha256: string;
+  size: number;
+  partSize: number;
+  parts: {
+    partNumber: number;
+    size: number;
+    etag: string;
+    [key: string]: unknown;
+  }[];
+  status?: string;
+  expiresAt?: string;
+  [key: string]: unknown;
+}
+
+export interface GetMultipartUploadInput {
+  /** Upload session id from POST /api/v1/uploads. */
+  id: string;
+}
+
+export interface GetMultipartUploadOutput {
+  id: string;
+  versionId?: string;
+  sha256: string;
+  size: number;
+  partSize: number;
+  parts: {
+    partNumber: number;
+    size: number;
+    etag: string;
+    [key: string]: unknown;
+  }[];
+  status?: string;
+  expiresAt?: string;
+  [key: string]: unknown;
+}
+
+export interface UploadMultipartPartInput {
+  id: string;
+  /** One-based part number. */
+  partNumber: number;
+}
+
+export interface UploadMultipartPartOutput {
+  partNumber: number;
+  size: number;
+  etag: string;
+  [key: string]: unknown;
+}
+
+export interface CompleteMultipartUploadInput {
+  id: string;
+  /** Ignored; the server uses its acknowledged parts. */
+  parts?: Record<string, unknown>[];
+}
+
+export interface CompleteMultipartUploadOutput {
+  sha256: string;
+  size: number;
+  stored?: boolean;
+  [key: string]: unknown;
+}
 
 export interface ListApiKeysInput {
   all?: "1" | "true";
@@ -780,8 +866,12 @@ export interface PublishUploadInput {
   slug?: string;
   /** Existing site ref or new slug. */
   site?: string;
-  files: ({
-    path: string;
+  files?: ({
+    path?: string;
+    /** Chat attachment URL fetched like url; pair with file_name. */
+    download_url?: string;
+    /** Chat attachment file name; becomes the path. */
+    file_name?: string;
     content?: string;
     encoding?: "utf8" | "base64";
     /** Public https URL the server downloads. */
@@ -798,6 +888,8 @@ export interface PublishUploadInput {
     contentType?: string;
     [key: string]: unknown;
   })[];
+  /** JSON only: public https .zip URL to publish instead of files. */
+  archiveUrl?: string;
   message?: string;
   baseVersionId?: string;
   title?: string | null;
@@ -818,7 +910,7 @@ export type PublishUploadOutput = {
   status?: "live" | "unchanged" | "awaiting_upload";
   url?: string;
   slug?: string;
-  /** Owner dashboard link pinned to the exact version id; requires the owner's API key in the dashboard. */
+  /** 24 h signed preview; bearer capability. */
   versionUrl?: string;
   site?: {
     slug?: string;
@@ -893,6 +985,8 @@ export type PublishUploadOutput = {
 } | {
   url?: string;
   slug?: string;
+  /** Signed exact-version preview link, valid for 24 hours. */
+  versionUrl?: string;
   created?: boolean;
   unchanged?: boolean;
   site?: {
@@ -1122,7 +1216,7 @@ export const OPERATIONS = {
   "list_files": { method: "GET", path: "/api/v1/sites/{slug}/files", summary: "List files" },
   "read_file": { method: "GET", path: "/api/v1/read-file", summary: "Read a file" },
   "list_versions": { method: "GET", path: "/api/v1/sites/{slug}/versions", summary: "List versions" },
-  "restore_version": { method: "POST", path: "/api/v1/sites/{slug}/versions/{id}/restore", summary: "Restore a version" },
+  "restore_version": { method: "POST", path: "/api/v1/sites/{slug}/versions/{id}/restore", summary: "Restore version" },
   "update_site_settings": { method: "PATCH", path: "/api/v1/sites/{slug}", summary: "Change site settings" },
   "set_site_access": { method: "PUT", path: "/api/v1/sites/{slug}/access", summary: "Set who can open a site" },
   "delete_site": { method: "DELETE", path: "/api/v1/sites/{slug}", summary: "Delete a site" },
@@ -1132,8 +1226,12 @@ export const OPERATIONS = {
   "duplicate_site": { method: "POST", path: "/api/v1/sites/{site}/duplicate", summary: "Duplicate a site's live version into a new slug" },
   "release_slug": { method: "POST", path: "/api/v1/slugs/release", summary: "Release a held site name early" },
   "get_version": { method: "GET", path: "/api/v1/sites/{slug}/versions/{id}", summary: "Get a version" },
-  "delete_version": { method: "DELETE", path: "/api/v1/sites/{slug}/versions/{id}", summary: "Delete a version" },
+  "delete_version": { method: "DELETE", path: "/api/v1/sites/{slug}/versions/{id}", summary: "Delete version" },
   "export_version": { method: "GET", path: "/api/v1/sites/{slug}/versions/{version}/export", summary: "Download a version as a ZIP" },
+  "create_multipart_upload": { method: "POST", path: "/api/v1/uploads", summary: "Start or resume a multipart upload" },
+  "get_multipart_upload": { method: "GET", path: "/api/v1/uploads/{id}", summary: "Show a resumable upload's acknowledged parts" },
+  "upload_multipart_part": { method: "PUT", path: "/api/v1/uploads/{id}/parts/{partNumber}", summary: "Upload one part's raw bytes" },
+  "complete_multipart_upload": { method: "POST", path: "/api/v1/uploads/{id}/complete", summary: "Complete and verify a resumable upload" },
   "list_api_keys": { method: "GET", path: "/api/v1/keys", summary: "List API keys" },
   "create_api_key": { method: "POST", path: "/api/v1/keys", summary: "Create an API key" },
   "revoke_api_key": { method: "DELETE", path: "/api/v1/keys/{id}", summary: "Revoke an API key" },
@@ -1196,9 +1294,9 @@ export class DropwayClient extends DropwayHttpClient {
   async listVersions(input: ListVersionsInput, opts?: CallOptions): Promise<ListVersionsOutput> {
     return this.call<ListVersionsInput, ListVersionsOutput>(OPERATIONS["list_versions"], input, opts);
   }
-  /** Restore a version */
+  /** Restore version */
   async restoreVersion(input: RestoreVersionInput, opts?: CallOptions): Promise<RestoreVersionOutput> {
-    return this.call<RestoreVersionInput, RestoreVersionOutput>(OPERATIONS["restore_version"], input, opts);
+    return this.call<RestoreVersionInput, RestoreVersionOutput>(OPERATIONS["restore_version"], input, { ...opts, retry: "none" });
   }
   /** Change site settings */
   async updateSiteSettings(input: UpdateSiteSettingsInput, opts?: CallOptions): Promise<UpdateSiteSettingsOutput> {
@@ -1236,13 +1334,29 @@ export class DropwayClient extends DropwayHttpClient {
   async getVersion(input: GetVersionInput, opts?: CallOptions): Promise<GetVersionOutput> {
     return this.call<GetVersionInput, GetVersionOutput>(OPERATIONS["get_version"], input, opts);
   }
-  /** Delete a version */
+  /** Delete version */
   async deleteVersion(input: DeleteVersionInput, opts?: CallOptions): Promise<DeleteVersionOutput> {
-    return this.call<DeleteVersionInput, DeleteVersionOutput>(OPERATIONS["delete_version"], input, opts);
+    return this.call<DeleteVersionInput, DeleteVersionOutput>(OPERATIONS["delete_version"], input, { ...opts, retry: "none" });
   }
   /** Download a version as a ZIP */
   async exportVersion(input: ExportVersionInput, opts?: CallOptions): Promise<BytesResult> {
     return this.callBytes(OPERATIONS["export_version"], input, opts);
+  }
+  /** Start or resume a multipart upload */
+  async createMultipartUpload(input: CreateMultipartUploadInput, opts?: CallOptions): Promise<CreateMultipartUploadOutput> {
+    return this.call<CreateMultipartUploadInput, CreateMultipartUploadOutput>(OPERATIONS["create_multipart_upload"], input, opts);
+  }
+  /** Show a resumable upload's acknowledged parts */
+  async getMultipartUpload(input: GetMultipartUploadInput, opts?: CallOptions): Promise<GetMultipartUploadOutput> {
+    return this.call<GetMultipartUploadInput, GetMultipartUploadOutput>(OPERATIONS["get_multipart_upload"], input, opts);
+  }
+  /** Upload one part's raw bytes */
+  async uploadMultipartPart(input: UploadMultipartPartInput, body: Uint8Array | ArrayBuffer | Blob | string, opts?: CallOptions): Promise<UploadMultipartPartOutput> {
+    return this.callRaw<UploadMultipartPartInput, UploadMultipartPartOutput>(OPERATIONS["upload_multipart_part"], input, body, opts);
+  }
+  /** Complete and verify a resumable upload */
+  async completeMultipartUpload(input: CompleteMultipartUploadInput, opts?: CallOptions): Promise<CompleteMultipartUploadOutput> {
+    return this.call<CompleteMultipartUploadInput, CompleteMultipartUploadOutput>(OPERATIONS["complete_multipart_upload"], input, opts);
   }
   /** List API keys */
   async listApiKeys(input: ListApiKeysInput, opts?: CallOptions): Promise<ListApiKeysOutput> {

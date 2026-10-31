@@ -1,0 +1,283 @@
+import { describe, expect, it } from "vitest";
+import { VIEWERS, type Viewer } from "@dropway/server";
+import { form, freshInstance } from "./helpers";
+
+// RFC 9110 entity-tag: quotes delimit the opaque tag; embedded quotes, controls
+// and code points outside obs-text cannot appear inside it.
+const ENTITY_TAG = /^(?:W\/)?"[\x21\x23-\x7e\x80-\xff]*"$/;
+
+describe("extension viewer ETag contract", () => {
+  it.each([false, true])("refreshes pre-chrome and chrome1 extension tags, then revalidates manifest-bound chrome2 (embed=%s)", async (embed) => {
+    const viewer: Viewer = {
+      id: "extension-chrome", version: 7, maxBytes: 1024,
+      matches: (file) => file.path === "fixture.txt",
+      etagExtra: () => "-layout-2",
+      async render(context) {
+        return new Response(`Extension page: ${await context.readText()}`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      },
+    };
+    const dw = await freshInstance({}, { viewers: [viewer] });
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey,
+      body: form({ "fixture.txt": "hello" }, { slug: "extension-chrome" }),
+    });
+    expect(published.status).toBe(201);
+    const path = `/s/extension-chrome/fixture.txt?view=1${embed ? "&embed=1" : ""}`;
+    const identity = "extension-chrome@7-2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824-layout-2";
+    const folder = `-folder${published.body.version.id}`;
+    const suffix = embed ? "-e" : "";
+    // Historical embeds omitted the manifest; keep both predecessor shapes
+    // independent of the current chrome2/manifest-bound contract.
+    const legacyFolder = embed ? "" : folder;
+    const predecessors = [
+      `W/"${identity}${legacyFolder}${suffix}"`,
+      `W/"${identity}${legacyFolder}-chrome1${suffix}"`,
+    ];
+    const current = `W/"${identity}${folder}-chrome2${suffix}"`;
+    for (const legacy of predecessors) {
+      const refreshed = await dw.call(path, { headers: { "If-None-Match": legacy } });
+      expect(refreshed.status, "pre-chrome and chrome1 cached extension pages must refresh").toBe(200);
+      expect(refreshed.headers.get("x-kofra-viewer")).toBe("extension-chrome");
+      expect(refreshed.headers.get("etag")).toBe(current);
+      expect(await refreshed.text()).toBe("Extension page: hello");
+    }
+    const revalidated = await dw.call(path, { headers: { "If-None-Match": current } });
+    expect(revalidated.status).toBe(304);
+    expect(revalidated.headers.get("etag")).toBe(current);
+    expect(await revalidated.text()).toBe("");
+  });
+
+  it.each([
+    { name: "ordinary identity", extra: "revision-1", changed: "revision-2" },
+    { name: "quote", extra: 'quote"value', changed: "quote%22value" },
+    { name: "CR/LF", extra: "line\r\nbreak", changed: "line%0D%0Abreak" },
+    { name: "percent", extra: "100%", changed: "100%25" },
+    { name: "Unicode", extra: "café雪", changed: "caf%C3%A9%E9%9B%AA" },
+    { name: "astral", extra: "\u{1F600}", changed: "%F0%9F%98%80", encodedExtra: "%F0%9F%98%80" },
+    { name: "combined characters", extra: 'quote"\r\n100%雪', changed: "quote%22%0D%0A100%25%E9%9B%AA" },
+  ])("renders and revalidates $name without losing extra identity", async ({ extra, changed, encodedExtra }) => {
+    let identity = extra;
+    const viewer: Viewer = {
+      id: "contract-etag", version: 1, maxBytes: 1024,
+      matches: (file) => file.path === "fixture.txt",
+      etagExtra: () => identity,
+      async render(context) {
+        return new Response(`Contract view: ${await context.readText()} / ${identity}`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      },
+    };
+    const dw = await freshInstance({}, { viewers: [viewer] });
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey,
+      body: form({ "fixture.txt": "hello" }, { slug: "extension-etag" }),
+    });
+    expect(published.status).toBe(201);
+
+    const path = "/s/extension-etag/fixture.txt?view=1";
+    const first = await dw.call(path);
+    expect(first.status).toBe(200);
+    expect(first.headers.get("x-kofra-viewer")).toBe("contract-etag");
+    expect(await first.text()).toBe(`Contract view: hello / ${extra}`);
+    const etag = first.headers.get("etag");
+    expect(etag).toMatch(ENTITY_TAG);
+    if (encodedExtra) expect(etag).toContain(encodedExtra);
+
+    const unchanged = await dw.call(path, { headers: { "If-None-Match": etag! } });
+    expect(unchanged.status).toBe(304);
+    expect(unchanged.headers.get("etag")).toBe(etag);
+    expect(await unchanged.text()).toBe("");
+
+    // Literal percent escapes are a different identity, not an already-encoded
+    // form of the first one. The file, viewer id and viewer version stay fixed.
+    identity = changed;
+    const updated = await dw.call(path, { headers: { "If-None-Match": etag! } });
+    expect(updated.status).toBe(200);
+    expect(await updated.text()).toBe(`Contract view: hello / ${changed}`);
+    const nextEtag = updated.headers.get("etag");
+    expect(nextEtag).toMatch(ENTITY_TAG);
+    expect(nextEtag).not.toBe(etag);
+    const revalidated = await dw.call(path, { headers: { "If-None-Match": nextEtag! } });
+    expect(revalidated.status).toBe(304);
+    expect(revalidated.headers.get("etag")).toBe(nextEtag);
+  });
+
+  it("keeps a quoted custom viewer id inside one valid entity-tag", async () => {
+    const viewer: Viewer = {
+      id: 'contract"viewer', version: 1, maxBytes: 1024,
+      matches: (file) => file.path === "fixture.txt",
+      async render(context) {
+        return new Response(`Contract view: ${await context.readText()}`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      },
+    };
+    const dw = await freshInstance({}, { viewers: [viewer] });
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey,
+      body: form({ "fixture.txt": "hello" }, { slug: "quoted-viewer" }),
+    });
+    expect(published.status).toBe(201);
+    const path = "/s/quoted-viewer/fixture.txt?view=1";
+    const rendered = await dw.call(path);
+    expect(rendered.status).toBe(200);
+    expect(rendered.headers.get("x-kofra-viewer")).toBe('contract"viewer');
+    expect(await rendered.text()).toBe("Contract view: hello");
+    const etag = rendered.headers.get("etag");
+    expect(etag).toMatch(ENTITY_TAG);
+    const revalidated = await dw.call(path, { headers: { "If-None-Match": etag! } });
+    expect(revalidated.status).toBe(304);
+    expect(revalidated.headers.get("etag")).toBe(etag);
+  });
+
+  it("renders when etagExtra holds a lone surrogate, normalized to U+FFFD", async () => {
+    const viewer: Viewer = {
+      id: "contract-etag", version: 1, maxBytes: 1024,
+      matches: (file) => file.path === "fixture.txt",
+      etagExtra: () => "x\ud800y",
+      async render(context) {
+        return new Response(`Contract view: ${await context.readText()}`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      },
+    };
+    const dw = await freshInstance({}, { viewers: [viewer] });
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey,
+      body: form({ "fixture.txt": "hello" }, { slug: "surrogate-extra" }),
+    });
+    expect(published.status).toBe(201);
+    const path = "/s/surrogate-extra/fixture.txt?view=1";
+    const rendered = await dw.call(path);
+    expect(rendered.status).toBe(200);
+    expect(await rendered.text()).toBe("Contract view: hello");
+    const etag = rendered.headers.get("etag");
+    expect(etag).toMatch(ENTITY_TAG);
+    expect(etag).toContain("x%EF%BF%BDy");
+    const revalidated = await dw.call(path, { headers: { "If-None-Match": etag! } });
+    expect(revalidated.status).toBe(304);
+    expect(revalidated.headers.get("etag")).toBe(etag);
+    expect(await revalidated.text()).toBe("");
+  });
+
+  it("renders when the custom viewer id holds a lone surrogate", async () => {
+    const viewer: Viewer = {
+      id: "bad\ud800viewer", version: 1, maxBytes: 1024,
+      matches: (file) => file.path === "fixture.txt",
+      async render(context) {
+        return new Response(`Contract view: ${await context.readText()}`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      },
+    };
+    const dw = await freshInstance({}, { viewers: [viewer] });
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey,
+      body: form({ "fixture.txt": "hello" }, { slug: "surrogate-viewer" }),
+    });
+    expect(published.status).toBe(201);
+    const path = "/s/surrogate-viewer/fixture.txt?view=1";
+    const rendered = await dw.call(path);
+    expect(rendered.status).toBe(200);
+    expect(await rendered.text()).toBe("Contract view: hello");
+    const etag = rendered.headers.get("etag");
+    expect(etag).toMatch(ENTITY_TAG);
+    const revalidated = await dw.call(path, { headers: { "If-None-Match": etag! } });
+    expect(revalidated.status).toBe(304);
+    expect(revalidated.headers.get("etag")).toBe(etag);
+  });
+
+  it("renders when the custom viewer id holds a newline, without leaking it in viewer headers", async () => {
+    const viewer: Viewer = {
+      id: "bad\nviewer", version: 1, maxBytes: 1024,
+      matches: (file) => file.path === "fixture.txt",
+      async render(context) {
+        return new Response(`Contract view: ${await context.readText()}`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      },
+    };
+    const dw = await freshInstance({}, { viewers: [viewer] });
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey,
+      body: form({ "fixture.txt": "hello" }, { slug: "newline-viewer" }),
+    });
+    expect(published.status).toBe(201);
+    const path = "/s/newline-viewer/fixture.txt?view=1";
+    const rendered = await dw.call(path);
+    expect(rendered.status).toBe(200);
+    expect(rendered.headers.get("x-kofra-viewer")).toBeNull();
+    expect(rendered.headers.get("x-dropway-viewer")).toBeNull(); // rebrand:keep
+    expect(await rendered.text()).toBe("Contract view: hello");
+    const etag = rendered.headers.get("etag");
+    expect(etag).toMatch(ENTITY_TAG);
+    const revalidated = await dw.call(path, { headers: { "If-None-Match": etag! } });
+    expect(revalidated.status).toBe(304);
+    expect(revalidated.headers.get("etag")).toBe(etag);
+  });
+
+  it("renders when the custom viewer id holds a lone CR, without viewer headers", async () => {
+    const viewer: Viewer = {
+      id: "bad\rviewer", version: 1, maxBytes: 1024,
+      matches: (file) => file.path === "fixture.txt",
+      async render(context) {
+        return new Response(`Contract view: ${await context.readText()}`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      },
+    };
+    const dw = await freshInstance({}, { viewers: [viewer] });
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey,
+      body: form({ "fixture.txt": "hello" }, { slug: "cr-viewer" }),
+    });
+    expect(published.status).toBe(201);
+    const path = "/s/cr-viewer/fixture.txt?view=1";
+    const rendered = await dw.call(path);
+    expect(rendered.status).toBe(200);
+    expect(rendered.headers.get("x-kofra-viewer")).toBeNull();
+    expect(rendered.headers.get("x-dropway-viewer")).toBeNull(); // rebrand:keep
+    expect(await rendered.text()).toBe("Contract view: hello");
+    const etag = rendered.headers.get("etag");
+    expect(etag).toMatch(ENTITY_TAG);
+    const revalidated = await dw.call(path, { headers: { "If-None-Match": etag! } });
+    expect(revalidated.status).toBe(304);
+    expect(revalidated.headers.get("etag")).toBe(etag);
+    expect(await revalidated.text()).toBe("");
+  });
+
+  it("renders when the custom viewer id holds a NUL, without viewer headers", async () => {
+    const viewer: Viewer = {
+      id: "bad\u0000viewer", version: 1, maxBytes: 1024,
+      matches: (file) => file.path === "fixture.txt",
+      async render(context) {
+        return new Response(`Contract view: ${await context.readText()}`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      },
+    };
+    const dw = await freshInstance({}, { viewers: [viewer] });
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey,
+      body: form({ "fixture.txt": "hello" }, { slug: "nul-viewer" }),
+    });
+    expect(published.status).toBe(201);
+    const rendered = await dw.call("/s/nul-viewer/fixture.txt?view=1");
+    expect(rendered.status).toBe(200);
+    expect(rendered.headers.get("x-kofra-viewer")).toBeNull();
+    expect(rendered.headers.get("x-dropway-viewer")).toBeNull(); // rebrand:keep
+    expect(await rendered.text()).toBe("Contract view: hello");
+    expect(rendered.headers.get("etag")).toMatch(ENTITY_TAG);
+  });
+
+  it("keeps built-in viewer identity and folder bytes before the shared chrome version", async () => {
+    const dw = await freshInstance();
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey,
+      body: form({ "fixture.txt": "hello" }, { slug: "builtin-etag" }),
+    });
+    expect(published.status).toBe(201);
+    const path = "/s/builtin-etag/fixture.txt?view=1";
+    const rendered = await dw.call(path);
+    expect(rendered.status).toBe(200);
+    expect(rendered.headers.get("x-kofra-viewer")).toBe("code");
+    // Derive the viewer and folder versions from the registry and publish
+    // response; the id and extra bytes around them must stay unescaped.
+    const code = VIEWERS.find((viewer) => viewer.id === "code");
+    expect(code).toBeDefined();
+    const versionId = published.body.version.id;
+    expect(versionId).toEqual(expect.any(String));
+    const etag = `W/"code@${code!.version ?? 1}-2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824-folder${versionId}-chrome2"`;
+    expect(rendered.headers.get("etag")).toBe(etag);
+    expect(etag).toMatch(/^W\/"code@\d+-[0-9a-f]{64}-folder[^"\s]+-chrome2"$/);
+    const revalidated = await dw.call(path, { headers: { "If-None-Match": etag } });
+    expect(revalidated.status).toBe(304);
+    expect(revalidated.headers.get("etag")).toBe(etag);
+  });
+});
