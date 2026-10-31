@@ -87,19 +87,25 @@ describe("scoped API keys and members", () => {
     await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, body: form({ "index.html": "a" }, { slug: "site-one" }) });
     const other = await dw.json("/api/v1/members", { key: dw.ownerKey, ...jsonBody({ email: "dev@example.com", role: "member" }) });
     const otherKeyId = other.body.apiKey.id;
-    // Default scopes ("*") on a site key leave out members:write and admin; asking for them is refused.
+    // A site key leaves out members:write and admin, by default ("*") and when they are asked for
+    // (the dashboard sends every scope it shows as checked).
     const k = await dw.json("/api/v1/keys", { key: dw.ownerKey, ...jsonBody({ name: "site-all", site: "site-one" }) });
     expect(k.status).toBe(201);
     expect(k.body.scopes).not.toContain("members:write");
     expect(k.body.scopes).not.toContain("admin");
-    for (const scope of ["members:write", "admin"]) {
-      const r = await dw.json("/api/v1/keys", { key: dw.ownerKey, ...jsonBody({ site: "site-one", scopes: [scope] }) });
-      expect(r.status, scope).toBe(403);
-      expect(r.body.error.code).toBe("scope_not_grantable");
-    }
+    const asked = await dw.json("/api/v1/keys", { key: dw.ownerKey, ...jsonBody({ site: "site-one", scopes: ["sites:read", "members:write", "admin"] }) });
+    expect(asked.status, JSON.stringify(asked.body)).toBe(201);
+    expect(asked.body.scopes).toEqual(["sites:read"]);
+    const only = await dw.json("/api/v1/keys", { key: dw.ownerKey, ...jsonBody({ site: "site-one", scopes: ["admin"] }) });
+    expect(only.status).toBe(400);
+    expect(only.body.error.code).toBe("invalid_scope");
     // A site key stored with tenant scopes (e.g. minted before this rule) still cannot use them.
     await env.DB.prepare("UPDATE api_keys SET scopes = ? WHERE id = ?").bind(ALL_SCOPES.join(" "), k.body.id).run();
     const siteKey = k.body.key;
+    // Listings report what the key can use, not the stored tenant scopes.
+    const listed = (await dw.json("/api/v1/keys", { key: dw.ownerKey })).body.keys.find((x: { id: string }) => x.id === k.body.id);
+    expect(listed.scopes).not.toContain("members:write");
+    expect(listed.scopes).not.toContain("admin");
     expect((await dw.json("/api/v1/members", { key: siteKey, ...jsonBody({ email: "x@example.com", role: "admin" }) })).status).toBe(403);
     const patch = await dw.json(`/api/v1/members/${other.body.member.id}`, { ...jsonBody({ role: "admin" }), method: "PATCH", key: siteKey });
     expect(patch.status, JSON.stringify(patch.body)).toBe(403);

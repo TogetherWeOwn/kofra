@@ -40,7 +40,7 @@ export function serializeKey(k: ApiKeyRow, currentKeyId?: string | null) {
     name: k.name,
     prefix: k.prefix,
     memberId: k.member_id,
-    scopes: deserializeScopes(k.scopes),
+    scopes: siteKeyScopes(deserializeScopes(k.scopes), k.site_id),
     siteId: k.site_id,
     current: currentKeyId ? k.id === currentKeyId : undefined,
     createdAt: iso(k.created_at),
@@ -109,11 +109,11 @@ export async function createApiKey(
     if (!site || (caller.siteId && caller.siteId !== site.id)) throw notFound("site_not_found", `No site "${String(input.site)}" in this tenant.`);
     siteId = site.id;
   }
-  // A key can never be wider than the caller's key, nor than the target member's role,
-  // and a key restricted to one site gets no tenant-wide scopes.
-  const grantable = siteKeyScopes(caller.scopes.filter((s) => ROLE_SCOPES[memberRole].includes(s)), siteId);
-  const scopes = parseScopes(input.scopes, grantable);
-  if (scopes.length === 0) throw badRequest("invalid_scope", "A key needs at least one scope.");
+  // A key can never be wider than the caller's key, nor than the target member's role.
+  // A key restricted to one site drops tenant-wide scopes, even when they are asked for.
+  const grantable = caller.scopes.filter((s) => ROLE_SCOPES[memberRole].includes(s));
+  const scopes = siteKeyScopes(parseScopes(input.scopes, grantable), siteId);
+  if (scopes.length === 0) throw badRequest("invalid_scope", "A key needs at least one scope.", siteId ? "A key restricted to one site cannot hold members:write or admin." : undefined);
 
   let expiresAt: number | null = null;
   if (input.expiresInDays !== undefined && input.expiresInDays !== null) {
