@@ -45,7 +45,8 @@ jobs:
 
   # The slow suites of `npm test`, run in parallel instead of one after another: the
   # Workers-runtime tests (D1, R2, KV emulated) and the CLI and browser-code tests, which
-  # drive Chromium through Playwright against a local Worker.
+  # drive Chromium through Playwright against a local Worker. The CLI suite is the slowest
+  # (~9 min alone), so it is split into two vitest shards.
   test:
     name: test (${{ matrix.suite }})
     runs-on: ubuntu-latest
@@ -57,8 +58,11 @@ jobs:
         include:
           - suite: workers
             script: test:workers
-          - suite: cli
-            script: test:cli
+          - suite: cli 1/2
+            script: test:cli -- --shard=1/2
+            browser: true
+          - suite: cli 2/2
+            script: test:cli -- --shard=2/2
             browser: true
           - suite: browser-code
             script: test:browser-code
