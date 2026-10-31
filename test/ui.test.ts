@@ -186,6 +186,11 @@ describe("UI slots for embedding apps", () => {
     expect(html).toContain('<div class="dw-account" id="dw-account"><a class="dw-btn-link" href="/signin">Sign in</a></div>');
     const login = await (await dw.call("/login?next=/dashboard/publish")).text();
     expect(login).toContain('href="/signin?next=%2Fdashboard%2Fpublish">Sign in with your account</a>');
+    // An off-origin next is dropped rather than handed to the embedding app's sign-in.
+    for (const next of ["//evil.test/", "/\\evil.test/", "/\t/evil.test/", "https://evil.test/"]) {
+      const offOrigin = await (await dw.call(`/login?next=${encodeURIComponent(next)}`)).text();
+      expect(offOrigin).toContain('href="/signin">Sign in with your account</a>');
+    }
     // Without the slot nothing changes.
     const plain = await freshInstance();
     const plainHtml = await (await plain.call("/dashboard")).text();
