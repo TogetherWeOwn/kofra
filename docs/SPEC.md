@@ -1120,7 +1120,7 @@ are sampled, not written one by one. Reads use the SQL API when the operator set
 - D1 has a hard 10 GB cap per database. `version_files` grows with versions x files. When the database
   passes about 2 GB, R-44 moves file lists to immutable `manifests/<versionId>.json` in R2 and keeps only
   blob reference counts in D1.
-- Deleted sites are soft-deleted (`deleted_at`), purged by the first hourly cron run once they are 1 h old (so 1 to 2 h); blobs no scope
+- Deleted sites are soft-deleted (`deleted_at`), purged by the hourly cron once they are over 1 h old (25 per run); blobs no scope
   references are deleted after a grace period.
 - Anonymous sites are deleted at `expires_at`.
 - Idempotency keys 24 h; email codes and login links 15 min; jobs 30 days; audit log kept unless the
@@ -1757,8 +1757,7 @@ grant more than they hold. Keys can be limited to one site and, for drives, a pa
   write-only through every surface, and are injected only into proxy requests to pinned upstreams.
 - **Agent mistakes.** `confirm` on destructive MCP tools, `--yes` in the CLI, `baseVersionId` conflicts,
   immutable versions, `delete_version` refuses the live version, deleted sites are soft-deleted and
-  stay recoverable by the operator for 1 to 2 hours, until the first hourly purge after they are an
-  hour old.
+  stay recoverable by the operator for at least an hour, until the hourly purge removes them.
 
 ### 11.6 Anonymous publish controls
 
