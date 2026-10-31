@@ -1,4 +1,4 @@
-import type { Limits } from "../config";
+import { signingSecret, type Limits } from "../config";
 import type { DropwayContext } from "../context";
 import { appOrigin, siteUrl } from "../context";
 import { ApiError, badRequest, forbidden, notFound, tooLarge } from "../errors";
@@ -526,6 +526,15 @@ async function completeVersion(
     stored = toStore.size;
     pendingShas = [...missing].filter((s) => !toStore.has(s));
     if (pendingShas.length) {
+      // Upload items need a dwu_ token. Without a signing secret, drop the pending version
+      // instead of leaving one behind per retry (presence is only known after createDeploy).
+      if (!dc.config.signingSecret) {
+        await dc.env.DB.batch([
+          dc.env.DB.prepare("DELETE FROM version_files WHERE version_id = ? AND EXISTS (SELECT 1 FROM versions WHERE id = ? AND status = 'pending')").bind(deploy.deploy.id, deploy.deploy.id),
+          dc.env.DB.prepare("DELETE FROM versions WHERE id = ? AND status = 'pending'").bind(deploy.deploy.id),
+        ]);
+        signingSecret(dc.config);
+      }
       status = "awaiting_upload";
       version = await getVersion(dc, site.id, deploy.deploy.id);
     } else {

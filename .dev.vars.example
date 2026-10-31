@@ -3,3 +3,8 @@
 #   curl -X POST <worker URL>/api/v1/setup -H "Authorization: Bearer <ADMIN_BOOTSTRAP_KEY>"
 # Generate one with: openssl rand -hex 32
 ADMIN_BOOTSTRAP_KEY=
+
+# HMAC secret for signed links, password cookies and IP hashing. Falls back to
+# ADMIN_BOOTSTRAP_KEY; set its own value so rotating that key does not sign
+# everyone out. Generate one with: openssl rand -hex 32
+SIGNING_SECRET=
