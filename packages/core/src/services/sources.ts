@@ -517,6 +517,16 @@ async function completeVersion(
     const scope = blobScope({ tenantId: site.tenant_id, siteId: site.id });
     const toStore = new Map<string, ResolvedFile>();
     for (const f of files) if (f.bytes && missing.has(f.sha256) && !toStore.has(f.sha256)) toStore.set(f.sha256, f);
+    pendingShas = [...missing].filter((s) => !toStore.has(s));
+    // Upload items need a dwu_ token. Without a signing secret, refuse before storing any bytes and
+    // drop the pending version instead of leaving one behind per retry (presence is only known after createDeploy).
+    if (pendingShas.length && !dc.config.signingSecret) {
+      await dc.env.DB.batch([
+        dc.env.DB.prepare("DELETE FROM version_files WHERE version_id = ? AND EXISTS (SELECT 1 FROM versions WHERE id = ? AND status = 'pending')").bind(deploy.deploy.id, deploy.deploy.id),
+        dc.env.DB.prepare("DELETE FROM versions WHERE id = ? AND status = 'pending'").bind(deploy.deploy.id),
+      ]);
+      signingSecret(dc.config);
+    }
     const queue = [...toStore.values()];
     await Promise.all(
       Array.from({ length: Math.min(6, queue.length) }, async () => {
@@ -524,17 +534,7 @@ async function completeVersion(
       }),
     );
     stored = toStore.size;
-    pendingShas = [...missing].filter((s) => !toStore.has(s));
     if (pendingShas.length) {
-      // Upload items need a dwu_ token. Without a signing secret, drop the pending version
-      // instead of leaving one behind per retry (presence is only known after createDeploy).
-      if (!dc.config.signingSecret) {
-        await dc.env.DB.batch([
-          dc.env.DB.prepare("DELETE FROM version_files WHERE version_id = ? AND EXISTS (SELECT 1 FROM versions WHERE id = ? AND status = 'pending')").bind(deploy.deploy.id, deploy.deploy.id),
-          dc.env.DB.prepare("DELETE FROM versions WHERE id = ? AND status = 'pending'").bind(deploy.deploy.id),
-        ]);
-        signingSecret(dc.config);
-      }
       status = "awaiting_upload";
       version = await getVersion(dc, site.id, deploy.deploy.id);
     } else {

@@ -41,12 +41,18 @@ describe("signing secret", () => {
     const publish = await call("/api/v1/publish", { key: dw.ownerKey, ...jsonBody({ site: "manifest", files: [entry] }) });
     expect(publish.status).toBe(503);
     expect(((await publish.json()) as { error: { code: string } }).error.code).toBe("signing_secret_missing");
-    // Refused before any pending version is written, also for an existing site.
+    // The refused publish leaves no pending version behind and stores no bytes, also for an existing site.
     const versions = () => env.DB.prepare("SELECT COUNT(*) AS n FROM versions").first<number>("n");
     const before = await versions();
-    const update = await call("/api/v1/publish", { key: dw.ownerKey, ...jsonBody({ site: "locked", files: [entry] }) });
+    const objects = async () => (await env.FILES.list()).objects.length;
+    const objectsBefore = await objects();
+    const update = await call("/api/v1/publish", {
+      key: dw.ownerKey,
+      ...jsonBody({ site: "locked", files: [entry, { path: "new.txt", content: "inline bytes, not stored" }] }),
+    });
     expect(update.status).toBe(503);
     expect(await versions()).toBe(before);
+    expect(await objects()).toBe(objectsBefore);
     // A hash the site already stores needs no upload token, so it still publishes.
     const stored = await manifestEntry("index.html", "private content");
     const reuse = await call("/api/v1/publish", { key: dw.ownerKey, ...jsonBody({ site: "locked", files: [{ ...stored, path: "copy.html" }] }) });
