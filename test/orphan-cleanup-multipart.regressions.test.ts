@@ -108,4 +108,45 @@ describe("multipart completion and orphan cleanup", () => {
     accepted(await finalize(dw, p));
     expect(await served(dw, p.site)).toEqual(bytes);
   });
+
+  it("keeps a zero-byte completion open when cleanup retired its reservation, so a retry proves scope", async () => {
+    const dw = await freshInstance({ multiTenant: true });
+    const empty = new Uint8Array(0);
+    const p = await pending(dw, await sha256Hex(empty), 0, "multipart-empty-slow-writer");
+    const s = await session(dw, p);
+
+    const put = env.FILES.put.bind(env.FILES);
+    let release!: () => void;
+    const released = new Promise<void>((done) => { release = done; });
+    let entered!: () => void;
+    const reached = new Promise<void>((done) => { entered = done; });
+    let held = false;
+    vi.spyOn(env.FILES, "put").mockImplementation((async (key: string, value: unknown, options?: unknown) => {
+      if (key.startsWith("blobs/") && !held) {
+        held = true;
+        entered();
+        await released;
+      }
+      return put(key, value as never, options as never);
+    }) as never);
+    const completing = complete(dw, s, p.token);
+    await reached;
+    await cleanupBlobs(context(dw), Date.now() + 2 * DAY);
+    expect((await env.DB.prepare("SELECT * FROM blob_uploads").all()).results).toEqual([]);
+    release();
+    const refused = await completing;
+    expect(refused.status).toBe(409);
+    expect(refused.body.error.code).toBe("missing_blobs");
+    expect(await storedKey(p.sha256)).toBeUndefined();
+    const row = await env.DB.prepare("SELECT status FROM upload_sessions WHERE id = ?").bind(s.id).first<{ status: string }>();
+    expect(row?.status).toBe("completing");
+    vi.restoreAllMocks();
+
+    accepted(await complete(dw, s, p.token));
+    expect(await storedKey(p.sha256)).toMatch(new RegExp(`^blobs/${p.sha256}/`));
+    const scopes = await env.DB.prepare("SELECT scope FROM blob_scopes WHERE sha256 = ?").bind(p.sha256).all();
+    expect(scopes.results).toHaveLength(1);
+    accepted(await finalize(dw, p));
+    expect(await served(dw, p.site)).toEqual(empty);
+  });
 });
