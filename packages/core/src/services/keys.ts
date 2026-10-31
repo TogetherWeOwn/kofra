@@ -4,9 +4,11 @@ import { newId, newSecret, sha256Hex } from "../lib/crypto";
 import {
   ROLE_SCOPES,
   deserializeScopes,
+  hasScope,
   parseScopes,
   requireMember,
   serializeScopes,
+  siteKeyScopes,
   type MemberPrincipal,
   type Principal,
   type Role,
@@ -99,11 +101,6 @@ export async function createApiKey(
     memberId = m.id;
     memberRole = m.role;
   }
-  // A key can never be wider than the caller's key, nor than the target member's role.
-  const grantable = caller.scopes.filter((s) => ROLE_SCOPES[memberRole].includes(s));
-  const scopes = parseScopes(input.scopes, grantable);
-  if (scopes.length === 0) throw badRequest("invalid_scope", "A key needs at least one scope.");
-
   let siteId: string | null = caller.siteId;
   if (input.site !== undefined && input.site !== null && input.site !== "") {
     const site = await dc.env.DB.prepare("SELECT id FROM sites WHERE slug = ? AND tenant_id = ? AND deleted_at IS NULL")
@@ -112,6 +109,11 @@ export async function createApiKey(
     if (!site || (caller.siteId && caller.siteId !== site.id)) throw notFound("site_not_found", `No site "${String(input.site)}" in this tenant.`);
     siteId = site.id;
   }
+  // A key can never be wider than the caller's key, nor than the target member's role,
+  // and a key restricted to one site gets no tenant-wide scopes.
+  const grantable = siteKeyScopes(caller.scopes.filter((s) => ROLE_SCOPES[memberRole].includes(s)), siteId);
+  const scopes = parseScopes(input.scopes, grantable);
+  if (scopes.length === 0) throw badRequest("invalid_scope", "A key needs at least one scope.");
 
   let expiresAt: number | null = null;
   if (input.expiresInDays !== undefined && input.expiresInDays !== null) {
@@ -132,7 +134,7 @@ export async function createApiKey(
 /** Your own keys; with members:write and all=true, every key in the tenant. */
 export async function listApiKeys(dc: DropwayContext, p: Principal, opts: { all?: boolean } = {}) {
   const caller = requireMember(p, "keys:write");
-  const all = opts.all && caller.scopes.includes("members:write");
+  const all = opts.all && hasScope(caller, "members:write");
   const { results } = await dc.env.DB.prepare(
     `SELECT id, tenant_id, member_id, name, prefix, scopes, site_id, created_at, last_used_at, expires_at, revoked_at
        FROM api_keys WHERE tenant_id = ? AND revoked_at IS NULL ${all ? "" : "AND member_id = ?"} ORDER BY created_at DESC`,
@@ -147,7 +149,7 @@ export async function revokeApiKey(dc: DropwayContext, p: Principal, keyId: stri
   const key = await dc.env.DB.prepare("SELECT id, member_id FROM api_keys WHERE id = ? AND tenant_id = ? AND revoked_at IS NULL")
     .bind(keyId, caller.tenantId)
     .first<{ id: string; member_id: string }>();
-  if (!key || (key.member_id !== caller.memberId && !caller.scopes.includes("members:write"))) {
+  if (!key || (key.member_id !== caller.memberId && !hasScope(caller, "members:write"))) {
     throw notFound("key_not_found", `No active key ${keyId} that you can revoke.`, "List keys with GET /api/v1/keys.");
   }
   await dc.env.DB.prepare("UPDATE api_keys SET revoked_at = ? WHERE id = ?").bind(Date.now(), key.id).run();
@@ -195,7 +197,7 @@ export async function authenticateApiKey(dc: DropwayContext, token: string, ip: 
     tenantId: row.tenant_id,
     memberId: row.member_id,
     role: row.role,
-    scopes: deserializeScopes(row.scopes).filter((s) => roleScopes.includes(s)),
+    scopes: siteKeyScopes(deserializeScopes(row.scopes), row.site_id).filter((s) => roleScopes.includes(s)),
     keyId: row.id,
     siteId: row.site_id,
     via: "api_key",

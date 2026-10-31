@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
+import { ALL_SCOPES, hasScope, requireMember, type MemberPrincipal } from "@dropway/core";
 import { BOOTSTRAP, form, freshInstance, jsonBody, type Instance } from "./helpers";
 
 let dw: Instance;
@@ -80,6 +81,51 @@ describe("scoped API keys and members", () => {
     expect(create.status).toBe(403);
     const list = await dw.json("/api/v1/sites", { key: k.body.key });
     expect(list.body.sites.map((s: { slug: string }) => s.slug)).toEqual(["site-one"]);
+  });
+
+  it("a site-restricted key holds no tenant-wide powers", async () => {
+    await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, body: form({ "index.html": "a" }, { slug: "site-one" }) });
+    const other = await dw.json("/api/v1/members", { key: dw.ownerKey, ...jsonBody({ email: "dev@example.com", role: "member" }) });
+    const otherKeyId = other.body.apiKey.id;
+    // Default scopes ("*") on a site key leave out members:write and admin; asking for them is refused.
+    const k = await dw.json("/api/v1/keys", { key: dw.ownerKey, ...jsonBody({ name: "site-all", site: "site-one" }) });
+    expect(k.status).toBe(201);
+    expect(k.body.scopes).not.toContain("members:write");
+    expect(k.body.scopes).not.toContain("admin");
+    for (const scope of ["members:write", "admin"]) {
+      const r = await dw.json("/api/v1/keys", { key: dw.ownerKey, ...jsonBody({ site: "site-one", scopes: [scope] }) });
+      expect(r.status, scope).toBe(403);
+      expect(r.body.error.code).toBe("scope_not_grantable");
+    }
+    // A site key stored with tenant scopes (e.g. minted before this rule) still cannot use them.
+    await env.DB.prepare("UPDATE api_keys SET scopes = ? WHERE id = ?").bind(ALL_SCOPES.join(" "), k.body.id).run();
+    const siteKey = k.body.key;
+    expect((await dw.json("/api/v1/members", { key: siteKey, ...jsonBody({ email: "x@example.com", role: "admin" }) })).status).toBe(403);
+    const patch = await dw.json(`/api/v1/members/${other.body.member.id}`, { ...jsonBody({ role: "admin" }), method: "PATCH", key: siteKey });
+    expect(patch.status, JSON.stringify(patch.body)).toBe(403);
+    expect((await dw.json(`/api/v1/members/${other.body.member.id}`, { method: "DELETE", key: siteKey })).status).toBe(403);
+    expect((await dw.json("/api/v1/keys", { key: siteKey, ...jsonBody({ memberId: other.body.member.id }) })).status).toBe(403);
+    const all = await dw.json("/api/v1/keys?all=1", { key: siteKey });
+    expect(all.body.keys.map((x: { id: string }) => x.id)).not.toContain(otherKeyId);
+    expect((await dw.json(`/api/v1/keys/${otherKeyId}`, { method: "DELETE", key: siteKey })).status).toBe(404);
+    // Nothing changed: the other member and their key are intact, and no member was added.
+    expect((await dw.json("/api/v1/sites", { key: other.body.apiKey.key })).status).toBe(200);
+    const members = await dw.json("/api/v1/members", { key: dw.ownerKey });
+    expect(members.body.members.map((m: { email: string; role: string }) => `${m.email}:${m.role}`).sort()).toEqual(["dev@example.com:member", "owner@example.com:owner"]);
+    // The key still works on its own site.
+    expect((await dw.json("/api/v1/sites/site-one", { key: siteKey })).status).toBe(200);
+  });
+
+  it("a site-restricted principal from any identity adapter cannot use tenant-wide scopes", () => {
+    const p: MemberPrincipal = {
+      kind: "member", tenantId: "t", memberId: "m", role: "owner", scopes: ALL_SCOPES, keyId: null, siteId: "site_1", via: "session", ip: "",
+    };
+    for (const scope of ["members:write", "admin"] as const) {
+      expect(hasScope(p, scope)).toBe(false);
+      expect(() => requireMember(p, scope)).toThrow(/restricted to one site/);
+    }
+    expect(requireMember(p, "sites:write")).toBe(p);
+    expect(hasScope({ ...p, siteId: null }, "members:write")).toBe(true);
   });
 
   it("revoked keys stop working", async () => {

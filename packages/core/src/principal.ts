@@ -24,6 +24,14 @@ export const ROLE_SCOPES: Record<Role, readonly Scope[]> = {
   member: ["sites:read", "sites:write", "sites:delete", "keys:write", "data:write"],
 };
 
+/** Tenant-wide scopes. A key restricted to one site never holds them: they would reach past its site. */
+export const TENANT_SCOPES: readonly Scope[] = ["members:write", "admin"];
+
+/** The scopes a key may hold, given its site restriction. */
+export function siteKeyScopes(scopes: readonly Scope[], siteId: string | null): Scope[] {
+  return siteId ? scopes.filter((s) => !TENANT_SCOPES.includes(s)) : [...scopes];
+}
+
 /** A member of a tenant, authenticated by an API key or (in extensions) by a session. */
 export interface MemberPrincipal {
   kind: "member";
@@ -55,7 +63,7 @@ export type Principal =
   | { kind: "upload"; versionId: string; expiresAt: number; ip: string };
 
 export function hasScope(p: Principal, scope: Scope): boolean {
-  return p.kind === "member" && p.scopes.includes(scope);
+  return p.kind === "member" && siteKeyScopes(p.scopes, p.siteId).includes(scope);
 }
 
 /** Require an authenticated member, optionally holding a scope. */
@@ -68,6 +76,9 @@ export function requireMember(p: Principal, scope?: Scope): MemberPrincipal {
       );
     }
     throw unauthorized();
+  }
+  if (scope && p.siteId && TENANT_SCOPES.includes(scope)) {
+    throw forbidden(`A key restricted to one site cannot use "${scope}".`, "Use a key without a site restriction.", "insufficient_scope");
   }
   if (scope && !p.scopes.includes(scope)) {
     throw forbidden(`This API key lacks the "${scope}" scope.`, "Ask the instance owner for a key with that scope (POST /api/v1/keys).", "insufficient_scope");
