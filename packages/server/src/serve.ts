@@ -558,6 +558,7 @@ export async function serveSiteContent(
     response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", `There is no file at <code>/${escapeHtml(filePath).replaceAll("{", "&#123;")}</code> on this site.`, recovery);
   } else if (resolved.kind === "listing") {
     response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`, url.searchParams.get("sort"), url.origin);
+    applySiteHeaders(response.headers, live, requestPath);
     securityHeaders(response.headers, live, mode);
   } else {
     response = await serveFile(req, dw, url, live, mode, resolved.path, resolved.status, viewers, { requestPath });

@@ -58,7 +58,7 @@ export interface VersionRow {
   created_by: string | null;
   created_at: number;
   finalized_at: number | null;
-  /** Parsed _redirects/_headers (migration 0010); null when the version shipped neither file. */
+  /** Parsed _redirects/_headers (migration 0012); null when the version shipped neither file. */
   config_json?: string | null;
 }
 

@@ -1,3 +1,5 @@
+import { env } from "cloudflare:test";
+import { clearLiveMemoryCache } from "@dropway/core";
 import { beforeEach, describe, expect, it } from "vitest";
 import { form, freshInstance, jsonBody, manifestEntry, type Instance } from "./helpers";
 
@@ -244,6 +246,56 @@ describe("headers parsed at finalize (SRV-09)", () => {
       .filter((attrs) => /rel="(prev|next)"/.test(attrs))
       .map((attrs) => ({ rel: /rel="(prev|next)"/.exec(attrs)![1], href: /href="([^"]+)"/.exec(attrs)![1] }));
     expect(nav).toEqual([{ rel: "next", href: "/s/config-hidden/omega.txt" }]);
+  });
+
+  it("applies matching _headers to folder listings", async () => {
+    const pub = await publish(
+      { "one.txt": "1\n", "two.txt": "2\n", _headers: "/*\n  X-Site: yes\n" },
+      { slug: "headers-listing" },
+    );
+    expect(pub.status).toBe(201);
+
+    const listing = await dw.call("/s/headers-listing/", { headers: NAV });
+    expect(listing.status).toBe(200);
+    expect(listing.headers.get("x-site")).toBe("yes");
+    await listing.arrayBuffer();
+  });
+
+  it("an identical republish backfills rules for a pre-migration version", async () => {
+    const files = {
+      "index.html": "<p>home</p>",
+      "new.html": "<p>new</p>",
+      _redirects: "/old /new.html 302\n",
+    };
+    const first = await publish(files, { slug: "config-backfill" });
+    expect(first.status).toBe(201);
+    const id = first.body.version.id as string;
+
+    // Simulate a version finalized before migration 0012: ready with hosting
+    // files in its manifest but no parsed config. Drop every serving cache so
+    // the next read rebuilds from D1.
+    await env.DB.prepare("UPDATE versions SET config_json = NULL WHERE id = ?").bind(id).run();
+    clearLiveMemoryCache();
+    await env.CACHE.delete("live:config-backfill");
+    await caches.default.delete(new Request("https://dropway.invalid/__dropway/ptr/config-backfill"));
+
+    const stale = await dw.call("/s/config-backfill/old");
+    expect(stale.status).toBe(404);
+    await stale.arrayBuffer();
+
+    // Republishing the identical files backfills the config in place: no new
+    // version, and the redirect serves afterwards.
+    const second = await publish(files, { slug: "config-backfill" });
+    expect(second.status, JSON.stringify(second.body)).toBe(200);
+    expect(second.body.unchanged).toBe(true);
+
+    const row = await env.DB.prepare("SELECT config_json FROM versions WHERE id = ?").bind(id)
+      .first<{ config_json: string | null }>();
+    expect(row?.config_json).toContain("/old");
+
+    const back = await dw.call("/s/config-backfill/old");
+    expect(back.status).toBe(302);
+    expect(destinationOf(back)).toBe("https://dropway.test/s/config-backfill/new.html");
   });
 
   it("nested files named _redirects stay ordinary content", async () => {

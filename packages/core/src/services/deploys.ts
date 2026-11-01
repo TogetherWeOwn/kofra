@@ -236,7 +236,32 @@ export async function createDeploy(dc: DropwayContext, p: Principal, site: SiteR
            WHERE id = ? AND ttl_seconds IS NOT NULL AND deleted_at IS NULL`,
       ).bind(Date.now(), site.id).run();
       if ((renewed?.meta.changes ?? 0) > 0) await refreshLive(dc, site.id);
-      const serialized = { ...serializeVersion(current, site.current_version_id), siteSlug: site.slug };
+      // SRV-09 upgrade backfill: versions finalized before migration 0012
+      // carry config_json null even when their manifest ships root hosting
+      // files, so their rules stay inactive while serving hides the files.
+      // An identical republish parses and stores the config in place (no new
+      // version) and refreshes serving; unreadable blobs leave the null in
+      // place rather than failing a previously successful republish.
+      let backfilled = current;
+      if (current.config_json == null) {
+        const { results: hostingFiles } = await dc.env.DB.prepare(
+          "SELECT path, sha256, size, content_type AS contentType FROM version_files WHERE version_id = ? AND (path = '_redirects' OR path = '_headers')",
+        ).bind(current.id).all<NormalisedEntry>();
+        if (hostingFiles.length > 0) {
+          try {
+            const { configJson } = await loadVersionSiteConfig(dc, hostingFiles);
+            const filled = await dc.env.DB.prepare("UPDATE versions SET config_json = ? WHERE id = ? AND config_json IS NULL")
+              .bind(configJson, current.id).run();
+            if ((filled?.meta.changes ?? 0) > 0) {
+              backfilled = { ...current, config_json: configJson };
+              await refreshLive(dc, site.id);
+            }
+          } catch {
+            // Blob reads failed: keep serving the legacy version as-is.
+          }
+        }
+      }
+      const serialized = { ...serializeVersion(backfilled, site.current_version_id), siteSlug: site.slug };
       return {
         unchanged: true,
         deploy: serialized,
