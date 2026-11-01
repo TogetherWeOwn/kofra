@@ -98,21 +98,41 @@ function pathSegments(path: string): string[] {
   return segments;
 }
 
+/** Filesystem surface `fileTarget` needs. Production uses the real one below;
+ * tests substitute a case-insensitive simulation no Linux disk can reproduce. */
+export interface FileTargetFs {
+  statPath: (path: string) => Promise<{ isDirectory(): boolean; isSymbolicLink(): boolean; isFile(): boolean } | null>;
+  listDir: (path: string) => Promise<string[]>;
+  makeDir: (path: string) => Promise<unknown>;
+}
+
+const realFs: FileTargetFs = {
+  statPath: localStat,
+  listDir: (path) => readdir(path),
+  makeDir: (path) => mkdir(path, { recursive: true }),
+};
+
 /** Never follow local symlinks in the server-controlled part of the destination. */
-export async function fileTarget(dir: string, segments: string[], existingPaths: ReadonlySet<string>): Promise<string> {
-  await mkdir(dir, { recursive: true });
+export async function fileTarget(dir: string, segments: string[], existingPaths: ReadonlySet<string>, fs: FileTargetFs = realFs): Promise<string> {
+  await fs.makeDir(dir);
   let parent = dir;
   for (const segment of segments.slice(0, -1)) {
     const next = join(parent, segment);
-    const info = await localStat(next);
-    if (!info) await mkdir(next);
+    const info = await fs.statPath(next);
+    if (!info) await fs.makeDir(next);
     else if (!info.isDirectory() || info.isSymbolicLink()) {
       throw new CliError({ code: "unsafe_pull_path", message: "A local parent is not a directory or is a symlink.", hint: "Choose a destination without conflicting files or symlink parents.", exitCode: EXIT.usage });
+    } else if (!(await fs.listDir(parent)).includes(segment)) {
+      // A case/normalization-insensitive disk resolved `next` to a differently
+      // spelled directory (existing `A` for manifest segment `a`). Accepting it
+      // would write the file under the wrong name while the receipt claims
+      // `segments`, so refuse with the same collision code as aliased files.
+      throw new CliError({ code: "pull_path_collision", message: "A local parent directory aliases another name on this filesystem.", hint: "Use a case-sensitive destination that preserves distinct manifest paths.", exitCode: EXIT.invalid });
     }
     parent = next;
   }
   const target = join(parent, segments[segments.length - 1]!);
-  const info = await localStat(target);
+  const info = await fs.statPath(target);
   if (info && !info.isFile()) {
     throw new CliError({ code: "unsafe_pull_path", message: "The local target is not a regular file.", hint: "Choose a destination without conflicting directories or symlinks.", exitCode: EXIT.usage });
   }

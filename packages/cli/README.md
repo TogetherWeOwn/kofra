@@ -300,7 +300,10 @@ syntax and reserved names are also refused, as is any `.git` path segment:
 publishing never includes `.git`, and server bytes must not become trusted
 Git configuration on the local disk. A path that aliases an earlier
 download or a differently named local extra on a case-insensitive filesystem
-fails with `pull_path_collision`, rather than overwriting it. Use a case-sensitive
+fails with `pull_path_collision`, rather than overwriting it. The same code
+refuses a parent directory that differs only in case or normalization
+(manifest `a/two.txt` alongside an existing `A/`), which would otherwise
+write the file under the wrong name. Use a case-sensitive
 destination for manifests containing such names. Do not modify the destination
 concurrently while pulling; this is not a filesystem sandbox against concurrent
 local changes. A pull is atomic per file, not across the whole directory.

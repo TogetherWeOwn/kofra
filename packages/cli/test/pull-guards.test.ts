@@ -2,11 +2,11 @@
  * Mutation guards for pull's local-safety and integrity checks. Separate from the
  * protected acceptance files, which stay unchanged. Only HTTP is substituted.
  */
-import { mkdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { lstat, mkdir, readdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pullHarness, sha256, tree } from "./fixtures/pull-harness";
-import { fileTarget } from "../src/pull.ts";
+import { fileTarget, type FileTargetFs } from "../src/pull.ts";
 
 const api = "https://pull-guards.example";
 const site = "guards";
@@ -65,7 +65,15 @@ describe("pull guards", () => {
     try {
       const r = await pull("out");
       expect(r.code, r.stdout + r.stderr).toBe(0);
-      expect((await stat(join(h.cwd, "out", "bytes.txt"))).mode & 0o777).toBe(0o644);
+      const target = join(h.cwd, "out", "bytes.txt");
+      // Node does not enforce POSIX permission bits on Windows, so the exact
+      // mode assertion only holds where the mode has meaning; elsewhere the
+      // pulled bytes themselves prove the download landed.
+      if (process.platform === "win32") {
+        expect((await readFile(target)).equals(body)).toBe(true);
+      } else {
+        expect((await stat(target)).mode & 0o777).toBe(0o644);
+      }
     } finally { process.umask(previous); }
   });
 
@@ -101,6 +109,35 @@ describe("pull guards", () => {
     await expect(fileTarget(dir, ["extra.bin"], new Set<string>())).rejects.toMatchObject({ code: "pull_path_collision" });
     // A path that was present before the pull is still replaceable.
     await expect(fileTarget(dir, ["extra.bin"], new Set(["extra.bin"]))).resolves.toBe(join(dir, "extra.bin"));
+  });
+
+  it("refuses a parent directory that differs only in case on an insensitive disk", async () => {
+    // A case-sensitive test disk cannot reproduce this: `a` beside `A` is just
+    // a missing directory there. Simulate the insensitive disk instead, where
+    // `statPath` resolves `a` to the existing `A` while `listDir` reports the
+    // exact on-disk spelling.
+    const dir = join(h.cwd, "caseparent");
+    await mkdir(join(dir, "A"), { recursive: true });
+    const insensitive: FileTargetFs = {
+      statPath: async (path: string) => {
+        try {
+          return await lstat(path);
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+          const entries = await readdir(dirname(path));
+          const hit = entries.find(entry => entry.toLowerCase() === basename(path).toLowerCase());
+          if (!hit) return null;
+          return lstat(join(dirname(path), hit));
+        }
+      },
+      listDir: (path: string) => readdir(path),
+      makeDir: (path: string) => mkdir(path, { recursive: true }),
+    };
+    await expect(fileTarget(dir, ["a", "two.txt"], new Set(["a/two.txt"]), insensitive))
+      .rejects.toMatchObject({ code: "pull_path_collision" });
+    // The exact-spelled manifest name still resolves through the same disk.
+    await expect(fileTarget(dir, ["A", "two.txt"], new Set(["A/two.txt"]), insensitive))
+      .resolves.toBe(join(dir, "A", "two.txt"));
   });
 
   it("still pulls into an existing plain-directory destination", async () => {
