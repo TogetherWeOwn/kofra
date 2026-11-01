@@ -61,14 +61,29 @@ describe("stdin production reader wiring", () => {
 
   // Break caught: omitting the production firstByteTimeoutMs option leaves an
   // open, silent producer hanging. No EOF, test-only product knob or fake Io.
-  it("a silent OPEN pipe becomes empty_stdin at the production 30-second first-byte deadline", async () => {
+  it("a silent OPEN pipe is refused with stdin_timeout at the production 30-second first-byte deadline", async () => {
     const r = await h.run(["publish", "--stdin", "silent.bin", "--json"], null, { env, timeoutMs: 38_000 });
     const json = stdinObject(r);
     expect(r.code, r.stdout + r.stderr).toBe(2);
-    expect(json).toMatchObject({ ok: false, exitCode: 2, error: { code: "empty_stdin" } });
+    expect(json).toMatchObject({ ok: false, exitCode: 2, error: { code: "stdin_timeout" } });
     expect(r.elapsedMs, "must not confuse an open pipe with immediate EOF or an early timeout").toBeGreaterThanOrEqual(29_000);
     expect(r.elapsedMs).toBeLessThan(38_000);
     expect(r.stdinReads).toBe(1);
     expect(r.wire).toEqual([]);
+  }, 45_000);
+
+  // Break caught (Devin Review #114): the timeout used to read as empty input,
+  // so --allow-empty published a zero-byte file and exited 0 while the slow
+  // producer's later output was dropped. Only a real EOF with zero bytes
+  // counts as empty; a silent pipe is refused either way.
+  it("a silent OPEN pipe is refused with stdin_timeout even with --allow-empty", async () => {
+    const r = await h.run(["publish", "--stdin", "silent.bin", "--allow-empty", "--json"], null, { env, timeoutMs: 38_000 });
+    const json = stdinObject(r);
+    expect(r.code, r.stdout + r.stderr).toBe(2);
+    expect(json).toMatchObject({ ok: false, exitCode: 2, error: { code: "stdin_timeout" } });
+    expect(r.elapsedMs, "must wait for the first-byte deadline, not refuse early").toBeGreaterThanOrEqual(29_000);
+    expect(r.elapsedMs).toBeLessThan(38_000);
+    expect(r.stdinReads).toBe(1);
+    expect(r.wire, "a silent pipe never publishes, even opted into empty").toEqual([]);
   }, 45_000);
 });

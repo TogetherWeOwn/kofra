@@ -390,7 +390,9 @@ Piped input (--stdin): stdin is read once, as raw bytes, up to 100 MiB (more is
 refused with file_too_large, exit 6). <filename> is the site path (assets/app.js
 is fine; __dropway/ and unsafe names are refused). It cannot be combined with
 <path>, and a terminal on stdin is refused (exit 2) instead of waiting. Empty
-input is refused (exit 2) unless --allow-empty. The same secret scan, --dry-run,
+input is refused (exit 2) unless --allow-empty. A pipe that stays silent past
+the 30 s first-byte deadline is refused (stdin_timeout, exit 2) even with
+--allow-empty: only a real EOF with zero bytes counts as empty. The same secret scan, --dry-run,
 --wait, --json, --encrypt and exit codes apply as for a path. A piped publish
 does not read or write ./dropway.json: pass --site to update the same site.
 A piped .zip is stored as one file named <filename>, not unpacked.

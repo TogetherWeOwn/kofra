@@ -56,10 +56,14 @@ describe("readBounded", () => {
     expect(released).toBe(1);
   });
 
-  it("treats a pipe that never produces a first byte as empty after the timeout", async () => {
-    const silent: AsyncIterable<Uint8Array> = { [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}), return: async () => ({ done: true, value: undefined }) }) };
-    const out = await readBounded(silent, 16, { firstByteTimeoutMs: 20 });
-    expect(out.byteLength).toBe(0);
+  it("refuses a pipe that never produces a first byte with stdin_timeout (exit 2), never as empty", async () => {
+    let released = 0;
+    const silent: AsyncIterable<Uint8Array> = { [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}), return: async () => { released++; return { done: true, value: undefined }; } }) };
+    const err = await readBounded(silent, 16, { firstByteTimeoutMs: 20 }).catch((e) => e);
+    expect(err).toBeInstanceOf(CliError);
+    expect(err).toMatchObject({ code: "stdin_timeout", exitCode: EXIT.usage });
+    expect(String(err.message)).toMatch(/silent/i);
+    expect(released).toBe(1);
   });
 
   it("applies the timeout to the first byte only", async () => {

@@ -369,9 +369,11 @@ weekly-report --format md | kofra publish --stdin assets/report.md --site weekly
   such as `.env` are refused before any read or request (`reserved_path`, `invalid_path`,
   `ignored_file`). A file named `index.html` is served at the site root.
 - `--stdin` and a `<path>` (including `-`) are mutually exclusive (exit 2). A terminal on stdin is
-  refused (exit 2) instead of waiting. A pipe that stays silent for 30 s counts as empty.
+  refused (exit 2) instead of waiting. A pipe that stays silent for 30 s is refused with
+  `stdin_timeout` (exit 2), even with `--allow-empty`: the producer may still be working.
 - **Empty input is refused** (`empty_stdin`, exit 2) so a failed producer never publishes a blank
-  page by accident; pass `--allow-empty` to publish a zero-byte file on purpose.
+  page by accident; pass `--allow-empty` to publish a zero-byte file on purpose. Only a real EOF
+  with zero bytes counts as empty.
 - `--dry-run` runs the offline preflight over the piped bytes (size, SHA-256, secret scan) and
   contacts nothing. Credential-looking text refuses with `possible_secrets` unless `--allow-secrets`.
 - A piped publish does not read or write `./dropway.json` (there is no path to remember): pass
