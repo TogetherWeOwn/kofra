@@ -16,6 +16,7 @@ import {
   readBlobRange,
   requestPathToFilePath,
   resolveSlugRedirect,
+  signingSecret,
   siteUrl,
   timingSafeEqualStr,
   verifyPassword,
@@ -27,6 +28,7 @@ import { findViewer, toViewerFile, VIEWER_CHROME_VERSION, VIEWER_CSP, VIEWERS, t
 import { renderListing } from "./viewers/listing";
 import { MAX_CSS_REWRITE_BYTES, rewriteCss, rewriteHtml, type PathRewrite } from "./path-rewrite";
 import { PATH_SHIM_VERSION, pathShimScript } from "./path-shim";
+import { localRedirectPath } from "./local-redirect";
 import { injectReportLink, REPORT_LINK_VERSION } from "./report-link";
 import { badgeFor, badgeResponse } from "./site-badge";
 import { serveTransfer } from "./transfers";
@@ -200,7 +202,7 @@ export function systemResponse(
 }
 
 async function passwordCookieValue(dw: DropwayContext, live: LiveSite): Promise<string> {
-  return (await hmacHex(dw.config.signingSecret, `${live.siteId}:${live.passwordHash}`)).slice(0, 40);
+  return (await hmacHex(signingSecret(dw.config), `${live.siteId}:${live.passwordHash}`)).slice(0, 40);
 }
 
 /**
@@ -230,7 +232,7 @@ function passwordVisitor(req: Request): string {
 }
 
 async function passwordFormSignature(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, until: number): Promise<string> {
-  return hmacHex(dw.config.signingSecret, JSON.stringify([
+  return hmacHex(signingSecret(dw.config), JSON.stringify([
     "site-password-form", new URL(req.url).origin, mode.base, live.siteId, live.passwordHash,
     passwordVisitor(req), until,
   ]));
@@ -273,7 +275,7 @@ async function handlePassword(dw: DropwayContext, req: Request, live: LiveSite, 
     const form = await req.formData().catch(() => null);
     const password = form?.get("password");
     const next = String(form?.get("next") ?? mode.base);
-    const safeNext = next.startsWith(mode.base) && !next.startsWith("//") ? next : mode.base;
+    const safeNext = localRedirectPath(next, new URL(req.url).origin, mode.base) ?? mode.base;
     if (typeof password === "string" && (await verifyPassword(password, live.passwordHash))) {
       const h = new Headers({ Location: safeNext, "Cache-Control": "no-store" });
       const dest = req.headers.get("sec-fetch-dest");

@@ -318,8 +318,10 @@ describe("empty-site page", () => {
 describe("unreadable-file page", () => {
   async function deleteBlob(content: string): Promise<void> {
     const sha = await sha256Hex(new TextEncoder().encode(content));
-    await env.FILES.delete(`blobs/${sha}`);
-    expect(await env.FILES.head(`blobs/${sha}`), "fixture blob is really gone").toBeNull();
+    const row = await env.DB.prepare("SELECT storage_key FROM blobs WHERE sha256 = ?").bind(sha).first<{ storage_key: string }>();
+    expect(row?.storage_key, "fixture has a verified physical generation").toEqual(expect.any(String));
+    await env.FILES.delete(row!.storage_key);
+    expect(await env.FILES.head(row!.storage_key), "fixture blob is really gone").toBeNull();
   }
 
   it("offers Try again rebuilt from the path-mode base and the encoded file path, with no request query copied", async () => {

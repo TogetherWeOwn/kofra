@@ -11,7 +11,7 @@ import { dropwayClient } from "./client";
  * (esbuild keepNames, which wrangler turns on), so a no-op __name is defined
  * around it.
  */
-export const CLIENT_SCRIPT = `/*! Kofra dashboard (MIT) https://github.com/TogetherWeOwn/dropway */
+export const CLIENT_SCRIPT = `/*! Kofra dashboard (MIT) https://github.com/TogetherWeOwn/kofra */
 ${QR_LICENSE}
 (function(){"use strict";var __name=function(t){return t};(${dropwayClient.toString()})(${createQrEncoder.toString()});})();
 `;

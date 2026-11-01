@@ -174,7 +174,7 @@ describe("concurrent completion preserves corrupt-cleanup intent", () => {
 });
 
 // Hold the first promotion write to blob storage, run `invalidate` while the
-// verified bytes are in flight to blobs/<sha256>, then release it so the
+// verified bytes are in flight to a blobs/<sha256>/<uuid> generation, then release it so the
 // physical write lands before the (now refused) metadata registration.
 function holdFirstBlobPromotion() {
   const entered = signal();
@@ -197,10 +197,17 @@ function holdFirstBlobPromotion() {
   };
 }
 
+/** Physical generations of a hash, current or not. */
+async function generations(sha256: string): Promise<string[]> {
+  return (await env.FILES.list({ prefix: `blobs/${sha256}` })).objects.map((o) => o.key);
+}
+
 async function blobInventory(sha256: string) {
+  const row = await env.DB.prepare("SELECT sha256, storage_key FROM blobs WHERE sha256 = ?").bind(sha256).first<{ sha256: string; storage_key: string | null }>();
   return {
-    object: await env.FILES.head(`blobs/${sha256}`),
-    row: await env.DB.prepare("SELECT sha256 FROM blobs WHERE sha256 = ?").bind(sha256).first(),
+    object: row ? await env.FILES.head(row.storage_key ?? `blobs/${sha256}`) : null,
+    generations: await generations(sha256),
+    row,
     scopes: ((await env.DB.prepare("SELECT scope FROM blob_scopes WHERE sha256 = ?").bind(sha256).all<{ scope: string }>()).results.map((r) => r.scope)),
   };
 }
@@ -257,10 +264,10 @@ describe("refused owner registration retains durable inventory of promoted bytes
       const t0 = Date.now();
       for (const at of [t0 + DAY + 3_600_000, t0 + 2 * DAY + 3_600_000, t0 + 3 * DAY + 3_600_000]) {
         await context(dw, (dc) => runCleanup(dc, at));
-        if ((await env.FILES.head(`blobs/${p.sha256}`)) === null) break;
+        if (!(await generations(p.sha256)).length) break;
       }
-      expect.soft(await env.FILES.head(`blobs/${p.sha256}`),
-        "promoted bytes from a refused registration must eventually clean up").toBeNull();
+      expect.soft(await generations(p.sha256),
+        "promoted bytes from a refused registration must eventually clean up").toEqual([]);
       // The session's staged object is drained by the same normal cleanup.
       expect(await env.FILES.head(`uploads/${s.id}`)).toBeNull();
       // Neighbor control: live referenced data survives those same ticks.
@@ -273,7 +280,7 @@ describe("refused owner registration retains durable inventory of promoted bytes
   it("a shared pre-existing verified object survives a refused second registration and later cleanup", async () => {
     const { dw, p, s } = await fixture();
     // A live neighbor site in the same tenant already owns the exact same
-    // bytes: blobs/<sha> is shared, referenced, and must not be deleted when
+    // bytes: its blobs/<sha> generation is shared, referenced, and must not be deleted when
     // this session's own registration is refused.
     const q = await pending(dw, p.sha256, bytes.length, "shared-owner-neighbor");
     const t = await session(dw, q);
@@ -309,7 +316,8 @@ describe("refused owner registration retains durable inventory of promoted bytes
     expect(await env.FILES.head(`uploads/${s.id}`)).toBeNull();
     const after = await blobInventory(p.sha256);
     expect(after.object, "cleanup must not delete a shared object a live owner still references").not.toBeNull();
-    expect(after.row).not.toBeNull();
+    expect(after.row).toEqual(before.row);
+    expect(after.generations, "the refused upload's own generation is reclaimed").toEqual(before.generations);
     expect(after.scopes).toEqual(before.scopes);
     await expectServedExactly(dw, q);
   });

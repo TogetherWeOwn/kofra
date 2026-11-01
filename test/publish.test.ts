@@ -168,7 +168,7 @@ describe("dedupe", () => {
     const blobs = await env.DB.prepare("SELECT COUNT(*) AS n FROM blobs WHERE sha256 = ?").bind(e.sha256).first<{ n: number }>();
     expect(blobs?.n).toBe(1);
     const objects = await env.FILES.list({ prefix: "blobs/" });
-    expect(objects.objects.filter((o) => o.key === `blobs/${e.sha256}`)).toHaveLength(1);
+    expect(objects.objects.filter((o) => o.key.startsWith(`blobs/${e.sha256}/`))).toHaveLength(1);
   });
 });
 

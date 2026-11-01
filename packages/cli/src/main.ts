@@ -344,8 +344,9 @@ const publishCmd: Command = {
 
 Only files the instance does not already have are uploaded (SHA-256 content
 addressing); publishing identical files again reports "unchanged".
-Never published: .git/, node_modules/, .env*, .dev.vars*, .npmrc, *.pem, *.key,
-.dropway/, .DS_Store, plus patterns in <path>/.dropwayignore ("!" re-includes).
+Never published: .git, .hg/, .svn/, node_modules/, .wrangler/, .dropway/, .env, .env.*,
+.dev.vars*, .npmrc, *.pem, *.key, *.p12, *.pfx, id_rsa*, id_ecdsa, id_ed25519*,
+.DS_Store, Thumbs.db, plus patterns in <path>/.dropwayignore ("!" re-includes).
 A .zip file is unpacked by the instance (one request, up to 25 MB by default).
 After a publish with a key, ./dropway.json remembers the site for <path>, so
 running the same command again updates that site.
@@ -1466,7 +1467,7 @@ Quick start:
 
 ${HELP_FOOTER}
 
-Docs: https://github.com/TogetherWeOwn/dropway/tree/main/packages/cli`;
+Docs: https://github.com/TogetherWeOwn/kofra/tree/main/packages/cli`;
 }
 
 function commandHelp(name: string, c: Command): string {

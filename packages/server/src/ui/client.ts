@@ -460,7 +460,17 @@ export function dropwayClient() {
   }
 
   function safeNext(n) {
-    return n && n.charAt(0) === "/" && n.charAt(1) !== "/" && n.charAt(1) !== "\\" ? n : "/dashboard";
+    // Resolve like the browser will (it strips tabs/newlines and treats a backslash as /), require the same
+    // origin, and refuse a resolved path that still starts with // (e.g. /.//x), which would leave the origin.
+    if (!n || n.charAt(0) !== "/") return "/dashboard";
+    try {
+      var u = new URL(n, location.origin);
+      if (u.origin !== location.origin) return "/dashboard";
+      var out = u.pathname + u.search + u.hash;
+      return out.charAt(1) === "/" || out.charAt(1) === "\\" ? "/dashboard" : out;
+    } catch (e) {
+      return "/dashboard";
+    }
   }
 
   // ------------------------------------------------------------------ account
