@@ -11,7 +11,7 @@
  * are never uploaded again, and a byte-identical republish creates no version.
  * Runtime-neutral (fetch only), so it is tested inside the Workers runtime.
  */
-import { CliError, EXIT, type DropwayClient } from "./client.ts";
+import { CliError, EXIT, isCredentialSafeUrl, type DropwayClient } from "./client.ts";
 import { LEGACY_HEADER_PREFIX } from "./legacy-brand.ts";
 
 export interface SourceFile {
@@ -133,6 +133,17 @@ function settingsOf(opts: PublishOptions): Record<string, unknown> {
 export async function publish(client: DropwayClient, files: SourceFile[], opts: PublishOptions = {}): Promise<PublishResult> {
   if (!files.length) {
     throw new CliError({ code: "no_files", message: "There are no files to publish.", hint: "Check the path, and .dropwayignore rules.", exitCode: EXIT.usage });
+  }
+  // An anonymous create mints a claim token that every later step of this
+  // publish (deploy, uploads, finalize, and cleanup on failure) must send.
+  // Refuse a credential-unsafe origin before creating anything: after the
+  // create succeeded, that refusal would strand an empty, unclaimable site.
+  if (!client.token && !isCredentialSafeUrl(client.api)) {
+    throw new CliError({
+      code: "invalid_api_url", exitCode: EXIT.usage,
+      message: "Anonymous publishing needs an HTTPS instance (or a loopback development instance), because this publish must send the claim token the instance returns.",
+      hint: "Use an https:// instance URL, http://localhost for local development, or publish with an API key.",
+    });
   }
   const manifest = files.map((f) => ({ path: f.path, size: f.size, sha256: f.sha256 }));
   const deployBody = {

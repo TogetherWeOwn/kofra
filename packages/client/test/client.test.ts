@@ -40,6 +40,13 @@ describe("normaliseApi", () => {
     expect(normaliseApi("localhost:8787")).toBe("http://localhost:8787");
   });
 
+  it("selects http for scheme-free loopback shorthands", () => {
+    // The URL parser canonicalises IPv4 shorthands only after scheme
+    // inference, so inference must canonicalise before classifying.
+    expect(normaliseApi("127.1:8787")).toBe("http://127.0.0.1:8787");
+    expect(normaliseApi("127.0.1:8787")).toBe("http://127.0.0.1:8787");
+  });
+
   it("refuses empty and non-http(s) input", () => {
     expect(() => normaliseApi("  ")).toThrowError(DropwayError);
     expect(() => normaliseApi("ftp://kofra.test")).toThrowError(DropwayError);
