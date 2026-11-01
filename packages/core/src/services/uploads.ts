@@ -2,7 +2,7 @@ import type { DropwayContext } from "../context";
 import { appOrigin } from "../context";
 import { canAccess, serializeVersion, type SiteRow, type VersionRow } from "./sites";
 import { missingForScope } from "./deploys";
-import { blobScope, writeVerifiedBlob } from "./blobs";
+import { attachStatements, blobScope, settleAttach, writeVerifiedBlob } from "./blobs";
 import { createUploadToken, PENDING_VERSION_TTL_MS, uploadExpired } from "./upload-tokens";
 import { hasScope, type Principal } from "../principal";
 import { ApiError, badRequest, conflict, forbidden, isApiError, notFound, unauthorized } from "../errors";
@@ -496,8 +496,11 @@ async function markSession(dc: DropwayContext, sessionId: string, status: Sessio
     .run();
 }
 
-/** Register against current ownership in the same transaction as the lifetime fence. */
-async function registerVerifiedUpload(dc: DropwayContext, p: Principal, session: SessionRow, completed: boolean): Promise<string | null> {
+/**
+ * Register against current ownership in the same transaction as the lifetime
+ * fence. With a storage key, this also attaches that freshly written generation.
+ */
+async function registerVerifiedUpload(dc: DropwayContext, p: Principal, session: SessionRow, completed: boolean, storageKey: string | null = null): Promise<string | null> {
   const now = Date.now();
   let authority: string;
   let values: Array<string | number | null>;
@@ -521,36 +524,50 @@ async function registerVerifiedUpload(dc: DropwayContext, p: Principal, session:
       AND u.expires_at > ? AND v.status = 'pending' AND s.deleted_at IS NULL
       AND (s.expires_at IS NULL OR s.expires_at > ?) AND (${authority})`;
   const binds = [session.id, now, now, ...values];
+  const attach = storageKey ? attachStatements(dc, session.sha256, session.size, storageKey, now) : null;
+  // Scope proof needs a verified generation; while attaching, only this upload's own.
+  const proven = attach
+    ? " AND EXISTS (SELECT 1 FROM blob_uploads WHERE storage_key = ?) AND EXISTS (SELECT 1 FROM blobs WHERE sha256 = u.sha256)"
+    : " AND EXISTS (SELECT 1 FROM blobs WHERE sha256 = u.sha256)";
+  let result: D1Result[];
   try {
-    const result = await dc.env.DB.batch([
+    result = await dc.env.DB.batch([
       dc.env.DB.prepare(`SELECT CASE WHEN EXISTS (SELECT 1 ${current}) THEN 1
         ELSE json_extract('{}', 'dropway_upload_target_changed') END`).bind(...binds),
-      dc.env.DB.prepare("INSERT OR IGNORE INTO blobs (sha256, size, created_at) VALUES (?, ?, ?)").bind(session.sha256, session.size, now),
+      ...(attach ? [attach.insert] : []),
       dc.env.DB.prepare(`INSERT OR IGNORE INTO blob_scopes (scope, sha256, created_at)
-        SELECT CASE WHEN s.tenant_id IS NULL THEN 's:' || s.id ELSE 't:' || s.tenant_id END, u.sha256, ? ${current}`).bind(now, ...binds),
-      ...(completed ? [dc.env.DB.prepare("UPDATE upload_sessions SET status = 'completed', completed_at = ? WHERE id = ?").bind(now, session.id)] : []),
+        SELECT CASE WHEN s.tenant_id IS NULL THEN 's:' || s.id ELSE 't:' || s.tenant_id END, u.sha256, ? ${current}${proven}`)
+        .bind(now, ...binds, ...(storageKey ? [storageKey] : [])),
+      // While attaching, complete only if the reservation survived; otherwise a
+      // retry would short-circuit on 'completed' without ever proving scope.
+      ...(completed
+        ? [dc.env.DB.prepare(`UPDATE upload_sessions SET status = 'completed', completed_at = ? WHERE id = ?${attach ? " AND EXISTS (SELECT 1 FROM blob_uploads WHERE storage_key = ?)" : ""}`)
+          .bind(now, session.id, ...(attach ? [storageKey] : []))]
+        : []),
+      ...(attach ? [attach.select, attach.release] : []),
       dc.env.DB.prepare("SELECT tenant_id FROM sites WHERE id = ?").bind(session.site_id),
     ]);
-    return (result[result.length - 1]?.results[0] as { tenant_id: string | null } | undefined)?.tenant_id ?? null;
   } catch (error) {
     if (String(error).includes("JSON path") && String(error).includes("dropway_upload_target_changed")) {
+      // The batch rolled back, so nothing references this generation: reclaim it now
+      // rather than after the reservation expires.
+      if (storageKey) await discardGeneration(dc, storageKey);
       throw conflict("upload_closed", "The upload target changed before completion could commit.", "Retry complete with the current owner's credential while the version is pending.");
     }
     throw error;
   }
+  if (storageKey) await settleAttach(dc, storageKey, result[result.length - 3]?.results[0] as { storage_key: string | null } | undefined);
+  return (result[result.length - 1]?.results[0] as { tenant_id: string | null } | undefined)?.tenant_id ?? null;
 }
 
-/**
- * Durable cleanup inventory for bytes about to be promoted, recorded before
- * the R2 write and carrying no ownership scope. If the fenced registration
- * then refuses (target deleted, lifetime expired) or this request dies, the
- * orphan reaper can still find the promoted object; scope rows remain the
- * only proof of ownership, so this row alone exposes nothing.
- */
-async function recordBlobInventory(dc: DropwayContext, session: SessionRow): Promise<void> {
-  await dc.env.DB.prepare("INSERT OR IGNORE INTO blobs (sha256, size, created_at) VALUES (?, ?, ?)")
-    .bind(session.sha256, session.size, Date.now())
-    .run();
+/** Best effort: the reservation sweep and inventory sweep recover failures. */
+async function discardGeneration(dc: DropwayContext, storageKey: string): Promise<void> {
+  try {
+    await dc.env.DB.prepare("DELETE FROM blob_uploads WHERE storage_key = ?").bind(storageKey).run();
+    await dc.env.FILES.delete(storageKey);
+  } catch {
+    // Recovered by cleanupBlobs.
+  }
 }
 
 /** Persist cleanup intent before removing corrupt bytes; retain the allocation fence until deletion succeeds. */
@@ -565,7 +582,11 @@ async function rejectCorruptUpload(dc: DropwayContext, session: SessionRow): Pro
   throw badRequest("hash_mismatch", "The uploaded bytes do not match the SHA-256 in the manifest.", "Start a new upload session and upload the exact file bytes; do not re-encode or compress them.");
 }
 
-/** POST /api/v1/uploads/{id}/complete: assemble, hash-verify, then promote to blobs/<sha256>. Safe to repeat. */
+/**
+ * POST /api/v1/uploads/{id}/complete: assemble, hash-verify, then promote to a
+ * fresh blobs/<sha256>/<uuid> generation. Safe to repeat. The generation's D1
+ * reservation is the cleanup inventory if the request dies before attaching it.
+ */
 export async function completeMultipartUpload(dc: DropwayContext, p: Principal, sessionId: string): Promise<{ sha256: string; size: number; stored: true }> {
   const loaded = await authorizedSession(dc, p, sessionId);
   let { session } = loaded;
@@ -610,9 +631,8 @@ export async function completeMultipartUpload(dc: DropwayContext, p: Principal, 
       await markSession(dc, session.id, "failed");
       throw badRequest("hash_mismatch", "The uploaded bytes do not match the SHA-256 in the manifest.", "Start a new upload session and upload the exact file bytes.");
     }
-    await recordBlobInventory(dc, session);
-    await writeVerifiedBlob(dc, session.sha256, new Uint8Array(0), 0, session.content_type);
-    await registerVerifiedUpload(dc, p, session, true);
+    const storageKey = await writeVerifiedBlob(dc, session.sha256, new Uint8Array(0), 0, session.content_type);
+    await registerVerifiedUpload(dc, p, session, true, storageKey);
     return done;
   }
 
@@ -637,9 +657,8 @@ export async function completeMultipartUpload(dc: DropwayContext, p: Principal, 
   if (staged.size !== session.size || staged.hash !== session.sha256) return rejectCorruptUpload(dc, session);
   const verified = await dc.env.FILES.get(session.r2_key);
   if (!verified) throw new ApiError(502, "blob_missing", "The completed upload's staged bytes could not be read.", "Retry shortly; if it repeats, start a new upload session.");
-  await recordBlobInventory(dc, session);
-  await writeVerifiedBlob(dc, session.sha256, verified.body, session.size, session.content_type);
-  await registerVerifiedUpload(dc, p, session, false);
+  const storageKey = await writeVerifiedBlob(dc, session.sha256, verified.body, session.size, session.content_type);
+  await registerVerifiedUpload(dc, p, session, false, storageKey);
   await dc.env.FILES.delete(session.r2_key);
   const tenantId = await registerVerifiedUpload(dc, p, session, true);
   meter(dc, { type: "blob_upload", tenantId, sha256: session.sha256, bytes: session.size, at: Date.now() });

@@ -1,3 +1,4 @@
+import { signingSecret } from "../config";
 import type { DropwayContext } from "../context";
 import { ApiError, forbidden } from "../errors";
 import { hmacHex, timingSafeEqualStr } from "../lib/crypto";
@@ -9,12 +10,12 @@ export const PENDING_VERSION_TTL_MS = 3600_000;
 /** A capability for exactly one immutable pending manifest, never a site credential. */
 export async function createUploadToken(dc: DropwayContext, version: { id: string; created_at: number }): Promise<string> {
   const payload = `${UPLOAD_TOKEN_PREFIX}${version.id}.${version.created_at + PENDING_VERSION_TTL_MS}`;
-  return `${payload}.${await hmacHex(dc.config.signingSecret, payload)}`;
+  return `${payload}.${await hmacHex(signingSecret(dc.config), payload)}`;
 }
 
 export async function authenticateUploadToken(dc: DropwayContext, token: string, ip: string): Promise<Principal> {
   const match = /^dwu_(ver_[a-zA-Z0-9_-]+)\.(\d+)\.([a-f0-9]{64})$/.exec(token);
-  if (!match || !timingSafeEqualStr(await hmacHex(dc.config.signingSecret, token.slice(0, token.lastIndexOf("."))), match[3]!)) {
+  if (!match || !timingSafeEqualStr(await hmacHex(signingSecret(dc.config), token.slice(0, token.lastIndexOf("."))), match[3]!)) {
     throw forbidden("Invalid upload token.", "Use the unmodified Authorization header from upload.items.");
   }
   const expiresAt = Number(match[2]);

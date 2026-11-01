@@ -29,7 +29,7 @@ function warningFailure() {
     // The ordered advisory-file read observed at the D1 boundary. Other reads,
     // real authorization, storage and the publication transaction remain intact.
     const advisory = statements.some((sql) => sql.replace(/\s+/g, " ").trim().startsWith(
-      "SELECT path, sha256, size, content_type AS contentType FROM version_files WHERE version_id = ? ORDER BY path",
+      "SELECT vf.path, vf.sha256, vf.size, vf.content_type AS contentType, COALESCE(b.storage_key, 'blobs/' || b.sha256) AS storageKey FROM version_files vf LEFT JOIN blobs b ON b.sha256 = vf.sha256 WHERE vf.version_id = ? ORDER BY vf.path",
     ));
     if (!advisory) return;
     const live = await env.DB.prepare(`SELECT v.status FROM versions v JOIN sites s ON s.current_version_id = v.id WHERE s.slug = ?`)

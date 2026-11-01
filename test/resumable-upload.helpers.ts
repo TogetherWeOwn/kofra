@@ -80,7 +80,7 @@ export async function foreignKey(dw: Instance) {
 }
 
 export async function unregistered(sha256: string) {
-  expect(await env.FILES.head(`blobs/${sha256}`)).toBeNull();
+  expect((await env.FILES.list({ prefix: `blobs/${sha256}` })).objects).toEqual([]);
   expect(await env.DB.prepare("SELECT sha256 FROM blobs WHERE sha256 = ?").bind(sha256).first()).toBeNull();
   expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM blob_scopes WHERE sha256 = ?").bind(sha256).first<{ n: number }>())?.n).toBe(0);
 }

@@ -41,7 +41,7 @@ packages/server           @dropway/server: createDropway() Hono app factory
   src/discovery.ts        /llms.txt, /llms-full.txt, /skill.md, /connect(.md), /.well-known/*, /robots.txt (generated)
   src/extensions.ts       Types for routes, MCP tools, UI slots, createDropway options
 packages/cli              `kofra` CLI (npm package "kofra", Node 20+, zero runtime dependencies)
-skills/kofra/SKILL.md   Agent Skill (`npx skills add TogetherWeOwn/dropway`); generated, `npm run skill:sync`
+skills/kofra/SKILL.md   Agent Skill (`npx skills add TogetherWeOwn/kofra`); generated, `npm run skill:sync`
 scripts/guard-open-core.mjs  CI guard: no billing, pricing, payment or hosted-service code in this repo
 test/                     vitest + @cloudflare/vitest-plugin (runs inside workerd)
 ```
@@ -59,15 +59,16 @@ throws `ApiError` with a stable `code` and a `hint` for the caller.
 | `tenants.ts` | First-run setup (bootstrap key creates the owner), members, owner recovery |
 | `sites.ts` | Create, list, update, delete and claim sites; settings; access checks (`getSiteFor`) |
 | `deploys.ts` | Manifest validation, content-addressed upload, atomic finalize, versions, restore, read-back |
-| `uploads.ts` | Fresh upload items for pending versions, plus resumable multipart sessions: real R2 multipart staged at `uploads/<id>`, durable part acknowledgements, streaming-digest verification before promotion to `blobs/<sha256>`, bounded expired-session cleanup |
+| `uploads.ts` | Fresh upload items for pending versions, plus resumable multipart sessions: real R2 multipart staged at `uploads/<id>`, durable part acknowledgements, streaming-digest verification before promotion to a fresh `blobs/<sha256>/<uuid>` generation, bounded expired-session cleanup |
 | `publish.ts` | One-shot publish (multipart, JSON, zip, raw) built on `deploys.ts` |
 | `sources.ts` | Agent file sources (`content`, base64, `url` with an SSRF guard, `sha256` + upload links, `copyFrom`, chat attachments normalized from `download_url`/`file_name`), top-level `archiveUrl` zip publishing through the same fetcher and zip extractor, `publishSources`, partial `updateSiteFiles`, `finalizeVersionByRef` |
 | `site-ops.ts` | Site refs (slug, id or URL), version refs (`live`, `v3`, `3`, id), rename, access modes, paged file reads, `confirm` checks |
 | `idempotency.ts` | Atomic D1 idempotency claims (24 h): replay the first result, 422 on a reused key with another body, retryable 409 for concurrent/unknown outcomes |
 | `upload-tokens.ts` | HMAC upload-only capabilities for the blobs of one pending version, expiring one hour after creation |
-| `blobs.ts` | R2 storage at `blobs/<sha256>` (R2 verifies the hash on write), edge cache |
-| `live.ts` | `live:<slug>` manifest in KV (D1 fallback, per-isolate 5 s cache); v3 filename maps are prototype-less so legal names like `__proto__` survive |
+| `blobs.ts` | Hash-addressed storage with unique R2 generations (`blobs/<sha256>/<uuid>`), a D1 physical-key pointer, verified scope proofs and edge cache; legacy hash-only keys remain readable |
+| `live.ts` | `live:<slug>` manifest in KV (D1 fallback, per-isolate 5 s cache). A miss fills KV, then re-reads the D1 site row and drops the entry if it changed, so a delayed fill cannot overwrite a newer publish, setting or delete; a per-slug read fence stops a read that started before a change from restoring isolate memory. v5 rejects older entries (possibly unverified fills); filename maps are prototype-less so legal names like `__proto__` survive |
 | `cleanup.ts` | Hourly cron: expire anonymous sites, purge deleted sites, drop stale uploads, delete orphan blobs |
+| `blob-cleanup.ts` | Fence orphan retirement by physical generation; invalidate abandoned upload reservations and sweep a bounded R2 inventory page for crash/failed-delete recovery |
 | `events.ts` | Runs hooks and metering after the response (never throws) |
 | `transfers.ts` | Sender-owned deliveries: create/read/update/revoke, revision fencing and permanent slug reservations |
 | `transfer-downloads.ts` | Live D1 download gates, digest-bound unlock grants, per-IP/transfer unlock budgets, range and recipient accounting |

@@ -3,7 +3,7 @@ name: kofra
 description: Publish files, folders and static sites to a live URL with Kofra, then update, version, roll back and share them. Use when the user wants to publish, host, share, deploy or preview HTML pages, Markdown docs, reports, images, PDFs, demos or a built web app, or to change, check or roll back something already on Kofra.
 license: MIT
 metadata:
-  homepage: https://github.com/TogetherWeOwn/dropway
+  homepage: https://github.com/TogetherWeOwn/kofra
 ---
 
 # Kofra
@@ -38,7 +38,7 @@ Publish to the same site again with `-F slug=<slug>` (REST) or `site: "<slug>"` 
 - Change a few files: `update_site_files` (MCP) or `PATCH $KOFRA_URL/api/v1/sites/<slug>/files` with `files`, `delete`, `move`, and `baseVersionId` from your last result. `version_conflict` means someone published since: re-read, re-apply, retry.
 - Check your work: `list_files`, `read_file`, or fetch the returned `url`.
 - Roll back: `list_versions`, then `restore_version` with `"v3"`.
-- Settings: `update_site_settings` (spa, renderMarkdown, title). Password: `set_site_access`.
+- Settings: `update_site_settings` (title, description, spa, renderMarkdown, crossOriginIsolation). Password: `set_site_access`.
 
 ## Rules
 
