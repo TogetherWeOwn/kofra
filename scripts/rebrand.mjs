@@ -82,8 +82,10 @@ const CLI_SUBCOMMANDS =
 /** [name, regex, replacement]. Order matters only where noted. */
 const RULES = [
   // Repository URLs and action/skill refs. The lookahead keeps a differently named
-  // repository that merely starts with the old name (e.g. an "-action" repo) untouched.
-  ["repository URL", /\bTogetherWeOwn\/dropway(?![\w-])/g, "TogetherWeOwn/kofra"],
+  // repository that merely starts with the old name (e.g. an "-action" or ".js" repo,
+  // since periods are valid in repository names) untouched, while ".git" clone URLs
+  // still match and keep their suffix.
+  ["repository URL", /\bTogetherWeOwn\/dropway(?![\w-]|\.(?!git(?![\w-]))[\w])/g, "TogetherWeOwn/kofra"],
   ["header X-Dropway-*", /\bX-Dropway-/g, "X-Kofra-"],
   ["header x-dropway-*", /\bx-dropway-/g, "x-kofra-"],
   ["env DROPWAY_*", /(?<![A-Za-z0-9_])DROPWAY_(?=[A-Z0-9])/g, "KOFRA_"],
@@ -304,8 +306,8 @@ function selfTest() {
   // Renames what people see, keeps internal names and marked lines, and is idempotent.
   const keptLine = "See /__dropway/ and dropway.json.";
   // Escaped slash so a repo-wide search for the old repository URL stays clean.
-  const oldRepoLine = "Source: https://github.com/TogetherWeOwn\/dropway, install: npx skills add TogetherWeOwn\/dropway, action: TogetherWeOwn\/dropway-action@v1.";
-  const newRepoLine = "Source: https://github.com/TogetherWeOwn/kofra, install: npx skills add TogetherWeOwn/kofra, action: TogetherWeOwn\/dropway-action@v1.";
+  const oldRepoLine = "Source: https://github.com/TogetherWeOwn\/dropway, install: npx skills add TogetherWeOwn\/dropway, clone: TogetherWeOwn\/dropway.git, action: TogetherWeOwn\/dropway-action@v1, lib: TogetherWeOwn\/dropway.js.";
+  const newRepoLine = "Source: https://github.com/TogetherWeOwn/kofra, install: npx skills add TogetherWeOwn/kofra, clone: TogetherWeOwn/kofra.git, action: TogetherWeOwn\/dropway-action@v1, lib: TogetherWeOwn\/dropway.js.";
   const markedLine = "Dropway was the old name. <!-- rebrand:keep -->";
   const a = repo({
     "README.md": `Dropway: run \`npx dropway publish ./dist\` with DROPWAY_API_KEY, then read X-Dropway-Version.\n${keptLine}\n${oldRepoLine}\n${markedLine}\n`,
