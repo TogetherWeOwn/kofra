@@ -63,6 +63,16 @@ describe.each([
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe(`${base}docs/page.html?x=1#frag`);
   });
+
+  it("keeps a literal backslash in the query or fragment", async () => {
+    const dw = await freshInstance(config);
+    await locked(dw, "locked");
+    for (const next of [`${base}docs?search=C:\\notes`, `${base}docs#sec\\tion`]) {
+      const res = await unlock(dw, `${site}/__dropway/password`, next);
+      expect(res.status, next).toBe(303);
+      expect(res.headers.get("location")).toBe(next);
+    }
+  });
 });
 
 it("site password redirect: app-origin paths do not reach another site through dot-segments", async () => {

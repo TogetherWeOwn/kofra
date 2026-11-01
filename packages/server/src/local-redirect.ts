@@ -7,7 +7,12 @@
  * packages/server/src/ui/client.ts (safeNext) applies the same rule in the browser.
  */
 export function localRedirectPath(next: string | null | undefined, origin: string, base = "/"): string | null {
-  if (!next || next.charAt(0) !== "/" || /[\x00-\x1f\x7f\\]/.test(next)) return null;
+  if (!next || next.charAt(0) !== "/" || /[\x00-\x1f\x7f]/.test(next)) return null;
+  // Browsers treat a backslash as a slash in the path, but a literal backslash in
+  // ?query or #fragment (e.g. ?search=C:\notes) stays on the same origin, so only
+  // the path portion (before the first ? or #) is scanned for them.
+  const delim = next.search(/[?#]/);
+  if (/\\/.test(delim === -1 ? next : next.slice(0, delim))) return null;
   let url: URL;
   try {
     url = new URL(next, origin);
