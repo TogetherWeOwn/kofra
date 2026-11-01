@@ -238,9 +238,22 @@ describe("collector read-boundary ENOENT", () => {
 describe.runIf(process.platform !== "win32")("collector filename decoding (POSIX)", () => {
   const rawPath = (name: Buffer) => Buffer.concat([Buffer.from(`${dir}/`), name]);
 
-  it("rejects a name that is not valid UTF-8", async () => {
-    await writeFile(rawPath(Buffer.from([0xff])) as unknown as string, "hi");
-    await expect(collectFiles(dir)).rejects.toMatchObject({ code: "invalid_filename" });
+  // A lone 0xff byte is not a valid filename on macOS (APFS requires valid
+  // UTF-8), so only these two tests are Linux-only; the rest of the POSIX
+  // suite still runs on macOS.
+  describe.runIf(process.platform === "linux")("invalid UTF-8 bytes (Linux-only)", () => {
+    it("rejects a name that is not valid UTF-8", async () => {
+      await writeFile(rawPath(Buffer.from([0xff])) as unknown as string, "hi");
+      await expect(collectFiles(dir)).rejects.toMatchObject({ code: "invalid_filename" });
+    });
+
+    it("does not let a non-UTF-8 name and a U+FFFD name collapse in a Map", async () => {
+      await writeFile(rawPath(Buffer.from([0xff])) as unknown as string, "raw");
+      await writeFile(join(dir, "�"), "decoded");
+      // Either invalid_filename or duplicate_path proves no silent collapse;
+      // with strict decoding the non-UTF-8 name fails first.
+      await expect(collectFiles(dir)).rejects.toMatchObject({ code: "invalid_filename" });
+    });
   });
 
   it("accepts a real U+FFFD name without rejecting it as invalid", async () => {
@@ -289,11 +302,4 @@ describe.runIf(process.platform !== "win32")("collector filename decoding (POSIX
     await expect(collectFiles(dir)).rejects.toMatchObject({ code: "EIO" });
   });
 
-  it("does not let a non-UTF-8 name and a U+FFFD name collapse in a Map", async () => {
-    await writeFile(rawPath(Buffer.from([0xff])) as unknown as string, "raw");
-    await writeFile(join(dir, "�"), "decoded");
-    // Either invalid_filename or duplicate_path proves no silent collapse;
-    // with strict decoding the non-UTF-8 name fails first.
-    await expect(collectFiles(dir)).rejects.toMatchObject({ code: "invalid_filename" });
-  });
 });
