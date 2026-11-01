@@ -155,6 +155,8 @@ export function emitClient(operations) {
     const type = toTypeName(op.id);
     const method = toMethodName(op.id);
     const summary = op.summary.replace(/\*\//g, "*\\/");
+    // A 429 on these mutations does not prove that no effect committed.
+    const callOptions = op.id === "restore_version" || op.id === "delete_version" ? '{ ...opts, retry: "none" }' : "opts";
     const optionalInput = Object.keys(op.input?.properties ?? {}).length === 0;
     if (isBytesOut(op)) {
       chunks.push(`  /** ${summary} */`);
@@ -178,7 +180,7 @@ export function emitClient(operations) {
       chunks.push(`  /** ${summary} */`);
       chunks.push(`  async ${method}(input: ${type}Input, opts?: CallOptions): Promise<${type}Output> {`);
       chunks.push(
-        `    return this.call<${type}Input, ${type}Output>(OPERATIONS[${JSON.stringify(op.id)}], input, opts);`,
+        `    return this.call<${type}Input, ${type}Output>(OPERATIONS[${JSON.stringify(op.id)}], input, ${callOptions});`,
       );
     }
     chunks.push("  }");

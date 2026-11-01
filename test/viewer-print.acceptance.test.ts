@@ -70,13 +70,13 @@ describe("print stylesheet delivery", () => {
     },
   );
 
-  it("binary text fallback is validator binary@3 and revalidates only the new representation", async () => {
+  it("binary text fallback is validator binary@5 and revalidates only the new representation", async () => {
     const hash = await sha256Hex(new TextEncoder().encode(binaryTextContent));
-    const response = await get("yarn.lock?view=1", { ...NAV, "If-None-Match": `W/"binary@2-${hash}"` });
+    const response = await get("yarn.lock?view=1", { ...NAV, "If-None-Match": `W/"binary@3-${hash}"` });
     expect(response.headers.get("x-kofra-viewer")).toBe("binary");
     expect(response.status, "a pre-rotation binary cached response must not survive as 304").toBe(200);
     const etag = response.headers.get("etag")!;
-    expect(etag).toMatch(new RegExp(`^W/"binary@3-${hash}(?:-folder[A-Za-z0-9_-]+)?"$`));
+    expect(etag).toMatch(new RegExp(`^W/"binary@5-${hash}(?:-folder[A-Za-z0-9_-]+)?"$`));
     const html = await response.text();
     expect(html).toContain("it looks like text");
     expect(printStyles(html).length, "the binary as-text branch renders through the code page, so it must receive print CSS").toBeGreaterThan(0);

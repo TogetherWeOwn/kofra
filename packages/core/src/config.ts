@@ -3,6 +3,7 @@
  * then overridden by whatever the embedding app passes to createDropway({ config }).
  */
 
+import { ApiError } from "./errors";
 import { QUOTA_KEYS, type QuotaKey, type Quotas } from "./policy";
 
 const MB = 1024 * 1024;
@@ -99,8 +100,12 @@ export interface DropwayConfig {
   quotas: Quotas;
   /** Secret that may create the owner (first run) and mint recovery owner keys. */
   adminBootstrapKey: string | null;
-  /** HMAC secret for cookies and IP hashing. */
-  signingSecret: string;
+  /**
+   * HMAC secret for capabilities (cookies, upload and preview tokens) and IP hashing. null when
+   * neither SIGNING_SECRET nor ADMIN_BOOTSTRAP_KEY is set: read it through signingSecret(), which
+   * refuses with 503 then.
+   */
+  signingSecret: string | null;
   /** KV edge-cache TTL for live site manifests, seconds (KV minimum is 30). */
   liveCacheTtlSeconds: number;
   /** How long freed site names are held (R-59). */
@@ -140,6 +145,8 @@ export interface DropwayVars extends Partial<Record<`QUOTA_${Uppercase<QuotaKey>
   SLUG_HOLD_GENERATED_DAYS?: string;
   ADMIN_BOOTSTRAP_KEY?: string;
   SIGNING_SECRET?: string;
+  /** Local development only: sign with a fixed, public secret when no secret is set. */
+  ALLOW_INSECURE_DEV_SECRET?: string;
   TRANSFER_MAX_EXPIRY_DAYS?: string;
 }
 
@@ -180,6 +187,19 @@ function unixSeconds(v: string | undefined): number {
 function normaliseDomain(v: string | undefined | null): string | null {
   const d = (v ?? "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^\.+|\.+$/g, "");
   return d || null;
+}
+
+/** Public, so anything signed with it is forgeable: only behind ALLOW_INSECURE_DEV_SECRET. */
+const INSECURE_DEV_SECRET = "dropway-insecure-dev-secret";
+
+/**
+ * The instance signing secret. Fails closed: without one, signed capabilities and salted IP hashes
+ * are refused (503) instead of falling back to a guessable key. Unsigned routes keep working.
+ */
+export function signingSecret(config: Pick<DropwayConfig, "signingSecret">): string {
+  if (config.signingSecret) return config.signingSecret;
+  throw new ApiError(503, "signing_secret_missing", "This instance has no signing secret configured.",
+    "The operator must set SIGNING_SECRET (or ADMIN_BOOTSTRAP_KEY) as a Worker secret.", undefined, { retryable: false });
 }
 
 export function resolveConfig(vars: DropwayVars, overrides: ConfigOverrides = {}): DropwayConfig {
@@ -259,7 +279,8 @@ export function resolveConfig(vars: DropwayVars, overrides: ConfigOverrides = {}
       return [key, n];
     })) as Quotas,
     adminBootstrapKey,
-    signingSecret: overrides.signingSecret ?? (vars.SIGNING_SECRET?.trim() || adminBootstrapKey || "dropway-insecure-dev-secret"),
+    signingSecret: overrides.signingSecret !== undefined ? overrides.signingSecret
+      : vars.SIGNING_SECRET?.trim() || adminBootstrapKey || (bool(vars.ALLOW_INSECURE_DEV_SECRET, false) ? INSECURE_DEV_SECRET : null),
     liveCacheTtlSeconds: Math.max(30, overrides.liveCacheTtlSeconds ?? 30),
     slugHolds,
   };

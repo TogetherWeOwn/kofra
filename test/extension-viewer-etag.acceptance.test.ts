@@ -7,6 +7,46 @@ import { form, freshInstance } from "./helpers";
 const ENTITY_TAG = /^(?:W\/)?"[\x21\x23-\x7e\x80-\xff]*"$/;
 
 describe("extension viewer ETag contract", () => {
+  it.each([false, true])("refreshes pre-chrome and chrome1 extension tags, then revalidates manifest-bound chrome2 (embed=%s)", async (embed) => {
+    const viewer: Viewer = {
+      id: "extension-chrome", version: 7, maxBytes: 1024,
+      matches: (file) => file.path === "fixture.txt",
+      etagExtra: () => "-layout-2",
+      async render(context) {
+        return new Response(`Extension page: ${await context.readText()}`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      },
+    };
+    const dw = await freshInstance({}, { viewers: [viewer] });
+    const published = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey,
+      body: form({ "fixture.txt": "hello" }, { slug: "extension-chrome" }),
+    });
+    expect(published.status).toBe(201);
+    const path = `/s/extension-chrome/fixture.txt?view=1${embed ? "&embed=1" : ""}`;
+    const identity = "extension-chrome@7-2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824-layout-2";
+    const folder = `-folder${published.body.version.id}`;
+    const suffix = embed ? "-e" : "";
+    // Historical embeds omitted the manifest; keep both predecessor shapes
+    // independent of the current chrome2/manifest-bound contract.
+    const legacyFolder = embed ? "" : folder;
+    const predecessors = [
+      `W/"${identity}${legacyFolder}${suffix}"`,
+      `W/"${identity}${legacyFolder}-chrome1${suffix}"`,
+    ];
+    const current = `W/"${identity}${folder}-chrome2${suffix}"`;
+    for (const legacy of predecessors) {
+      const refreshed = await dw.call(path, { headers: { "If-None-Match": legacy } });
+      expect(refreshed.status, "pre-chrome and chrome1 cached extension pages must refresh").toBe(200);
+      expect(refreshed.headers.get("x-kofra-viewer")).toBe("extension-chrome");
+      expect(refreshed.headers.get("etag")).toBe(current);
+      expect(await refreshed.text()).toBe("Extension page: hello");
+    }
+    const revalidated = await dw.call(path, { headers: { "If-None-Match": current } });
+    expect(revalidated.status).toBe(304);
+    expect(revalidated.headers.get("etag")).toBe(current);
+    expect(await revalidated.text()).toBe("");
+  });
+
   it.each([
     { name: "ordinary identity", extra: "revision-1", changed: "revision-2" },
     { name: "quote", extra: 'quote"value', changed: "quote%22value" },
@@ -216,7 +256,7 @@ describe("extension viewer ETag contract", () => {
     expect(rendered.headers.get("etag")).toMatch(ENTITY_TAG);
   });
 
-  it("preserves the ordinary built-in code viewer ETag bytes", async () => {
+  it("keeps built-in viewer identity and folder bytes before the shared chrome version", async () => {
     const dw = await freshInstance();
     const published = await dw.json("/api/v1/publish", {
       method: "POST", key: dw.ownerKey,
@@ -233,9 +273,9 @@ describe("extension viewer ETag contract", () => {
     expect(code).toBeDefined();
     const versionId = published.body.version.id;
     expect(versionId).toEqual(expect.any(String));
-    const etag = `W/"code@${code!.version ?? 1}-2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824-folder${versionId}"`;
+    const etag = `W/"code@${code!.version ?? 1}-2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824-folder${versionId}-chrome2"`;
     expect(rendered.headers.get("etag")).toBe(etag);
-    expect(etag).toMatch(/^W\/"code@\d+-[0-9a-f]{64}-folder[^"\s]+"$/);
+    expect(etag).toMatch(/^W\/"code@\d+-[0-9a-f]{64}-folder[^"\s]+-chrome2"$/);
     const revalidated = await dw.call(path, { headers: { "If-None-Match": etag } });
     expect(revalidated.status).toBe(304);
     expect(revalidated.headers.get("etag")).toBe(etag);

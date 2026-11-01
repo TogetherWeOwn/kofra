@@ -1,3 +1,4 @@
+import { signingSecret } from "../config";
 import type { DropwayContext } from "../context";
 import { appOrigin, siteUrl } from "../context";
 import { ApiError, badRequest, conflict, forbidden, notFound, rateLimited, unauthorized } from "../errors";
@@ -174,7 +175,7 @@ export function parseSettings(body: Record<string, unknown>): SiteSettingsInput 
 
 /** Salted hash of the caller IP, for anonymous rate limits without storing raw IPs. */
 export async function ipHash(dc: DropwayContext, ip: string): Promise<string> {
-  return (await sha256Hex(`${dc.config.signingSecret}:${ip}`)).slice(0, 32);
+  return (await sha256Hex(`${signingSecret(dc.config)}:${ip}`)).slice(0, 32);
 }
 
 export function anonymousDisabled(): ApiError {

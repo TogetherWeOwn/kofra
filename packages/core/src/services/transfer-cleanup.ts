@@ -31,6 +31,9 @@ export async function cleanupTransfers(dc: DropwayContext, now: number) {
       purgedTransfers++;
     }
   }
-  await db.prepare("DELETE FROM transfer_unlock_buckets WHERE window < ?").bind(Math.floor(now / 900_000) - 1).run();
+  // Bounded like the other scheduled sweeps: a large stale backlog drains over successive invocations.
+  const staleWindow = Math.floor(now / 900_000) - 1;
+  await db.prepare("DELETE FROM transfer_unlock_buckets WHERE bucket IN (SELECT bucket FROM transfer_unlock_buckets WHERE window < ? LIMIT 500)")
+    .bind(staleWindow).run();
   return { expiredTransfers: expired.length, purgedTransfers };
 }

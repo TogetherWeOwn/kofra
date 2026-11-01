@@ -1,3 +1,4 @@
+import { signingSecret } from "../config";
 import type { DropwayContext } from "../context";
 import { siteUrl } from "../context";
 import { readBlob, readBlobRange } from "./blobs";
@@ -31,7 +32,7 @@ export const transferCookieName = (t: TransferRow) => `__Host-dw_transfer_${t.id
 export async function makeTransferGrant(dc: DropwayContext, t: PublicTransfer): Promise<string> {
   const until = Math.min(Date.now() + 15 * 60_000, t.expires_at);
   const value = String(until);
-  return `${value}.${await hmacHex(dc.config.signingSecret, `transfer:${t.id}:${t.password_hash}:${value}`)}`;
+  return `${value}.${await hmacHex(signingSecret(dc.config), `transfer:${t.id}:${t.password_hash}:${value}`)}`;
 }
 export async function transferUnlocked(dc: DropwayContext, t: PublicTransfer, request: Request): Promise<boolean> {
   if (!t.password_hash) return true;
@@ -41,7 +42,7 @@ export async function transferUnlocked(dc: DropwayContext, t: PublicTransfer, re
     if (!grant || grant.length > 100) continue;
     const [until, signature] = grant.split(".");
     if (!until || !signature || !/^\d+$/.test(until) || Number(until) < Date.now() || Number(until) > Date.now() + 15 * 60_000) continue;
-    const expected = await hmacHex(dc.config.signingSecret, `transfer:${t.id}:${t.password_hash}:${until}`);
+    const expected = await hmacHex(signingSecret(dc.config), `transfer:${t.id}:${t.password_hash}:${until}`);
     if (timingSafeEqualStr(signature, expected)) return true;
   }
   return false;
@@ -49,16 +50,32 @@ export async function transferUnlocked(dc: DropwayContext, t: PublicTransfer, re
 async function spendUnlock(dc: DropwayContext, bucket: string, cap: number) {
   const windowMs = 15 * 60_000;
   const window = Math.floor(Date.now() / windowMs);
-  const row = await dc.env.DB.prepare(`INSERT INTO transfer_unlock_buckets (bucket, window, attempts) VALUES (?, ?, 1)
-    ON CONFLICT(bucket) DO UPDATE SET window = excluded.window,
-      attempts = CASE WHEN window = excluded.window THEN attempts + 1 ELSE 1 END RETURNING attempts`)
-    .bind(bucket, window).first<{ attempts: number }>();
-  if (!row) throw new ApiError(503, "transfer_unlock_unavailable", "Password unlock is unavailable.", "Retry later.");
-  if (row.attempts > cap) throw rateLimited("Too many password attempts.", "Wait before trying again.", Math.max(1, Math.ceil(((window + 1) * windowMs - Date.now()) / 1000)));
+  // The conditional upsert matches no row once the counter is at its allowance, so a full counter is never written
+  // again in its window and attempts never pass the cap. A late reservation from an earlier window cannot move it backward.
+  for (let tries = 0; tries < 2; tries++) {
+    const spent = await dc.env.DB.prepare(`INSERT INTO transfer_unlock_buckets (bucket, window, attempts) VALUES (?, ?, 1)
+      ON CONFLICT(bucket) DO UPDATE SET window = MAX(window, excluded.window),
+        attempts = CASE WHEN window >= excluded.window THEN attempts + 1 ELSE 1 END
+        WHERE window < excluded.window OR attempts < ? RETURNING window`)
+      .bind(bucket, window, cap).first<{ window: number }>();
+    if (spent) return;
+    const stored = await dc.env.DB.prepare("SELECT window, attempts FROM transfer_unlock_buckets WHERE bucket = ?")
+      .bind(bucket).first<{ window: number; attempts: number }>();
+    if (!stored) break;
+    // A counter renewed into a newer window between the upsert and this read has room again: try once more.
+    if (stored.attempts >= cap) throw rateLimited("Too many password attempts.", "Wait before trying again.", Math.max(1, Math.ceil(((stored.window + 1) * windowMs - Date.now()) / 1000)));
+  }
+  throw new ApiError(503, "transfer_unlock_unavailable", "Password unlock is unavailable.", "Retry later.");
 }
+/** Separate namespaces prevent site password attempts from consuming transfer budgets. */
+export async function spendSitePasswordAttempt(dc: DropwayContext, siteId: string, ip: string) {
+  await spendUnlock(dc, `site-ip:${await sha256Hex(`${signingSecret(dc.config)}:${ip}`)}`, 10);
+  await spendUnlock(dc, `site:${siteId}`, 30);
+}
+
 export async function unlockTransfer(dc: DropwayContext, t: PublicTransfer, password: unknown, ip: string) {
   checkTransferGate(t);
-  await spendUnlock(dc, `ip:${await sha256Hex(`${dc.config.signingSecret}:${ip}`)}`, 10);
+  await spendUnlock(dc, `ip:${await sha256Hex(`${signingSecret(dc.config)}:${ip}`)}`, 10);
   await spendUnlock(dc, `transfer:${t.id}`, 30);
   const value = validateTransferPassword(password);
   if (!value || !t.password_hash || !await verifyPassword(value, t.password_hash)) throw forbidden("Incorrect password.", "Ask the sender for the delivery password.", "transfer_locked");

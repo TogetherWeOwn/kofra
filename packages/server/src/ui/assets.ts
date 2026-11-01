@@ -1,3 +1,4 @@
+import { createQrEncoder, QR_LICENSE } from "../qr.js";
 import { dropwayClient } from "./client";
 
 /**
@@ -10,8 +11,9 @@ import { dropwayClient } from "./client";
  * (esbuild keepNames, which wrangler turns on), so a no-op __name is defined
  * around it.
  */
-export const CLIENT_SCRIPT = `/*! Kofra dashboard (MIT) https://github.com/TogetherWeOwn/dropway */
-(function(){"use strict";var __name=function(t){return t};(${dropwayClient.toString()})();})();
+export const CLIENT_SCRIPT = `/*! Kofra dashboard (MIT) https://github.com/TogetherWeOwn/kofra */
+${QR_LICENSE}
+(function(){"use strict";var __name=function(t){return t};(${dropwayClient.toString()})(${createQrEncoder.toString()});})();
 `;
 
 /** 32-bit FNV-1a, hex: enough to bust caches when the script changes. */

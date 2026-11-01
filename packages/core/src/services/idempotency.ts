@@ -10,7 +10,8 @@ import type { Principal } from "../principal";
  * - same input  -> the first result is replayed (`replayed: true`), nothing runs twice;
  * - other input -> 422 idempotency_key_reused;
  * - first call still running -> 409 idempotency_in_progress (retryable).
- * Records live 24 hours. Failed calls are not recorded, so a retry after an error runs again.
+ * Records live 24 hours. Failed callbacks normally release their claim; callers
+ * with uncertain mutation outcomes opt into retainOnError instead.
  *
  * D1 atomically claims each key across isolates and locations. A pending claim is
  * never stolen before its 24-hour expiry: an interrupted request has an unknown
@@ -79,6 +80,8 @@ export interface IdempotencyOptions<T> {
   key: string | null;
   /** The request input (without the key itself). */
   input: unknown;
+  /** Keep an unknown-outcome claim when the callback throws; an error need not prove rollback. */
+  retainOnError?: boolean;
   /** Strip secrets before the result is stored for replay (e.g. a newly minted API key). */
   redactForReplay?: (result: T) => T;
 }
@@ -125,7 +128,9 @@ export async function withIdempotency<T>(dc: DropwayContext, opts: IdempotencyOp
   try {
     result = await run();
   } catch (e) {
-    await dc.env.DB.prepare("DELETE FROM idempotency_keys WHERE key_hash = ? AND owner_token = ? AND state = 'pending'").bind(keyHash, owner).run();
+    if (!opts.retainOnError) {
+      await dc.env.DB.prepare("DELETE FROM idempotency_keys WHERE key_hash = ? AND owner_token = ? AND state = 'pending'").bind(keyHash, owner).run();
+    }
     throw e;
   }
   try {

@@ -344,8 +344,9 @@ const publishCmd: Command = {
 
 Only files the instance does not already have are uploaded (SHA-256 content
 addressing); publishing identical files again reports "unchanged".
-Never published: .git/, node_modules/, .env*, .dev.vars*, .npmrc, *.pem, *.key,
-.dropway/, .DS_Store, plus patterns in <path>/.dropwayignore ("!" re-includes).
+Never published: .git, .hg/, .svn/, node_modules/, .wrangler/, .dropway/, .env, .env.*,
+.dev.vars*, .npmrc, *.pem, *.key, *.p12, *.pfx, id_rsa*, id_ecdsa, id_ed25519*,
+.DS_Store, Thumbs.db, plus patterns in <path>/.dropwayignore ("!" re-includes).
 A .zip file is unpacked by the instance (one request, up to 25 MB by default).
 After a publish with a key, ./dropway.json remembers the site for <path>, so
 running the same command again updates that site.
@@ -810,7 +811,7 @@ const restoreCmd: Command = {
     const inst = await resolveInstance(p, io);
     const client = makeClient(io, inst.api, requireKey(inst));
     const v = await resolveVersion(client, slug, p.positionals[1]);
-    const { data } = await client.post<{ restored: boolean; alreadyLive: boolean; version: VersionInfo; url: string }>(`/sites/${enc(slug)}/versions/${enc(v.id)}/restore`, {}, { retry: "safe" });
+    const { data } = await client.post<{ restored: boolean; alreadyLive: boolean; version: VersionInfo; url: string }>(`/sites/${enc(slug)}/versions/${enc(v.id)}/restore`, {}, { retry: "none", idempotencyKey: crypto.randomUUID() });
     out.result(data, () => (data.alreadyLive ? `${slug} v${data.version.number} is already live.\n${data.url}` : `Restored ${slug} to v${data.version.number}.\n${data.url}`));
     return EXIT.ok;
   },
@@ -829,7 +830,8 @@ const deleteCmd: Command = {
     if (ref) {
       const v = await resolveVersion(client, slug, ref);
       await confirm(io, out, p, slug, `delete version v${v.number} of ${slug}`);
-      const { data } = await client.request("DELETE", `/sites/${enc(slug)}/versions/${enc(v.id)}`);
+      const { site: canonicalSlug } = await getVersionDirect(client, slug, v.id);
+      const { data } = await client.request("DELETE", `/sites/${enc(slug)}/versions/${enc(v.id)}`, { json: { confirm: canonicalSlug }, retry: "none", idempotencyKey: crypto.randomUUID() });
       out.result({ ...data, slug, version: v.number }, `Deleted version v${v.number} of ${slug}.`);
       return EXIT.ok;
     }
@@ -1520,7 +1522,7 @@ Quick start:
 
 ${HELP_FOOTER}
 
-Docs: https://github.com/TogetherWeOwn/dropway/tree/main/packages/cli`;
+Docs: https://github.com/TogetherWeOwn/kofra/tree/main/packages/cli`;
 }
 
 function commandHelp(name: string, c: Command): string {

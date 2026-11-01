@@ -15,6 +15,12 @@ export interface Instance {
 
 /** Wipe storage, apply migrations, build a Kofra and create its owner. */
 export async function freshInstance(config: ConfigOverrides = {}, extra: Omit<CreateDropwayOptions, "config"> = {}): Promise<Instance> {
+  // The pinned runtime can retain stopped SQLite-backed stores on reset.
+  // Wake every fixture store first with bounded calls, even before migrations.
+  await env.DB.prepare("SELECT 1").first();
+  await env.FILES.list({ limit: 1 });
+  await env.CACHE.list({ limit: 1 });
+  await caches.default.delete(new Request(`${ORIGIN}/__fixture_reset__`));
   await reset();
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
   // Diagnostic for the intermittent setup 409: record whether reset left a

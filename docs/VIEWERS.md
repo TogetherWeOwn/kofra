@@ -17,6 +17,35 @@ the first viewer whose `maxBytes` is at least `file.size`
 (`file.size <= maxBytes`) and whose `matches` accepts the file kind and view
 mode wins. The response names the winner in `X-Kofra-Viewer`.
 
+## Phone handoff
+
+File viewer bars include a native **Phone** disclosure, operable by keyboard
+with JavaScript disabled. It shows an inline SVG QR plus a selectable full link
+for the request origin and already-encoded public file path. Query strings and
+fragments are never included. Password protection still applies when the phone
+opens that address; no desktop grant is transferred.
+
+Embeds, folder listings and version-preview addresses omit Phone. Raw, Source
+and Download retain their existing representation and access rules. The shared
+vendored encoder also serves the dashboard, whose QR output is unchanged.
+
+The server limits QR input to 1,273 UTF-8 bytes (version 40, H correction) and
+SVG output to 128 KiB, with a four-module quiet zone. Display is at most 256
+CSS pixels at whole pixels per module (never a fractional module scale), and
+shrinks toward one pixel per module in short viewports. The open bar is
+non-sticky and its panel does not clip: native document scrolling can expose
+the complete code even when its module grid exceeds the available panel height.
+Above capacity or on an encoder failure, the full link remains without a QR.
+URL-specific chrome is generated outside cached body fragments; built-in
+viewer versions advance so conditional responses refresh the markup, and every
+full-page ETag also carries the shared-chrome revision (`-chrome<N>`), so a
+chrome change retires cached pages of extension viewers using `viewerPage`
+without a version bump of their own. Every full-page validator, including images
+and embeds, also carries the manifest version: identical bytes can acquire a new
+path or MIME description. Content-only cached fragments remain independent.
+Whether a page is an authorized version preview comes from the router's preview state (`ViewerContext.preview`), never
+from matching the address or deployment labels.
+
 ## At a glance
 
 | Format | Accepted input cap (`maxBytes`) | Read budget for the rendered view | Rendered-output limits | Above the input cap |
@@ -122,6 +151,51 @@ only while the shown text is at most `HIGHLIGHT_MAX_BYTES = 512 * 1024`
 [`packages/server/src/viewers/highlight.ts`](../packages/server/src/viewers/highlight.ts));
 above that the same text is shown escaped as plain text with a note.
 
+## Image and SVG backgrounds
+
+The raster-image and SVG viewers offer **Checker** (default), **Light** (white)
+and **Dark** (black) backgrounds for visually inspecting artwork. The selection
+changes only the image stage, not the page theme or the file. It does not detect
+transparency or certify contrast or accessibility; opaque pixels keep their own
+colors.
+
+The labelled native radio group works without JavaScript. Tab to the selected
+background, then use the arrow keys to change it; the checked circle and bold
+label identify the selection, and a visible outline identifies keyboard focus.
+**Actual size** remains a separate checkbox: Space toggles between fitting the
+image and its natural size without resetting the background. Clicking the image
+also toggles sizing. Large Actual-size images remain scrollable, and the controls
+wrap above the stage on narrow screens. Fit uses the space remaining after the
+actual wrapped controls and header, rather than a fixed header-height allowance.
+If controls exhaust a very short window, the stage retains a usable minimum
+height and the document can scroll instead of collapsing the image to zero.
+Image-viewer chrome stays in normal document flow so it cannot cover a control
+when native keyboard focus scrolls it into view. The inspection paint layer keeps
+its checker/white/black colors in forced-colors mode; the controls and their focus
+indicators still use the system's forced-color adaptation.
+
+The same controls are available with `?view=1&embed=1`. A bare iframe or image
+sub-resource still receives the original file. SVGs remain isolated through
+`<img>`; their scripts do not run. The raster viewer still reads only the first
+65,536 bytes (or the whole file if smaller) for dimensions, and the SVG viewer
+reads no file bytes to build its page.
+
+Selection is local to the current document: it is not saved or encoded in the
+URL. No script, canvas, external asset, extra storage read or background-query
+cache variant is added. Raw/Download/sub-resource bytes, headers and ranges are
+unchanged. The image and SVG viewer versions invalidate the former rendered-page
+validators when these controls change.
+
+Verification contracts:
+[`test/image-backgrounds.acceptance.test.ts`](../test/image-backgrounds.acceptance.test.ts)
+and
+[`packages/cli/test/encrypted/image-backgrounds.browser.acceptance.test.ts`](../packages/cli/test/encrypted/image-backgrounds.browser.acceptance.test.ts).
+The browser suite serves a disposable local Worker and uses transparent light/dark
+PNG/SVG fixtures plus an opaque PNG across light/dark themes at 360 and 1100 px.
+It checks all three backgrounds with both sizing states using the keyboard with
+scripts disabled, including stage pixels, focus, scrolling and unchanged requests.
+These contracts are not evidence of a particular deployed version.
+
 ## Printing reports
 
 Markdown, code/text (including Source), JSON, CSV/TSV and notebook documents
@@ -143,6 +217,22 @@ Printed path context does not include request URLs or append link destinations.
 The browser's optional URL headers/footers are a separate print-dialog setting:
 disable them when printing a sensitive URL. Document-authored text is not
 redacted.
+
+## Font specimen sample sizes
+
+The font viewer (`.woff .woff2 .ttf .otf`, [`media.ts`](../packages/server/src/viewers/media.ts))
+shows the uploaded font on the sites origin from the same single font resource
+as before; it reads no font bytes and parses nothing. The editable sample is a
+plain-text `<textarea>` (multiline, Unicode and HTML-like text stay literal;
+pasted rich text becomes plain text) with three native, labelled size presets:
+16px, 32px (default) and 64px. They are CSS-only radios, so they need no
+script, form submission or application storage, and typed text is not sent
+anywhere. Browsers may restore entered text and selected presets on reload.
+Choosing 32px resets the size. The presets resize only the editable sample; the seven static rows keep their labelled sizes (12-72px) and
+wrap on narrow screens instead of being cut with an ellipsis. The page does not
+claim the font covers every displayed character: the browser may substitute a
+fallback font for missing glyphs. Raw, Download, CSP and read budgets are
+unchanged; the viewer version is bumped so cached specimen pages revalidate.
 
 ## Agent verification matrix
 

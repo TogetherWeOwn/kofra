@@ -1,6 +1,6 @@
 # kofra CLI
 
-Publish a folder, a file or a `.zip` to a live URL on any [Kofra](https://github.com/TogetherWeOwn/dropway)
+Publish a folder, a file or a `.zip` to a live URL on any [Kofra](https://github.com/TogetherWeOwn/kofra)
 instance. Built for AI agents and scripts: one command, one JSON object on stdout, stable exit codes,
 and only the bytes the instance does not already have are uploaded.
 
@@ -484,9 +484,19 @@ Error objects preserve the server's optional recovery metadata alongside the sta
 delay (`null` means no guidance), a `docs` reference and a `next` array of suggested
 `{tool, args, why}` calls. Malformed optional fields are omitted independently, and
 unknown envelope fields are never copied. `next` and `docs` are informational only: the
-client never executes a suggested call or fetches a docs URL, and retry scheduling is
-unchanged (any method retries 429 within the `Retry-After` cap, 5xx and network errors
-retry only for `GET`/`HEAD`, idempotency keys never authorize unsafe retries).
+client never executes a suggested call or fetches a docs URL. Reads retain bounded
+429/5xx/network retries. Restore (including omitted-version restore) and version
+delete make **one mutation attempt**, even on 429; rate limits, 5xx and network loss
+surface as exit 7. Other transport policies are unchanged. Error metadata and
+idempotency keys never authorize an automatic unsafe retry.
+
+Each restore/version-delete invocation sends a fresh UUID `Idempotency-Key`, without
+printing or saving it. There is no key flag for these commands. A new invocation is
+fresh deliberate intent, not recovery of the old attempt: an uncertain restore may
+already have moved live, and a later publish may have moved it again. Inspect the
+same site/version before deciding to act again; neither a live pointer nor a 404
+proves who performed the earlier operation. Explicit API/SDK consumers can retain
+and replay a key under the [bounded server contract](../../docs/OPERATIONS.md#version-action-replay).
 
 `read-file` without `--json` prints exactly the page content to stdout; a truncated page
 adds a stderr continuation pinned to the successful response's immutable `versionId`, so

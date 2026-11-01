@@ -1,6 +1,7 @@
 import { detectFileKind, encodePath, KIND_LABELS, type LiveSite } from "@dropway/core";
 import { escapeHtml, formatBytes, htmlPage } from "../html";
 import type { ServeMode } from "../serve";
+import { unfurlHead } from "./unfurl";
 
 const LISTING_CSS = `
 .dw-ls{max-width:56rem;margin:0 auto;padding:2rem 1.25rem 4rem}
@@ -38,7 +39,7 @@ export function compareNames(a: string, b: string): number {
  * folders first, then files with their kind and size, then a gallery of the
  * folder's images. `appViewerUrl` links to the app-origin file browser.
  */
-export function renderListing(live: LiveSite, dir: string, mode: ServeMode, appViewerUrl?: string, sort?: string | null): Response {
+export function renderListing(live: LiveSite, dir: string, mode: ServeMode, appViewerUrl?: string, sort?: string | null, origin = ""): Response {
   const order = sort === "size" || sort === "type" ? sort : "name";
   const sortLinks = `<nav class="sort" aria-label="Sort files"><span>Sort:</span>${SORTS.map(([value, label]) => `<a href="?sort=${value}"${order === value ? ' aria-current="true"' : ""}>${label}</a>`).join("")}</nav>`;
   const dirs = new Map<string, number>();
@@ -86,11 +87,17 @@ export function renderListing(live: LiveSite, dir: string, mode: ServeMode, appV
     acc += `${s}/`;
     return `<a href="${escapeHtml(mode.base + encodePath(acc))}">${escapeHtml(s)}</a>`;
   })].join(" / ");
-  const summary = `${dirs.size ? `${dirs.size} folder${dirs.size === 1 ? "" : "s"}, ` : ""}${files.length} file${files.length === 1 ? "" : "s"} · ${formatBytes(total)}`;
+  const counts = (withFolders: boolean) => `${withFolders ? `${dirs.size} folder${dirs.size === 1 ? "" : "s"}, ` : ""}${files.length} file${files.length === 1 ? "" : "s"} · ${formatBytes(total)}`;
+  const summary = counts(dirs.size > 0);
+  const title = `${live.slug}/${dir}`;
   const page = htmlPage({
-    title: `${live.slug}/${dir}`,
+    title,
     css: LISTING_CSS,
-    head: '<meta name="robots" content="noindex">',
+    head: unfurlHead({
+      title,
+      description: `Folder listing · ${summary}`,
+      url: origin + base,
+    }),
     body: `<main class="dw-ls"><header><h1>${crumb} /</h1><span class="sum">${summary}${appViewerUrl ? `<a href="${escapeHtml(appViewerUrl)}" rel="nofollow">Browse files</a>` : ""}</span>${sortLinks}</header><ul>${items.join("")}</ul>${gallery}</main>`,
   });
   return new Response(page, {

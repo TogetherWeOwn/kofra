@@ -2,6 +2,72 @@
 
 ## Unreleased
 
+### Signing secret fails closed
+
+- With neither `SIGNING_SECRET` nor `ADMIN_BOOTSTRAP_KEY` set, signed capabilities
+  (site password cookies, upload and version preview tokens, delivery grants) and
+  salted IP hashes now answer `503 signing_secret_missing` instead of using a
+  built-in key. Health, setup and API-key routes keep working. Local development
+  may opt back in with `ALLOW_INSECURE_DEV_SECRET=true`.
+- `DropwayConfig.signingSecret` is `string | null`; read it with `signingSecret(config)`.
+- Set `SIGNING_SECRET` to its own value; the Deploy button now asks for it.
+
+### Viewer phone handoff
+
+- File viewer bars offer a keyboard-operable Phone disclosure without JavaScript.
+  Its inline SVG QR and full link use the public file address without query or
+  fragment; opening a password-protected file on a phone still requires its password.
+  Embeds, folder listings and version-preview addresses omit the control.
+- Over-capacity URLs retain the full link without a QR. Server rendering and the
+  dashboard share the existing vendored encoder; dashboard QR pixels are unchanged.
+  Built-in viewer versions advance to refresh cached validators. The QR displays
+  at whole CSS pixels per module; native document scrolling exposes larger
+  grids in short viewports without clipping or fractional scaling.
+
+### Resumable large uploads and URL archive sources
+
+- Large files stage through a resumable R2 multipart protocol bound to one
+  pending manifest file: `POST /api/v1/uploads` (`partSize` 10-95 MiB, default
+  50 MiB), `PUT /api/v1/uploads/{id}/parts/{n}`, `GET /api/v1/uploads/{id}`
+  (acknowledged parts for resume) and `POST /api/v1/uploads/{id}/complete`,
+  which stream-hashes the assembled object before it becomes a verified blob.
+  Owner keys, claim tokens and the version's dwu_ token are accepted with the
+  same per-operation rechecks as blob uploads; sessions expire within a day
+  and hourly cleanup aborts them in bounded slices (migration
+  `0007_multipart_uploads.sql`, `0008_multipart_session_cap.sql`). Starts atomically
+  reuse the one unfinished session per pending file. In-flight part claims are
+  exclusive, including identical bytes; transient storage cleanup failures keep
+  their durable retry obligations. Lost claims can be recovered after ten minutes
+  by aborting the entire old physical handle before session replacement. New error codes: `upload_not_found`,
+  `invalid_part`, `upload_incomplete`, `upload_closed`, `part_busy`, `part_conflict`, `upload_busy`.
+  In-flight `part_busy` is retryable; changed acknowledged `part_conflict` is not.
+  Live part buffers share a 96 MiB per-isolate admission budget (503 on overload),
+  with incremental part hashing rather than a second whole-part digest copy.
+  Completion registers ownership against current site/version state in a D1
+  transaction, including an anonymous site claimed during assembly. Corrupt
+  staging has durable cleanup intent before deletion, so a later D1 failure
+  cannot wedge its unfinished-session slot. Cleanup reserves capacity for every
+  phase: at most 100 multipart sessions and 791 core binding calls per invocation.
+- The CLI uses multipart above 95 MiB (the raw PUT at or below), resuming from
+  the server's acknowledged parts when retrying the same pending version, with
+  the existing retries and dedupe. Separate CLI invocations create new versions;
+  there is no persisted cross-invocation resume checkpoint. New CLI sessions
+  request 10 MiB parts so six default file workers fit the shared buffer budget.
+  Retryable `part_busy` and `upload_busy` get bounded admission-aware waits
+  (at most 60 admission cycles in a two-minute scheduling window, in addition
+  to each request's transport retry budget); other conflicts fail immediately.
+  Failed publishes settle in-flight siblings before returning.
+- `publish_site` and REST JSON publishing accept `archiveUrl` alone (a public
+  https .zip, fetched and unpacked like an uploaded zip) and chat-client
+  attachments `{download_url, file_name}` as file sources under the existing
+  URL fetch guards. A sha256 file source with an explicit size no longer needs
+  an API key merely to resolve, so an anonymous publish can return
+  `awaiting_upload`; owner-scoped dedupe is unchanged. ZIP extraction counts
+  actual output incrementally and checks declared lengths, preserves legal
+  names such as `__proto__`, and refuses duplicate normalized entries. All
+  extracted file sizes/paths are validated before hashing or changing an
+  existing site's settings, password or live cache.
+
 ### Sites
 
 - Every site serves an embeddable live-version badge at `<site URL>badge.svg` (path and
@@ -11,6 +77,15 @@
   live manifest (now version 4, which also carries the live version number and time; cached v3
   entries rebuild from D1 on first read) and is not recorded as a site request. `badge.svg` at a
   site root is reserved. See `docs/SITE_BADGE.md`.
+
+### Viewers
+
+- The font specimen has three native sample-size presets (16px, 32px default,
+  64px) for the editable sample, works without JavaScript, and its static size
+  rows wrap on narrow screens instead of being cut with an ellipsis. The sample
+  is now a labelled plain-text multiline textbox with a visible focus
+  indicator. Font bytes, CSP and read budgets are unchanged; cached specimen
+  pages are revalidated (font viewer version 3).
 
 ### Dashboard
 
@@ -184,6 +259,11 @@
 
 ### Extension API
 
+- Bump `EXTENSION_API_VERSION` to 6: `ViewerContext` and `ServeMode` gain an
+  optional `preview` flag (set only by version-preview serving), and every
+  full-page viewer ETag gains a `-chrome<N>` shared-chrome revision segment, so
+  a `viewerPage` chrome change also retires extension viewers' cached pages.
+  A viewer's own `version` now only tracks its own output.
 - Bump `EXTENSION_API_VERSION` to 5: `Viewer` gains an optional `etagExtra(file, live)` that adds render
   identity (for example linked neighbours) to the viewer ETag. The server percent-encodes the viewer id
   and this value in the ETag, so any string is safe; built-in viewers' ETags are unchanged.

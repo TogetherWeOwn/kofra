@@ -13,7 +13,7 @@ export const PAGE_PATHS: Json = {
     post: page("mcp", "Remote MCP server (Streamable HTTP, stateless)", {
       tags: ["agents"],
       description:
-        'JSON-RPC over Streamable HTTP (MCP 2026-07-28, and 2025-era clients through the stateless lane). Same API keys as REST. Narrow the tool list with ?toolsets=core,sites,versions,keys,members and ?read_only=1. Example: claude mcp add --transport http kofra <origin>/mcp --header "Authorization: Bearer dw_..."',
+        'JSON-RPC over Streamable HTTP (MCP 2026-07-28, and 2025-era clients through the stateless lane). Same API keys as REST. Narrow the tool list with ?toolsets=core,sites,versions,keys,members,folders,transfers and ?read_only=1. Example: claude mcp add --transport http kofra <origin>/mcp --header "Authorization: Bearer dw_..."',
       requestBody: { required: true, content: { "application/json": { schema: { type: "object", description: "A JSON-RPC 2.0 request." } } } },
       "x-mcp-exclude": "this is the MCP endpoint itself",
       responses: {
