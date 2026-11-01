@@ -1,6 +1,6 @@
 import type { DropwayContext } from "../context";
 import { siteUrl } from "../context";
-import { blobKey } from "./blobs";
+import { cleanupBlobs } from "./blob-cleanup";
 import { emit, meter } from "./events";
 import { dropLive } from "./live";
 import { convertRedirectsStatements, insertTombstone, purgeExpiredHolds } from "./slug-holds";
@@ -30,9 +30,9 @@ export interface CleanupReport {
  * 4. delete blobs no version references any more (older than a day);
  * 5. purge expired, unreleased name holds (released rows are the audit trail);
  * 6. purge expired idempotency records, oldest first.
- * Core binding calls total at most 785 even when every slice is full:
+ * Core binding calls total at most 791 even when every slice is full:
  * transfers 103, sites 101 + 26, holds 1, multipart 301, abandoned 51,
- * orphans 201, idempotency 1. This reserves 215 of Free's 1000 calls for
+ * orphans 201 + inventory 6, idempotency 1. This reserves 209 of Free's 1000 calls for
  * other invocation work; embedding hooks must budget their own calls.
  */
 export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<CleanupReport> {
@@ -108,27 +108,8 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
     if (result[1]?.meta.changes) report.abandonedDeploys++;
   }
 
-  // 4. Unreferenced blobs. The row is deleted only if still unreferenced at that instant;
-  // only then is the R2 object removed. (Known gap: a re-upload of the same bytes in the
-  // milliseconds between those two steps would be lost; the next finalize reports it missing.)
-  const { results: orphans } = await db
-    .prepare(
-      `SELECT b.sha256 FROM blobs b
-        WHERE b.created_at < ? AND NOT EXISTS (SELECT 1 FROM version_files vf WHERE vf.sha256 = b.sha256)
-        LIMIT 100`,
-    )
-    .bind(now - DAY)
-    .all<{ sha256: string }>();
-  for (const b of orphans) {
-    const [del] = await db.batch([
-      db.prepare("DELETE FROM blobs WHERE sha256 = ? AND NOT EXISTS (SELECT 1 FROM version_files WHERE sha256 = ?)").bind(b.sha256, b.sha256),
-      db.prepare("DELETE FROM blob_scopes WHERE sha256 = ? AND NOT EXISTS (SELECT 1 FROM blobs WHERE sha256 = ?)").bind(b.sha256, b.sha256),
-    ]);
-    if (del?.meta.changes) {
-      await dc.env.FILES.delete(blobKey(b.sha256));
-      report.deletedBlobs++;
-    }
-  }
+  // 4. Retire unreferenced generations and reclaim crash/failed-delete objects.
+  report.deletedBlobs = await cleanupBlobs(dc, now);
   // 6. One statement selects and deletes against current expiry, so a reclaimed
   // key cannot be removed using a stale snapshot of its previous owner.
   const purgedKeys = await db.prepare(

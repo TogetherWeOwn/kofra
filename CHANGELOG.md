@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Signing secret fails closed
+
+- With neither `SIGNING_SECRET` nor `ADMIN_BOOTSTRAP_KEY` set, signed capabilities
+  (site password cookies, upload and version preview tokens, delivery grants) and
+  salted IP hashes now answer `503 signing_secret_missing` instead of using a
+  built-in key. Health, setup and API-key routes keep working. Local development
+  may opt back in with `ALLOW_INSECURE_DEV_SECRET=true`.
+- `DropwayConfig.signingSecret` is `string | null`; read it with `signingSecret(config)`.
+- Set `SIGNING_SECRET` to its own value; the Deploy button now asks for it.
+
 ### Viewer phone handoff
 
 - File viewer bars offer a keyboard-operable Phone disclosure without JavaScript.
@@ -37,7 +47,7 @@
   transaction, including an anonymous site claimed during assembly. Corrupt
   staging has durable cleanup intent before deletion, so a later D1 failure
   cannot wedge its unfinished-session slot. Cleanup reserves capacity for every
-  phase: at most 100 multipart sessions and 785 core binding calls per invocation.
+  phase: at most 100 multipart sessions and 791 core binding calls per invocation.
 - The CLI uses multipart above 95 MiB (the raw PUT at or below), resuming from
   the server's acknowledged parts when retrying the same pending version, with
   the existing retries and dedupe. Separate CLI invocations create new versions;

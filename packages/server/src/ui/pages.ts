@@ -117,7 +117,7 @@ ${snippet("dw-s-setup", `curl -X POST ${o}/api/v1/setup \\\n  -H "Authorization:
 <li><strong>Publishing</strong>${anon ? `With an API key, or anonymously (anonymous sites expire after ${Math.round(dw.config.anonymous.ttlMs / 3600_000)} hours).` : "With an API key from this instance's owner. Anonymous publishing is off."} Files up to ${formatBytes(lim.maxFileBytes)}, ${lim.maxFiles.toLocaleString("en-US")} files per version.</li>
 <li><strong>Yours</strong>Runs on its owner's Cloudflare account. Open source, MIT licensed.</li>
 </ul>
-<footer class="dw-foot"><span>${e(name)} runs <a href="https://github.com/TogetherWeOwn/dropway">Kofra</a>, open source under the MIT license.</span><span><a href="/llms.txt">llms.txt</a> · <a href="/openapi.json">OpenAPI</a> · <a href="https://github.com/TogetherWeOwn/dropway/blob/main/docs/SELF_HOST.md">Host your own</a></span></footer>`;
+<footer class="dw-foot"><span>${e(name)} runs <a href="https://github.com/TogetherWeOwn/kofra">Kofra</a>, open source under the MIT license.</span><span><a href="/llms.txt">llms.txt</a> · <a href="/openapi.json">OpenAPI</a> · <a href="https://github.com/TogetherWeOwn/kofra/blob/main/docs/SELF_HOST.md">Host your own</a></span></footer>`;
   return renderAppPage(c, { title: name, page: "home", body, css: HOME_CSS, nav: false });
 }
 

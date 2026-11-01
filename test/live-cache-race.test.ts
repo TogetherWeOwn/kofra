@@ -1,5 +1,5 @@
 import { createExecutionContext, env } from "cloudflare:test";
-import { clearLiveMemoryCache, getLiveSite, liveKey } from "@dropway/core";
+import { clearLiveMemoryCache, getLiveSite, liveKey, type LiveSite } from "@dropway/core";
 import type { ServerBindings } from "@dropway/server";
 import { afterEach, describe, expect, it } from "vitest";
 import { form, freshInstance } from "./helpers";
@@ -256,7 +256,9 @@ describe("live cache miss races", () => {
     const stale = await read;
     await Promise.all(pending);
     expect(stale?.versionId).toBe(v2.body.version.id);
-    expect(await env.CACHE.get(`live-files:v1:${stale!.siteId}:${v2.body.version.id}`)).toBeNull();
+    // The fill of {v2, no files} was verified against D1 and dropped; KV holds nothing or v1.
+    const kv = await env.CACHE.get<LiveSite>(liveKey(slug), "json");
+    expect(kv === null || kv.versionId === v1.body.version.id).toBe(true);
     const page = await dw.call(`/s/${slug}/?raw=1`);
     expect(page.status).toBe(200);
     expect(await page.text()).toBe("one");

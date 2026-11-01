@@ -4,7 +4,7 @@
   "private": true,
   "license": "MIT",
   "description": "Instant web hosting for AI agents and people, built entirely on Cloudflare. Self-hostable, single tenant, MIT.",
-  "repository": "github:TogetherWeOwn/dropway",
+  "repository": "github:TogetherWeOwn/kofra",
   "type": "module",
   "workspaces": [
     "packages/*",
@@ -12,7 +12,8 @@
   ],
   "scripts": {
     "dev": "wrangler dev",
-    "test": "vitest run && npm run test:cli && npm run test:browser-code && npm run test:client",
+    "test": "npm run test:workers && npm run test:cli && npm run test:browser-code && npm run test:client",
+    "test:workers": "vitest run",
     "test:cli": "vitest run -c packages/cli/vitest.config.ts",
     "test:client": "vitest run -c packages/client/vitest.config.ts",
     "test:browser-code": "vitest run -c packages/server/vitest.config.ts",
@@ -52,6 +53,9 @@
     "bindings": {
       "ADMIN_BOOTSTRAP_KEY": {
         "description": "A long random string, used once to create the owner of this instance: `curl -X POST <your worker URL>/api/v1/setup -H \"Authorization: Bearer <ADMIN_BOOTSTRAP_KEY>\"`. Generate one with `openssl rand -hex 32`."
+      },
+      "SIGNING_SECRET": {
+        "description": "A second long random string, different from ADMIN_BOOTSTRAP_KEY, that signs password cookies, upload and preview links and salts IP hashes. Generate one with `openssl rand -hex 32`."
       },
       "APP_ORIGIN": {
         "description": "Optional. Public origin of the app and API, for example `https://dropway.<you>.workers.dev`. Leave empty to use the origin of each request."

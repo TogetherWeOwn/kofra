@@ -99,6 +99,7 @@ Extension adapters can add codes and override guidance without changing built-in
 | `reserved_path` | 400 | false | Rename the __dropway/ folder: paths under __dropway/ belong to the server (password form, report link). |
 | `route_not_found` | 404 | false | See /openapi.json for supported methods and endpoints. |
 | `scope_not_grantable` | 403 | false | Request only scopes held by both the caller and the target member's role. |
+| `signing_secret_missing` | 503 | false | The operator must set SIGNING_SECRET (or ADMIN_BOOTSTRAP_KEY) as a Worker secret. |
 | `site_changed` | 409 | false | Reload the site, reconcile the change, and retry manually. |
 | `site_not_found` | 404 | false | List sites with GET /api/v1/sites using the intended owner's credential. |
 | `site_too_large` | 413 | false | Split the content across several sites. |

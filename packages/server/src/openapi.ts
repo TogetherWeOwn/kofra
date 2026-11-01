@@ -138,7 +138,7 @@ export function buildOpenApi(origin: string, instanceName: string, anonymousOrOp
         "Publish files, folders and sites to live URLs. Authenticate with a scoped bearer API key. REST, MCP and CLI metadata are generated from the operation registry. Errors include a stable code and remediation hint.",
       license: {
         name: "MIT",
-        url: "https://github.com/TogetherWeOwn/dropway/blob/main/LICENSE",
+        url: "https://github.com/TogetherWeOwn/kofra/blob/main/LICENSE",
       },
     },
     servers: [{ url: origin }],

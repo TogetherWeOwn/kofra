@@ -167,14 +167,16 @@ describe("resumable upload integrity and real R2 multipart", () => {
     const s = await session(dw, p);
     accepted(await putPart(dw, s, 1, bytes, p.token));
     accepted(await complete(dw, s, p.token));
-    const original = await env.FILES.head(`blobs/${p.sha256}`);
+    const generations = async () => (await env.FILES.list({ prefix: `blobs/${p.sha256}` })).objects.map((o) => `${o.key}:${o.etag}`);
+    const original = await generations();
+    expect(original).toHaveLength(1);
     const other = await foreignKey(dw);
     const q = await pending(dw, p.sha256, p.size, "other-owner", other);
     const foreignSession = await session(dw, q);
     const corrupt = bytes.slice(); corrupt[0] = 0;
     accepted(await putPart(dw, foreignSession, 1, corrupt, q.token));
     expect((await complete(dw, foreignSession, q.token)).body.error.code).toBe("hash_mismatch");
-    expect((await env.FILES.head(`blobs/${p.sha256}`))?.etag).toBe(original?.etag);
+    expect(await generations()).toEqual(original);
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM blob_scopes WHERE sha256 = ?").bind(p.sha256).first<{ n: number }>())?.n).toBe(1);
     expect((await finalize(dw, q)).body.error.code).toBe("missing_blobs");
   });

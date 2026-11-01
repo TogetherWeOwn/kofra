@@ -74,7 +74,7 @@ async function failedPendingDelivery(kind: Protection) {
 
 async function expectObjects(refs: Awaited<ReturnType<typeof references>>, present: boolean) {
   for (const ref of refs) {
-    const object = await env.FILES.get(`blobs/${ref.sha256}`);
+    const object = await env.FILES.get(ref.storage_key);
     expect.soft(object !== null, `${ref.path}: R2 object presence`).toBe(present);
     if (object) {
       const bytes = await object.arrayBuffer();

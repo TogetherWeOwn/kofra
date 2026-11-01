@@ -1,0 +1,15 @@
+# Notification only — code-owner review is NOT required to merge (org merge governance).
+# Purpose: a human sees changes to deploy/release and security-sensitive paths.
+.github/workflows/ @Rick7C2
+**/wrangler*.toml @Rick7C2
+**/wrangler*.jsonc @Rick7C2
+**/auth/** @Rick7C2
+**/session/** @Rick7C2
+**/billing/** @Rick7C2
+**/migrations/** @Rick7C2
+# Authentication, keys and secrets live in service/lib files, not auth/ directories.
+/packages/core/src/services/identity.ts @Rick7C2
+/packages/core/src/services/upload-tokens.ts @Rick7C2
+/packages/core/src/lib/crypto.ts @Rick7C2
+/packages/core/src/lib/secrets.ts @Rick7C2
+/packages/cli/src/secrets.ts @Rick7C2
