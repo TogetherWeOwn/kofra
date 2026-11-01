@@ -122,7 +122,7 @@ What Kofra is not:
 | SRV-03 | Index resolution: `index.html`, `index.htm`, `index.md`, `README.md`; a one-file site serves that file at `/`; folders without an index get a listing; `404.html`; SPA fallback | P0 | Done |
 | SRV-04 | Headers: `ETag` (sha256), `Range`/206, pre-compressed `.br`/`.gz` with `Content-Encoding`, `X-Kofra-Version`, `X-Robots-Tag: noindex` on expiring sites, `X-Content-Type-Options: nosniff` | P0 | Done |
 | SRV-05 | Cache policy matrix (HTML and unfingerprinted files revalidate; fingerprinted files immutable; gated sites `private, no-store`; sites with `.wasm` revalidate) | P0 | Partial; R-27 |
-| SRV-06 | Content-addressed edge cache (Cache API by sha256, pointer memo). Live URL shows a new version within about 60 s worldwide, the version URL at once | P0 | R-14 |
+| SRV-06 | Content-addressed edge cache (Cache API by sha256, pointer memo). Live URL shows a new version within about 60 s worldwide, the version URL at once | P0 | Partial: blob cache, 10 s Cache API pointer memo and `scripts/measure-freshness.mjs` done; the `workers.dev` p50/p95 and cache probe are recorded in [SELF_HOST.md](SELF_HOST.md) when measured |
 | SRV-07 | Version preview URLs `<slug>--v<N>` for the owner (signed links for others) | P0 | Done: exact ready version from D1 in both modes; owner Authorization or 24 h signed link with preview-root cookie, noindex/no-referrer |
 | SRV-08 | Cross-origin isolation per site (COOP/COEP for `SharedArrayBuffer` and threaded WebAssembly) | P0 | Done |
 | SRV-09 | `_redirects` and `_headers` files at the site root (Netlify/Cloudflare Pages syntax subset), parsed at finalize, never served | P1 | R-27 |
@@ -408,12 +408,15 @@ Notes that shape the design:
 ### 5.4 Serving hot path (R-14)
 
 1. Route by host and path (no I/O).
-2. Live pointer `slug -> { siteId, versionId, settings, access }`: isolate memo (5 s) -> KV
-   `live:<slug>` (`cacheTtl` 30 s) -> D1.
+2. Live pointer `slug -> { siteId, versionId, settings, access }`: isolate memo (5 s) -> Cache API
+   `ptr/<slug>` (10 s) -> KV `live:<slug>` (`cacheTtl` 30 s) -> D1. A publish, settings change,
+   restore or delete drops the memo after the KV write; a per-slug read fence keeps a read that
+   started before the change from restoring isolate memory, its delayed memo fill is dropped by a
+   generation check, and a KV miss fill is verified against D1 before and after the put.
 3. Manifest `versionId -> { path: [sha256, size, type] }`: immutable, cached forever (isolate LRU ->
    Cache API -> D1; R2 `manifests/<versionId>.json` when D1 grows, section 7.5).
 4. Bytes: Cache API `blob/<sha256>` (immutable) -> D1 `blobs.storage_key` -> R2 generation on a miss. Range requests and
-   files above 50 MiB stream from R2 and skip the Cache API.
+   files above 25 MB stream from R2 and skip the Cache API.
 5. Rendered viewers: Cache API `render/<viewer>@<viewerVersion>/<variant>/<sha256>`.
 6. One Analytics Engine data point per top-level view, 404 or bot hit, written without awaiting.
 

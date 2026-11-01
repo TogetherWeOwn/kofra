@@ -70,6 +70,12 @@
 
 ### Sites
 
+- Hot-path caching (R-14): the live manifest has a 10-second Cache API memo (`__dropway/ptr/<slug>`)
+  between the isolate memory and KV, rewritten or dropped by a publish, settings change or delete in
+  the same data center. Blobs are cached by SHA-256 only up to 25 MB (neither read nor written above
+  it); Range requests already bypass the cache. `scripts/measure-freshness.mjs` publishes a change and
+  times how long the live URL takes to serve it.
+
 - Every site serves an embeddable live-version badge at `<site URL>badge.svg` (path and
   subdomain mode): a flat SVG with the live version and a coarse age for public sites, and one
   identical generic image for passworded, expired, deleted, transfer, missing and renamed-away
