@@ -141,8 +141,10 @@ do not treat a zero count right after a copy as data loss.
 nothing to lose. Deleting one changes nothing a visitor can see: once the
 5-second per-isolate memory cache and the 30-second KV edge cache
 (`cacheTtl`) have expired, the next read rebuilds it from D1 and rewrites KV
-(executed: delete → site still `200` → key repopulated). Inspect the cache
-with:
+(executed: delete → site still `200` → key repopulated). A read-path rewrite
+is checked against the D1 site row afterwards and deleted if the site changed
+in the meantime, so a slow read cannot leave an older manifest behind.
+Inspect the cache with:
 
 ```sh
 npx wrangler kv key list --binding CACHE --remote --prefix live:
