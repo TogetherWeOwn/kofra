@@ -22,13 +22,13 @@ export interface InlineFile {
 
 export interface PublishInput {
   files: InlineFile[];
-  /** Metadata: slug, title, description, spa, renderMarkdown, crossOriginIsolation, password, noindex, message, baseVersionId. */
+  /** Metadata: slug, title, description, spa, renderMarkdown, crossOriginIsolation, password, noindex, viewers, ttlSeconds, message, baseVersionId. */
   fields: Record<string, unknown>;
   source: string;
 }
 
 const FILE_FIELD_NAMES = new Set(["file", "files", "files[]", "upload", "uploads", "uploads[]"]);
-const META_FIELDS = ["slug", "title", "description", "spa", "renderMarkdown", "crossOriginIsolation", "message", "path", "filename", "password", "baseVersionId", "noindex"];
+const META_FIELDS = ["slug", "title", "description", "spa", "renderMarkdown", "crossOriginIsolation", "message", "path", "filename", "password", "baseVersionId", "noindex", "viewers", "ttlSeconds"];
 
 function isZip(bytes: Uint8Array): boolean {
   return bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;

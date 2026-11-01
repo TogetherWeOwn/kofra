@@ -29,6 +29,10 @@ export interface SiteRow {
   render_markdown: number;
   cross_origin_isolation: number;
   noindex: number;
+  /** 0 serves every file raw and skips viewers (VIEW-06); 1 (default) renders them. */
+  viewers: number;
+  /** TTL in seconds for keyed sites; expires_at is recomputed at finalize (PUB-16). */
+  ttl_seconds: number | null;
   password_hash: string | null;
   current_version_id: string | null;
   claim_token_hash: string | null;
@@ -64,9 +68,17 @@ export interface SiteSettingsInput {
   crossOriginIsolation?: boolean;
   /** Ask crawlers not to index this site (X-Robots-Tag: noindex, generated robots.txt). */
   noindex?: boolean;
+  /** Skip every file viewer and serve all files raw (renderMarkdown keeps working when on). */
+  viewers?: boolean;
+  /** Expiry in seconds for a keyed site, renewed at each finalize; null clears it (no expiry). */
+  ttlSeconds?: number | null;
   /** Set a visitor password; null removes it. */
   password?: string | null;
 }
+
+/** Bounds for ttlSeconds: a day has 86400 s; a year caps millisecond/second mix-ups. */
+export const TTL_SECONDS_MIN = 1;
+export const TTL_SECONDS_MAX = 31_536_000;
 
 const iso = (t: number | null | undefined) => (t ? new Date(t).toISOString() : null);
 
@@ -131,6 +143,8 @@ export function serializeSite(dc: DropwayContext, site: SiteRow, current?: Versi
       renderMarkdown: site.render_markdown === 1,
       crossOriginIsolation: site.cross_origin_isolation === 1,
       noindex: site.noindex === 1,
+      viewers: site.viewers !== 0,
+      ttlSeconds: site.ttl_seconds ?? null,
       passwordProtected: !!site.password_hash,
     },
     currentVersionId: site.current_version_id,
@@ -168,6 +182,23 @@ export function parseSettings(body: Record<string, unknown>): SiteSettingsInput 
   if (coi !== undefined) out.crossOriginIsolation = coi;
   const noindex = boolField(body.noindex, "noindex");
   if (noindex !== undefined) out.noindex = noindex;
+  const viewers = boolField(body.viewers, "viewers");
+  if (viewers !== undefined) out.viewers = viewers;
+  if ("ttlSeconds" in body) {
+    const v = body.ttlSeconds;
+    if (v === null) out.ttlSeconds = null;
+    else {
+      // Multipart and query transports send numbers as strings.
+      const n = typeof v === "string" && v.trim() !== "" ? Number(v) : v;
+      if (!Number.isInteger(n) || (n as number) < TTL_SECONDS_MIN || (n as number) > TTL_SECONDS_MAX) {
+        throw badRequest(
+          "invalid_field",
+          `ttlSeconds must be an integer number of seconds between ${TTL_SECONDS_MIN} and ${TTL_SECONDS_MAX}, or null to clear.`,
+        );
+      }
+      out.ttlSeconds = n as number;
+    }
+  }
   if ("password" in body) {
     if (body.password === null || body.password === "") out.password = null;
     else {
@@ -224,6 +255,7 @@ export async function createSite(
     await requireCapability(dc, p, "anonymous_publish");
     if (input.slug) throw forbidden("Choosing a site name needs an API key.", "Omit slug to get a generated name.");
     if (input.password) throw forbidden("Password protection needs an API key.");
+    if (input.ttlSeconds !== undefined) throw forbidden("Anonymous sites already expire after 24 hours.", "Claim the site with an API key to set its own expiry.");
     creatorIp = await ipHash(dc, p.ip);
     const recent = await dc.env.DB.prepare("SELECT COUNT(*) AS n FROM sites WHERE creator_ip_hash = ? AND created_at > ?")
       .bind(creatorIp, now - 3600_000)
@@ -261,11 +293,13 @@ export async function createSite(
       render_markdown: input.renderMarkdown === false ? 0 : 1,
       cross_origin_isolation: input.crossOriginIsolation ? 1 : 0,
       noindex: input.noindex ? 1 : 0,
+      viewers: input.viewers === false ? 0 : 1,
+      ttl_seconds: input.ttlSeconds ?? null,
       password_hash: passwordHash,
       current_version_id: null,
       claim_token_hash: claimHash,
       creator_ip_hash: creatorIp,
-      expires_at: anonymous ? now + dc.config.anonymous.ttlMs : null,
+      expires_at: anonymous ? now + dc.config.anonymous.ttlMs : input.ttlSeconds != null ? now + input.ttlSeconds * 1000 : null,
       created_at: now,
       updated_at: now,
       deleted_at: null,
@@ -285,11 +319,11 @@ export async function createSite(
           THEN 1 ELSE json_extract('{}', 'dropway_sites_quota') END`).bind(siteQuota, tenantId, siteQuota),
         dc.env.DB.prepare(
           `INSERT INTO sites (id, slug, slug_chosen, tenant_id, created_by, title, description, spa, render_markdown, cross_origin_isolation,
-             noindex, password_hash, claim_token_hash, creator_ip_hash, expires_at, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             noindex, viewers, ttl_seconds, password_hash, claim_token_hash, creator_ip_hash, expires_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).bind(
           site.id, site.slug, site.slug_chosen, site.tenant_id, site.created_by, site.title, site.description, site.spa, site.render_markdown,
-          site.cross_origin_isolation, site.noindex, site.password_hash, site.claim_token_hash, site.creator_ip_hash, site.expires_at,
+          site.cross_origin_isolation, site.noindex, site.viewers, site.ttl_seconds, site.password_hash, site.claim_token_hash, site.creator_ip_hash, site.expires_at,
           site.created_at, site.updated_at,
         ), ...usageStatements(dc, tenantId),
       ], extension, (error) => {
@@ -369,6 +403,9 @@ export async function updateSite(dc: DropwayContext, p: Principal, slug: string,
   const site = await getSiteFor(dc, p, slug, "sites:write");
   if (site.mode === "transfer") throw conflict("transfer_immutable", "Use update_transfer to change delivery settings.", "Transfer passwords need current-password proof in the same call.");
   if (input.password && site.tenant_id === null) throw forbidden("Password protection needs an account. Claim the site first.");
+  if (input.ttlSeconds !== undefined && site.tenant_id === null) {
+    throw forbidden("Anonymous sites already expire after 24 hours.", "Claim the site with an API key to set its own expiry.");
+  }
   if (input.password) await requireCapability(dc, p, "site_password", { siteId: site.id, tenantId: site.tenant_id });
   const sets: string[] = [];
   const binds: unknown[] = [];
@@ -382,6 +419,11 @@ export async function updateSite(dc: DropwayContext, p: Principal, slug: string,
   if (input.renderMarkdown !== undefined) set("render_markdown", input.renderMarkdown ? 1 : 0);
   if (input.crossOriginIsolation !== undefined) set("cross_origin_isolation", input.crossOriginIsolation ? 1 : 0);
   if (input.noindex !== undefined) set("noindex", input.noindex ? 1 : 0);
+  if (input.viewers !== undefined) set("viewers", input.viewers ? 1 : 0);
+  if (input.ttlSeconds !== undefined) {
+    set("ttl_seconds", input.ttlSeconds);
+    set("expires_at", input.ttlSeconds == null ? null : Date.now() + input.ttlSeconds * 1000);
+  }
   if (input.password !== undefined) set("password_hash", input.password ? await hashPassword(input.password) : null);
   if (!sets.length) return site;
   set("updated_at", Date.now());

@@ -107,7 +107,7 @@ What Kofra is not:
 | PUB-13 | Files larger than one request (above about 95 MB): multipart upload through the Worker, resumable | P1 | Implemented (R-35); workers.dev boundary measurement pending |
 | PUB-14 | `archiveUrl` (publish a zip from a URL) and chat-client attachments (`{download_url, file_name}`) as sources | P1 | Implemented (R-35); deployment verification pending |
 | PUB-15 | Duplicate a site server-side (immediately live) | P1 | Done |
-| PUB-16 | TTL for keyed sites (`ttlSeconds`, `null` clears) | P1 | R-27 |
+| PUB-16 | TTL for keyed sites (`ttlSeconds`, `null` clears) | P1 | Done |
 | PUB-17 | Dry run: `dryRun: true` returns added, changed, removed and skipped files and the resulting size without creating a version | P1 | R-20 |
 | PUB-18 | Drag-and-drop publish in the dashboard (folder, zip or file) | P1 | R-22 |
 | PUB-19 | `kofra watch` republishes on change | P1 | R-10 |
@@ -143,7 +143,7 @@ Full matrix in section 10.
 | VIEW-03 | P1 types: Jupyter notebooks, Mermaid and math inside Markdown, YAML/TOML tree, sortable and filterable CSV, JSON search, font specimens, diffs and patches, binary info page | P1 | R-34 |
 | VIEW-04 | P2 types: Office documents (via Markdown conversion), archives (entry list), 3D models, GeoJSON maps, EPUB | P2 | R-51 |
 | VIEW-05 | App-origin viewer page `<app>/view/{site}/{path}` with tabs and a version picker; user content stays in an iframe on the sites origin | P1 | R-22 |
-| VIEW-06 | Per-site switches: `renderMarkdown` (exists) and `viewers: false` (always raw) | P0/P1 | Partial; R-27 |
+| VIEW-06 | Per-site switches: `renderMarkdown` (exists) and `viewers: false` (always raw) | P0/P1 | Done |
 
 ### 4.4 Versions (VER)
 

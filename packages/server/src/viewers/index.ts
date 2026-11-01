@@ -120,6 +120,8 @@ export function toViewerFile(path: string, sha256: string, size: number, content
 }
 
 export function findViewer(file: ViewerFile, live: LiveSite, viewers: readonly Viewer[] = VIEWERS, mode: ViewMode = "document"): Viewer | null {
+  // Per-site opt-out (VIEW-06): every file is served raw, including ?view=1 and ?view=source.
+  if (live.viewers === false) return null;
   for (const v of viewers) if (file.size <= v.maxBytes && v.matches(file, live, mode)) return v;
   return null;
 }

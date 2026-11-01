@@ -79,7 +79,8 @@ describe("MCP endpoint: transport and auth", () => {
   it("keeps the tool list small enough for agent context windows", async () => {
     // About 4 characters per token: all tools ~8k tokens, core ~5.5k (SPEC 9.2 budget for core: about 5k).
     // R-27a: the per-site noindex setting adds ~140 chars to the site-tool schemas.
-    expect(JSON.stringify(await mcp.tools()).length).toBeLessThan(36_500);
+    // R-27c: the viewers switch and ttlSeconds setting add ~370 chars more.
+    expect(JSON.stringify(await mcp.tools()).length).toBeLessThan(37_500);
     const core = await connectMcp(dw, dw.ownerKey, { path: "/mcp?toolsets=core" });
     expect(JSON.stringify(await core.tools()).length).toBeLessThan(24_000);
   });

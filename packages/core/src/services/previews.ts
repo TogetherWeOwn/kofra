@@ -88,6 +88,7 @@ export async function readVersionPreview(
       spa: site.spa === 1,
       renderMarkdown: site.render_markdown === 1,
       crossOriginIsolation: site.cross_origin_isolation === 1,
+      viewers: site.viewers !== 0,
       passwordHash: site.password_hash,
       expiresAt: site.expires_at,
       files,
