@@ -54,10 +54,10 @@ export const FILE_INPUT: Schema = {
 
 export const SETTINGS_INPUT = {
   title: { type: ["string", "null"], maxLength: 200, description: "Title shown in lists." },
-  description: { type: ["string", "null"], maxLength: 2000, description: "About the site, briefly." },
-  spa: { type: "boolean", description: "Serve index.html for unknown paths (SPA)." },
-  renderMarkdown: { type: "boolean", description: "Render .md as pages (default true); false serves raw." },
-  crossOriginIsolation: { type: "boolean", description: "COOP/COEP headers (threaded WASM)." },
+  description: { type: ["string", "null"], maxLength: 2000, description: "One or two sentences about the site." },
+  spa: { type: "boolean", description: "Unknown paths serve index.html." },
+  renderMarkdown: { type: "boolean", description: "Render .md as pages (default true)." },
+  crossOriginIsolation: { type: "boolean", description: "Send COOP/COEP headers." },
   noindex: { type: "boolean", description: "Skip search indexing." },
 } satisfies Record<string, Schema>;
 
@@ -82,7 +82,10 @@ export const VERSION_OUT: Schema = {
 
 export const SITE_OUT: Schema = {
   type: "object",
-  properties: { slug: { type: "string" }, url: { type: "string" }, currentVersionId: { type: ["string", "null"] } },
+  // id is typed but not required: idempotency receipts stored before sites
+  // serialized an id replay unchanged and must keep validating, never be
+  // refused (or re-executed) for lacking it.
+  properties: { id: { type: "string" }, slug: { type: "string" }, url: { type: "string" }, currentVersionId: { type: ["string", "null"] } },
   required: ["slug", "url"],
 };
 

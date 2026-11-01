@@ -119,6 +119,7 @@ export function serializeVersion(v: VersionRow, liveVersionId: string | null) {
 export function serializeSite(dc: DropwayContext, site: SiteRow, current?: VersionRow | null) {
   const api = `${appOrigin(dc)}/api/v1/sites/${site.slug}`;
   return {
+    id: site.id,
     slug: site.slug,
     url: siteUrl(dc, site.slug),
     title: site.title,

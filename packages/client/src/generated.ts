@@ -54,13 +54,13 @@ export interface PublishSiteInput {
   site?: string;
   /** Title shown in lists. */
   title?: string | null;
-  /** About the site, briefly. */
+  /** One or two sentences about the site. */
   description?: string | null;
-  /** Serve index.html for unknown paths (SPA). */
+  /** Unknown paths serve index.html. */
   spa?: boolean;
-  /** Render .md as pages (default true); false serves raw. */
+  /** Render .md as pages (default true). */
   renderMarkdown?: boolean;
-  /** COOP/COEP headers (threaded WASM). */
+  /** Send COOP/COEP headers. */
   crossOriginIsolation?: boolean;
   /** Skip search indexing. */
   noindex?: boolean;
@@ -80,6 +80,7 @@ export interface PublishSiteOutput {
   /** 24 h signed preview; bearer capability. */
   versionUrl?: string;
   site?: {
+    id?: string;
     slug: string;
     url: string;
     currentVersionId?: string | null;
@@ -144,6 +145,7 @@ export interface UpdateSiteFilesOutput {
   /** 24 h signed preview; bearer capability. */
   versionUrl?: string;
   site?: {
+    id?: string;
     slug?: string;
     /** Share this URL as returned; never construct it. */
     url?: string;
@@ -170,7 +172,6 @@ export interface UpdateSiteFilesOutput {
     createdAt?: string;
     updatedAt?: string;
     links?: Record<string, unknown>;
-    id?: string;
     [key: string]: unknown;
   };
   version?: {
@@ -230,6 +231,7 @@ export interface GetSiteInput {
 
 export interface GetSiteOutput {
   site?: {
+    id?: string;
     slug?: string;
     /** Share this URL as returned; never construct it. */
     url?: string;
@@ -269,6 +271,7 @@ export interface ListSitesInput {
 
 export interface ListSitesOutput {
   sites?: ({
+    id?: string;
     slug?: string;
     /** Share this URL as returned; never construct it. */
     url?: string;
@@ -377,6 +380,7 @@ export interface UpdateSiteSettingsInput {
 
 export interface UpdateSiteSettingsOutput {
   site?: {
+    id?: string;
     slug?: string;
     /** Share this URL as returned; never construct it. */
     url?: string;
@@ -417,6 +421,7 @@ export interface SetSiteAccessInput {
 
 export interface SetSiteAccessOutput {
   site?: {
+    id?: string;
     slug?: string;
     /** Share this URL as returned; never construct it. */
     url?: string;
@@ -493,6 +498,7 @@ export interface CreateSiteInput {
 
 export interface CreateSiteOutput {
   site?: {
+    id?: string;
     slug?: string;
     /** Share this URL as returned; never construct it. */
     url?: string;
@@ -570,6 +576,7 @@ export interface RenameSiteOutput {
   url?: string;
   redirectUntil?: string | null;
   site?: {
+    id?: string;
     slug?: string;
     /** Share this URL as returned; never construct it. */
     url?: string;
@@ -614,6 +621,7 @@ export interface DuplicateSiteOutput {
   slug: string;
   url: string;
   site?: {
+    id?: string;
     slug: string;
     url: string;
     currentVersionId?: string | null;
@@ -919,6 +927,7 @@ export type PublishUploadOutput = {
   /** 24 h signed preview; bearer capability. */
   versionUrl?: string;
   site?: {
+    id?: string;
     slug?: string;
     /** Share this URL as returned; never construct it. */
     url?: string;
@@ -945,7 +954,6 @@ export type PublishUploadOutput = {
     createdAt?: string;
     updatedAt?: string;
     links?: Record<string, unknown>;
-    id?: string;
     [key: string]: unknown;
   };
   version?: {
@@ -996,6 +1004,7 @@ export type PublishUploadOutput = {
   created?: boolean;
   unchanged?: boolean;
   site?: {
+    id?: string;
     slug?: string;
     /** Share this URL as returned; never construct it. */
     url?: string;

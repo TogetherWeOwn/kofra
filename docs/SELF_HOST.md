@@ -345,8 +345,23 @@ It prints `p50Ms` and `p95Ms` from "publish returned" to "the live URL served th
 
 ### Measured on workers.dev
 
-Not measured yet: the numbers and the answer to "do `cf-cache-status` and Cache API hits work on
-`*.workers.dev`?" are added here from a real deployment (date, sample count, p50/p95, probe result).
+Measured 2026-11-01 against a throwaway test worker with 20 samples
+(`scripts/measure-freshness.mjs --samples 20 --json`): p50 163 ms, p95 235 ms
+(min 128 ms, max 517 ms). Requests were served from EU colos (LHR, CDG, AMS).
+Acceptance (p95 ≤ 60 s) passes. The test worker's Analytics Engine binding wrote
+to the shared `dropway_hits` dataset; filter by worker name when reading it.
+
+Cache probe: no `cf-cache-status` header is present on `*.workers.dev` responses.
+The Cache API is internal to the Workers runtime, not the CDN cache, so there is
+nothing to emit that header. Repeat reads of the same file from the same colo return
+identical bytes and ETag (`cache-control: immutable` on fingerprinted assets), but
+from outside a Cache API hit is indistinguishable from another R2 read, so this probe
+verifies byte stability and cache headers, not hit rate. The [backup runbook](BACKUP.md)
+conservatively calls the edge Cache API a no-op on `*.workers.dev`; confirming or
+revising that needs Worker-side instrumentation (for example a debug hit/miss header
+or an analytics counter) and is out of scope here. Cross-colo propagation of a new
+version was observed within seconds: immediately after a publish one colo served the
+new version while another still served the previous one, converging on the next reads.
 
 ## Upgrades, backups, removal
 

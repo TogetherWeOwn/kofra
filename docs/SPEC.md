@@ -122,7 +122,7 @@ What Kofra is not:
 | SRV-03 | Index resolution: `index.html`, `index.htm`, `index.md`, `README.md`; a one-file site serves that file at `/`; folders without an index get a listing; `404.html`; SPA fallback | P0 | Done |
 | SRV-04 | Headers: `ETag` (sha256), `Range`/206, pre-compressed `.br`/`.gz` with `Content-Encoding`, `X-Kofra-Version`, `X-Robots-Tag` (`noindex` for anonymous, expiring and opted-out sites, `all` otherwise), `X-Content-Type-Options: nosniff` | P0 | Done |
 | SRV-05 | Cache policy matrix (HTML and unfingerprinted files revalidate; fingerprinted files immutable; gated sites `private, no-store`; sites with `.wasm` revalidate) | P0 | Done |
-| SRV-06 | Content-addressed edge cache (Cache API by sha256, pointer memo). Live URL shows a new version within about 60 s worldwide, the version URL at once | P0 | Partial: blob cache, 10 s Cache API pointer memo and `scripts/measure-freshness.mjs` done; the `workers.dev` p50/p95 and cache probe are recorded in [SELF_HOST.md](SELF_HOST.md) when measured |
+| SRV-06 | Content-addressed edge cache (Cache API by sha256, pointer memo). Live URL shows a new version within about 60 s worldwide, the version URL at once | P0 | Done: measured 2026-11-01 on workers.dev, 20 samples, p50 163 ms, p95 235 ms; numbers and cache probe in [SELF_HOST.md](SELF_HOST.md) |
 | SRV-07 | Version preview URLs `<slug>--v<N>` for the owner (signed links for others) | P0 | Done: exact ready version from D1 in both modes; owner Authorization or 24 h signed link with preview-root cookie, noindex/no-referrer |
 | SRV-08 | Cross-origin isolation per site (COOP/COEP for `SharedArrayBuffer` and threaded WebAssembly) | P0 | Done |
 | SRV-09 | `_redirects` and `_headers` files at the site root (Netlify/Cloudflare Pages syntax subset), parsed at finalize, never served | P1 | R-27 |
@@ -223,7 +223,7 @@ the local filter.
 | AX-01 | REST API v1 and OpenAPI 3.1, generated from one operation registry | P0 | Done (R-02); legacy wire adapters preserved |
 | AX-02 | Remote MCP server, Streamable HTTP, stateless, API-key auth, `core` toolset | P0 | R-06 |
 | AX-03 | MCP: OAuth, every toolset, `?toolsets=`, read-only mode, single-site scope, resources, prompts, an MCP Apps site card | P1 | R-24, R-25 |
-| AX-04 | CLI `npx kofra`: `publish --json --wait`, management commands, exit codes, `kofra api` escape hatch | P0 | Partial (R-09, R-10): explicit `rename <source> <new-slug> --yes`, offline plan and unchanged local mappings; remaining management commands pending |
+| AX-04 | CLI `npx kofra`: `publish --json --wait`, management commands, exit codes, `kofra api` escape hatch | P0 | Partial (R-09, R-10): explicit `rename <source> <new-slug> --yes`, explicit `settings <site>` inspect/PATCH/offline `--dry-run`, `claim <site> --token`, offline plan, neutral retry receipts and unchanged local mappings; remaining management commands pending |
 | AX-05 | Local stdio MCP (`npx kofra mcp`) with local-path sources | P1 | R-26 |
 | AX-06 | Discovery: `llms.txt` v2, a skill templated with the instance's own URLs, `/.well-known/agent-skills/index.json`, `/.well-known/api-catalog`, `/connect` | P0 | Partial (`llms.txt`, OpenAPI); R-11 |
 | AX-07 | Error envelope with `code`, `hint`, `retryable`, `retryAfterSeconds`, `docs`, `next`, `details.fields` | P0 | Done (manifest and schema validation; legacy service validators retain stable codes) |

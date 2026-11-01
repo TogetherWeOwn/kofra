@@ -903,10 +903,11 @@ export const CORE_API_OPERATIONS = [
     method: "PATCH",
     path: "/api/v1/sites/{slug}",
     summary: "Change site settings",
+    cli: { command: ["settings"] },
     toolset: "core",
     scopes: ["sites:write"],
     description:
-      "Change a site's settings (title, description, spa, renderMarkdown, crossOriginIsolation, noindex); only given fields change. Passwords: set_site_access.",
+      "Change a site's title, description, spa, renderMarkdown, crossOriginIsolation or noindex. Only passed fields change. Passwords: set_site_access.",
     input: fromSchema({
       type: "object",
       properties: { site: SITE_REF, ...SETTINGS_INPUT },
