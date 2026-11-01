@@ -23,23 +23,44 @@ Milestones:
 5. Migrations are new numbered files; applied ones are never edited.
 6. `docs/SPEC.md` status column updated in the same pull request.
 
-## Progress (2026-10-22, MVP merge)
+## Status
 
-The first three feature branches are merged into `main` on top of the baseline below:
+Feature status lives in the Status column of `docs/SPEC.md`. That column is updated in the same pull request
+as the code (definition of done, item 6), so it is the source of truth. The table below only tracks the M0
+items. It was checked against `main` on 2026-11-01.
 
-| Item | State | What landed |
+| Item | State | What is left |
 |---|---|---|
-| R-01 | Done | Open-core guard and self-test in CI (npm, Yarn, pnpm and Bun text locks); `EXTENSION_API_VERSION`, Extension API changelog and contract tests for every existing extension point. |
-| R-04 | Partial | File sources (`content`, `url`, `sha256` + upload link, `copyFrom`) and idempotency keys for agent writes. |
-| R-05 | Done | Canonical `/versions` routes with `/deploys` kept as aliases, partial updates (`PATCH /api/v1/sites/:slug/files`), `GET` version status returning fresh upload items, fresh upload items in `missing_blobs`, rename. |
-| R-13 | Done | Exact ready-version previews in path and subdomain modes, owner credentials or 24-hour signed links, preview-root cookies, private/no-store privacy headers and stale-live-KV bypass. |
-| R-06 | Done | Remote MCP server at `/mcp` (Streamable HTTP) with a tool for every core capability, toolsets and read-only mode. |
-| R-07, R-08 | Done | Viewer bar with Rendered / Source / Raw, HTML frame, code highlighting, Markdown, JSON, CSV, images, SVG, PDF, video, audio, fonts, notebooks, binary info, cached renders. |
-| R-09, R-10 | Done | `kofra` CLI: publish (hash locally, upload only missing files), list, versions, restore, delete, login, whoami, setup, `api`. Not yet published to npm. |
-| R-11 | Done | `/llms.txt`, `/llms-full.txt`, `/skill.md`, `/.well-known/agent-skills`, repo skill in `skills/kofra`, `/connect`, `/connect.md`, `/.well-known/api-catalog`, `/robots.txt`. |
-| R-22 | Partial | Dashboard (sign-in with an API key, sites, versions, publish, keys, members, settings) and the app-origin file browser `/v/:slug/`. Sessions and login links are R-21. |
+| R-01 | Done | |
+| R-02 | Done | |
+| R-03 | Done | |
+| R-04 | Partial | Legacy raw, multipart and ZIP publish does not take idempotency keys (PUB-08). Upload tokens still need a check on a real deployment (ID-05). |
+| R-05 | Done | |
+| R-06 | Done | |
+| R-07 | Done | |
+| R-08 | Done | |
+| R-09 | Partial | The CLI is not published to npm yet (Goal 4, v0.1.0). |
+| R-10 | Partial | `pull`, `claim`, `settings`, `publish --stdin` and comparing with a pinned version are open PRs (#84, #115, #57, #114, #101). `watch` is specified only (`docs/CLI_WATCH.md`). `keys create` and `revoke` and the golden `--json` tests are not done. |
+| R-11 | Done | |
+| R-12 | Done | |
+| R-13 | Done | |
+| R-14 | Partial | The live-pointer cache and the 25 MB blob cap are in #113. Still to do: `scripts/measure-freshness.mjs` and the p50/p95 numbers in `docs/SELF_HOST.md` (kofra Goal 3). |
+| R-15 | Partial | The report-abuse link and 6-character slugs are done. `Origin` and `Sec-Fetch-Site` checks cover the cookie-authenticated transfer and preview paths. The `__Host-` app cookies wait for sessions (R-21). |
+| R-16 | Partial | The browser setup page is done. `/health` does not report `version` and `build` yet (OBS-05). The fresh-account check is not recorded in `docs/SELF_HOST.md`. The M0 exit week has not run. |
 
-Next: R-02 (operation registry), R-12 (path-mode hardening), R-13 (version preview URLs), R-14, R-15, R-16.
+No M0 item has been dropped. R-27 (M1) is being split out of the closed PR #97 into small PRs under kofra Goal 3.
+
+### Post-release backlog from closed PRs
+
+These PRs were closed on 2026-11-01 under the board-approved backlog plan. Each branch is kept for reference.
+
+- **Delivery inventory, sender-scoped** (from #89): turn the useful parts of that spec into SPEC rows after v0.1.0.
+- **Resuming the final permitted transfer download** (from #125): the design is still open. It needs to settle
+  how resuming counts against the download limit and how to fence a final download that was only partly served.
+- **Markdown outline** (#73), **viewer breadcrumbs** (#116) and **listing kind links** (#117): re-file each as a
+  small PR after v0.1.0.
+- **Collision between raw-HTML heading ids and Markdown anchors** (#112): re-file as a small fix if it
+  reproduces on `main`.
 
 ## Baseline (in `main` at `866ca07`)
 
