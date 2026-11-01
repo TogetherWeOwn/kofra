@@ -55,6 +55,11 @@ listing may be slow" with no payload size), and defensive checks for states
 the callers already prevent (re-checking a principal the service already
 scoped).
 
+These labels only grade a finding that already qualifies under "What
+merits a finding", "Test rigor" and "Skip"; they never make an item
+reportable. Most of the Not Severe items are skipped outright, and any
+that is still reported is Non-severe.
+
 ## Disproof pass (before posting any finding)
 
 Try to prove your own candidate wrong first:
