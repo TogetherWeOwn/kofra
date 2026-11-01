@@ -17,6 +17,10 @@ Read `docs/ARCHITECTURE.md` first. The short version:
   from a hosted layer. Do not work around it; an unrelated word match goes in
   `scripts/open-core-allowlist.txt` with a reason.
 - Before committing: `npm run check` (guard, typecheck, all tests).
-- Do not deploy the root `wrangler.jsonc` to an account that also runs a hosted
-  Kofra (names collide). Test instances use their own config.
+- Cloudflare test deploys go through the `cf-test-env` plugin only: `provision`
+  a per-card disposable `pct-*` env, test against its short-lived per-Worker
+  token, then `teardown`. D1 goes through `d1_execute`. Never deploy, `secret
+  put`, or otherwise touch Cloudflare with the root `wrangler.jsonc` (worker
+  names collide with hosted Kofra on the same account, and standing credentials
+  can touch production). R2 object writes use wrangler/S3 paths, not raw REST.
 - PRs follow the org contract in `TogetherWeOwn/.github` CONTRIBUTING + this repo's overrides; the PR template's Attestation is mandatory.
