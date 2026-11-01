@@ -226,6 +226,15 @@ export async function createDeploy(dc: DropwayContext, p: Principal, site: SiteR
   if (site.current_version_id) {
     const current = await getVersion(dc, site.id, site.current_version_id);
     if (current && current.manifest_hash === hash) {
+      // An identical republish is still a publish: renew a keyed TTL from the
+      // row-current value in one statement (a concurrent TTL edit converges),
+      // then refresh serving so the new deadline applies at once. Sites without
+      // a TTL match no row and skip the refresh.
+      const renewed = await dc.env.DB.prepare(
+        `UPDATE sites SET expires_at = ? + ttl_seconds * 1000
+           WHERE id = ? AND ttl_seconds IS NOT NULL AND deleted_at IS NULL`,
+      ).bind(Date.now(), site.id).run();
+      if ((renewed?.meta.changes ?? 0) > 0) await refreshLive(dc, site.id);
       const serialized = { ...serializeVersion(current, site.current_version_id), siteSlug: site.slug };
       return {
         unchanged: true,
@@ -481,16 +490,19 @@ export async function finalizeDeploy(dc: DropwayContext, p: Principal, site: Sit
   const newBytes = site.mode === "transfer" ? 0 : await incrementalBytes(dc, site.tenant_id, site.id, files);
   const storageQuota = await requireQuota(dc, p, "storage_bytes", siteOwner(site), (await getUsage(dc, site.tenant_id)).storage_bytes, newBytes);
   const now = Date.now();
-  // A keyed-site TTL renews at every finalize (PUB-16); other sites keep their expiry.
-  const expiresAt = site.ttl_seconds != null ? now + site.ttl_seconds * 1000 : site.expires_at;
   const [upd] = await dc.env.DB.batch([
     // Check quota and base against transaction-local state; parallel pending deploys reserve no storage.
+    // A keyed-site TTL renews at every finalize (PUB-16). The expiry is computed
+    // from the row-current ttl_seconds inside the same statement, so a TTL edit
+    // that lands mid-finalize converges instead of being overwritten by this
+    // finalize's earlier snapshot; sites without a TTL keep their expiry.
     dc.env.DB.prepare(
-      `UPDATE sites SET current_version_id = ?, updated_at = ?, expires_at = ?
+      `UPDATE sites SET current_version_id = ?, updated_at = ?,
+         expires_at = CASE WHEN ttl_seconds IS NULL THEN expires_at ELSE ? + ttl_seconds * 1000 END
         WHERE id = ? AND tenant_id IS ? AND deleted_at IS NULL AND (? IS NULL OR current_version_id IS ?)
           AND EXISTS (SELECT 1 FROM versions WHERE id = ? AND status = 'pending')
           AND (? IS NULL OR (${PROJECTED_STORAGE_SQL}) <= ?)`,
-    ).bind(version.id, now, expiresAt, site.id, site.tenant_id, version.base_version_id, version.base_version_id,
+    ).bind(version.id, now, now, site.id, site.tenant_id, version.base_version_id, version.base_version_id,
       version.id, storageQuota, site.tenant_id, site.id, version.id, storageQuota),
     dc.env.DB.prepare(`UPDATE versions SET status = 'ready', finalized_at = ? WHERE id = ? AND status = 'pending'
       AND EXISTS (SELECT 1 FROM sites WHERE id = ? AND current_version_id = ? AND updated_at = ? AND deleted_at IS NULL)`)

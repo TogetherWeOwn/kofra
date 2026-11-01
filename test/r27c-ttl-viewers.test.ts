@@ -2,7 +2,7 @@ import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:
 import { beforeEach, describe, expect, it } from "vitest";
 import { clearLiveMemoryCache, runCleanup } from "@dropway/core";
 import type { ServerBindings } from "@dropway/server";
-import { form, freshInstance, type Instance } from "./helpers";
+import { form, freshInstance, jsonBody, manifestEntry, type Instance } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
 
 const BROWSER_NAV = { Accept: "text/html,application/xhtml+xml,*/*;q=0.8", "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate" };
@@ -126,6 +126,99 @@ describe("keyed-site TTL (PUB-16)", () => {
     expect((await dw.call("/s/ttl-gone/")).status).toBe(404);
   });
 
+  it("identical republish renews the TTL expiry", async () => {
+    const pub = await publish({ "index.html": "<p>x</p>" }, { slug: "ttl-same", ttlSeconds: "3600" });
+    expect(pub.status).toBe(201);
+    // Force the deadline near, then publish the identical files again.
+    await env.DB.prepare("UPDATE sites SET expires_at = ? WHERE slug = 'ttl-same'").bind(Date.now() + 1000).run();
+    const before = Date.now();
+    const again = await publish({ "index.html": "<p>x</p>" }, { slug: "ttl-same" });
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+    expect(again.body.unchanged).toBe(true);
+    expect(again.body.site.settings.ttlSeconds).toBe(3600);
+    const renewed = Date.parse(again.body.site.expiresAt);
+    expect(renewed - before).toBeGreaterThan(3599_000);
+    expect(renewed - before).toBeLessThan(3601_000);
+  });
+
+  it("TTL edits around a pending finalize converge", async () => {
+    const e = await manifestEntry("index.html", "<p>pending</p>");
+    const { bytes: _b, ...entry } = e;
+    const startPending = async (slug: string) => {
+      const created = await dw.json("/api/v1/sites", { key: dw.ownerKey, ...jsonBody({ slug }) });
+      expect(created.status).toBe(201);
+      const deploy = await dw.json(`/api/v1/sites/${slug}/versions`, { key: dw.ownerKey, ...jsonBody({ files: [entry] }) });
+      expect(deploy.status).toBe(201);
+      const up = await dw.json(`/api/v1/blobs/${e.sha256}`, { method: "PUT", key: dw.ownerKey, body: e.bytes, headers: { "Content-Length": String(e.size) } });
+      expect([200, 201]).toContain(up.status);
+      return deploy.body.deploy.id as string;
+    };
+    const finalize = (slug: string, id: string) =>
+      dw.json(`/api/v1/sites/${slug}/deploys/${id}/finalize`, { method: "POST", key: dw.ownerKey });
+
+    // Set, then clear before finalize: the site stays expiry-free.
+    const clearId = await startPending("ttl-clear-race");
+    expect((await patchSite("ttl-clear-race", { ttlSeconds: 3600 })).status).toBe(200);
+    expect((await patchSite("ttl-clear-race", { ttlSeconds: null })).status).toBe(200);
+    expect((await finalize("ttl-clear-race", clearId)).status).toBe(200);
+    const cleared = await patchSite("ttl-clear-race", {});
+    expect(cleared.body.site.settings.ttlSeconds).toBeNull();
+    expect(cleared.body.site.expiresAt).toBeNull();
+
+    // No TTL, then set before finalize: the finalize renews with the new TTL.
+    const setId = await startPending("ttl-set-race");
+    const before = Date.now();
+    expect((await patchSite("ttl-set-race", { ttlSeconds: 60 })).status).toBe(200);
+    expect((await finalize("ttl-set-race", setId)).status).toBe(200);
+    const set = await patchSite("ttl-set-race", {});
+    expect(set.body.site.settings.ttlSeconds).toBe(60);
+    const renewed = Date.parse(set.body.site.expiresAt);
+    expect(renewed - before).toBeGreaterThan(59_000);
+    expect(renewed - before).toBeLessThan(61_000);
+  });
+
+  it("concurrent finalize and TTL edit converge", async () => {
+    const e = await manifestEntry("index.html", "<p>race</p>");
+    const { bytes: _b, ...entry } = e;
+    const startPending = async (slug: string) => {
+      const created = await dw.json("/api/v1/sites", { key: dw.ownerKey, ...jsonBody({ slug }) });
+      expect(created.status).toBe(201);
+      const deploy = await dw.json(`/api/v1/sites/${slug}/versions`, { key: dw.ownerKey, ...jsonBody({ files: [entry] }) });
+      expect(deploy.status).toBe(201);
+      const up = await dw.json(`/api/v1/blobs/${e.sha256}`, { method: "PUT", key: dw.ownerKey, body: e.bytes, headers: { "Content-Length": String(e.size) } });
+      expect([200, 201]).toContain(up.status);
+      return deploy.body.deploy.id as string;
+    };
+
+    // Clear racing a finalize: every interleaving ends expiry-free.
+    const clearId = await startPending("ttl-clear-concurrent");
+    expect((await patchSite("ttl-clear-concurrent", { ttlSeconds: 3600 })).status).toBe(200);
+    const [finClear, patchClear] = await Promise.all([
+      dw.json(`/api/v1/sites/ttl-clear-concurrent/deploys/${clearId}/finalize`, { method: "POST", key: dw.ownerKey }),
+      patchSite("ttl-clear-concurrent", { ttlSeconds: null }),
+    ]);
+    expect(finClear.status, JSON.stringify(finClear.body)).toBe(200);
+    expect(patchClear.status).toBe(200);
+    const cleared = await patchSite("ttl-clear-concurrent", {});
+    expect(cleared.body.site.settings.ttlSeconds).toBeNull();
+    expect(cleared.body.site.expiresAt).toBeNull();
+
+    // Set racing a finalize: every interleaving ends with the new TTL renewed.
+    const setId = await startPending("ttl-set-concurrent");
+    const before = Date.now();
+    const [finSet, patchSet] = await Promise.all([
+      dw.json(`/api/v1/sites/ttl-set-concurrent/deploys/${setId}/finalize`, { method: "POST", key: dw.ownerKey }),
+      patchSite("ttl-set-concurrent", { ttlSeconds: 60 }),
+    ]);
+    expect(finSet.status, JSON.stringify(finSet.body)).toBe(200);
+    expect(patchSet.status).toBe(200);
+    const set = await patchSite("ttl-set-concurrent", {});
+    expect(set.body.site.settings.ttlSeconds).toBe(60);
+    const renewed = Date.parse(set.body.site.expiresAt);
+    expect(renewed - before).toBeGreaterThan(59_000);
+    expect(renewed - before).toBeLessThan(63_000);
+  });
+
   it("sets ttlSeconds and viewers through MCP", async () => {
     const pub = await publish({ "index.html": "<p>x</p>" }, { slug: "ttl-mcp" });
     expect(pub.status).toBe(201);
@@ -203,5 +296,23 @@ describe("per-site viewers switch (VIEW-06)", () => {
     });
     expect(created.status).toBe(201);
     expect(created.body.site.settings.viewers).toBe(false);
+  });
+
+  it("viewers:false serves byte-exact HTML in path mode", async () => {
+    const html = '<img src="/logo.png">';
+    const pub = await publish({ "index.html": html }, { slug: "raw-bytes" });
+    expect(pub.status).toBe(201);
+    // Viewers on: path mode prefixes the root-relative URL.
+    const rewritten = await dw.call("/s/raw-bytes/index.html", { headers: BROWSER_NAV });
+    expect(rewritten.status).toBe(200);
+    expect(rewritten.headers.get("x-kofra-rewritten")).toBe("path-prefix");
+    expect(await rewritten.text()).toContain("/s/raw-bytes/logo.png");
+
+    expect((await patchSite("raw-bytes", { viewers: false })).status).toBe(200);
+    const raw = await dw.call("/s/raw-bytes/index.html", { headers: BROWSER_NAV });
+    expect(raw.status).toBe(200);
+    expect(raw.headers.get("x-kofra-viewer")).toBeNull();
+    expect(raw.headers.get("x-kofra-rewritten")).toBeNull();
+    expect(await raw.text()).toBe(html);
   });
 });

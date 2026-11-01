@@ -548,7 +548,9 @@ async function serveFile(
   const head = req.method === "HEAD";
   const viewMode = raw || download || opts?.forceRaw ? null : requestedViewMode(req, sp);
   const viewer = viewMode ? findViewer(file, live, viewers, viewMode) : null;
-  const report = !opts?.forceRaw && live.tenantId === null && !raw && !download && !precompressed(path) && baseType(contentType) === "text/html";
+  // viewers:false means byte-exact output: skip the anonymous report link like ?raw=1 does.
+  const viewersOff = live.viewers === false;
+  const report = !viewersOff && !opts?.forceRaw && live.tenantId === null && !raw && !download && !precompressed(path) && baseType(contentType) === "text/html";
   const reportVariant = report ? `-report${REPORT_LINK_VERSION}` : "";
   const reportUrl = new URL(`${mode.base}__dropway/report`, url).href;
 
@@ -630,7 +632,8 @@ async function serveFile(
   }
 
   // Path mode: HTML and CSS get root-relative URLs prefixed with the site base.
-  const rewriteKind = mode.rewrite && !raw && !download && !opts?.forceRaw && !precompressed(path) ? (isHtml(contentType) ? "html" : baseType(contentType) === "text/css" && size <= MAX_CSS_REWRITE_BYTES ? "css" : null) : null;
+  // viewers:false opts out of that rewriting too: the stored bytes go out untouched.
+  const rewriteKind = !viewersOff && mode.rewrite && !raw && !download && !opts?.forceRaw && !precompressed(path) ? (isHtml(contentType) ? "html" : baseType(contentType) === "text/css" && size <= MAX_CSS_REWRITE_BYTES ? "css" : null) : null;
   if (rewriteKind || report) {
     // Sandboxed pages and private previews send no Referer, so they need runtime URL repair.
     const shim = rewriteKind === "html" && (mode.sandbox || mode.pathShim === true);
