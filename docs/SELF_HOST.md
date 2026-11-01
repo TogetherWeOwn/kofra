@@ -14,9 +14,9 @@ You need:
 
 ## Option 1: Deploy to Cloudflare button
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/TogetherWeOwn/dropway)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/TogetherWeOwn/kofra)
 
-Link: `https://deploy.workers.cloudflare.com/?url=https://github.com/TogetherWeOwn/dropway`
+Link: `https://deploy.workers.cloudflare.com/?url=https://github.com/TogetherWeOwn/kofra`
 
 What happens, per Cloudflare's [Deploy button docs](https://developers.cloudflare.com/workers/platform/deploy-buttons/):
 
@@ -42,7 +42,7 @@ ones in `wrangler.jsonc` unless you set `"keep_vars": true`. Secrets (`ADMIN_BOO
 ## Option 2: Command line
 
 ```sh
-git clone https://github.com/TogetherWeOwn/dropway && cd dropway
+git clone https://github.com/TogetherWeOwn/kofra && cd kofra
 npm install
 npx wrangler login
 npx wrangler secret put ADMIN_BOOTSTRAP_KEY   # paste a long random string (openssl rand -hex 32)

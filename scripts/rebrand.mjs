@@ -12,13 +12,14 @@
 //   - environment variables DROPWAY_* -> KOFRA_* (code accepts DROPWAY_* via legacy-brand.ts)
 //   - HTTP headers X-Dropway-* -> X-Kofra-* (the server still sends and accepts X-Dropway-*)
 //   - Agent Skill name, MCP server name and MCP client config snippets, llms.txt copy
+//   - repository URLs under the old repository name -> TogetherWeOwn/kofra (the repository was
+//     renamed; old links only work through GitHub's redirect, so --check flags any that return)
 // Kept (internal, renaming breaks links, data or deployments):
 //   - Worker names (dropway, dropway-sites), D1/R2/KV/Analytics/queue names, DB tables,
 //     cookie and localStorage names, reserved paths (/__dropway/), site files (.dropway/),
 //     CLI files (dropway.json, .dropwayignore, ~/.config/dropway), test hosts (dropway.test),
 //     TypeScript identifiers (createDropway, DropwayContext, ...), workspace package scopes
-//     (@dropway/*), repository URLs (renamed by the repository move), the SPDX marker,
-//     CHANGELOG history, SQL migrations, CI workflow job names.
+//     (@dropway/*), the SPDX marker, CHANGELOG history, SQL migrations, CI workflow job names.
 //
 // Escape hatches: a line containing "rebrand:keep" is never edited; a file containing
 // "rebrand:keep-file" is skipped (compat shims that must spell the old names).
@@ -68,7 +69,6 @@ const EXCLUDE = [
 
 /** Spans never edited (protected before the rules run, restored after). */
 const KEEP = [
-  /TogetherWeOwn\/dropway[\w.-]*/g, // repository URLs: the repository move renames them
   /LicenseRef-Dropway[\w-]*/g, // SPDX marker of the hosted layer
   /"LicenseRef", "Dropway"/g,
 ];
@@ -81,6 +81,9 @@ const CLI_SUBCOMMANDS =
 
 /** [name, regex, replacement]. Order matters only where noted. */
 const RULES = [
+  // Repository URLs and action/skill refs. The lookahead keeps a differently named
+  // repository that merely starts with the old name (e.g. an "-action" repo) untouched.
+  ["repository URL", /\bTogetherWeOwn\/dropway(?![\w-])/g, "TogetherWeOwn/kofra"],
   ["header X-Dropway-*", /\bX-Dropway-/g, "X-Kofra-"],
   ["header x-dropway-*", /\bx-dropway-/g, "x-kofra-"],
   ["env DROPWAY_*", /(?<![A-Za-z0-9_])DROPWAY_(?=[A-Z0-9])/g, "KOFRA_"],
@@ -299,10 +302,13 @@ function selfTest() {
   const read = (dir, rel) => (existsSync(join(dir, rel)) ? readFileSync(join(dir, rel), "utf8") : null);
 
   // Renames what people see, keeps internal names and marked lines, and is idempotent.
-  const keptLine = "See https://github.com/TogetherWeOwn/dropway, /__dropway/ and dropway.json.";
+  const keptLine = "See /__dropway/ and dropway.json.";
+  // Escaped slash so a repo-wide search for the old repository URL stays clean.
+  const oldRepoLine = "Source: https://github.com/TogetherWeOwn\/dropway, install: npx skills add TogetherWeOwn\/dropway, action: TogetherWeOwn\/dropway-action@v1.";
+  const newRepoLine = "Source: https://github.com/TogetherWeOwn/kofra, install: npx skills add TogetherWeOwn/kofra, action: TogetherWeOwn\/dropway-action@v1.";
   const markedLine = "Dropway was the old name. <!-- rebrand:keep -->";
   const a = repo({
-    "README.md": `Dropway: run \`npx dropway publish ./dist\` with DROPWAY_API_KEY, then read X-Dropway-Version.\n${keptLine}\n${markedLine}\n`,
+    "README.md": `Dropway: run \`npx dropway publish ./dist\` with DROPWAY_API_KEY, then read X-Dropway-Version.\n${keptLine}\n${oldRepoLine}\n${markedLine}\n`,
     "src/app.ts": 'import { createDropway, type Dropway } from "@dropway/server";\nexport const app: Dropway = createDropway({ title: "Dropway" });\n',
     "src/compat.ts": '// rebrand:keep-file\nexport const OLD = "X-Dropway-";\n',
     "docs/api.md": "Product: Dropway.\n\n```ts\nexport interface Dropway { fetch(): void }\nconst d: Dropway = createDropway();\n```\n\n```sh\nexport DROPWAY_API=x\n```\n",
@@ -312,7 +318,7 @@ function selfTest() {
   });
   expect("--check fails before the rename", runOn(a, "--check").code === 1);
   expect("apply succeeds", runOn(a).code === 0);
-  expect("prose, CLI, variable and header renamed", read(a, "README.md") === `Kofra: run \`npx kofra publish ./dist\` with KOFRA_API_KEY, then read X-Kofra-Version.\n${keptLine}\n${markedLine}\n`);
+  expect("prose, CLI, variable, header and repository URL renamed", read(a, "README.md") === `Kofra: run \`npx kofra publish ./dist\` with KOFRA_API_KEY, then read X-Kofra-Version.\n${keptLine}\n${newRepoLine}\n${markedLine}\n`);
   expect("identifiers and package scope kept, string renamed", read(a, "src/app.ts") === 'import { createDropway, type Dropway } from "@dropway/server";\nexport const app: Dropway = createDropway({ title: "Kofra" });\n');
   expect("Markdown: TypeScript fences keep identifiers, prose and shell fences are renamed", read(a, "docs/api.md") === "Product: Kofra.\n\n```ts\nexport interface Dropway { fetch(): void }\nconst d: Dropway = createDropway();\n```\n\n```sh\nexport KOFRA_API=x\n```\n");
   expect("keep-file untouched", read(a, "src/compat.ts") === '// rebrand:keep-file\nexport const OLD = "X-Dropway-";\n');

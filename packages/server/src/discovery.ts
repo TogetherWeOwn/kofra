@@ -50,7 +50,7 @@ name: ${SKILL_NAME}
 description: ${skillDescription(product)}
 license: MIT
 metadata:
-  homepage: ${instance ? instance.origin : "https://github.com/TogetherWeOwn/dropway"}
+  homepage: ${instance ? instance.origin : "https://github.com/TogetherWeOwn/kofra"}
 ---
 
 # ${product}
@@ -192,8 +192,8 @@ ${mcpLines(origin)}
 
 - [Full reference](${origin}/llms-full.txt): every endpoint, every MCP tool with its input schema, error codes
 - [OpenAPI 3.1](${origin}/openapi.json): x-mcp-tool names available MCP twins; x-mcp-exclude explains REST-only operations
-- [Agent Skill](${origin}/skill.md): install with \`npx skills add ${origin}\` or \`npx skills add TogetherWeOwn/dropway\`
-- [Source (MIT)](https://github.com/TogetherWeOwn/dropway)
+- [Agent Skill](${origin}/skill.md): install with \`npx skills add ${origin}\` or \`npx skills add TogetherWeOwn/kofra\`
+- [Source (MIT)](https://github.com/TogetherWeOwn/kofra)
 
 ## REST endpoints
 

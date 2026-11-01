@@ -164,7 +164,7 @@ export async function fetchUrlSource(
   for (let hop = 0; ; hop++) {
     let res: Response;
     try {
-      res = await doFetch(current.href, { headers: { "User-Agent": "Kofra-Fetch/1 (+https://github.com/TogetherWeOwn/dropway)", ...headers }, redirect: "manual", signal });
+      res = await doFetch(current.href, { headers: { "User-Agent": "Kofra-Fetch/1 (+https://github.com/TogetherWeOwn/kofra)", ...headers }, redirect: "manual", signal });
     } catch (e) {
       if (opts.signal?.aborted) throw opts.signal.reason;
       throw fetchFailure(e);
