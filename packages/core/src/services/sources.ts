@@ -571,7 +571,7 @@ async function completeVersion(
     url: siteUrl(dc, fresh.slug),
     versionUrl: await versionPreviewUrl(dc, actor, fresh, version!),
     slug: fresh.slug,
-    site: { id: fresh.id, ...serializeSite(dc, fresh, live) },
+    site: serializeSite(dc, fresh, live),
     version: versionOut,
     files: {
       total: files.length,
@@ -602,6 +602,8 @@ export interface PublishSourcesInput {
   renderMarkdown?: unknown;
   crossOriginIsolation?: unknown;
   password?: unknown;
+  /** Ask crawlers not to index this site (X-Robots-Tag: noindex, generated robots.txt). */
+  noindex?: unknown;
   message?: unknown;
   baseVersionId?: unknown;
   /** Attribution stored on the version, e.g. "claude-code/2.1". */
@@ -675,7 +677,7 @@ export async function publishSources(dc: DropwayContext, p: Principal, input: Pu
     : await resolveFileInputs(dc, p, input.files, { lim, scope: callerBlobScope(p, existing), site: existing, fetcher: input.fetcher });
 
   const fields: Record<string, unknown> = { slug };
-  for (const k of ["title", "description", "spa", "renderMarkdown", "crossOriginIsolation", "password"] as const) if (input[k] !== undefined) fields[k] = input[k];
+  for (const k of ["title", "description", "spa", "renderMarkdown", "crossOriginIsolation", "password", "noindex"] as const) if (input[k] !== undefined) fields[k] = input[k];
   const manifest = resolved.files.map((f) => ({ path: f.path, size: f.size, sha256: f.sha256, contentType: f.contentType }));
   const target = await resolvePublishTarget(dc, p, fields, manifest);
   const site = target.site;
@@ -843,7 +845,7 @@ export async function finalizeVersionByRef(dc: DropwayContext, p: Principal, sit
       url: siteUrl(dc, fresh.slug),
       versionUrl: await versionPreviewUrl(dc, p, fresh, result.version),
       slug: fresh.slug,
-      site: { id: fresh.id, ...serializeSite(dc, fresh, live) },
+      site: serializeSite(dc, fresh, live),
       version: serializeVersion(result.version, fresh.current_version_id),
       warnings: result.warnings,
       next: [] as NextStep[],

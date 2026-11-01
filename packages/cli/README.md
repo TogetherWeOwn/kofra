@@ -24,8 +24,11 @@ Zero runtime dependencies. Node.js 20 or newer.
 | `duplicate <source> <new-slug>` | Copy an explicit live site into a new slug (`--message`, `--idempotency-key`, offline `--dry-run`) |
 | `list` | Your sites (`--all` for every page) |
 | `site <name>` | One site: URL, live version, settings |
+| `settings <site>` | Inspect non-secret site settings, PATCH explicit fields, or plan a patch offline with `--dry-run` |
 | `rename <source> <new-slug> --yes` | Rename an explicit site; offline `--dry-run`; saved local project mappings remain unchanged |
+| `claim <site> --token <claimToken>` | Keep an anonymous site in your account; the site stops expiring (offline `--dry-run`) |
 | `files <name>` | Files of the live version (or `--version <ref>` with `live`, `v3`, `3` or a version id, read directly) with their URLs |
+| `pull <site> <dir>` | Download an immutable version with size/SHA-256 verification (`--version`, `--force`, `--json`) |
 | `read-file <site> <path>` | One file's content, one bounded page (`--version`, `--offset`, `--length`, `--encoding`) |
 | `versions <name>` | Newest 500 versions, newest first, live marked — or `versions <name> <ref>` to inspect one directly |
 | `restore <name> [v3]` | Make an older version live again. Without a version: the one before the live version. Alias `rollback` |
@@ -50,6 +53,77 @@ kofra keys ls --all --json  # every member's keys (needs members:write) as one J
 `*` marks the current key and terminal control characters are shown as visible `\uXXXX` escapes,
 keeping each key on one row. `--json` preserves the original metadata values. Create and revoke
 keys with the generic command, e.g. `kofra api POST /keys --data '{"name":"ci"}'`.
+
+## Site settings
+
+Always supply one explicit site **slug**, even if `dropway.json` maps this folder to a site.
+`settings` never infers a target, creates a site, publishes, changes credentials or writes config.
+
+```sh
+kofra settings disposable-report --json                    # inspect: authenticated GET only
+kofra settings disposable-report --title 'Report' --json   # write: PATCH only this title
+kofra settings disposable-report --spa false --render-markdown false --cross-origin-isolation true --json
+kofra settings disposable-report --title '' --description '' --json  # clear both to null
+kofra settings disposable-report --spa false --dry-run --json       # offline; no credential needed
+```
+
+| Flag | Accepted value / PATCH field |
+|---|---|
+| `--title <text>` | Literal string, including spaces; `''` clears `title` to `null` |
+| `--description <text>` | Literal string; `''` clears `description` to `null` |
+| `--spa true\|false` | Lower-case literal boolean / `spa` |
+| `--render-markdown true\|false` | Lower-case literal boolean / `renderMarkdown` |
+| `--cross-origin-isolation true\|false` | Lower-case literal boolean / `crossOriginIsolation` |
+| `--dry-run` | Requires at least one explicit field; prints the exact normalized patch offline |
+
+Use each option only once. `--flag=value` also works; boolean field flags still require an explicit
+`true` or `false` (no `1`, `0`, `yes`, `--no-spa` or implicit toggle). Unknown options, extra/missing
+sites, repeated flags and unsupported controls fail with exit 2 **before any request**. Passwords,
+access modes, key management, tenant/runtime settings and instance limits are not supported by this
+command and are never forwarded. Omitted fields are not sent, so existing values survive. Empty
+strings are the only CLI clearing spelling; the literal string `null` is just text.
+
+Inspect needs an authenticated site read; member keys changing settings need both `sites:read`
+and `sites:write`. A write sends only the
+existing PATCH, with no preliminary GET. Reapplying the same patch preserves the settings and
+version history (server timestamps may change). Site bytes and version identity are not republished.
+`--dry-run` does not contact the instance, read credentials or write local state; it checks CLI syntax,
+not site existence, permission or server policy. No non-TTY prompt or fallback to another command
+occurs, including on errors.
+
+JSON success is exactly one object on stdout; progress goes to stderr. The response is allowlisted:
+
+```json
+{"ok":true,"site":{"id":"site_example","slug":"disposable-report","title":null,"description":null,"currentVersionId":"ver_example","settings":{"spa":false,"renderMarkdown":true,"crossOriginIsolation":false}}}
+```
+
+`site.id` is a stable string on current instances and `null` on older instances that omit it;
+human output omits a missing id. Existing site slugs up to 63 characters remain supported.
+Authenticated requests require HTTPS except for loopback HTTP development instances.
+
+No claim token, visitor password, key or other access data is included. Dry-run returns a versioned
+plan with the explicit slug, never an invented stable id:
+
+```json
+{"ok":true,"schemaVersion":1,"dryRun":true,"site":"disposable-report","patch":{"spa":false}}
+```
+
+Errors use the normal `{ok:false,exitCode,error}` envelope and preserve the server's code, hint,
+HTTP status, request id, retryability, next-call array and retry delay when present. See the exit-code
+table below; this command never changes the target or falls back to publish/setup after a refusal.
+
+Disposable, agent-runnable verification from the repository root (no remote account, deployment or
+production request; builds the CLI, starts a temporary local Worker, applies local migrations and
+checks inspect/PATCH/reapply against isolated D1/R2/KV):
+
+```sh
+npm ci --include=dev --no-audit --no-fund
+npm run build -w kofra
+npm run test:cli -- test/site-settings/
+```
+
+The suite also observes wire requests, checks exact offline plans without credentials, fingerprints
+local config before/after, and exercises invalid flags, explicit false, secret projection and errors.
 
 ## Versions
 
@@ -132,6 +206,24 @@ Disposable local integration check (no deploy):
 npm run test:cli -- test/duplicate.acceptance.test.ts test/duplicate-worker.acceptance.test.ts
 ```
 
+
+## Claiming an anonymous site
+
+```sh
+kofra claim bright-otter-x7k2 --token dwc_... --json   # needs your API key
+kofra claim bright-otter-x7k2 --dry-run                # offline plan, no key or token
+```
+
+The site and `--token` (the `dwc_` claim token from the anonymous publish) are both required;
+claim never prompts for the token and never prints it. It calls `claim_site` once: the site moves
+into your account, stops expiring, and the claim token stops working. `--json` prints
+`{ "ok": true, "claimed": null, "alreadyOwned": null, "site": {...}, "url": "..." }` after
+a successful claim request: the server does not say whether it changed the site or merely retried
+an earlier claim. An unknown site and a wrong token both fail with the server's `site_not_found`
+(exit 4). If a server read shows you already own the site, it reports unchanged (`claimed: false`,
+`alreadyOwned: true`, exit 0) without using the token. Scoped keys without read access and other
+failed pre-reads fall through to the claim request and return the neutral result on success.
+The token is a command-line argument, so it can land in shell history; clear it afterwards if that matters (a claimed site's token stops working anyway).
 
 ## Renaming a site
 
@@ -290,6 +382,75 @@ weekly-report --format md | kofra publish --stdin assets/report.md --site weekly
 Anonymous publishing (`--anonymous`) works only on instances that turned it on. The site expires and
 the output includes a `claimToken`: keep it to update the site (`--key <claimToken> --site <name>`) or
 to claim it into an account.
+
+## Pulling a version
+
+```sh
+kofra pull my-site ./snapshot --json
+kofra pull my-site ./old-snapshot --version v1 --json
+kofra pull my-site ./snapshot --version ver_abc123 --force
+```
+
+The CLI resolves `live` (default), `vN`, `N` or an id directly to an immutable
+version id **before** listing any files. Every manifest continuation and file
+page uses that id: a concurrent republish cannot change the snapshot. Only the
+existing `list_files` and `read_file` operations are used; your key needs read
+access to the site. No project link or credentials are written.
+
+Files are downloaded as base64 pages of at most 1 MiB, decoded and hashed
+incrementally, then renamed from an exclusive temporary file only after the
+size and SHA-256 match the manifest. The temporary stays owner-only while
+unverified (POSIX modes; Windows does not enforce `0600`, so on Windows pull into a
+private destination or apply an ACL to it); the renamed file carries the normal umask-adjusted file mode. Binary, Unicode, empty, HTML and CSS files
+retain their original stored bytes, without viewer rendering or URL rewriting.
+A failed file is named in `failures`, never counted in `files`, and its temporary
+file is removed. An old same-path file is retained if its replacement fails.
+Other files continue; the first failure determines the exit code using the
+existing table. Failures before downloading (such as auth/version resolution or
+nonempty-directory refusal) use the normal error envelope instead.
+
+An existing non-empty directory is refused with `pull_directory_not_empty`
+(exit 2) unless `--force` is passed. `--force` replaces only pulled file paths;
+extra local files are **never deleted** and their names are reported on stderr
+(unless `--quiet`). Unsafe relative paths, symlinks and conflicting directories
+are refused rather than followed or removed, including a symlink in any parent of
+the destination below your working directory (`kofra pull site link/out` is
+refused when `link` is a symlink). Windows drive/alternate-stream
+syntax and reserved names are also refused, as is any `.git`, `.gitmodules`
+or `.gitattributes` path segment (case-insensitive): publishing never
+includes `.git`, and server bytes must not become trusted Git configuration
+on the local disk (`--force` into a worktree would otherwise let a manifest
+replace the submodule or attribute config later Git operations read). A path that aliases an earlier
+download or a differently named local extra on a case-insensitive filesystem
+fails with `pull_path_collision`, rather than overwriting it. The same code
+refuses a parent directory that differs only in case or normalization
+(manifest `a/two.txt` alongside an existing `A/`), which would otherwise
+write the file under the wrong name. Use a case-sensitive
+destination for manifests containing such names. Do not modify the destination
+concurrently while pulling; this is not a filesystem sandbox against concurrent
+local changes. A pull is atomic per file, not across the whole directory.
+
+`--json` writes exactly one object on stdout, **without** an `ok` wrapper:
+
+```json
+{
+  "site": "my-site",
+  "versionId": "ver_abc123",
+  "dir": "/absolute/path/to/snapshot",
+  "files": [{ "path": "index.html", "size": 12, "sha256": "<64 lowercase hex characters>" }],
+  "failures": []
+}
+```
+
+Failure rows are `{ "path": "file.bin", "code": "pull_integrity_mismatch",
+"message": "..." }`. Progress and extra-file notices stay on stderr; human
+output summarizes pulled/failed counts and the exact pinned version.
+
+Disposable local integration check (no deploy):
+
+```sh
+npm run test:cli -- test/pull.acceptance.test.ts test/pull-worker.acceptance.test.ts
+```
 
 ## Reading files
 

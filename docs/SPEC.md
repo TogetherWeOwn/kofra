@@ -120,15 +120,15 @@ What Kofra is not:
 | SRV-01 | Three serving modes: subdomain (each site its own origin), path on a dedicated sites origin, path on the app origin (always sandboxed). Section 11.2 | P0 | Done |
 | SRV-02 | Path mode keeps sites inside `/<slug>/`: HTML and CSS root-relative URLs are rewritten; URLs built at runtime are resolved by `Referer` with a 307 (unsandboxed pages) or by an injected run-time shim (sandboxed pages, which send no Referer); navigations inside an SPA fall back to the SPA. Interim until an instance has a domain | P0 | Done |
 | SRV-03 | Index resolution: `index.html`, `index.htm`, `index.md`, `README.md`; a one-file site serves that file at `/`; folders without an index get a listing; `404.html`; SPA fallback | P0 | Done |
-| SRV-04 | Headers: `ETag` (sha256), `Range`/206, pre-compressed `.br`/`.gz` with `Content-Encoding`, `X-Kofra-Version`, `X-Robots-Tag: noindex` on expiring sites, `X-Content-Type-Options: nosniff` | P0 | Done |
-| SRV-05 | Cache policy matrix (HTML and unfingerprinted files revalidate; fingerprinted files immutable; gated sites `private, no-store`; sites with `.wasm` revalidate) | P0 | Partial; R-27 |
-| SRV-06 | Content-addressed edge cache (Cache API by sha256, pointer memo). Live URL shows a new version within about 60 s worldwide, the version URL at once | P0 | R-14 |
+| SRV-04 | Headers: `ETag` (sha256), `Range`/206, pre-compressed `.br`/`.gz` with `Content-Encoding`, `X-Kofra-Version`, `X-Robots-Tag` (`noindex` for anonymous, expiring and opted-out sites, `all` otherwise), `X-Content-Type-Options: nosniff` | P0 | Done |
+| SRV-05 | Cache policy matrix (HTML and unfingerprinted files revalidate; fingerprinted files immutable; gated sites `private, no-store`; sites with `.wasm` revalidate) | P0 | Done |
+| SRV-06 | Content-addressed edge cache (Cache API by sha256, pointer memo). Live URL shows a new version within about 60 s worldwide, the version URL at once | P0 | Done: measured 2026-11-01 on workers.dev, 20 samples, p50 163 ms, p95 235 ms; numbers and cache probe in [SELF_HOST.md](SELF_HOST.md) |
 | SRV-07 | Version preview URLs `<slug>--v<N>` for the owner (signed links for others) | P0 | Done: exact ready version from D1 in both modes; owner Authorization or 24 h signed link with preview-root cookie, noindex/no-referrer |
 | SRV-08 | Cross-origin isolation per site (COOP/COEP for `SharedArrayBuffer` and threaded WebAssembly) | P0 | Done |
 | SRV-09 | `_redirects` and `_headers` files at the site root (Netlify/Cloudflare Pages syntax subset), parsed at finalize, never served | P1 | R-27 |
 | SRV-10 | Agent-readable pages: `Accept: text/markdown` on a navigation returns a Markdown rendering of HTML and text files | P1 | R-34 |
 | SRV-11 | Embeds: public sites can be framed anywhere; gated sites refuse framing; per-site embed allowlist (`frame-ancestors`) | P1 | Partial; R-23 |
-| SRV-12 | Robots: anonymous and expiring sites `noindex`; per-site `noindex` setting; a site's own `robots.txt` is served when present | P0 | Partial; R-27 |
+| SRV-12 | Robots: anonymous and expiring sites `noindex`; per-site `noindex` setting; a site's own `robots.txt` is served when present | P0 | Done |
 | SRV-13 | Live reload: open tabs refresh when a new version goes live | P2 | R-41 |
 | SRV-14 | Per-site functions (sandboxed server code via Dynamic Workers) | P2 | R-48 |
 
@@ -223,7 +223,7 @@ the local filter.
 | AX-01 | REST API v1 and OpenAPI 3.1, generated from one operation registry | P0 | Done (R-02); legacy wire adapters preserved |
 | AX-02 | Remote MCP server, Streamable HTTP, stateless, API-key auth, `core` toolset | P0 | R-06 |
 | AX-03 | MCP: OAuth, every toolset, `?toolsets=`, read-only mode, single-site scope, resources, prompts, an MCP Apps site card | P1 | R-24, R-25 |
-| AX-04 | CLI `npx kofra`: `publish --json --wait`, management commands, exit codes, `kofra api` escape hatch | P0 | Partial (R-09, R-10): explicit `rename <source> <new-slug> --yes`, offline plan and unchanged local mappings; `publish --stdin <filename>` pipes one raw file through the same publish path; remaining management commands pending |
+| AX-04 | CLI `npx kofra`: `publish --json --wait`, management commands, exit codes, `kofra api` escape hatch | P0 | Partial (R-09, R-10): explicit `rename <source> <new-slug> --yes`, explicit `settings <site>` inspect/PATCH/offline `--dry-run`, `claim <site> --token`, offline plan, neutral retry receipts and unchanged local mappings; verified immutable-version `pull <site> <dir>` (bounded pages, safe local replacement, per-file JSON receipts); `publish --stdin <filename>` pipes one raw file through the same publish path; remaining management commands pending |
 | AX-05 | Local stdio MCP (`npx kofra mcp`) with local-path sources | P1 | R-26 |
 | AX-06 | Discovery: `llms.txt` v2, a skill templated with the instance's own URLs, `/.well-known/agent-skills/index.json`, `/.well-known/api-catalog`, `/connect` | P0 | Partial (`llms.txt`, OpenAPI); R-11 |
 | AX-07 | Error envelope with `code`, `hint`, `retryable`, `retryAfterSeconds`, `docs`, `next`, `details.fields` | P0 | Done (manifest and schema validation; legacy service validators retain stable codes) |
@@ -408,12 +408,15 @@ Notes that shape the design:
 ### 5.4 Serving hot path (R-14)
 
 1. Route by host and path (no I/O).
-2. Live pointer `slug -> { siteId, versionId, settings, access }`: isolate memo (5 s) -> KV
-   `live:<slug>` (`cacheTtl` 30 s) -> D1.
+2. Live pointer `slug -> { siteId, versionId, settings, access }`: isolate memo (5 s) -> Cache API
+   `ptr/<slug>` (10 s) -> KV `live:<slug>` (`cacheTtl` 30 s) -> D1. A publish, settings change,
+   restore or delete drops the memo after the KV write; a per-slug read fence keeps a read that
+   started before the change from restoring isolate memory, its delayed memo fill is dropped by a
+   generation check, and a KV miss fill is verified against D1 before and after the put.
 3. Manifest `versionId -> { path: [sha256, size, type] }`: immutable, cached forever (isolate LRU ->
    Cache API -> D1; R2 `manifests/<versionId>.json` when D1 grows, section 7.5).
 4. Bytes: Cache API `blob/<sha256>` (immutable) -> D1 `blobs.storage_key` -> R2 generation on a miss. Range requests and
-   files above 50 MiB stream from R2 and skip the Cache API.
+   files above 25 MB stream from R2 and skip the Cache API.
 5. Rendered viewers: Cache API `render/<viewer>@<viewerVersion>/<variant>/<sha256>`.
 6. One Analytics Engine data point per top-level view, 404 or bot hit, written without awaiting.
 
