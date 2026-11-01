@@ -602,6 +602,8 @@ export interface PublishSourcesInput {
   renderMarkdown?: unknown;
   crossOriginIsolation?: unknown;
   password?: unknown;
+  /** Ask crawlers not to index this site (X-Robots-Tag: noindex, generated robots.txt). */
+  noindex?: unknown;
   message?: unknown;
   baseVersionId?: unknown;
   /** Attribution stored on the version, e.g. "claude-code/2.1". */
@@ -675,7 +677,7 @@ export async function publishSources(dc: DropwayContext, p: Principal, input: Pu
     : await resolveFileInputs(dc, p, input.files, { lim, scope: callerBlobScope(p, existing), site: existing, fetcher: input.fetcher });
 
   const fields: Record<string, unknown> = { slug };
-  for (const k of ["title", "description", "spa", "renderMarkdown", "crossOriginIsolation", "password"] as const) if (input[k] !== undefined) fields[k] = input[k];
+  for (const k of ["title", "description", "spa", "renderMarkdown", "crossOriginIsolation", "password", "noindex"] as const) if (input[k] !== undefined) fields[k] = input[k];
   const manifest = resolved.files.map((f) => ({ path: f.path, size: f.size, sha256: f.sha256, contentType: f.contentType }));
   const target = await resolvePublishTarget(dc, p, fields, manifest);
   const site = target.site;

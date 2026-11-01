@@ -64,6 +64,10 @@ export const SITE_OPERATIONS = [
             type: "boolean",
             description: "Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM).",
           },
+          noindex: {
+            type: "boolean",
+            description: "Ask crawlers not to index this site (X-Robots-Tag: noindex, generated robots.txt).",
+          },
           password: {
             type: ["string", "null"],
             description: "Visitor password; null removes it. Needs an API key.",

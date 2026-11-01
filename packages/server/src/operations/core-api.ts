@@ -449,7 +449,7 @@ export const CORE_API_OPERATIONS = [
     toolset: "core",
     scopes: ["sites:read"],
     description:
-      "Show one site: live URL, title, settings (spa, renderMarkdown, crossOriginIsolation), access mode, expiry, and the live version (number, file count, size, who published it and when).",
+      "Show one site: live URL, title, settings, access mode, expiry, and the live version (number, file count, size, who published it and when).",
     input: fromSchema({
       type: "object",
       properties: { site: SITE_REF },
@@ -907,7 +907,7 @@ export const CORE_API_OPERATIONS = [
     toolset: "core",
     scopes: ["sites:write"],
     description:
-      "Change a site's title, description, spa, renderMarkdown or crossOriginIsolation. Only passed fields change. Passwords: set_site_access.",
+      "Change a site's title, description, spa, renderMarkdown, crossOriginIsolation or noindex. Only passed fields change. Passwords: set_site_access.",
     input: fromSchema({
       type: "object",
       properties: { site: SITE_REF, ...SETTINGS_INPUT },
@@ -940,6 +940,10 @@ export const CORE_API_OPERATIONS = [
             type: "boolean",
             description: "Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM).",
           },
+          noindex: {
+            type: "boolean",
+            description: "Ask crawlers not to index this site (X-Robots-Tag: noindex, generated robots.txt).",
+          },
           password: {
             type: ["string", "null"],
             description: "Visitor password; null removes it. Needs an API key.",
@@ -956,7 +960,7 @@ export const CORE_API_OPERATIONS = [
     },
     tool: {
       summarize: (r) =>
-        `Updated ${r.site.slug}: spa ${r.site.settings.spa}, renderMarkdown ${r.site.settings.renderMarkdown}, crossOriginIsolation ${r.site.settings.crossOriginIsolation}.`,
+        `Updated ${r.site.slug}: spa ${r.site.settings.spa}, renderMarkdown ${r.site.settings.renderMarkdown}, crossOriginIsolation ${r.site.settings.crossOriginIsolation}, noindex ${r.site.settings.noindex}.`,
     },
     examples: [
       {

@@ -62,6 +62,8 @@ export interface PublishSiteInput {
   renderMarkdown?: boolean;
   /** Send COOP/COEP headers. */
   crossOriginIsolation?: boolean;
+  /** Skip search indexing. */
+  noindex?: boolean;
   /** Optional visitor password (see set_site_access). */
   password?: string;
   /** Short note about this version, like a commit message. */
@@ -368,6 +370,8 @@ export interface UpdateSiteSettingsInput {
   renderMarkdown?: boolean;
   /** Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM). */
   crossOriginIsolation?: boolean;
+  /** Ask crawlers not to index this site (X-Robots-Tag: noindex, generated robots.txt). */
+  noindex?: boolean;
   /** Visitor password; null removes it. Needs an API key. */
   password?: string | null;
   slug: string;
@@ -485,6 +489,8 @@ export interface CreateSiteInput {
   renderMarkdown?: boolean;
   /** Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM). */
   crossOriginIsolation?: boolean;
+  /** Ask crawlers not to index this site (X-Robots-Tag: noindex, generated robots.txt). */
+  noindex?: boolean;
   /** Visitor password; null removes it. Needs an API key. */
   password?: string | null;
   [key: string]: unknown;

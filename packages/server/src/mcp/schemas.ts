@@ -58,6 +58,7 @@ export const SETTINGS_INPUT = {
   spa: { type: "boolean", description: "Unknown paths serve index.html." },
   renderMarkdown: { type: "boolean", description: "Render .md as pages (default true)." },
   crossOriginIsolation: { type: "boolean", description: "Send COOP/COEP headers." },
+  noindex: { type: "boolean", description: "Skip search indexing." },
 } satisfies Record<string, Schema>;
 
 export const IDEMPOTENCY_KEY: Schema = {
