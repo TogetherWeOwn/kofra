@@ -207,6 +207,14 @@ export const HTTP_OPERATIONS = [
           type: "boolean",
           description: "Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM).",
         },
+        viewers: {
+          type: "boolean",
+          description: "false serves every file raw and skips viewers.",
+        },
+        ttlSeconds: {
+          type: ["integer", "null"],
+          description: "Keyed-site expiry in seconds, renewed at each publish; null clears it.",
+        },
         password: {
           type: ["string", "null"],
           description: "Visitor password; null removes it. Needs an API key.",
@@ -311,6 +319,14 @@ export const HTTP_OPERATIONS = [
         crossOriginIsolation: {
           type: "boolean",
           description: "Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM).",
+        },
+        viewers: {
+          type: "boolean",
+          description: "false serves every file raw and skips viewers.",
+        },
+        ttlSeconds: {
+          type: ["integer", "null"],
+          description: "Keyed-site expiry in seconds, renewed at each publish; null clears it.",
         },
         password: {
           type: ["string", "null"],

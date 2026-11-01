@@ -4,6 +4,7 @@ import { cleanupBlobs } from "./blob-cleanup";
 import { emit, meter } from "./events";
 import { dropLive } from "./live";
 import { convertRedirectsStatements, insertTombstone, purgeExpiredHolds } from "./slug-holds";
+import { usageStatements } from "./usage";
 import { cleanupTransfers } from "./transfer-cleanup";
 import { assertSiteDeletionState, siteDeletionStateChanged } from "./atomic-write";
 import { cleanupExpiredMultipartUploads } from "./uploads";
@@ -39,7 +40,8 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
   const report: CleanupReport = { expiredSites: 0, purgedSites: 0, abandonedDeploys: 0, deletedBlobs: 0, expiredUploads: 0, ...await cleanupTransfers(dc, now) };
   const db = dc.env.DB;
 
-  // 1. Expire anonymous sites.
+  // 1. Expire anonymous and TTL'd keyed sites. The usage refresh is a no-op for
+  // anonymous sites; keyed expiries drop out of their tenant's counters at once.
   const { results: expired } = await db
     .prepare("SELECT * FROM sites WHERE mode = 'site' AND expires_at IS NOT NULL AND expires_at < ? AND deleted_at IS NULL LIMIT 50")
     .bind(now)
@@ -54,6 +56,7 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
           .bind(now, `~deleted~${s.id}`, s.id),
         insertTombstone(dc, { slug: s.slug, tenantId: s.tenant_id, siteId: s.id, chosen: s.slug_chosen === 1, holdUntil, reason: "expired", createdAt: now, deletedAt: now }),
         ...convertRedirectsStatements(dc, { siteId: s.id, tenantId: s.tenant_id, reason: "expired", now, deletedAt: now }),
+        ...usageStatements(dc, s.tenant_id),
       ]);
     } catch (error) {
       // A changed row is reconsidered from fresh state on the next cron run.
@@ -73,6 +76,7 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
     .bind(now - HOUR)
     .all<{ id: string }>();
   for (const s of gone) {
+    const row = await db.prepare("SELECT tenant_id FROM sites WHERE id = ?").bind(s.id).first<{ tenant_id: string | null }>();
     await db.batch([
       db.prepare("DELETE FROM version_files WHERE version_id IN (SELECT id FROM versions WHERE site_id = ?)").bind(s.id),
       db.prepare("DELETE FROM versions WHERE site_id = ?").bind(s.id),
@@ -80,6 +84,7 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
       // Defensive: deletes convert redirects to tombstones, so none should be left.
       db.prepare("DELETE FROM slug_redirects WHERE site_id = ?").bind(s.id),
       db.prepare("DELETE FROM sites WHERE id = ?").bind(s.id),
+      ...usageStatements(dc, row?.tenant_id ?? null),
     ]);
     report.purgedSites++;
   }

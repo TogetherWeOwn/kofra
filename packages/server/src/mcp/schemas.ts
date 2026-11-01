@@ -59,6 +59,8 @@ export const SETTINGS_INPUT = {
   renderMarkdown: { type: "boolean", description: "Render .md as pages (default true)." },
   crossOriginIsolation: { type: "boolean", description: "Send COOP/COEP headers." },
   noindex: { type: "boolean", description: "Skip search indexing." },
+  viewers: { type: "boolean", description: "false serves all files raw." },
+  ttlSeconds: { type: ["integer", "null"], description: "Keyed-site expiry seconds; null clears." },
 } satisfies Record<string, Schema>;
 
 export const IDEMPOTENCY_KEY: Schema = {

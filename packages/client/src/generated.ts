@@ -64,6 +64,10 @@ export interface PublishSiteInput {
   crossOriginIsolation?: boolean;
   /** Skip search indexing. */
   noindex?: boolean;
+  /** false serves all files raw. */
+  viewers?: boolean;
+  /** Keyed-site expiry seconds; null clears. */
+  ttlSeconds?: number | null;
   /** Optional visitor password (see set_site_access). */
   password?: string;
   /** Short note about this version, like a commit message. */
@@ -372,6 +376,10 @@ export interface UpdateSiteSettingsInput {
   crossOriginIsolation?: boolean;
   /** Ask crawlers not to index this site (X-Robots-Tag: noindex, generated robots.txt). */
   noindex?: boolean;
+  /** false serves every file raw and skips viewers. */
+  viewers?: boolean;
+  /** Keyed-site expiry in seconds, renewed at each publish; null clears it. */
+  ttlSeconds?: number | null;
   /** Visitor password; null removes it. Needs an API key. */
   password?: string | null;
   slug: string;
@@ -491,6 +499,10 @@ export interface CreateSiteInput {
   crossOriginIsolation?: boolean;
   /** Ask crawlers not to index this site (X-Robots-Tag: noindex, generated robots.txt). */
   noindex?: boolean;
+  /** false serves every file raw and skips viewers. */
+  viewers?: boolean;
+  /** Keyed-site expiry in seconds, renewed at each publish; null clears it. */
+  ttlSeconds?: number | null;
   /** Visitor password; null removes it. Needs an API key. */
   password?: string | null;
   [key: string]: unknown;
@@ -914,6 +926,10 @@ export interface PublishUploadInput {
   renderMarkdown?: boolean;
   /** Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM). */
   crossOriginIsolation?: boolean;
+  /** false serves every file raw and skips viewers. */
+  viewers?: boolean;
+  /** Keyed-site expiry in seconds, renewed at each publish; null clears it. */
+  ttlSeconds?: number | null;
   /** Visitor password; null removes it. Needs an API key. */
   password?: string | null;
   path?: string;
@@ -1083,6 +1099,10 @@ export interface CreateVersionInput {
   renderMarkdown?: boolean;
   /** Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM). */
   crossOriginIsolation?: boolean;
+  /** false serves every file raw and skips viewers. */
+  viewers?: boolean;
+  /** Keyed-site expiry in seconds, renewed at each publish; null clears it. */
+  ttlSeconds?: number | null;
   /** Visitor password; null removes it. Needs an API key. */
   password?: string | null;
   slug: string;

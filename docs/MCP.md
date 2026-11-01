@@ -68,7 +68,7 @@ repository) or `npx skills add https://<app>` (templated with that instance).
 | `read_file` | core | Text or base64, paged with offset/length | `GET .../files/{path}` |
 | `list_versions` | core | Immutable versions, newest first | `GET .../versions` |
 | `restore_version` | core | Roll back (`v3`, `3` or an id) | `POST .../versions/{id}/restore` |
-| `update_site_settings` | core | title, description, spa, renderMarkdown, crossOriginIsolation, noindex | `PATCH /api/v1/sites/{slug}` |
+| `update_site_settings` | core | title, description, spa, renderMarkdown, crossOriginIsolation, noindex, viewers, ttlSeconds | `PATCH /api/v1/sites/{slug}` |
 | `set_site_access` | core | `public` or `password` | `PUT .../access` |
 | `delete_site` | core | Delete (needs `confirm` = slug) | `DELETE /api/v1/sites/{slug}` |
 | `claim_site` | core | Claim an anonymous site (listed only when anonymous publishing is on) | `POST .../claim` |

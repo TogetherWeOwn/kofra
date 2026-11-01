@@ -907,7 +907,7 @@ export const CORE_API_OPERATIONS = [
     toolset: "core",
     scopes: ["sites:write"],
     description:
-      "Change a site's title, description, spa, renderMarkdown, crossOriginIsolation or noindex. Only passed fields change. Passwords: set_site_access.",
+      "Change a site's title, description, spa, renderMarkdown, crossOriginIsolation, noindex, viewers or ttlSeconds. Only passed fields change. Passwords: set_site_access.",
     input: fromSchema({
       type: "object",
       properties: { site: SITE_REF, ...SETTINGS_INPUT },
@@ -944,6 +944,14 @@ export const CORE_API_OPERATIONS = [
             type: "boolean",
             description: "Ask crawlers not to index this site (X-Robots-Tag: noindex, generated robots.txt).",
           },
+          viewers: {
+            type: "boolean",
+            description: "false serves every file raw and skips viewers.",
+          },
+          ttlSeconds: {
+            type: ["integer", "null"],
+            description: "Keyed-site expiry in seconds, renewed at each publish; null clears it.",
+          },
           password: {
             type: ["string", "null"],
             description: "Visitor password; null removes it. Needs an API key.",
@@ -960,7 +968,7 @@ export const CORE_API_OPERATIONS = [
     },
     tool: {
       summarize: (r) =>
-        `Updated ${r.site.slug}: spa ${r.site.settings.spa}, renderMarkdown ${r.site.settings.renderMarkdown}, crossOriginIsolation ${r.site.settings.crossOriginIsolation}, noindex ${r.site.settings.noindex}.`,
+        `Updated ${r.site.slug}: spa ${r.site.settings.spa}, renderMarkdown ${r.site.settings.renderMarkdown}, crossOriginIsolation ${r.site.settings.crossOriginIsolation}, noindex ${r.site.settings.noindex}, viewers ${r.site.settings.viewers}, ttlSeconds ${r.site.settings.ttlSeconds}.`,
     },
     examples: [
       {

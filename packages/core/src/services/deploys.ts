@@ -481,14 +481,16 @@ export async function finalizeDeploy(dc: DropwayContext, p: Principal, site: Sit
   const newBytes = site.mode === "transfer" ? 0 : await incrementalBytes(dc, site.tenant_id, site.id, files);
   const storageQuota = await requireQuota(dc, p, "storage_bytes", siteOwner(site), (await getUsage(dc, site.tenant_id)).storage_bytes, newBytes);
   const now = Date.now();
+  // A keyed-site TTL renews at every finalize (PUB-16); other sites keep their expiry.
+  const expiresAt = site.ttl_seconds != null ? now + site.ttl_seconds * 1000 : site.expires_at;
   const [upd] = await dc.env.DB.batch([
     // Check quota and base against transaction-local state; parallel pending deploys reserve no storage.
     dc.env.DB.prepare(
-      `UPDATE sites SET current_version_id = ?, updated_at = ?
+      `UPDATE sites SET current_version_id = ?, updated_at = ?, expires_at = ?
         WHERE id = ? AND tenant_id IS ? AND deleted_at IS NULL AND (? IS NULL OR current_version_id IS ?)
           AND EXISTS (SELECT 1 FROM versions WHERE id = ? AND status = 'pending')
           AND (? IS NULL OR (${PROJECTED_STORAGE_SQL}) <= ?)`,
-    ).bind(version.id, now, site.id, site.tenant_id, version.base_version_id, version.base_version_id,
+    ).bind(version.id, now, expiresAt, site.id, site.tenant_id, version.base_version_id, version.base_version_id,
       version.id, storageQuota, site.tenant_id, site.id, version.id, storageQuota),
     dc.env.DB.prepare(`UPDATE versions SET status = 'ready', finalized_at = ? WHERE id = ? AND status = 'pending'
       AND EXISTS (SELECT 1 FROM sites WHERE id = ? AND current_version_id = ? AND updated_at = ? AND deleted_at IS NULL)`)

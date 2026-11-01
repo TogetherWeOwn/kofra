@@ -457,7 +457,10 @@ export async function serveSiteContent(
   // Anonymous sites are untrusted: sandbox them even where other sites are not.
   if (!mode.sandbox && live.tenantId === null && dw.config.sitesSandboxAnonymous) mode = { ...mode, sandbox: true };
   if (live.expiresAt && live.expiresAt < Date.now()) {
-    return systemResponse(dw, req, mode, live, 410, "EXPIRED", "This site has expired", "Anonymous sites are temporary. Publish again, or claim a site with an API key to keep it. See {app}.");
+    return systemResponse(dw, req, mode, live, 410, "EXPIRED", "This site has expired",
+      live.tenantId === null
+        ? "Anonymous sites are temporary. Publish again, or claim a site with an API key to keep it. See {app}."
+        : "This site's TTL has passed. Publish again to bring it back, or clear its ttlSeconds setting. See {app}.");
   }
 
   // Password-protected sites only answer navigations (top level or frames, such as the app's file
