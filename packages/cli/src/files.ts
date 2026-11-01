@@ -56,7 +56,30 @@ interface Entry {
 
 const toPosix = (p: string) => p.split(sep).join("/");
 
-const utf8Names = new TextDecoder("utf-8", { fatal: true });
+// ignoreBOM: EF BB BF is a legal POSIX filename prefix (U+FEFF), not a marker to strip.
+const utf8Names = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+/**
+ * stat/lstat take no signal, so race them against abort: a stalled metadata
+ * read must not hold fail-fast (or external cancel) open. Promise.race keeps
+ * handlers on the underlying promise, so its later settlement is observed.
+ */
+async function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal || signal.aborted) {
+    signal?.throwIfAborted();
+    return promise;
+  }
+  let onAbort: () => void = () => {};
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason ?? new DOMException("This operation was aborted", "AbortError"));
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([promise, aborted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
 
 function sourceChanged(path: string): never {
   throw new CliError({
@@ -134,12 +157,15 @@ async function walk(
     if (d.isSymlink) {
       let s;
       try {
-        s = await stat(abs);
+        s = await abortable(stat(abs), signal);
       } catch (error) {
         if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
           // A link whose target is gone is broken; a link that itself vanished
           // raced with the walk and must surface as a change, not a stale skip.
-          const gone = await lstat(abs).then(() => false, (e: NodeJS.ErrnoException) => e?.code === "ENOENT");
+          const gone = await abortable(lstat(abs), signal).then(
+            () => false,
+            (e: NodeJS.ErrnoException) => e?.code === "ENOENT",
+          );
           if (gone) sourceChanged(rel);
           omissions.push({ path: rel, reason: "broken_symlink" });
           continue;
@@ -180,7 +206,7 @@ async function hashFile(
   opts.signal?.throwIfAborted();
   let s;
   try {
-    s = await stat(e.abs);
+    s = await abortable(stat(e.abs), opts.signal);
   } catch (error) {
     if (asErrno(error)?.code === "ENOENT") sourceChanged(e.rel);
     throw error;
