@@ -10,7 +10,8 @@ import { findSecrets, lineAt } from "../lib/secrets";
 import { detectFileKind } from "../lib/filetypes";
 import { stringField } from "../lib/input";
 import { hasScope, type Principal } from "../principal";
-import { blobScope, putVerifiedBlob } from "./blobs";
+import { blobScope, putVerifiedBlob, readBlobText } from "./blobs";
+import { parseSiteConfig, parseSiteConfigJson, siteConfigFileWarning, SITE_CONFIG_MAX_BYTES, type SiteConfig } from "./site-config";
 import { emit, meter } from "./events";
 import { refreshLive } from "./live";
 import { createSite, discardNewSite, getSiteFor, getVersion, serializeVersion, type SiteRow, type SiteSettingsInput, type VersionRow } from "./sites";
@@ -235,7 +236,41 @@ export async function createDeploy(dc: DropwayContext, p: Principal, site: SiteR
            WHERE id = ? AND ttl_seconds IS NOT NULL AND deleted_at IS NULL`,
       ).bind(Date.now(), site.id).run();
       if ((renewed?.meta.changes ?? 0) > 0) await refreshLive(dc, site.id);
-      const serialized = { ...serializeVersion(current, site.current_version_id), siteSlug: site.slug };
+      // SRV-09 upgrade backfill: versions finalized before migration 0012
+      // carry config_json null even when their manifest ships root hosting
+      // files, so their rules stay inactive while serving hides the files.
+      // An identical republish parses and stores the config in place (no new
+      // version) and refreshes serving; an unreadable blob leaves the null
+      // in place, while a failed cache refresh after a stored backfill
+      // fails retryably, so the next republish retries the refresh instead
+      // of reporting success on a stale cache.
+      let backfilled = current;
+      if (current.config_json == null) {
+        const { results: hostingFiles } = await dc.env.DB.prepare(
+          "SELECT path, sha256, size, content_type AS contentType FROM version_files WHERE version_id = ? AND (path = '_redirects' OR path = '_headers')",
+        ).bind(current.id).all<NormalisedEntry>();
+        if (hostingFiles.length > 0) {
+          // An unreadable blob means there is no parsed config to store, so
+          // the null stays and a later republish tries again.
+          let parsed: { configJson: string | null; warnings: Warning[] } | null = null;
+          try {
+            parsed = await loadVersionSiteConfig(dc, hostingFiles);
+          } catch {
+            parsed = null;
+          }
+          if (parsed) {
+            const filled = await dc.env.DB.prepare("UPDATE versions SET config_json = ? WHERE id = ? AND config_json IS NULL")
+              .bind(parsed.configJson, current.id).run();
+            if ((filled?.meta.changes ?? 0) > 0) backfilled = { ...current, config_json: parsed.configJson };
+            try {
+              await refreshLive(dc, site.id);
+            } catch {
+              throw new ApiError(502, "cache_refresh_failed", "The site rules were stored but serving could not be refreshed.", "Retry the identical publish shortly; it re-attempts the refresh.", { retryable: true });
+            }
+          }
+        }
+      }
+      const serialized = { ...serializeVersion(backfilled, site.current_version_id), siteSlug: site.slug };
       return {
         unchanged: true,
         deploy: serialized,
@@ -457,6 +492,41 @@ export async function uploadBlob(
   return { sha256: sha, size: expected.size, stored: true, existed: false };
 }
 
+/**
+ * Read and parse this version's root `_redirects` / `_headers` files (SRV-09).
+ * Returns the JSON to store in `versions.config_json` (null when the version
+ * ships neither file) plus the config warnings. Oversized files are ignored
+ * with a warning instead of being read; a blob that D1 says exists but R2
+ * cannot produce fails the finalize rather than silently dropping the rules.
+ */
+async function loadVersionSiteConfig(
+  dc: DropwayContext,
+  files: NormalisedEntry[],
+): Promise<{ configJson: string | null; warnings: Warning[] }> {
+  const texts: { redirects?: string | null; headers?: string | null } = {};
+  const warnings: Warning[] = [];
+  let present = false;
+  for (const [path, key] of [["_redirects", "redirects"], ["_headers", "headers"]] as const) {
+    const entry = files.find((f) => f.path === path);
+    if (!entry) continue;
+    present = true;
+    if (entry.size > SITE_CONFIG_MAX_BYTES) {
+      warnings.push(siteConfigFileWarning(path, `the file is ${entry.size} bytes; files over ${SITE_CONFIG_MAX_BYTES} bytes are ignored.`));
+      texts[key] = null;
+      continue;
+    }
+    const text = await readBlobText(dc, entry.sha256, entry.size);
+    if (text === null) {
+      throw new ApiError(502, "blob_missing", `The contents of "${path}" could not be read.`, "Retry the finalize shortly.", { retryable: true });
+    }
+    texts[key] = text;
+  }
+  if (!present) return { configJson: null, warnings };
+  const config: SiteConfig = parseSiteConfig(texts);
+  config.warnings = [...warnings, ...config.warnings];
+  return { configJson: JSON.stringify(config), warnings: config.warnings };
+}
+
 /** Atomically make a pending version live. Retrying a finished finalize is safe. */
 export async function finalizeDeploy(dc: DropwayContext, p: Principal, site: SiteRow, versionId: string, transferCreate = false) {
   site = await getSiteFor(dc, p, site.slug, "sites:write");
@@ -464,7 +534,7 @@ export async function finalizeDeploy(dc: DropwayContext, p: Principal, site: Sit
   const version = await getVersion(dc, site.id, versionId);
   if (!version) throw notFound("deploy_not_found", `No version ${versionId} on site ${site.slug}.`, "Start one with POST /api/v1/sites/:slug/versions (alias: /deploys).");
   if (version.status === "ready") {
-    return { version, replayed: true, live: version.id === site.current_version_id, warnings: await deployWarnings(dc, site, version.id) };
+    return { version, replayed: true, live: version.id === site.current_version_id, warnings: await versionWarnings(dc, site, version) };
   }
   const scope = blobScope(siteOwner(site));
   const missingPredicate = `FROM version_files vf
@@ -487,6 +557,7 @@ export async function finalizeDeploy(dc: DropwayContext, p: Principal, site: Sit
   const { results: files } = await dc.env.DB.prepare("SELECT path, sha256, size, content_type AS contentType FROM version_files WHERE version_id = ?").bind(version.id).all<NormalisedEntry>();
   validateManifest(files, await dc.adapters.policy.limits(p, siteOwner(site), dc));
   await validateStoredSizes(dc, site, files);
+  const { configJson, warnings: configWarnings } = await loadVersionSiteConfig(dc, files);
   const newBytes = site.mode === "transfer" ? 0 : await incrementalBytes(dc, site.tenant_id, site.id, files);
   const storageQuota = await requireQuota(dc, p, "storage_bytes", siteOwner(site), (await getUsage(dc, site.tenant_id)).storage_bytes, newBytes);
   const now = Date.now();
@@ -504,21 +575,21 @@ export async function finalizeDeploy(dc: DropwayContext, p: Principal, site: Sit
           AND (? IS NULL OR (${PROJECTED_STORAGE_SQL}) <= ?)`,
     ).bind(version.id, now, now, site.id, site.tenant_id, version.base_version_id, version.base_version_id,
       version.id, storageQuota, site.tenant_id, site.id, version.id, storageQuota),
-    dc.env.DB.prepare(`UPDATE versions SET status = 'ready', finalized_at = ? WHERE id = ? AND status = 'pending'
+    dc.env.DB.prepare(`UPDATE versions SET status = 'ready', finalized_at = ?, config_json = ? WHERE id = ? AND status = 'pending'
       AND EXISTS (SELECT 1 FROM sites WHERE id = ? AND current_version_id = ? AND updated_at = ? AND deleted_at IS NULL)`)
-      .bind(now, version.id, site.id, version.id, now),
+      .bind(now, configJson, version.id, site.id, version.id, now),
     ...usageStatements(dc, site.tenant_id),
   ]);
   if (!upd?.meta.changes) {
     const fresh = await getSiteFor(dc, p, site.slug, "sites:write");
     const latest = await getVersion(dc, site.id, version.id);
-    if (latest?.status === "ready") return { version: latest, replayed: true, live: latest.id === fresh.current_version_id, warnings: await deployWarnings(dc, site, version.id) };
+    if (latest?.status === "ready") return { version: latest, replayed: true, live: latest.id === fresh.current_version_id, warnings: await versionWarnings(dc, site, latest) };
     if (version.base_version_id && fresh.current_version_id !== version.base_version_id) throw await versionConflict(dc, fresh);
     if (storageQuota !== null) throw quotaExceeded("storage_bytes", storageQuota);
     throw await versionConflict(dc, fresh);
   }
   await refreshLive(dc, site.id);
-  const finalized: VersionRow = { ...version, status: "ready", finalized_at: now };
+  const finalized: VersionRow = { ...version, status: "ready", finalized_at: now, config_json: configJson };
   const ref = { id: site.id, slug: site.slug, tenantId: site.tenant_id, url: siteUrl(dc, site.slug) };
   emit(dc, "onPublish", {
     kind: "deploy",
@@ -528,7 +599,12 @@ export async function finalizeDeploy(dc: DropwayContext, p: Principal, site: Sit
     at: now,
   });
   meter(dc, { type: "deploy", tenantId: site.tenant_id, siteId: site.id, versionId: finalized.id, fileCount: finalized.file_count, totalBytes: finalized.total_bytes, at: now });
-  return { version: finalized, replayed: false, live: true, warnings: await deployWarnings(dc, site, version.id) };
+  return { version: finalized, replayed: false, live: true, warnings: [...(await deployWarnings(dc, site, version.id)), ...configWarnings] };
+}
+
+/** Publish warnings for a ready version: the stored-bytes scan plus the hosting-rule warnings kept in its `config_json`. */
+export async function versionWarnings(dc: DropwayContext, site: SiteRow, version: Pick<VersionRow, "id" | "config_json">): Promise<Warning[]> {
+  return [...(await deployWarnings(dc, site, version.id)), ...parseSiteConfigJson(version.config_json).warnings];
 }
 
 /** Bounds for the finalize-time content scan: small text files only, capped counts per warning kind. */

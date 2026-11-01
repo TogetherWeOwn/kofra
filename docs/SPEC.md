@@ -125,7 +125,7 @@ What Kofra is not:
 | SRV-06 | Content-addressed edge cache (Cache API by sha256, pointer memo). Live URL shows a new version within about 60 s worldwide, the version URL at once | P0 | Done: measured 2026-11-01 on workers.dev, 20 samples, p50 163 ms, p95 235 ms; numbers and cache probe in [SELF_HOST.md](SELF_HOST.md) |
 | SRV-07 | Version preview URLs `<slug>--v<N>` for the owner (signed links for others) | P0 | Done: exact ready version from D1 in both modes; owner Authorization or 24 h signed link with preview-root cookie, noindex/no-referrer |
 | SRV-08 | Cross-origin isolation per site (COOP/COEP for `SharedArrayBuffer` and threaded WebAssembly) | P0 | Done |
-| SRV-09 | `_redirects` and `_headers` files at the site root (Netlify/Cloudflare Pages syntax subset), parsed at finalize, never served | P1 | R-27 |
+| SRV-09 | `_redirects` and `_headers` files at the site root (Netlify/Cloudflare Pages syntax subset), parsed at finalize, never served | P1 | Done |
 | SRV-10 | Agent-readable pages: `Accept: text/markdown` on a navigation returns a Markdown rendering of HTML and text files | P1 | R-34 |
 | SRV-11 | Embeds: public sites can be framed anywhere; gated sites refuse framing; per-site embed allowlist (`frame-ancestors`) | P1 | Partial; R-23 |
 | SRV-12 | Robots: anonymous and expiring sites `noindex`; per-site `noindex` setting; a site's own `robots.txt` is served when present | P0 | Done |
