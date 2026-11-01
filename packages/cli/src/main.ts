@@ -17,6 +17,7 @@ import { explainConfig, explainConfigHuman } from "./explain-config.ts";
 import { withLegacyEnv } from "./legacy-brand.ts";
 import { formatBytes, plural, shellQuote, shortTime, table } from "./output.ts";
 import { publish, publishZip, waitForVersion, type ProgressEvent, type PublishResult, type VersionInfo } from "./publish.ts";
+import { checkPullDirectory, pullVersion } from "./pull.ts";
 import { VERSION } from "./version.ts";
 
 export interface Io {
@@ -746,6 +747,42 @@ interface ReadFilePage {
   url: string;
   rawUrl: string;
 }
+
+const pullCmd: Command = {
+  summary: "Download a pinned site version and verify every file",
+  usage: "kofra pull <site> <dir> [--version <v>] [--force] [--json]",
+  maxPositionals: 2,
+  flags: { version: { kind: "string" }, force: { kind: "boolean" } },
+  details: `Resolves live (default), vN, N or an id before listing or downloading.
+Each file is read in bounded binary pages, verified against its size and SHA-256,
+then atomically replaces its local path. Failed downloads leave no partial file.
+
+A non-empty destination is refused unless --force is set. --force overwrites
+only pulled files; extra local files are preserved and reported on stderr.
+Symlink parents and unsafe server paths are refused. Do not modify the destination
+concurrently while pulling.
+
+--json prints exactly {site, versionId, dir, files: [{path, size, sha256}],
+failures: [{path, code, message}]}; progress stays on stderr. A failed file gives
+a nonzero exit using the existing exit-code table; other files still pull.
+No files are deleted, credentials saved, or project links changed.`,
+  async run(p, io, out) {
+    const slug = positional(p, 0, "site", this.usage);
+    const dir = resolve(io.cwd, positional(p, 1, "dir", this.usage));
+    await checkPullDirectory(dir, bool(p, "force") === true, io.cwd);
+    const inst = await resolveInstance(p, io);
+    const client = makeClient(io, inst.api, requireKey(inst));
+    const { version } = await getVersionDirect(client, slug, str(p, "version") ?? "live");
+    if (!isImmutableVersionId(version.id) || version.id !== version.id.trim()) {
+      throw new CliError({ code: "invalid_pull_version", message: "The instance did not resolve an immutable version id.", hint: "Retry against an instance that returns a pinned version id.", exitCode: EXIT.error });
+    }
+    const { receipt, exitCode } = await pullVersion(client, slug, version.id, dir, text => out.note(text));
+    // Pull has a fixed receipt schema, unlike commands using Output.result's ok wrapper.
+    if (out.json) io.stdout(`${JSON.stringify(receipt, null, 2)}\n`);
+    else io.stdout(`Pulled ${plural(receipt.files.length, "file")} from ${slug} (${version.id}) into ${dir}; ${receipt.failures.length} failed.\n`);
+    return exitCode;
+  },
+};
 
 const readFileCmd: Command = {
   summary: "Read one file's content (one bounded page)",
@@ -1554,6 +1591,7 @@ const COMMANDS: Record<string, Command> = {
   rename: renameCmd,
   claim: claimCmd,
   files: filesCmd,
+  pull: pullCmd,
   "read-file": readFileCmd,
   versions: versionsCmd,
   restore: restoreCmd,
