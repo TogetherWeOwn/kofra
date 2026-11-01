@@ -102,13 +102,17 @@ export async function getLiveSite(dc: DropwayContext, slug: string): Promise<Liv
  * followed by its own refreshLive, which lands after this put. Either way a stale fill cannot stick.
  * If the re-read itself fails, keep serving the fill (D1 may be down) but cap it to KV's minimum TTL
  * so an unverified entry is re-checked soon instead of living on.
+ * Checking before the put as well means a change committed during the (slow) read above is never
+ * written at all: a stale fill would otherwise briefly serve, say, a site whose password was just set.
+ * The site row is enough for both checks: a finalized version's files never change, and a version
+ * deleted mid-read (its file query came back empty) is no longer current, so its id differs.
  */
 async function fillLive(dc: DropwayContext, live: LiveSite): Promise<void> {
+  const before = await loadLiveSiteFromD1(dc, { siteId: live.siteId }, false);
+  if (!before || !sameSettings(before, live)) return;
   await putLive(dc, live);
   let now: LiveSite | null;
   try {
-    // The site row is enough: a finalized version's files never change, and a version deleted
-    // mid-read (its file query came back empty) is no longer current, so its id differs here.
     now = await loadLiveSiteFromD1(dc, { siteId: live.siteId }, false);
   } catch {
     await putLive(dc, live, UNVERIFIED_FILL_TTL_SECONDS);

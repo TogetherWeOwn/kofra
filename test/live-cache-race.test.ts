@@ -138,6 +138,80 @@ describe("live cache miss races", () => {
     });
   }
 
+  it("never writes an unprotected fill to KV when a password is set during the miss's D1 read", async () => {
+    const dw = await freshInstance();
+    const slug = "cache-fill-password";
+    const published = await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, body: form({ "index.html": "private" }, { slug }) });
+    expect(published.status).toBe(201);
+    await env.CACHE.delete(liveKey(slug));
+    clearLiveMemoryCache();
+
+    let release!: () => void;
+    let captured!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const snapshotRead = new Promise<void>((resolve) => { captured = resolve; });
+    // Hold the miss's file query after the site row (still unprotected) was read.
+    const db = new Proxy(env.DB, {
+      get(target, prop) {
+        if (prop === "prepare") return (query: string) => {
+          const statement = target.prepare(query);
+          if (!query.startsWith("SELECT path, sha256, size, content_type FROM version_files")) return statement;
+          return new Proxy(statement, {
+            get(target, prop) {
+              if (prop === "bind") return (...args: unknown[]) => {
+                const bound = target.bind(...args);
+                return new Proxy(bound, {
+                  get(target, prop) {
+                    if (prop === "all") return async () => {
+                      const result = await target.all();
+                      captured();
+                      await gate;
+                      return result;
+                    };
+                    const value = Reflect.get(target, prop, target);
+                    return typeof value === "function" ? value.bind(target) : value;
+                  },
+                });
+              };
+              const value = Reflect.get(target, prop, target);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        };
+        const value = Reflect.get(target, prop, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const unprotectedPuts: string[] = [];
+    const cache = new Proxy(env.CACHE, {
+      get(target, prop) {
+        if (prop === "put") return async (...args: Parameters<KVNamespace["put"]>) => {
+          if (args[0] === liveKey(slug) && JSON.parse(args[1] as string).passwordHash === null) unprotectedPuts.push(args[0]);
+          return target.put(...args);
+        };
+        const value = Reflect.get(target, prop, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const pending: Promise<unknown>[] = [];
+    const base = dw.dropway.context(env as unknown as ServerBindings, createExecutionContext());
+    const read = getLiveSite({ ...base, env: { ...base.env, DB: db, CACHE: cache }, waitUntil: (p: Promise<unknown>) => { pending.push(p); } }, slug);
+    try {
+      await snapshotRead;
+      const locked = await dw.json(`/api/v1/sites/${slug}`, {
+        method: "PATCH", key: dw.ownerKey, headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: "now-protected" }),
+      });
+      expect(locked.status).toBe(200);
+    } finally {
+      release();
+    }
+    expect((await read)?.passwordHash).toBeNull();
+    await Promise.all(pending);
+    expect(unprotectedPuts).toEqual([]);
+    expect((await dw.call(`/s/${slug}/?raw=1`)).status).toBe(401);
+  });
+
   it("does not restore unprotected memory from a delayed KV hit after a password change", async () => {
     const dw = await freshInstance();
     const slug = "cache-kv-read-race";
