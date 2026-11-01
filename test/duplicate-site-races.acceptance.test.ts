@@ -101,7 +101,7 @@ async function advanceAndDelete(dw: Instance, slug: string, old: LiveVersion) {
   const published = await publish(dw, slug, NEXT_FILES, 200);
   expect(published.version.id).not.toBe(old.version_id);
   expect((await liveVersion(slug)).version_id).toBe(published.version.id);
-  const deleted = await dw.json(`/api/v1/sites/${slug}/versions/${old.version_id}`, { method: "DELETE", key: dw.ownerKey });
+  const deleted = await dw.json(`/api/v1/sites/${slug}/versions/${old.version_id}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: slug }), key: dw.ownerKey });
   expect(deleted.status, `fixture deletion of nonlive A: ${JSON.stringify(deleted.body)}`).toBe(200);
   expect(await env.DB.prepare("SELECT id FROM versions WHERE id = ?").bind(old.version_id).first()).toBeNull();
   expect(await manifest(old.version_id), "real delete cascaded A's manifest").toEqual([]);

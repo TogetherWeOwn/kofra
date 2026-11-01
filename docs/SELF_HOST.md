@@ -14,9 +14,9 @@ You need:
 
 ## Option 1: Deploy to Cloudflare button
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/TogetherWeOwn/dropway)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/TogetherWeOwn/kofra)
 
-Link: `https://deploy.workers.cloudflare.com/?url=https://github.com/TogetherWeOwn/dropway`
+Link: `https://deploy.workers.cloudflare.com/?url=https://github.com/TogetherWeOwn/kofra`
 
 What happens, per Cloudflare's [Deploy button docs](https://developers.cloudflare.com/workers/platform/deploy-buttons/):
 
@@ -24,8 +24,9 @@ What happens, per Cloudflare's [Deploy button docs](https://developers.cloudflar
    Workers Builds, so every push to your copy redeploys.
 2. It reads `wrangler.jsonc` and creates what it lists: the D1 database `dropway`, the R2 bucket
    `dropway-files` and a KV namespace. You can rename them on the setup page.
-3. It asks for `ADMIN_BOOTSTRAP_KEY` (listed in `.dev.vars.example`; the help text comes from
-   `cloudflare.bindings` in `package.json`). Use a long random string: `openssl rand -hex 32`.
+3. It asks for `ADMIN_BOOTSTRAP_KEY` and `SIGNING_SECRET` (listed in `.dev.vars.example`; the help
+   text comes from `cloudflare.bindings` in `package.json`). Use a different long random string for
+   each: `openssl rand -hex 32`.
 4. It runs `npm run deploy`, which applies the D1 migrations and then deploys the Worker.
 
 The button points at the repository root on purpose. The docs say Cloudflare "does not fully
@@ -41,10 +42,11 @@ ones in `wrangler.jsonc` unless you set `"keep_vars": true`. Secrets (`ADMIN_BOO
 ## Option 2: Command line
 
 ```sh
-git clone https://github.com/TogetherWeOwn/dropway && cd dropway
+git clone https://github.com/TogetherWeOwn/kofra && cd kofra
 npm install
 npx wrangler login
 npx wrangler secret put ADMIN_BOOTSTRAP_KEY   # paste a long random string (openssl rand -hex 32)
+npx wrangler secret put SIGNING_SECRET        # a different long random string
 npm run deploy
 ```
 
@@ -165,12 +167,13 @@ Variables go in `vars` in `wrangler.jsonc`; secrets with `npx wrangler secret pu
 | Name | Default | Meaning |
 |---|---|---|
 | `ADMIN_BOOTSTRAP_KEY` (secret) | none | Creates the owner on first run; mints recovery owner keys |
-| `SIGNING_SECRET` (secret) | bootstrap key | HMAC secret for password cookies and IP hashing |
+| `SIGNING_SECRET` (secret) | bootstrap key | HMAC secret for signed capabilities (site password cookies, upload and version preview tokens, delivery grants) and IP hashing. Independent of the bootstrap key: set its own value so rotating or removing `ADMIN_BOOTSTRAP_KEY` does not invalidate them. With neither set, those features answer `503 signing_secret_missing`; unsigned routes keep working |
+| `ALLOW_INSECURE_DEV_SECRET` | `false` | Local development only: with no secret set, sign with a fixed public value. Never set it on a reachable instance |
 | `INSTANCE_NAME` | `Kofra` | Shown in pages and API responses |
 | `APP_ORIGIN` | request origin | Public origin of the app and API |
 | `LEGACY_APP_ORIGINS` | empty | Former app origins (comma-separated), after a move to a new `APP_ORIGIN`. See [Moving the app](#moving-the-app-to-a-new-origin) |
 | `LEGACY_DEPRECATED_AT` | none | Date of that move (ISO 8601 or Unix seconds), sent as `Deprecation: @<seconds>`; unset = no `Deprecation` header (the successor `Link` is still sent) |
-| `SITES_MODE` | `path` | `path` or `subdomain` (see below) |
+| `SITES_MODE` | `path` (`subdomain` when `SITES_DOMAIN` is set) | `path` or `subdomain` (see below) |
 | `SITES_DOMAIN` | empty | Subdomain mode: sites at `https://<name>.<SITES_DOMAIN>/` |
 | `SITES_ORIGIN` | empty | Path mode: origin of a second, sites-only deployment of the same Worker. Ignored in subdomain mode |
 | `LEGACY_SITES_ORIGINS` | empty | Former path-mode sites origins (comma-separated): `<origin>/<name>/<path>` answers `308` to the site's current URL, path and query kept (not cached) |
@@ -326,7 +329,7 @@ What a request reads, in order: isolate memory (5 s), the Cache API pointer memo
 every isolate in the data center), then KV (which has its own edge cache, 30 s minimum), then D1.
 File bytes come from the Cache API keyed by SHA-256 (immutable), then R2. Files over 25 MB and
 Range requests go straight to R2 and never touch the Cache API. A publish, settings change or
-delete rewrites or drops the memo in the data center that handled it; other data centers pick the
+delete drops the memo in the data center that handled it (the next read refills it from KV); other data centers pick the
 change up within the memo's 10 s plus KV's cache TTL.
 
 Measure how long a change takes to appear on your own deployment (it overwrites `measure.txt` on

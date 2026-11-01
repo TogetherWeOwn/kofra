@@ -1,5 +1,6 @@
 /** Protected served-artifact VM harness; API and DOM are disposable test doubles. */
 import vm from "node:vm";
+import { webcrypto } from "node:crypto";
 import { expect } from "vitest";
 import { CLIENT_SCRIPT } from "../src/ui/assets.ts";
 import { FakeDocument, FakeElement, isHidden } from "./loaded-versions-filter.dom.ts";
@@ -91,6 +92,7 @@ export async function mount(options: { linked?: number; empty?: boolean } = {}) 
       violations.push(`unexpected ${method} ${parsed.pathname}`);
       return response({ error: { code: "not_found", message: "Unexpected fixture request", hint: "Use the loaded data." } }, 404);
     },
+    crypto: webcrypto,
     Headers, URL: TestURL, URLSearchParams, Blob, setTimeout, clearTimeout, console,
     matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
   };

@@ -9,10 +9,12 @@ import type { DropwayContext } from "../context";
  * as own keys; older cached entries are treated as a miss and rebuilt from D1.
  * v4: adds the live version's number and go-live time (the embeddable badge reads
  * them from this entry, so it costs no extra D1 or R2 read); v3 entries are rebuilt.
+ * v5: read fills are verified against D1 (fillLive); v4 entries may hold an unverified
+ * fill that overwrote a later change, so they are rebuilt too.
  */
 export interface LiveSite {
-  /** 2 = stale (rebuilt on read); fresh writes are LIVE_VERSION. */
-  v: 2 | 3 | 4;
+  /** Older versions are stale (rebuilt on read); fresh writes are LIVE_VERSION. */
+  v: 2 | 3 | 4 | 5;
   siteId: string;
   slug: string;
   tenantId: string | null;
@@ -31,7 +33,10 @@ export interface LiveSite {
 
 export const liveKey = (slug: string) => `live:${slug}`;
 
-const LIVE_VERSION = 4;
+const LIVE_VERSION = 5;
+
+/** KV's minimum expirationTtl; caps a read-path fill that D1 could not verify. */
+const UNVERIFIED_FILL_TTL_SECONDS = 60;
 
 /** Copy own file entries into a prototype-less map, preserving an own __proto__ key. */
 function ownFiles(files: LiveSite["files"]): LiveSite["files"] {
@@ -44,6 +49,13 @@ function ownFiles(files: LiveSite["files"]): LiveSite["files"] {
 const MEMORY_TTL_MS = 5_000;
 const MEMORY_MAX = 500;
 const memory = new Map<string, { at: number; live: LiveSite | null }>();
+/**
+ * Per-slug read fence, shared by a slug's in-flight reads and released by the last one.
+ * refreshLive and dropLive remove it, so a read that started before a change cannot put
+ * its older snapshot back into memory (a password change or delete would be undone for
+ * up to MEMORY_TTL_MS).
+ */
+const reading = new Map<string, { active: number }>();
 
 function remember(slug: string, live: LiveSite | null) {
   if (memory.size >= MEMORY_MAX) memory.delete(memory.keys().next().value!);
@@ -53,7 +65,7 @@ function remember(slug: string, live: LiveSite | null) {
 /**
  * Cache API pointer memo (R-14): a 10 s copy of the live manifest shared by every isolate in the
  * data center, in front of KV. It is keyed by slug alone, so a publish, settings
- * change or delete in this data center rewrites or drops it (the next read refills it from KV); other data centers see a change within
+ * change or delete in this data center drops it (the next read refills it from KV); other data centers see a change within
  * the TTL (plus KV's own cacheTtl on a miss).
  */
 const POINTER_TTL_SECONDS = 10;
@@ -90,34 +102,99 @@ async function dropPointer(dc: DropwayContext, slug: string): Promise<void> {
   if (typeof caches !== "undefined") await caches.default.delete(pointerRequest(slug)).catch(() => {});
 }
 
+/**
+ * Per-slug pointer generation, bumped by refreshLive/dropLive in this isolate.
+ * A KV-hit read schedules its pointer memo fill in the background (waitUntil);
+ * the fill re-checks this generation just before the put, so a delayed fill can
+ * never overwrite the drop that a publish, settings change or delete wrote after
+ * the read started. (Cross-isolate fills stay bounded by the 10 s memo TTL.)
+ */
+const pointerGen = new Map<string, number>();
+
 /** For tests. */
 export function clearLiveMemoryCache() {
   memory.clear();
+  reading.clear();
+}
+
+/** For tests: distinct slugs with an in-flight read fence. */
+export function getLiveReadFenceCountForTests(): number {
+  return reading.size;
 }
 
 export async function getLiveSite(dc: DropwayContext, slug: string): Promise<LiveSite | null> {
   const hit = memory.get(slug);
   if (hit && Date.now() - hit.at < MEMORY_TTL_MS) return hit.live;
-  const memo = await readPointer(dc, slug);
-  if (memo && memo.v === LIVE_VERSION && memo.files && typeof memo.files === "object") {
-    memo.files = ownFiles(memo.files);
-    remember(slug, memo);
-    return memo;
+  const fence = reading.get(slug) ?? { active: 0 };
+  reading.set(slug, fence);
+  fence.active++;
+  try {
+    const memo = await readPointer(dc, slug);
+    if (memo && memo.v === LIVE_VERSION && memo.files && typeof memo.files === "object") {
+      memo.files = ownFiles(memo.files);
+      if (reading.get(slug) === fence) remember(slug, memo);
+      return memo;
+    }
+    const cached = await dc.env.CACHE.get<LiveSite>(liveKey(slug), { type: "json", cacheTtl: dc.config.liveCacheTtlSeconds }).catch(() => null);
+    if (cached && cached.v === LIVE_VERSION && cached.files && typeof cached.files === "object") {
+      cached.files = ownFiles(cached.files);
+      if (reading.get(slug) === fence) {
+        remember(slug, cached);
+        const gen = pointerGen.get(slug) ?? 0;
+        dc.waitUntil(
+          (async () => {
+            if ((pointerGen.get(slug) ?? 0) !== gen) return;
+            await writePointer(dc, cached);
+          })().catch(() => {}),
+        );
+      }
+      return cached;
+    }
+    const live = await loadLiveSiteFromD1(dc, { slug });
+    if (reading.get(slug) === fence) remember(slug, live);
+    if (live) dc.waitUntil(fillLive(dc, live).catch(() => {}));
+    return live;
+  } finally {
+    if (--fence.active === 0 && reading.get(slug) === fence) reading.delete(slug);
   }
-  const cached = await dc.env.CACHE.get<LiveSite>(liveKey(slug), { type: "json", cacheTtl: dc.config.liveCacheTtlSeconds }).catch(() => null);
-  if (cached && cached.v === LIVE_VERSION && cached.files && typeof cached.files === "object") {
-    dc.waitUntil(writePointer(dc, cached));
-    cached.files = ownFiles(cached.files);
-    remember(slug, cached);
-    return cached;
-  }
-  const live = await loadLiveSiteFromD1(dc, { slug });
-  remember(slug, live);
-  if (live) dc.waitUntil(putLive(dc, live).catch(() => {}));
-  return live;
 }
 
-export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string; siteId?: string }): Promise<LiveSite | null> {
+/**
+ * Read-path fill. The D1 read above may predate a deploy whose refreshLive lands before this put, so
+ * the put could overwrite a fresher manifest. Re-read D1 after the put: a change committed before the
+ * re-read is seen and the key is dropped (the next read rebuilds it); one committed after it is
+ * followed by its own refreshLive, which lands after this put. Either way a stale fill cannot stick.
+ * If the re-read itself fails, keep serving the fill (D1 may be down) but cap it to KV's minimum TTL
+ * so an unverified entry is re-checked soon instead of living on.
+ * Checking before the put as well means a change committed during the (slow) read above is never
+ * written at all: a stale fill would otherwise briefly serve, say, a site whose password was just set.
+ * The site row is enough for both checks: a finalized version's files never change, and a version
+ * deleted mid-read (its file query came back empty) is no longer current, so its id differs.
+ */
+async function fillLive(dc: DropwayContext, live: LiveSite): Promise<void> {
+  const before = await loadLiveSiteFromD1(dc, { siteId: live.siteId }, false);
+  if (!before || !sameSettings(before, live)) return;
+  await putLive(dc, live);
+  let now: LiveSite | null;
+  try {
+    now = await loadLiveSiteFromD1(dc, { siteId: live.siteId }, false);
+  } catch {
+    await putLive(dc, live, UNVERIFIED_FILL_TTL_SECONDS);
+    return;
+  }
+  if (!now || !sameSettings(now, live)) await dropLive(dc, live.slug);
+}
+
+/** Field-by-field equality of everything but the file map. */
+function sameSettings(a: LiveSite, b: LiveSite): boolean {
+  const { files: _af, ...ar } = a;
+  const { files: _bf, ...br } = b;
+  const keys = Object.keys(ar) as (keyof typeof ar)[];
+  return keys.length === Object.keys(br).length && keys.every((k) => ar[k] === br[k]);
+}
+
+/** withFiles = false skips the version_files query and returns an empty file map. */
+export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string; siteId?: string }, withFiles = true): Promise<LiveSite | null> {
   const site = await dc.env.DB.prepare(
     `SELECT s.id, s.slug, s.tenant_id, s.current_version_id, s.spa, s.render_markdown, s.cross_origin_isolation, s.password_hash, s.expires_at,
             v.number AS version_number, COALESCE(v.finalized_at, v.created_at) AS version_at
@@ -139,7 +216,7 @@ export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string
     }>();
   if (!site) return null;
   const files: LiveSite["files"] = Object.create(null);
-  if (site.current_version_id) {
+  if (site.current_version_id && withFiles) {
     const { results } = await dc.env.DB.prepare("SELECT path, sha256, size, content_type FROM version_files WHERE version_id = ?")
       .bind(site.current_version_id)
       .all<{ path: string; sha256: string; size: number; content_type: string }>();
@@ -162,12 +239,13 @@ export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string
   };
 }
 
-async function putLive(dc: DropwayContext, live: LiveSite): Promise<void> {
+async function putLive(dc: DropwayContext, live: LiveSite, maxTtlSeconds?: number): Promise<void> {
   const opts: KVNamespacePutOptions = {};
   if (live.expiresAt) {
     // Keep the key a little past expiry so visitors get a clear "expired" page, then let KV drop it.
     opts.expirationTtl = Math.max(60, Math.ceil((live.expiresAt - Date.now()) / 1000) + 3600);
   }
+  if (maxTtlSeconds !== undefined) opts.expirationTtl = Math.min(opts.expirationTtl ?? maxTtlSeconds, maxTtlSeconds);
   await dc.env.CACHE.put(liveKey(live.slug), JSON.stringify(live), opts);
 }
 
@@ -175,15 +253,19 @@ async function putLive(dc: DropwayContext, live: LiveSite): Promise<void> {
 export async function refreshLive(dc: DropwayContext, siteId: string): Promise<LiveSite | null> {
   const live = await loadLiveSiteFromD1(dc, { siteId });
   if (live) {
+    reading.delete(live.slug);
     remember(live.slug, live);
     await putLive(dc, live);
+    pointerGen.set(live.slug, (pointerGen.get(live.slug) ?? 0) + 1);
     await dropPointer(dc, live.slug);
   }
   return live;
 }
 
 export async function dropLive(dc: DropwayContext, slug: string): Promise<void> {
+  reading.delete(slug);
   memory.delete(slug);
   await dc.env.CACHE.delete(liveKey(slug));
+  pointerGen.set(slug, (pointerGen.get(slug) ?? 0) + 1);
   await dropPointer(dc, slug);
 }

@@ -180,7 +180,7 @@ describe("SPA Referer routing boundaries", () => {
     const v1 = versions.body.versions.find((v: { number: number }) => v.number === 1);
     expect(v1.id).toEqual(expect.any(String));
     if (state === "deleted version") {
-      expect((await dw.call(`/api/v1/sites/base-site/versions/${v1.id}`, { method: "DELETE", key: dw.ownerKey })).status).toBe(200);
+      expect((await dw.call(`/api/v1/sites/base-site/versions/${v1.id}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: "base-site" }), key: dw.ownerKey })).status).toBe(200);
     } else if (state === "deleted site") {
       expect((await dw.call("/api/v1/sites/base-site", { method: "DELETE", key: dw.ownerKey })).status).toBe(200);
     } else if (state === "renamed") {

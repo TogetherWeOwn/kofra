@@ -50,7 +50,7 @@ name: ${SKILL_NAME}
 description: ${skillDescription(product)}
 license: MIT
 metadata:
-  homepage: ${instance ? instance.origin : "https://github.com/TogetherWeOwn/dropway"}
+  homepage: ${instance ? instance.origin : "https://github.com/TogetherWeOwn/kofra"}
 ---
 
 # ${product}
@@ -66,7 +66,7 @@ ${where}
 
 ## Publish
 
-MCP: \`publish_site\` with \`files\`, each \`{ path, content }\` (text; base64 only for small binaries), \`{ path, url }\` (the server downloads a public https file), \`{ path, sha256, size }\` (then PUT the bytes to the returned upload link and call \`finalize_version\`) or \`{ path, copyFrom }\`.
+MCP: \`publish_site\` with \`files\`, each \`{ path, content }\` (text; base64 only for small binaries), \`{ path, url }\` (the server downloads a public https file), \`{ path, sha256, size }\` (then PUT the bytes to the returned upload link and call \`finalize_version\`), \`{ path, copyFrom }\` or a chat attachment \`{ download_url, file_name }\`; or \`archiveUrl\` alone for a public https .zip.
 
 REST, one call (form field name = file path):
 
@@ -84,7 +84,7 @@ Publish to the same site again with \`-F slug=<slug>\` (REST) or \`site: "<slug>
 - Change a few files: \`update_site_files\` (MCP) or \`PATCH ${app}/api/v1/sites/<slug>/files\` with \`files\`, \`delete\`, \`move\`, and \`baseVersionId\` from your last result. \`version_conflict\` means someone published since: re-read, re-apply, retry.
 - Check your work: \`list_files\`, \`read_file\`, or fetch the returned \`url\`.
 - Roll back: \`list_versions\`, then \`restore_version\` with \`"v3"\`.
-- Settings: \`update_site_settings\` (spa, renderMarkdown, title). Password: \`set_site_access\`.
+- Settings: \`update_site_settings\` (title, description, spa, renderMarkdown, crossOriginIsolation). Password: \`set_site_access\`.
 
 ## Rules
 
@@ -153,7 +153,7 @@ const firstSentence = (s: string) => {
 };
 
 function mcpLines(origin: string): string {
-  return `- Endpoint: \`${origin}/mcp\` (Streamable HTTP; header \`Authorization: Bearer dw_...\`). Narrow the tool list with \`?toolsets=core\` (or sites, versions, keys, members) and \`?read_only=1\`.
+  return `- Endpoint: \`${origin}/mcp\` (Streamable HTTP; header \`Authorization: Bearer dw_...\`). Narrow the tool list with \`?toolsets=core\` (or sites, versions, keys, members, folders, transfers) and \`?read_only=1\`.
 - Claude Code: \`claude mcp add --transport http kofra ${origin}/mcp --header "Authorization: Bearer $KOFRA_API_KEY"\`
 - Codex (~/.codex/config.toml): \`[mcp_servers.kofra]\` with \`url = "${origin}/mcp"\` and \`bearer_token_env_var = "KOFRA_API_KEY"\`
 - Cursor, VS Code and other clients: add a remote (HTTP) MCP server with that URL and header.
@@ -192,8 +192,8 @@ ${mcpLines(origin)}
 
 - [Full reference](${origin}/llms-full.txt): every endpoint, every MCP tool with its input schema, error codes
 - [OpenAPI 3.1](${origin}/openapi.json): x-mcp-tool names available MCP twins; x-mcp-exclude explains REST-only operations
-- [Agent Skill](${origin}/skill.md): install with \`npx skills add ${origin}\` or \`npx skills add TogetherWeOwn/dropway\`
-- [Source (MIT)](https://github.com/TogetherWeOwn/dropway)
+- [Agent Skill](${origin}/skill.md): install with \`npx skills add ${origin}\` or \`npx skills add TogetherWeOwn/kofra\`
+- [Source (MIT)](https://github.com/TogetherWeOwn/kofra)
 
 ## REST endpoints
 
@@ -237,7 +237,8 @@ export function llmsFullTxt(origin: string, config: DropwayConfig, tools: readon
 - Site: a slug (DNS label, e.g. bright-otter-x7k2) with settings and a live version. Tools accept a slug, a site id or any URL of the site.
 - Version: an immutable set of files (path -> sha256, size, content type) with a number (v1, v2...). Publishing makes a new version live atomically; restore flips the live pointer back. Version arguments accept "live", "v3", "3" or an id.
 - Files are stored once per owner by SHA-256: unchanged files are never uploaded twice, across versions and sites.
-- File sources (MCP publish_site and update_site_files, REST PATCH .../files): each file has a path and exactly one of content (+encoding utf8 up to 1 MB or base64 up to 256 KB), url (+headers; public https only, up to 25 MB, 3 redirects, 30 s), sha256 (+size; reused if stored, otherwise an upload link is returned) or copyFrom {site?, version?, path?}.
+- File sources (MCP publish_site and update_site_files, REST PATCH .../files): each file has a path and exactly one of content (+encoding utf8 up to 1 MB or base64 up to 256 KB), url (+headers; public https only, up to 25 MB, 3 redirects, 30 s), sha256 (+size; reused if stored, otherwise an upload link is returned), copyFrom {site?, version?, path?} or a chat attachment {download_url, file_name} (fetched like url, file_name becomes the path). publish_site also accepts archiveUrl alone: a public https .zip downloaded and unpacked like an uploaded zip.
+- Large files (REST/CLI): above 95 MiB the CLI stages bytes through POST /api/v1/uploads, PUT /api/v1/uploads/{id}/parts/{n} (10-95 MiB parts, resumable via GET /api/v1/uploads/{id}) and POST /api/v1/uploads/{id}/complete; the server hash-verifies the assembled file before finalize.
 - status: "live" (the URL serves it now), "unchanged" (identical to the live version; nothing created) or "awaiting_upload" (PUT each upload.items[].url with the raw bytes and the same Authorization header, then finalize_version).
 - Idempotency: writes accept idempotencyKey (MCP) or the Idempotency-Key header (REST PATCH .../files). The same key and arguments within 24 hours replay the first result (replayed: true); a different body returns 422 idempotency_key_reused. Secrets (new API keys) are not replayed.
 - Viewers: navigations to a file get a rendered view chosen by type; sub-resource requests (img, script, fetch) always get raw bytes. ?raw=1 raw bytes (text types as text/plain), ?download=1 download, ?view=1 force the viewer.

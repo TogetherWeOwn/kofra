@@ -1,11 +1,12 @@
 import type { DropwayContext } from "../context";
 import { siteUrl } from "../context";
-import { blobKey } from "./blobs";
+import { cleanupBlobs } from "./blob-cleanup";
 import { emit, meter } from "./events";
 import { dropLive } from "./live";
 import { convertRedirectsStatements, insertTombstone, purgeExpiredHolds } from "./slug-holds";
 import { cleanupTransfers } from "./transfer-cleanup";
 import { assertSiteDeletionState, siteDeletionStateChanged } from "./atomic-write";
+import { cleanupExpiredMultipartUploads } from "./uploads";
 import type { SiteRow } from "./sites";
 
 const HOUR = 3600_000;
@@ -18,6 +19,7 @@ export interface CleanupReport {
   purgedSites: number;
   abandonedDeploys: number;
   deletedBlobs: number;
+  expiredUploads: number;
 }
 
 /**
@@ -28,15 +30,18 @@ export interface CleanupReport {
  * 4. delete blobs no version references any more (older than a day);
  * 5. purge expired, unreleased name holds (released rows are the audit trail);
  * 6. purge expired idempotency records, oldest first.
- * Each step is bounded so one run stays well inside Worker limits.
+ * Core binding calls total at most 791 even when every slice is full:
+ * transfers 103, sites 101 + 26, holds 1, multipart 301, abandoned 51,
+ * orphans 201 + inventory 6, idempotency 1. This reserves 209 of Free's 1000 calls for
+ * other invocation work; embedding hooks must budget their own calls.
  */
 export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<CleanupReport> {
-  const report: CleanupReport = { expiredSites: 0, purgedSites: 0, abandonedDeploys: 0, deletedBlobs: 0, ...await cleanupTransfers(dc, now) };
+  const report: CleanupReport = { expiredSites: 0, purgedSites: 0, abandonedDeploys: 0, deletedBlobs: 0, expiredUploads: 0, ...await cleanupTransfers(dc, now) };
   const db = dc.env.DB;
 
   // 1. Expire anonymous sites.
   const { results: expired } = await db
-    .prepare("SELECT * FROM sites WHERE mode = 'site' AND expires_at IS NOT NULL AND expires_at < ? AND deleted_at IS NULL LIMIT 200")
+    .prepare("SELECT * FROM sites WHERE mode = 'site' AND expires_at IS NOT NULL AND expires_at < ? AND deleted_at IS NULL LIMIT 50")
     .bind(now)
     .all<SiteRow>();
   for (const s of expired) {
@@ -64,7 +69,7 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
   // 2. Purge deleted sites (rows only; their blobs become orphans for step 4,
   // their tombstones keep holding the names).
   const { results: gone } = await db
-    .prepare("SELECT id FROM sites WHERE mode = 'site' AND deleted_at IS NOT NULL AND deleted_at < ? LIMIT 50")
+    .prepare("SELECT id FROM sites WHERE mode = 'site' AND deleted_at IS NOT NULL AND deleted_at < ? LIMIT 25")
     .bind(now - HOUR)
     .all<{ id: string }>();
   for (const s of gone) {
@@ -82,12 +87,16 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
   // 5. Expired holds.
   const purgedHolds = await purgeExpiredHolds(dc, now);
 
+  // Expired resumable uploads: abort their R2 multipart uploads and drop the
+  // session rows (at most 301 binding calls; staged bytes go with them).
+  report.expiredUploads = await cleanupExpiredMultipartUploads(dc, now);
+
   // 3. Abandoned uploads. Transfer references belong to cleanupTransfers, even
   // before publication: its live retention fence and purge accounting must win.
   const abandoned = `status = 'pending' AND created_at < ?
     AND NOT EXISTS (SELECT 1 FROM transfers t WHERE t.site_id = versions.site_id)`;
   const { results: stale } = await db
-    .prepare(`SELECT id FROM versions WHERE ${abandoned} LIMIT 200`)
+    .prepare(`SELECT id FROM versions WHERE ${abandoned} LIMIT 50`)
     .bind(now - DAY)
     .all<{ id: string }>();
   for (const v of stale) {
@@ -99,27 +108,8 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
     if (result[1]?.meta.changes) report.abandonedDeploys++;
   }
 
-  // 4. Unreferenced blobs. The row is deleted only if still unreferenced at that instant;
-  // only then is the R2 object removed. (Known gap: a re-upload of the same bytes in the
-  // milliseconds between those two steps would be lost; the next finalize reports it missing.)
-  const { results: orphans } = await db
-    .prepare(
-      `SELECT b.sha256 FROM blobs b
-        WHERE b.created_at < ? AND NOT EXISTS (SELECT 1 FROM version_files vf WHERE vf.sha256 = b.sha256)
-        LIMIT 500`,
-    )
-    .bind(now - DAY)
-    .all<{ sha256: string }>();
-  for (const b of orphans) {
-    const [del] = await db.batch([
-      db.prepare("DELETE FROM blobs WHERE sha256 = ? AND NOT EXISTS (SELECT 1 FROM version_files WHERE sha256 = ?)").bind(b.sha256, b.sha256),
-      db.prepare("DELETE FROM blob_scopes WHERE sha256 = ? AND NOT EXISTS (SELECT 1 FROM blobs WHERE sha256 = ?)").bind(b.sha256, b.sha256),
-    ]);
-    if (del?.meta.changes) {
-      await dc.env.FILES.delete(blobKey(b.sha256));
-      report.deletedBlobs++;
-    }
-  }
+  // 4. Retire unreferenced generations and reclaim crash/failed-delete objects.
+  report.deletedBlobs = await cleanupBlobs(dc, now);
   // 6. One statement selects and deletes against current expiry, so a reclaimed
   // key cannot be removed using a stale snapshot of its previous owner.
   const purgedKeys = await db.prepare(
@@ -129,7 +119,7 @@ export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<
     )`,
   ).bind(now, now).run();
   const purgedIdempotencyKeys = Number(purgedKeys.meta.changes ?? 0);
-  if (report.expiredSites || report.purgedSites || report.abandonedDeploys || report.deletedBlobs || purgedHolds.tombstones || purgedHolds.redirects || purgedIdempotencyKeys) {
+  if (report.expiredSites || report.purgedSites || report.abandonedDeploys || report.deletedBlobs || report.expiredUploads || purgedHolds.tombstones || purgedHolds.redirects || purgedIdempotencyKeys) {
     console.log(JSON.stringify({ event: "cleanup", ...report, purgedHolds, purgedIdempotencyKeys }));
   }
   return report;

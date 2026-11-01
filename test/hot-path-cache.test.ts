@@ -201,6 +201,33 @@ describe("R-14: 10-second Cache API pointer memo before KV", () => {
     expect(pointer!.headers.get("cache-control")).toMatch(/(?:^|[,\s])max-age=10(?:[,\s]|$)/);
   });
 
+  // Break caught: a publish or restore serving the previous memo instead of the new live version.
+  it("invalidates the cached pointer on publish and on restore", async () => {
+    const ptr = "https://dropway.invalid/__dropway/ptr/cache-invalidate";
+    const v1 = await publish("cache-invalidate", { "payload.txt": "v1" });
+    // Warm the memo from a cold isolate (waitUntil fills are flushed per call).
+    clearLiveMemoryCache();
+    expect((await read("cache-invalidate")).text()).toBe("v1");
+    expect(await caches.default.match(ptr)).toBeDefined();
+
+    // A publish drops the memo; the next cold read serves the new bytes from KV.
+    await publish("cache-invalidate", { "payload.txt": "v2" });
+    expect(await caches.default.match(ptr)).toBeUndefined();
+    clearLiveMemoryCache();
+    expect((await read("cache-invalidate")).text()).toBe("v2");
+
+    // A restore drops the refilled memo too; the next cold read serves the restored bytes.
+    expect(await caches.default.match(ptr)).toBeDefined();
+    const restored = await dw.json(`/api/v1/sites/cache-invalidate/versions/${v1.version.id}/restore`, {
+      method: "POST", key: dw.ownerKey,
+    });
+    expect(restored.status).toBe(200);
+    expect(restored.body.restored).toBe(true);
+    expect(await caches.default.match(ptr)).toBeUndefined();
+    clearLiveMemoryCache();
+    expect((await read("cache-invalidate")).text()).toBe("v1");
+  });
+
   // Break caught: a persistent/long-lived pointer memo hiding KV changes.
   it("refreshes an expired Cache API pointer from KV after 10 seconds", async () => {
     await publish("cache-expiry", { "payload.txt": "expiring pointer" });

@@ -12,6 +12,7 @@ import { CliError, DropwayClient, EXIT, normaliseApi, type FetchLike } from "./c
 import { linkKey, linkPath, readCredentials, readLink, removeCredentials, saveCredentials, writeLink, type ProjectLink } from "./config.ts";
 import { collectFiles } from "./files.ts";
 import { encryptFiles } from "./encrypt.ts";
+import { explainConfig, explainConfigHuman } from "./explain-config.ts";
 import { withLegacyEnv } from "./legacy-brand.ts";
 import { formatBytes, plural, shellQuote, shortTime, table } from "./output.ts";
 import { publish, publishZip, waitForVersion, type ProgressEvent, type PublishResult, type VersionInfo } from "./publish.ts";
@@ -342,8 +343,9 @@ const publishCmd: Command = {
 
 Only files the instance does not already have are uploaded (SHA-256 content
 addressing); publishing identical files again reports "unchanged".
-Never published: .git/, node_modules/, .env*, .dev.vars*, .npmrc, *.pem, *.key,
-.dropway/, .DS_Store, plus patterns in <path>/.dropwayignore ("!" re-includes).
+Never published: .git, .hg/, .svn/, node_modules/, .wrangler/, .dropway/, .env, .env.*,
+.dev.vars*, .npmrc, *.pem, *.key, *.p12, *.pfx, id_rsa*, id_ecdsa, id_ed25519*,
+.DS_Store, Thumbs.db, plus patterns in <path>/.dropwayignore ("!" re-includes).
 A .zip file is unpacked by the instance (one request, up to 25 MB by default).
 After a publish with a key, ./dropway.json remembers the site for <path>, so
 running the same command again updates that site.
@@ -808,7 +810,7 @@ const restoreCmd: Command = {
     const inst = await resolveInstance(p, io);
     const client = makeClient(io, inst.api, requireKey(inst));
     const v = await resolveVersion(client, slug, p.positionals[1]);
-    const { data } = await client.post<{ restored: boolean; alreadyLive: boolean; version: VersionInfo; url: string }>(`/sites/${enc(slug)}/versions/${enc(v.id)}/restore`, {}, { retry: "safe" });
+    const { data } = await client.post<{ restored: boolean; alreadyLive: boolean; version: VersionInfo; url: string }>(`/sites/${enc(slug)}/versions/${enc(v.id)}/restore`, {}, { retry: "none", idempotencyKey: crypto.randomUUID() });
     out.result(data, () => (data.alreadyLive ? `${slug} v${data.version.number} is already live.\n${data.url}` : `Restored ${slug} to v${data.version.number}.\n${data.url}`));
     return EXIT.ok;
   },
@@ -827,7 +829,8 @@ const deleteCmd: Command = {
     if (ref) {
       const v = await resolveVersion(client, slug, ref);
       await confirm(io, out, p, slug, `delete version v${v.number} of ${slug}`);
-      const { data } = await client.request("DELETE", `/sites/${enc(slug)}/versions/${enc(v.id)}`);
+      const { site: canonicalSlug } = await getVersionDirect(client, slug, v.id);
+      const { data } = await client.request("DELETE", `/sites/${enc(slug)}/versions/${enc(v.id)}`, { json: { confirm: canonicalSlug }, retry: "none", idempotencyKey: crypto.randomUUID() });
       out.result({ ...data, slug, version: v.number }, `Deleted version v${v.number} of ${slug}.`);
       return EXIT.ok;
     }
@@ -1364,8 +1367,24 @@ const apiCmd: Command = {
   },
 };
 
+const explainConfigCmd: Command = {
+  summary: "Show which configuration wins, without contacting anything",
+  usage: "kofra explain-config [path] [--api <url>] [--key <key>] [--json] [-q]",
+  maxPositionals: 1,
+  flags: {},
+  details: `Offline, read-only diagnostics. Exit 0 means presence, not authorization.
+Callers using --anonymous may treat exit 3 as OK; never auto-login on exit 3.
+Contract: https://github.com/TogetherWeOwn/kofra/blob/main/docs/CLI_DIAGNOSTICS.md`,
+  async run(p, io, out) {
+    const report = await explainConfig({ api: str(p, "api"), key: str(p, "key"), path: p.positionals[0], env: io.env, cwd: io.cwd });
+    out.result({ ...report }, () => explainConfigHuman(report));
+    return report.exitCode;
+  },
+};
+
 const COMMANDS: Record<string, Command> = {
   publish: publishCmd,
+  "explain-config": explainConfigCmd,
   duplicate: duplicateCmd,
   list: listCmd,
   site: siteCmd,
@@ -1410,7 +1429,7 @@ Quick start:
 
 ${HELP_FOOTER}
 
-Docs: https://github.com/TogetherWeOwn/dropway/tree/main/packages/cli`;
+Docs: https://github.com/TogetherWeOwn/kofra/tree/main/packages/cli`;
 }
 
 function commandHelp(name: string, c: Command): string {
@@ -1423,7 +1442,8 @@ ${HELP_FOOTER}`;
 
 /** Run the CLI. Returns the exit code (never calls process.exit). */
 export async function run(argv: string[], io: Io): Promise<number> {
-  io = { ...io, env: withLegacyEnv(io.env) };
+  // Diagnostics needs literal provenance; all existing commands keep legacy folding.
+  io = { ...io, env: argv[0] === "explain-config" ? io.env : withLegacyEnv(io.env) };
   const first = argv[0];
   if (!first || first === "help" || first === "--help" || first === "-h") {
     const topic = first === "help" ? argv[1] : undefined;
@@ -1457,7 +1477,9 @@ export async function run(argv: string[], io: Io): Promise<number> {
     return await command.run(p, io, new Output(io, bool(p, "json") === true, bool(p, "quiet") === true));
   } catch (e) {
     const err =
-      e instanceof CliError
+      name === "explain-config" && !(e instanceof UsageError)
+        ? new CliError({ code: "unexpected_error", message: "Unexpected internal failure.", exitCode: EXIT.error })
+        : e instanceof CliError
         ? e
         : e instanceof UsageError
           ? new CliError({ code: "usage", message: e.message, hint: `Run \`kofra ${name} --help\`.`, exitCode: EXIT.usage })

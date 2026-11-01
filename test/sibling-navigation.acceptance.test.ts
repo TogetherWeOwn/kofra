@@ -213,6 +213,9 @@ describe("same-folder sibling navigation", () => {
     for (const path of ["alone/only.csv", "docs/02%20data.csv?view=1&embed=1"]) {
       const { html } = await view(path);
       expect(await anchors(html)).toEqual([]);
+      // Phone is independent of sibling navigation: full pages carry it, embeds never do.
+      if (path.includes("embed=1")) expect(html).not.toContain("<details class=\"dw-phone\">");
+      else expect(html).toContain('<details class="dw-phone"><summary>Phone</summary>');
       expect(html).toMatchSnapshot(path);
     }
   });
@@ -220,6 +223,9 @@ describe("same-folder sibling navigation", () => {
   it.each(["media/01%20image.png", "media/02%20vector.svg"])("leaves excluded image/SVG viewer output byte-identical: %s", async path => {
     const { html } = await view(path);
     expect(await anchors(html)).toEqual([]);
+    // Excluded from sibling navigation only; the viewer bar still offers Phone for this file.
+    expect(html).toContain('<details class="dw-phone"><summary>Phone</summary>');
+    expect(html).toContain(`>https://dropway.test${base}${path}</a></div></details>`);
     expect(html).toMatchSnapshot(path);
   });
 
