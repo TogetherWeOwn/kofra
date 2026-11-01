@@ -842,11 +842,22 @@ export interface FileRow {
 export async function listFiles(dc: DropwayContext, site: SiteRow, versionId: string | null) {
   const vid = versionId ?? site.current_version_id;
   if (!vid) return { version: null, files: [] };
-  const version = await getVersion(dc, site.id, vid);
+  // One batch is one consistent snapshot: a concurrent deleteVersion batch commits
+  // either fully before this read (version row gone, 404 below) or fully after it
+  // (complete manifest). The file_count check fails closed on any torn remainder.
+  const [versionResult, filesResult] = await dc.env.DB.batch([
+    dc.env.DB.prepare("SELECT * FROM versions WHERE id = ? AND site_id = ?").bind(vid, site.id),
+    dc.env.DB.prepare("SELECT path, sha256, size, content_type FROM version_files WHERE version_id = ? ORDER BY path").bind(vid),
+  ]);
+  const version = ((versionResult?.results ?? []) as unknown as VersionRow[])[0] ?? null;
   if (!version) throw notFound("version_not_found", `No version ${vid} on site ${site.slug}.`);
-  const { results } = await dc.env.DB.prepare("SELECT path, sha256, size, content_type FROM version_files WHERE version_id = ? ORDER BY path")
-    .bind(vid)
-    .all<FileRow>();
+  const results = (filesResult?.results ?? []) as unknown as FileRow[];
+  if (results.length !== version.file_count) {
+    throw notFound("version_not_found", `No version ${vid} on site ${site.slug}.`, undefined, {
+      fileCount: version.file_count,
+      files: results.length,
+    });
+  }
   const api = `${appOrigin(dc)}/api/v1/sites/${site.slug}/files/`;
   return {
     version: serializeVersion(version, site.current_version_id),
