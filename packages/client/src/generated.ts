@@ -56,11 +56,11 @@ export interface PublishSiteInput {
   title?: string | null;
   /** One or two sentences about the site. */
   description?: string | null;
-  /** SPA: unknown paths serve index.html instead of 404. */
+  /** Unknown paths serve index.html. */
   spa?: boolean;
-  /** Render .md files as pages for browsers (default true); false serves raw. */
+  /** Render .md as pages (default true). */
   renderMarkdown?: boolean;
-  /** Send COOP/COEP headers (for SharedArrayBuffer/threaded WASM). */
+  /** Send COOP/COEP headers. */
   crossOriginIsolation?: boolean;
   /** Optional visitor password (see set_site_access). */
   password?: string;

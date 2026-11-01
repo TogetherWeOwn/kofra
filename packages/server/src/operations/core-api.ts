@@ -907,7 +907,7 @@ export const CORE_API_OPERATIONS = [
     toolset: "core",
     scopes: ["sites:write"],
     description:
-      "Change a site's title, description or serving settings: spa (unknown paths serve index.html, for single-page apps), renderMarkdown (browsers see .md rendered; false serves raw), crossOriginIsolation (COOP/COEP headers for SharedArrayBuffer). Only the fields you pass change. Passwords: set_site_access.",
+      "Change a site's title, description, spa, renderMarkdown or crossOriginIsolation. Only passed fields change. Passwords: set_site_access.",
     input: fromSchema({
       type: "object",
       properties: { site: SITE_REF, ...SETTINGS_INPUT },

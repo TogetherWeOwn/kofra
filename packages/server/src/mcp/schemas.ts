@@ -55,9 +55,9 @@ export const FILE_INPUT: Schema = {
 export const SETTINGS_INPUT = {
   title: { type: ["string", "null"], maxLength: 200, description: "Title shown in lists." },
   description: { type: ["string", "null"], maxLength: 2000, description: "One or two sentences about the site." },
-  spa: { type: "boolean", description: "SPA: unknown paths serve index.html instead of 404." },
-  renderMarkdown: { type: "boolean", description: "Render .md files as pages for browsers (default true); false serves raw." },
-  crossOriginIsolation: { type: "boolean", description: "Send COOP/COEP headers (for SharedArrayBuffer/threaded WASM)." },
+  spa: { type: "boolean", description: "Unknown paths serve index.html." },
+  renderMarkdown: { type: "boolean", description: "Render .md as pages (default true)." },
+  crossOriginIsolation: { type: "boolean", description: "Send COOP/COEP headers." },
 } satisfies Record<string, Schema>;
 
 export const IDEMPOTENCY_KEY: Schema = {
