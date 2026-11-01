@@ -25,7 +25,7 @@ export interface Io {
   stdinIsTTY: boolean;
   stderrIsTTY: boolean;
   readStdin(): Promise<string>;
-  /** Raw piped bytes, read once and bounded (`publish --stdin`). Tests may omit it: readStdin() is then encoded as UTF-8. */
+  /** Raw piped bytes, read once and bounded (`publish --stdin`). Tests may omit it: readStdin() is then encoded as UTF-8. Embedders piping more than STDIN_MAX_BYTES must supply this: the string fallback buffers the whole pipe before enforcing the bound. */
   readStdinBytes?(maxBytes: number): Promise<Uint8Array>;
   prompt(question: string, opts?: { hidden?: boolean }): Promise<string>;
   env: NodeJS.ProcessEnv;
@@ -184,8 +184,14 @@ function positional(p: Parsed, index: number, name: string, usage: string): stri
   return v;
 }
 
+/** TTY diagnosis lives here (not only at the call site) so a future byte-reading caller cannot ship the wrong code. */
+function stdinTerminalError(): CliError {
+  return new CliError({ code: "stdin_is_terminal", message: "--stdin needs piped input, but stdin is a terminal: nothing piped.", hint: "Pipe the content in, e.g. `cat report.html | kofra publish --stdin report.html`, or pass a <path> instead.", exitCode: EXIT.usage });
+}
+
 /** Read piped bytes exactly once; refuse empty input unless allowed. */
 async function readPiped(io: Io, allowEmpty: boolean): Promise<Uint8Array> {
+  if (io.stdinIsTTY) throw stdinTerminalError();
   let bytes: Uint8Array;
   if (io.readStdinBytes) bytes = await io.readStdinBytes(STDIN_MAX_BYTES);
   else {
@@ -405,9 +411,7 @@ A piped .zip is stored as one file named <filename>, not unpacked.
 
     let stdinPath: string | undefined;
     if (stdinName !== undefined) {
-      if (io.stdinIsTTY) {
-        throw new CliError({ code: "stdin_is_terminal", message: "--stdin needs piped input, but stdin is a terminal: nothing piped.", hint: "Pipe the content in, e.g. `cat report.html | kofra publish --stdin report.html`, or pass a <path> instead.", exitCode: EXIT.usage });
-      }
+      if (io.stdinIsTTY) throw stdinTerminalError();
       stdinPath = normaliseStdinPath(stdinName);
     }
     const st = stdinPath === undefined ? await stat(resolve(io.cwd, target)).catch(() => null) : null;
