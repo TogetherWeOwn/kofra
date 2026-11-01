@@ -274,6 +274,29 @@ describe("DropwayClient transport", () => {
     expect(onMoved).toHaveBeenCalledWith("https://new.test");
   });
 
+  it("refuses redirects instead of following them when redirect is error", async () => {
+    // The stub transport returns the redirect answer untouched: no redirect
+    // override of its own. The client must refuse rather than follow.
+    const fetch = stubFetch(() => new Response(null, { status: 307, headers: { Location: "https://other.test/api/v1/sites" } }));
+    const client = new DropwayClient({ api: "https://kofra.test", token: "dw_x", fetch });
+    const e = await caught(client.get("/sites", { redirect: "error" }));
+    expect(e.code).toBe("redirect_refused");
+    expect(e.status).toBe(307);
+    expect(e.retryable).toBe(false);
+    expect(fetch.requests).toHaveLength(1);
+  });
+
+  it("follows redirects by default", async () => {
+    const fetch = stubFetch((req) =>
+      new URL(req.url).pathname === "/api/v1/sites"
+        ? new Response(null, { status: 307, headers: { Location: "/api/v1/sites-followed" } })
+        : json({ ok: true }),
+    );
+    const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch });
+    await expect(client.get("/sites")).resolves.toMatchObject({ status: 200 });
+    expect(fetch.requests).toHaveLength(2);
+  });
+
   it("sends the idempotency key when given", async () => {
     const fetch = stubFetch(() => json({}));
     const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch });

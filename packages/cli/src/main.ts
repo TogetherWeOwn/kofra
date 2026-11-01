@@ -10,12 +10,13 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { bool, int, parseArgs, str, UsageError, type FlagSpecs, type Parsed } from "./args.ts";
 import { CliError, DropwayClient, EXIT, normaliseApi, type FetchLike } from "./client.ts";
+import { compareCancelled, compareDirectory, compareHuman, settleBeforeOutput } from "./compare.ts";
 import { linkKey, linkPath, readCredentials, readLink, removeCredentials, saveCredentials, writeLink, type ProjectLink } from "./config.ts";
 import { collectFiles, collectStdinFile, normaliseStdinPath } from "./files.ts";
 import { encryptFiles } from "./encrypt.ts";
 import { explainConfig, explainConfigHuman } from "./explain-config.ts";
 import { withLegacyEnv } from "./legacy-brand.ts";
-import { formatBytes, plural, shellQuote, shortTime, table } from "./output.ts";
+import { escapeControl, formatBytes, plural, shellQuote, shortTime, table } from "./output.ts";
 import { publish, publishZip, waitForVersion, type ProgressEvent, type PublishResult, type VersionInfo } from "./publish.ts";
 import { checkPullDirectory, pullVersion } from "./pull.ts";
 import { readBounded, STDIN_FIRST_BYTE_MS, STDIN_MAX_BYTES, stdinTooLarge } from "./stdin.ts";
@@ -108,7 +109,9 @@ class Output {
 
   error(err: CliError) {
     this.progress(null);
-    if (this.json) {
+    // Cancellation reports on stderr even in JSON mode: stdout must stay
+    // empty (no partial result), and the shape matches human errors.
+    if (this.json && err.code !== "compare_cancelled") {
       this.io.stdout(`${JSON.stringify({ ok: false, exitCode: err.exitCode, error: err.toJSON() }, null, 2)}\n`);
       return;
     }
@@ -117,7 +120,9 @@ class Output {
     const findings = err.details?.findings as Array<{ path: string; line: number; kind: string }> | undefined;
     if (findings?.length) text += `\n${findings.map((f) => `  ${f.path}:${f.line}  ${f.kind}`).join("\n")}`;
     if (err.requestId) text += `\n  Request id: ${err.requestId}`;
-    this.io.stderr(`${text}\n`);
+    // Human errors are the presentation boundary: control characters from
+    // untrusted input (paths, refs, server text) are escaped, never raw.
+    this.io.stderr(`${escapeControl(text)}\n`);
   }
 }
 
@@ -836,6 +841,62 @@ No files are deleted, credentials saved, or project links changed.`,
     if (out.json) io.stdout(`${JSON.stringify(receipt, null, 2)}\n`);
     else io.stdout(`Pulled ${plural(receipt.files.length, "file")} from ${slug} (${version.id}) into ${dir}; ${receipt.failures.length} failed.\n`);
     return exitCode;
+  },
+};
+
+const compareCmd: Command = {
+  summary: "Compare a directory's hashes against a pinned remote version (read-only)",
+  usage: "kofra compare <path> --site <name> [--version <ref>] [--json] [--quiet] [--include-unchanged] [--limit <n>] [--max-files <n>] [--max-bytes <n>]",
+  flags: { site: { kind: "string", short: "s" }, version: { kind: "string" }, "include-unchanged": { kind: "boolean" },
+    limit: { kind: "string" }, "max-files": { kind: "string" }, "max-bytes": { kind: "string" } },
+  maxPositionals: 1,
+  details: "Flags, limits, output schema and safety guarantees: docs/CLI_COMPARE.md",
+  async run(p, io, out) {
+    const path = positional(p, 0, "path", this.usage);
+    const site = str(p, "site");
+    if (!site?.trim() || site.startsWith("-")) throw new UsageError("An explicit --site <name> is required for compare.");
+    const bound = (name: string, max: number, fallback: number) => {
+      const raw = str(p, name);
+      if (raw !== undefined && !/^[0-9]+$/.test(raw)) throw new UsageError(`--${name} requires plain integer bytes/counts.`);
+      return int(p, name, 1, max) ?? fallback;
+    };
+    const limit = bound("limit", 100000, 500);
+    const maxFiles = bound("max-files", 500000, 50000);
+    const maxBytes = bound("max-bytes", 10737418240, 2147483648);
+    const controller = new AbortController();
+    const cancel = () => controller.abort(compareCancelled());
+    // Registered once: a second Ctrl-C during a non-abortable filesystem
+    // operation must still terminate with the default disposition.
+    process.once("SIGINT", cancel);
+    try {
+      const inst = await resolveInstance(p, io);
+      const key = requireKey(inst, "Comparing a directory");
+      controller.signal.throwIfAborted();
+      // Attach the abort signal to the SDK-built request: the SDK threads it
+      // through retry sleeps, and the transport aborts in-flight reads, so a
+      // cancelled fetch becomes a local error instead of another network read.
+      const client = makeClient({ ...io, fetch: async request => {
+        controller.signal.throwIfAborted();
+        try {
+          return await (io.fetch ?? globalThis.fetch)(new Request(request, { signal: controller.signal }));
+        } catch (error) {
+          controller.signal.throwIfAborted();
+          throw error;
+        }
+      } }, inst.api, key);
+      const result = await compareDirectory(client, { path, cwd: io.cwd, site, requestedRef: str(p, "version") ?? "live",
+        limit, maxFiles, maxBytes, includeUnchanged: bool(p, "include-unchanged") === true, signal: controller.signal });
+      // A SIGINT landing after the comparison but before stdout must cancel,
+      // never print success: yield first so the handler runs, then re-check.
+      await settleBeforeOutput(controller.signal);
+      out.result(result, () => compareHuman(result));
+      return EXIT.ok;
+    } catch (error) {
+      if (controller.signal.aborted) throw compareCancelled();
+      throw error;
+    } finally {
+      process.off("SIGINT", cancel);
+    }
   },
 };
 
@@ -1647,6 +1708,7 @@ const COMMANDS: Record<string, Command> = {
   claim: claimCmd,
   files: filesCmd,
   pull: pullCmd,
+  compare: compareCmd,
   "read-file": readFileCmd,
   versions: versionsCmd,
   restore: restoreCmd,

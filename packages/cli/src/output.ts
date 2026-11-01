@@ -1,5 +1,13 @@
 /** Small formatting helpers for human output. */
 
+/**
+ * Render control characters as visible \uXXXX escapes so untrusted names and
+ * refs stay on one inert terminal line. JSON output keeps exact values; apply
+ * this only at the human presentation boundary.
+ */
+export const escapeControl = (value: string) =>
+  value.replace(/[\u0000-\u001f\u007f-\u009f]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+
 export function formatBytes(n: number): string {
   if (!Number.isFinite(n)) return "?";
   if (n < 1024) return `${n} B`;

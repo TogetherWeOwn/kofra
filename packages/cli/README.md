@@ -29,6 +29,7 @@ Zero runtime dependencies. Node.js 20 or newer.
 | `claim <site> --token <claimToken>` | Keep an anonymous site in your account; the site stops expiring (offline `--dry-run`) |
 | `files <name>` | Files of the live version (or `--version <ref>` with `live`, `v3`, `3` or a version id, read directly) with their URLs |
 | `pull <site> <dir>` | Download an immutable version with size/SHA-256 verification (`--version`, `--force`, `--json`) |
+| `compare <path> --site <name>` | Compare a local directory's hashes with a pinned remote version without downloading content (`--version`, `--json`) |
 | `read-file <site> <path>` | One file's content, one bounded page (`--version`, `--offset`, `--length`, `--encoding`) |
 | `versions <name>` | Newest 500 versions, newest first, live marked — or `versions <name> <ref>` to inspect one directly |
 | `restore <name> [v3]` | Make an older version live again. Without a version: the one before the live version. Alias `rollback` |
@@ -149,6 +150,40 @@ Runnable local check (from a repo clone, against your own instance):
 
 ```sh
 node packages/cli/bin/dropway.mjs versions team-report v1 --api https://<your-instance> --json
+```
+
+## Comparing a local directory with a pinned version
+
+```sh
+kofra compare ./dist --site team-report
+kofra compare ./dist --site team-report --version v6 --json
+kofra compare ./dist --site team-report --include-unchanged --limit 200
+```
+
+`compare` is read-only. It hashes the local directory, resolves the requested
+reference once (`live` by default, or `v3`, `3`, or a version id), pins that
+immutable version, then reads its complete raw manifest. It performs only two
+authenticated manifest `GET`s, downloads no file bytes, creates no versions,
+writes no local files or credentials, and ignores any stale `dropway.json`
+site mapping. Metadata must come from the configured origin: a redirect answer
+is refused rather than followed. The manifest is also checked before local
+hashing: if its row count disagrees with the pinned version's file count, the
+run is refused as an incomplete manifest instead of comparing a torn listing.
+
+Secrets never block or leak through this command. The collector still scans
+text and reports only `secretsFound` as a count; secret values, kinds, paths,
+and line numbers are omitted. Human output escapes terminal control characters
+in untrusted paths and references, while `--json` preserves the exact values.
+`--include-unchanged` adds unchanged records; counts always cover the complete
+comparison, and `--limit` only truncates the printed records. A local file that
+changes during hashing fails as `compare_source_changed`; Ctrl-C exits as
+`compare_cancelled` with empty stdout, even with `--json`, so callers never
+receive a partial comparison.
+
+Disposable local check (no deploy):
+
+```sh
+npm run test:cli -- test/compare.acceptance.test.ts test/compare-worker.acceptance.test.ts test/compare-process.acceptance.test.ts
 ```
 
 ## Duplicating a live site

@@ -144,6 +144,14 @@ export interface RequestOptions {
   /** Sent as Idempotency-Key (the server replays repeats for idempotent operations). */
   idempotencyKey?: string;
   /**
+   * How to treat redirect answers. "follow" (default) follows up to five
+   * GET/HEAD hops, re-checking credential safety at each one. "error" refuses
+   * any answer with a redirect location instead of following it, for reads
+   * that must come from the configured origin (a moved instance must be
+   * re-targeted explicitly, not followed silently).
+   */
+  redirect?: "follow" | "error";
+  /**
    * Aborts the wait between retries: when signaled while backing off (for
    * example after a 429 with a long Retry-After), the call rejects with the
    * abort reason instead of sleeping out the timer. In-flight fetches are
@@ -377,7 +385,7 @@ export class DropwayHttpClient {
       if (key !== undefined) sent.set("Idempotency-Key", key);
       let res: Response;
       try {
-        res = await this.fetchFollowingRedirects(method, url, body, sent, authenticated);
+        res = await this.fetchFollowingRedirects(method, url, body, sent, authenticated, opts.redirect ?? "follow");
       } catch (e) {
         if (e instanceof DropwayError) throw e;
         lastError = new DropwayError({
@@ -433,6 +441,7 @@ export class DropwayHttpClient {
     body: Blob | Uint8Array | ArrayBuffer | string | null,
     sent: Headers,
     authenticated: boolean,
+    redirect: "follow" | "error" = "follow",
   ): Promise<Response> {
     let currentUrl = url;
     let currentHeaders = new Headers(sent);
@@ -446,6 +455,9 @@ export class DropwayHttpClient {
         code: "redirect_refused", message, status: res.status, retryable: false,
         hint: "Use the instance's canonical https:// origin (without /api/v1), then retry the same call.",
       });
+      if (redirect === "error") {
+        throw refused(`${method} to ${new URL(url).origin} answered with a redirect; this read must come from the configured origin.`);
+      }
       if (method !== "GET" && method !== "HEAD") {
         throw refused(`${method} to ${new URL(url).origin} answered with a redirect; writes are never replayed to a redirected target.`);
       }
