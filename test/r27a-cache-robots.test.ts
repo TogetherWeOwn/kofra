@@ -123,6 +123,51 @@ describe("indexing policy (SRV-12)", () => {
     expect((await dw.call("/s/noindex-site/")).headers.get("x-robots-tag")).toBe("all");
   });
 
+  it("publish carries noindex into site settings (multipart, JSON, republish)", async () => {
+    // Multipart one-shot publish: the noindex form field survives META_FIELDS.
+    const multi = await publish({ "index.html": "<p>x</p>" }, { slug: "noindex-multi", noindex: "true" });
+    expect(multi.status).toBe(201);
+    expect(multi.body.site.settings).toMatchObject({ noindex: true });
+    expect((await dw.call("/s/noindex-multi/")).headers.get("x-robots-tag")).toBe("noindex");
+
+    // JSON publish (sources format): the boolean survives the publishSources fields loop.
+    const js = await dw.json("/api/v1/publish", {
+      method: "POST",
+      key: dw.ownerKey,
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ files: [{ path: "index.html", content: "<p>x</p>" }], slug: "noindex-json", noindex: true }),
+    });
+    expect(js.status).toBe(201);
+    expect(js.body.site.settings).toMatchObject({ noindex: true });
+
+    // Republishing an existing site flips the flag back off.
+    const again = await publish({ "index.html": "<p>y</p>" }, { slug: "noindex-json", noindex: "false" });
+    expect(again.status).toBe(200);
+    expect(again.body.site.settings).toMatchObject({ noindex: false });
+    expect((await dw.call("/s/noindex-json/")).headers.get("x-robots-tag")).toBe("all");
+  });
+
+  it("serves an authored robots.txt byte-for-byte even with an HTML content type", async () => {
+    // Anonymous sites get the report-link treatment for HTML; forceRaw robots
+    // must stay untouched regardless of the declared content type.
+    const anon = await freshInstance({ anonymous: { enabled: true } });
+    const pub = await anon.json("/api/v1/publish", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        files: [
+          { path: "index.html", content: "<p>x</p>" },
+          { path: "robots.txt", content: "User-agent: *\nDisallow: /\n", contentType: "text/html" },
+        ],
+      }),
+    });
+    expect(pub.status).toBe(201);
+    const robots = await anon.call(`/s/${pub.body.slug}/robots.txt`, { headers: BROWSER_NAV });
+    expect(robots.status).toBe(200);
+    expect(robots.headers.get("x-kofra-viewer")).toBeNull();
+    expect(await robots.text()).toBe("User-agent: *\nDisallow: /\n");
+  });
+
   it("serves the site's own robots.txt verbatim, never rendered", async () => {
     const pub = await publish(
       { "index.html": "<p>x</p>", "robots.txt": "User-agent: *\nAllow: /\n" },

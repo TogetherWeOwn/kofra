@@ -545,7 +545,7 @@ async function serveFile(
   const head = req.method === "HEAD";
   const viewMode = raw || download || opts?.forceRaw ? null : requestedViewMode(req, sp);
   const viewer = viewMode ? findViewer(file, live, viewers, viewMode) : null;
-  const report = live.tenantId === null && !raw && !download && !precompressed(path) && baseType(contentType) === "text/html";
+  const report = !opts?.forceRaw && live.tenantId === null && !raw && !download && !precompressed(path) && baseType(contentType) === "text/html";
   const reportVariant = report ? `-report${REPORT_LINK_VERSION}` : "";
   const reportUrl = new URL(`${mode.base}__dropway/report`, url).href;
 
