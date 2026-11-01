@@ -140,13 +140,30 @@ export function resolvePath(live: LiveSite, p: string, req: Request, mode: Serve
   return { kind: "not_found" };
 }
 
-/** Long-lived caching only for build outputs whose names carry a content hash (Vite, webpack, Next, Astro). */
+const WASM_RE = /\.wasm(\.(br|gz))?$/i;
+
+/**
+ * The SRV-05 cache policy matrix:
+ * - password-gated sites: `private, no-store` for everything;
+ * - sites that ship WebAssembly: everything revalidates, so the .wasm module
+ *   and the glue that loads it can never drift a year apart in a cache;
+ * - build outputs whose names carry a content hash (Vite, webpack, Next,
+ *   Astro): immutable for a year;
+ * - HTML and every other (unfingerprinted) file: revalidate.
+ */
 export function cacheControlFor(path: string, live: LiveSite): string {
   if (live.passwordHash) return "private, no-store";
+  if (WASM_RE.test(path)) return "public, max-age=0, must-revalidate";
+  for (const p in live.files) if (WASM_RE.test(p)) return "public, max-age=0, must-revalidate";
   const fingerprinted =
     /^(assets|_next\/static|static|_astro|build|_app\/immutable|dist)\//.test(path) &&
     /[.\-_](?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{8,}\.[a-z0-9]+(\.(br|gz))?$/.test(path);
   return fingerprinted ? "public, max-age=31536000, immutable" : "public, max-age=0, must-revalidate";
+}
+
+/** Anonymous, expiring and explicitly noindex sites stay out of search indexes (SRV-12). */
+export function isNoindex(live: LiveSite): boolean {
+  return live.tenantId === null || live.expiresAt !== null || live.noindex === true;
 }
 
 /**
@@ -161,7 +178,7 @@ export function securityHeaders(h: Headers, live: LiveSite | null, mode: ServeMo
   h.set("Strict-Transport-Security", "max-age=31536000");
   if (gated) h.delete("Access-Control-Allow-Origin");
   else h.set("Access-Control-Allow-Origin", "*");
-  h.set("X-Robots-Tag", live?.expiresAt ? "noindex" : "all");
+  h.set("X-Robots-Tag", live && isNoindex(live) ? "noindex" : "all");
   if (live) {
     h.set("X-Kofra-Site", live.slug);
     if (live.versionId) h.set("X-Kofra-Version", live.versionId);
@@ -462,6 +479,26 @@ export async function serveSiteContent(
   }
   if (!live.versionId) return systemResponse(dw, req, mode, live, 404, "EMPTY", "Nothing published yet", "This site exists but has no live version yet. See {app}.");
 
+  // A site's own robots.txt is served verbatim; without one, noindex sites
+  // get a generated disallow-all and indexable sites a plain 404. None is
+  // ever answered by the SPA or 404.html fallbacks (SRV-12). The password
+  // gate above still applies: gated sites answer robots.txt only to visitors
+  // who unlocked them.
+  if (filePath === "robots.txt") {
+    let response: Response;
+    if (live.files["robots.txt"]) {
+      response = await serveFile(req, dw, url, live, mode, "robots.txt", 200, viewers, { forceRaw: true });
+    } else if (isNoindex(live)) {
+      const h = new Headers({ "Content-Type": "text/plain; charset=utf-8", "Cache-Control": cacheControlFor("robots.txt", live) });
+      securityHeaders(h, live, mode);
+      response = new Response(method === "HEAD" ? null : "User-agent: *\nDisallow: /\n", { status: 200, headers: h });
+    } else {
+      response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", "This site has no robots.txt.");
+    }
+    recordHit(dw, req, live, filePath, response.status, Number(response.headers.get("Content-Length") ?? 0), Date.now() - started);
+    return response;
+  }
+
   const resolved = resolvePath(live, filePath, req, mode);
   let response: Response;
   let bytes = 0;
@@ -498,6 +535,7 @@ async function serveFile(
   path: string,
   status: number,
   viewers: readonly Viewer[],
+  opts?: { forceRaw?: boolean },
 ): Promise<Response> {
   const [sha256, size, contentType] = live.files[path]!;
   const file = toViewerFile(path, sha256, size, contentType);
@@ -505,7 +543,7 @@ async function serveFile(
   const raw = flag(sp, "raw");
   const download = flag(sp, "download");
   const head = req.method === "HEAD";
-  const viewMode = raw || download ? null : requestedViewMode(req, sp);
+  const viewMode = raw || download || opts?.forceRaw ? null : requestedViewMode(req, sp);
   const viewer = viewMode ? findViewer(file, live, viewers, viewMode) : null;
   const report = live.tenantId === null && !raw && !download && !precompressed(path) && baseType(contentType) === "text/html";
   const reportVariant = report ? `-report${REPORT_LINK_VERSION}` : "";
@@ -589,7 +627,7 @@ async function serveFile(
   }
 
   // Path mode: HTML and CSS get root-relative URLs prefixed with the site base.
-  const rewriteKind = mode.rewrite && !raw && !download && !precompressed(path) ? (isHtml(contentType) ? "html" : baseType(contentType) === "text/css" && size <= MAX_CSS_REWRITE_BYTES ? "css" : null) : null;
+  const rewriteKind = mode.rewrite && !raw && !download && !opts?.forceRaw && !precompressed(path) ? (isHtml(contentType) ? "html" : baseType(contentType) === "text/css" && size <= MAX_CSS_REWRITE_BYTES ? "css" : null) : null;
   if (rewriteKind || report) {
     // Sandboxed pages and private previews send no Referer, so they need runtime URL repair.
     const shim = rewriteKind === "html" && (mode.sandbox || mode.pathShim === true);

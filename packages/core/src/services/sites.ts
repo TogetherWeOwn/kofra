@@ -28,6 +28,7 @@ export interface SiteRow {
   spa: number;
   render_markdown: number;
   cross_origin_isolation: number;
+  noindex: number;
   password_hash: string | null;
   current_version_id: string | null;
   claim_token_hash: string | null;
@@ -61,6 +62,8 @@ export interface SiteSettingsInput {
   spa?: boolean;
   renderMarkdown?: boolean;
   crossOriginIsolation?: boolean;
+  /** Ask crawlers not to index this site (X-Robots-Tag: noindex, generated robots.txt). */
+  noindex?: boolean;
   /** Set a visitor password; null removes it. */
   password?: string | null;
 }
@@ -126,6 +129,7 @@ export function serializeSite(dc: DropwayContext, site: SiteRow, current?: Versi
       spa: site.spa === 1,
       renderMarkdown: site.render_markdown === 1,
       crossOriginIsolation: site.cross_origin_isolation === 1,
+      noindex: site.noindex === 1,
       passwordProtected: !!site.password_hash,
     },
     currentVersionId: site.current_version_id,
@@ -161,6 +165,8 @@ export function parseSettings(body: Record<string, unknown>): SiteSettingsInput 
   if (md !== undefined) out.renderMarkdown = md;
   const coi = boolField(body.crossOriginIsolation, "crossOriginIsolation");
   if (coi !== undefined) out.crossOriginIsolation = coi;
+  const noindex = boolField(body.noindex, "noindex");
+  if (noindex !== undefined) out.noindex = noindex;
   if ("password" in body) {
     if (body.password === null || body.password === "") out.password = null;
     else {
@@ -253,6 +259,7 @@ export async function createSite(
       spa: input.spa ? 1 : 0,
       render_markdown: input.renderMarkdown === false ? 0 : 1,
       cross_origin_isolation: input.crossOriginIsolation ? 1 : 0,
+      noindex: input.noindex ? 1 : 0,
       password_hash: passwordHash,
       current_version_id: null,
       claim_token_hash: claimHash,
@@ -277,11 +284,11 @@ export async function createSite(
           THEN 1 ELSE json_extract('{}', 'dropway_sites_quota') END`).bind(siteQuota, tenantId, siteQuota),
         dc.env.DB.prepare(
           `INSERT INTO sites (id, slug, slug_chosen, tenant_id, created_by, title, description, spa, render_markdown, cross_origin_isolation,
-             password_hash, claim_token_hash, creator_ip_hash, expires_at, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             noindex, password_hash, claim_token_hash, creator_ip_hash, expires_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).bind(
           site.id, site.slug, site.slug_chosen, site.tenant_id, site.created_by, site.title, site.description, site.spa, site.render_markdown,
-          site.cross_origin_isolation, site.password_hash, site.claim_token_hash, site.creator_ip_hash, site.expires_at,
+          site.cross_origin_isolation, site.noindex, site.password_hash, site.claim_token_hash, site.creator_ip_hash, site.expires_at,
           site.created_at, site.updated_at,
         ), ...usageStatements(dc, tenantId),
       ], extension, (error) => {
@@ -373,6 +380,7 @@ export async function updateSite(dc: DropwayContext, p: Principal, slug: string,
   if (input.spa !== undefined) set("spa", input.spa ? 1 : 0);
   if (input.renderMarkdown !== undefined) set("render_markdown", input.renderMarkdown ? 1 : 0);
   if (input.crossOriginIsolation !== undefined) set("cross_origin_isolation", input.crossOriginIsolation ? 1 : 0);
+  if (input.noindex !== undefined) set("noindex", input.noindex ? 1 : 0);
   if (input.password !== undefined) set("password_hash", input.password ? await hashPassword(input.password) : null);
   if (!sets.length) return site;
   set("updated_at", Date.now());

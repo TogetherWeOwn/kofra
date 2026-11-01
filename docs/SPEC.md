@@ -120,15 +120,15 @@ What Kofra is not:
 | SRV-01 | Three serving modes: subdomain (each site its own origin), path on a dedicated sites origin, path on the app origin (always sandboxed). Section 11.2 | P0 | Done |
 | SRV-02 | Path mode keeps sites inside `/<slug>/`: HTML and CSS root-relative URLs are rewritten; URLs built at runtime are resolved by `Referer` with a 307 (unsandboxed pages) or by an injected run-time shim (sandboxed pages, which send no Referer); navigations inside an SPA fall back to the SPA. Interim until an instance has a domain | P0 | Done |
 | SRV-03 | Index resolution: `index.html`, `index.htm`, `index.md`, `README.md`; a one-file site serves that file at `/`; folders without an index get a listing; `404.html`; SPA fallback | P0 | Done |
-| SRV-04 | Headers: `ETag` (sha256), `Range`/206, pre-compressed `.br`/`.gz` with `Content-Encoding`, `X-Kofra-Version`, `X-Robots-Tag: noindex` on expiring sites, `X-Content-Type-Options: nosniff` | P0 | Done |
-| SRV-05 | Cache policy matrix (HTML and unfingerprinted files revalidate; fingerprinted files immutable; gated sites `private, no-store`; sites with `.wasm` revalidate) | P0 | Partial; R-27 |
+| SRV-04 | Headers: `ETag` (sha256), `Range`/206, pre-compressed `.br`/`.gz` with `Content-Encoding`, `X-Kofra-Version`, `X-Robots-Tag` (`noindex` for anonymous, expiring and opted-out sites, `all` otherwise), `X-Content-Type-Options: nosniff` | P0 | Done |
+| SRV-05 | Cache policy matrix (HTML and unfingerprinted files revalidate; fingerprinted files immutable; gated sites `private, no-store`; sites with `.wasm` revalidate) | P0 | Done |
 | SRV-06 | Content-addressed edge cache (Cache API by sha256, pointer memo). Live URL shows a new version within about 60 s worldwide, the version URL at once | P0 | Partial: blob cache, 10 s Cache API pointer memo and `scripts/measure-freshness.mjs` done; the `workers.dev` p50/p95 and cache probe are recorded in [SELF_HOST.md](SELF_HOST.md) when measured |
 | SRV-07 | Version preview URLs `<slug>--v<N>` for the owner (signed links for others) | P0 | Done: exact ready version from D1 in both modes; owner Authorization or 24 h signed link with preview-root cookie, noindex/no-referrer |
 | SRV-08 | Cross-origin isolation per site (COOP/COEP for `SharedArrayBuffer` and threaded WebAssembly) | P0 | Done |
 | SRV-09 | `_redirects` and `_headers` files at the site root (Netlify/Cloudflare Pages syntax subset), parsed at finalize, never served | P1 | R-27 |
 | SRV-10 | Agent-readable pages: `Accept: text/markdown` on a navigation returns a Markdown rendering of HTML and text files | P1 | R-34 |
 | SRV-11 | Embeds: public sites can be framed anywhere; gated sites refuse framing; per-site embed allowlist (`frame-ancestors`) | P1 | Partial; R-23 |
-| SRV-12 | Robots: anonymous and expiring sites `noindex`; per-site `noindex` setting; a site's own `robots.txt` is served when present | P0 | Partial; R-27 |
+| SRV-12 | Robots: anonymous and expiring sites `noindex`; per-site `noindex` setting; a site's own `robots.txt` is served when present | P0 | Done |
 | SRV-13 | Live reload: open tabs refresh when a new version goes live | P2 | R-41 |
 | SRV-14 | Per-site functions (sandboxed server code via Dynamic Workers) | P2 | R-48 |
 

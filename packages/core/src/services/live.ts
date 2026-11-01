@@ -26,6 +26,8 @@ export interface LiveSite {
   spa: boolean;
   renderMarkdown: boolean;
   crossOriginIsolation: boolean;
+  /** Per-site crawler opt-out (SRV-12). Optional so fixtures built against older entries keep compiling; undefined = false. */
+  noindex?: boolean;
   passwordHash: string | null;
   expiresAt: number | null;
   files: Record<string, [sha256: string, size: number, contentType: string]>;
@@ -196,7 +198,7 @@ function sameSettings(a: LiveSite, b: LiveSite): boolean {
 /** withFiles = false skips the version_files query and returns an empty file map. */
 export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string; siteId?: string }, withFiles = true): Promise<LiveSite | null> {
   const site = await dc.env.DB.prepare(
-    `SELECT s.id, s.slug, s.tenant_id, s.current_version_id, s.spa, s.render_markdown, s.cross_origin_isolation, s.password_hash, s.expires_at,
+    `SELECT s.id, s.slug, s.tenant_id, s.current_version_id, s.spa, s.render_markdown, s.cross_origin_isolation, s.noindex, s.password_hash, s.expires_at,
             v.number AS version_number, COALESCE(v.finalized_at, v.created_at) AS version_at
        FROM sites s LEFT JOIN versions v ON v.id = s.current_version_id WHERE s.${by.siteId ? "id" : "slug"} = ? AND s.deleted_at IS NULL`,
   )
@@ -211,6 +213,7 @@ export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string
       spa: number;
       render_markdown: number;
       cross_origin_isolation: number;
+      noindex: number;
       password_hash: string | null;
       expires_at: number | null;
     }>();
@@ -233,6 +236,7 @@ export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string
     spa: site.spa === 1,
     renderMarkdown: site.render_markdown === 1,
     crossOriginIsolation: site.cross_origin_isolation === 1,
+    noindex: site.noindex === 1,
     passwordHash: site.password_hash,
     expiresAt: site.expires_at,
     files,
