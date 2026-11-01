@@ -161,17 +161,23 @@ async function walk(
       } catch (error) {
         // Cancellation must propagate, not become a stale skip.
         signal?.throwIfAborted();
-        // A link whose target is unresolvable — gone (ENOENT), looping
-        // (ELOOP), through a non-directory (ENOTDIR), or unreadable
-        // (EACCES) — is broken; a link that itself vanished raced with the
-        // walk and must surface as a change, not a stale skip.
+        // A link that itself vanished raced with the walk and must surface
+        // as a change, not a stale skip.
         const gone = await abortable(lstat(abs), signal).then(
           () => false,
           (e: NodeJS.ErrnoException) => e?.code === "ENOENT",
         );
         if (gone) sourceChanged(rel);
-        omissions.push({ path: rel, reason: "broken_symlink" });
-        continue;
+        // Only an unresolvable target — gone (ENOENT), looping (ELOOP), or
+        // through a non-directory (ENOTDIR) — is a broken link. Transient
+        // filesystem failures (EIO, EMFILE, EACCES, ...) must fail loudly
+        // instead of silently omitting the file from the published version.
+        const code = asErrno(error)?.code;
+        if (code === "ENOENT" || code === "ELOOP" || code === "ENOTDIR") {
+          omissions.push({ path: rel, reason: "broken_symlink" });
+          continue;
+        }
+        throw error;
       }
       if (s.isDirectory()) {
         // Following directory links can loop or escape the folder being published.

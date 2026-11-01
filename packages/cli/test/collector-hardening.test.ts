@@ -11,6 +11,8 @@ const fault = vi.hoisted(() => ({
   readDelayMs: 0,
   slowTarget: "",
   slowStatTarget: "",
+  statTarget: "",
+  statCode: "",
   started: [] as string[],
   statStarted: [] as string[],
   slowStarted: false,
@@ -46,6 +48,11 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     stat: async (path: unknown, ...args: unknown[]) => {
       const p = String(path);
       fault.statStarted.push(p);
+      if (fault.statTarget && p === fault.statTarget) {
+        const err = new Error(`injected ${fault.statCode}`) as NodeJS.ErrnoException;
+        err.code = fault.statCode;
+        throw err;
+      }
       if (fault.slowStatTarget && p === fault.slowStatTarget) {
         // stat() takes no signal; the collector races it against abort, so a
         // stalled stat settles here once the sibling failure aborts the run.
@@ -94,6 +101,8 @@ beforeEach(async () => {
   fault.readDelayMs = 0;
   fault.slowTarget = "";
   fault.slowStatTarget = "";
+  fault.statTarget = "";
+  fault.statCode = "";
   fault.started = [];
   fault.statStarted = [];
   fault.slowStarted = false;
@@ -267,6 +276,17 @@ describe.runIf(process.platform !== "win32")("collector filename decoding (POSIX
     const c = await collectFiles(dir);
     expect(c.files.map((f) => f.path)).toEqual(["real.txt"]);
     expect(c.omissions).toContainEqual({ path: "bad", reason: "broken_symlink" });
+  });
+
+  it("propagates a transient stat failure on a link target instead of omitting it", async () => {
+    // EIO is not a target-resolution error: the link is fine, the
+    // filesystem hiccuped. Recording broken_symlink would silently drop
+    // the file from the published version; the error must fail loudly.
+    await writeFile(join(dir, "real.txt"), "x");
+    await symlink("real.txt", join(dir, "link"));
+    fault.statTarget = join(dir, "link");
+    fault.statCode = "EIO";
+    await expect(collectFiles(dir)).rejects.toMatchObject({ code: "EIO" });
   });
 
   it("does not let a non-UTF-8 name and a U+FFFD name collapse in a Map", async () => {
