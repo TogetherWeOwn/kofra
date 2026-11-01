@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### CLI
+
+- `kofra publish --stdin <filename>` publishes piped bytes as one file through the same publish
+  path as a folder or file (same `--json`, `--wait`, `--dry-run`, secret scan, `--encrypt` and exit
+  codes). Stdin is read once, as raw bytes, up to 100 MiB; empty input and a terminal on stdin are
+  refused (exit 2, `--allow-empty` opts in to a zero-byte file); it cannot be combined with a
+  `<path>`. See the CLI guide, "Publishing piped bytes".
+
 ### Signing secret fails closed
 
 - With neither `SIGNING_SECRET` nor `ADMIN_BOOTSTRAP_KEY` set, signed capabilities

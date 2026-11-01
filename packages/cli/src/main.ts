@@ -11,13 +11,14 @@ import { createInterface } from "node:readline";
 import { bool, int, parseArgs, str, UsageError, type FlagSpecs, type Parsed } from "./args.ts";
 import { CliError, DropwayClient, EXIT, normaliseApi, type FetchLike } from "./client.ts";
 import { linkKey, linkPath, readCredentials, readLink, removeCredentials, saveCredentials, writeLink, type ProjectLink } from "./config.ts";
-import { collectFiles } from "./files.ts";
+import { collectFiles, collectStdinFile, normaliseStdinPath } from "./files.ts";
 import { encryptFiles } from "./encrypt.ts";
 import { explainConfig, explainConfigHuman } from "./explain-config.ts";
 import { withLegacyEnv } from "./legacy-brand.ts";
 import { formatBytes, plural, shellQuote, shortTime, table } from "./output.ts";
 import { publish, publishZip, waitForVersion, type ProgressEvent, type PublishResult, type VersionInfo } from "./publish.ts";
 import { checkPullDirectory, pullVersion } from "./pull.ts";
+import { readBounded, STDIN_FIRST_BYTE_MS, STDIN_MAX_BYTES, stdinTooLarge } from "./stdin.ts";
 import { VERSION } from "./version.ts";
 
 export interface Io {
@@ -26,6 +27,8 @@ export interface Io {
   stdinIsTTY: boolean;
   stderrIsTTY: boolean;
   readStdin(): Promise<string>;
+  /** Raw piped bytes, read once and bounded (`publish --stdin`). Tests may omit it: readStdin() is then encoded as UTF-8. Embedders piping more than STDIN_MAX_BYTES must supply this: the string fallback buffers the whole pipe before enforcing the bound. */
+  readStdinBytes?(maxBytes: number): Promise<Uint8Array>;
   prompt(question: string, opts?: { hidden?: boolean }): Promise<string>;
   env: NodeJS.ProcessEnv;
   cwd: string;
@@ -127,8 +130,8 @@ interface Instance {
   link: ProjectLink | null;
 }
 
-async function resolveInstance(p: Parsed, io: Io): Promise<Instance> {
-  const link = await readLink(io.cwd);
+async function resolveInstance(p: Parsed, io: Io, opts: { projectLink?: boolean } = {}): Promise<Instance> {
+  const link = opts.projectLink === false ? null : await readLink(io.cwd);
   const creds = await readCredentials(io.env);
   const raw = str(p, "api") ?? (io.env.KOFRA_API || io.env.KOFRA_URL || undefined) ?? link?.api ?? creds.default ?? undefined;
   if (!raw) {
@@ -181,6 +184,26 @@ function positional(p: Parsed, index: number, name: string, usage: string): stri
   const v = p.positionals[index];
   if (!v) throw new UsageError(`Missing <${name}>. Usage: ${usage}`);
   return v;
+}
+
+/** TTY diagnosis lives here (not only at the call site) so a future byte-reading caller cannot ship the wrong code. */
+function stdinTerminalError(): CliError {
+  return new CliError({ code: "stdin_is_terminal", message: "--stdin needs piped input, but stdin is a terminal: nothing piped.", hint: "Pipe the content in, e.g. `cat report.html | kofra publish --stdin report.html`, or pass a <path> instead.", exitCode: EXIT.usage });
+}
+
+/** Read piped bytes exactly once; refuse empty input unless allowed. */
+async function readPiped(io: Io, allowEmpty: boolean): Promise<Uint8Array> {
+  if (io.stdinIsTTY) throw stdinTerminalError();
+  let bytes: Uint8Array;
+  if (io.readStdinBytes) bytes = await io.readStdinBytes(STDIN_MAX_BYTES);
+  else {
+    bytes = new TextEncoder().encode(await io.readStdin());
+    if (bytes.byteLength > STDIN_MAX_BYTES) throw stdinTooLarge(STDIN_MAX_BYTES);
+  }
+  if (!bytes.byteLength && !allowEmpty) {
+    throw new CliError({ code: "empty_stdin", message: "Refusing to publish: stdin was empty.", hint: "Pipe the content in (nothing arrived, or the producer failed), or pass --allow-empty to publish a zero-byte file.", exitCode: EXIT.usage });
+  }
+  return bytes;
 }
 
 const enc = encodeURIComponent;
@@ -309,7 +332,7 @@ const versionLabel = (v: VersionInfo | null | undefined) => (v ? `v${v.number}` 
 
 const publishCmd: Command = {
   summary: "Publish a folder, a file or a .zip to a live URL",
-  usage: "kofra publish <path> [--site <name>] [--json]",
+  usage: "kofra publish <path> | --stdin <filename> [--site <name>] [--json]",
   maxPositionals: 1,
   flags: {
     site: { kind: "string", short: "s" },
@@ -326,8 +349,12 @@ const publishCmd: Command = {
     "allow-secrets": { kind: "boolean" },
     "dry-run": { kind: "boolean" },
     save: { kind: "boolean" },
+    stdin: { kind: "string" },
+    "allow-empty": { kind: "boolean" },
   },
   details: `Options:
+  --stdin <filename>    Publish the bytes piped on stdin as the one file <filename> (no <path>)
+  --allow-empty         With --stdin: publish a zero-byte file instead of refusing empty input
   -s, --site <name>     Update this site (created with that name if it does not exist)
   --new                 Always create a new site (ignore ./dropway.json)
   -m, --message <text>  Version message
@@ -357,9 +384,28 @@ by path. Nothing publishable is refused with no_files (exit 2) before anything
 is contacted. Fully offline agent check (no URL or key needed):
   kofra publish ./dist --dry-run --json | jq '{files: [.files[].path], omissions}'
 This is a local inventory of what the CLI would send. It does not validate
-server policy, quotas or limits, and it is not the server's dry run.`,
+server policy, quotas or limits, and it is not the server's dry run.
+
+Piped input (--stdin): stdin is read once, as raw bytes, up to 100 MiB (more is
+refused with file_too_large, exit 6). <filename> is the site path (assets/app.js
+is fine; __dropway/ and unsafe names are refused). It cannot be combined with
+<path>, and a terminal on stdin is refused (exit 2) instead of waiting. Empty
+input is refused (exit 2) unless --allow-empty. A pipe that stays silent past
+the 30 s first-byte deadline is refused (stdin_timeout, exit 2) even with
+--allow-empty: only a real EOF with zero bytes counts as empty. The same secret scan, --dry-run,
+--wait, --json, --encrypt and exit codes apply as for a path. A piped publish
+does not read or write ./dropway.json: pass --site to update the same site.
+A piped .zip is stored as one file named <filename>, not unpacked.
+  echo '<h1>Hello</h1>' | kofra publish --stdin index.html --site hello
+  some-report-tool | kofra publish --stdin report.md --site weekly --json --wait`,
   async run(p, io, out) {
-    const target = positional(p, 0, "path", this.usage);
+    const stdinName = str(p, "stdin");
+    if (stdinName !== undefined) {
+      if (p.positionals.length) throw new UsageError("--stdin and <path> are mutually exclusive: publish piped bytes or a path, not both. Drop the positional argument (including \"-\").");
+    } else if (bool(p, "allow-empty")) {
+      throw new UsageError("--allow-empty only applies with --stdin.");
+    }
+    const target = stdinName ?? positional(p, 0, "path", this.usage);
     const anonymous = bool(p, "anonymous") === true;
     const dryRun = bool(p, "dry-run") === true;
     if (anonymous && str(p, "site")) throw new UsageError("--anonymous sites get a generated name; drop --site (or use --key <claimToken> --site <name> to update an anonymous site).");
@@ -367,21 +413,26 @@ server policy, quotas or limits, and it is not the server's dry run.`,
     const concurrency = int(p, "concurrency", 1, 32);
     const waitTimeout = int(p, "wait-timeout", 1, 3600);
 
-    const st = await stat(resolve(io.cwd, target)).catch(() => null);
-    if (!st) throw new CliError({ code: "path_not_found", message: `No such file or directory: ${target}`, hint: "Choose an existing file or folder.", exitCode: EXIT.usage });
-    const isZip = st.isFile() && /\.zip$/i.test(target);
+    let stdinPath: string | undefined;
+    if (stdinName !== undefined) {
+      if (io.stdinIsTTY) throw stdinTerminalError();
+      stdinPath = normaliseStdinPath(stdinName);
+    }
+    const st = stdinPath === undefined ? await stat(resolve(io.cwd, target)).catch(() => null) : null;
+    if (stdinPath === undefined && !st) throw new CliError({ code: "path_not_found", message: `No such file or directory: ${target}`, hint: "Choose an existing file or folder.", exitCode: EXIT.usage });
+    const isZip = !!st?.isFile() && /\.zip$/i.test(target);
     const encrypt = bool(p, "encrypt") === true;
     if (encrypt && isZip) throw new CliError({ code: "encrypted_zip_unsupported", message: "Encrypted publishing does not support ZIP archives.", hint: "Extract the archive locally, then publish its folder with --encrypt.", exitCode: EXIT.usage });
     if (encrypt && bool(p, "spa")) throw new CliError({ code: "encrypted_spa_unsupported", message: "Encrypted publishing does not support SPA routing.", hint: "Publish a static entry document without --spa.", exitCode: EXIT.usage });
 
-    const inst = dryRun ? null : await resolveInstance(p, io);
+    const inst = dryRun ? null : await resolveInstance(p, io, { projectLink: stdinPath === undefined });
     const token = anonymous ? null : inst ? requireKey(inst, "Publishing") : null;
     const isClaim = token?.startsWith("dwc_") ?? false;
     if (isClaim && !str(p, "site")) throw new UsageError("A claim token publishes only to its own anonymous site: add --site <name>.");
     const key = linkKey(io.cwd, target);
     let site = str(p, "site");
     let linked = false;
-    if (inst && !site && !anonymous && !isClaim && bool(p, "new") !== true && inst.link?.api === inst.api) {
+    if (inst && stdinPath === undefined && !site && !anonymous && !isClaim && bool(p, "new") !== true && inst.link?.api === inst.api) {
       site = inst.link.sites?.[key];
       linked = !!site;
     }
@@ -391,24 +442,28 @@ server policy, quotas or limits, and it is not the server's dry run.`,
     let waitUrl: string | undefined;
     if (isZip) {
       if (dryRun) {
-        out.result({ dryRun: true, path: target, zip: true, bytes: st.size }, `Would upload ${target} (${formatBytes(st.size)}); the instance unpacks it.`);
+        out.result({ dryRun: true, path: target, zip: true, bytes: st!.size }, `Would upload ${target} (${formatBytes(st!.size)}); the instance unpacks it.`);
         return EXIT.ok;
       }
       const client = makeClient(io, inst!.api, token);
-      out.progress(`Uploading ${target} (${formatBytes(st.size)})...`);
+      out.progress(`Uploading ${target} (${formatBytes(st!.size)})...`);
       const bytes = new Uint8Array(await readFile(resolve(io.cwd, target)));
       result = await publishZip(client, bytes, { site, ...settings, baseVersionId: str(p, "base") });
       out.progress(null);
     } else {
-      out.progress("Reading files...");
-      const collected = await collectFiles(resolve(io.cwd, target), { exclude: [linkPath(io.cwd)], allowSecrets: bool(p, "allow-secrets") === true });
+      out.progress(stdinPath === undefined ? "Reading files..." : "Reading stdin...");
+      const allowSecrets = bool(p, "allow-secrets") === true;
+      const collected =
+        stdinPath === undefined
+          ? await collectFiles(resolve(io.cwd, target), { exclude: [linkPath(io.cwd)], allowSecrets })
+          : collectStdinFile(stdinPath, await readPiped(io, bool(p, "allow-empty") === true), { allowSecrets });
       out.progress(null);
       for (const l of collected.skippedLinks) out.note(`Skipped symlinked folder ${l}/`);
       if (collected.secrets.length) {
         throw new CliError({
           code: "possible_secrets",
           message: `Refusing to publish: ${plural(collected.secrets.length, "file location")} look like credentials. Published files are public.`,
-          hint: "Remove them or add the files to .dropwayignore. If they are not secrets, re-run with --allow-secrets.",
+          hint: stdinPath === undefined ? "Remove them or add the files to .dropwayignore. If they are not secrets, re-run with --allow-secrets." : "Remove the credentials from the piped content. If they are not secrets, re-run with --allow-secrets.",
           details: { findings: collected.secrets },
           exitCode: EXIT.usage,
         });
@@ -458,7 +513,7 @@ server policy, quotas or limits, and it is not the server's dry run.`,
     }
 
     let savedLink: string | null = null;
-    if (!anonymous && !isClaim && bool(p, "save") !== false && !result.claimToken) {
+    if (stdinPath === undefined && !anonymous && !isClaim && bool(p, "save") !== false && !result.claimToken) {
       const saved = await writeLink(io.cwd, inst!.api, key, result.slug).catch(() => null);
       if (saved?.created) savedLink = saved.path;
     }
@@ -1755,6 +1810,7 @@ export function nodeIo(): Io {
     stderrIsTTY: !!process.stderr.isTTY,
     env: process.env,
     cwd: process.cwd(),
+    readStdinBytes: (maxBytes) => (process.stdin.isTTY ? Promise.resolve(new Uint8Array()) : readBounded(process.stdin, maxBytes, { firstByteTimeoutMs: STDIN_FIRST_BYTE_MS })),
     readStdin() {
       if (process.stdin.isTTY) return Promise.resolve("");
       // Some agent shells leave stdin open without ever writing to it: give up if nothing

@@ -20,7 +20,7 @@ Zero runtime dependencies. Node.js 20 or newer.
 
 | Command | What it does |
 |---|---|
-| `publish <path>` | Publish a folder, a single file or a `.zip`. Creates a site, or updates one with `--site <name>` |
+| `publish <path>` or `publish --stdin <filename>` | Publish a folder, a single file, a `.zip` or piped bytes (one file). Creates a site, or updates one with `--site <name>` |
 | `duplicate <source> <new-slug>` | Copy an explicit live site into a new slug (`--message`, `--idempotency-key`, offline `--dry-run`) |
 | `list` | Your sites (`--all` for every page) |
 | `site <name>` | One site: URL, live version, settings |
@@ -312,6 +312,7 @@ kofra publish report.md                      # one file: served at the site root
 kofra publish site.zip                       # the instance unpacks it (one request, 25 MB by default)
 kofra publish ./dist --wait --json           # return only once the URL serves the new version
 kofra publish ./dist --dry-run               # list what would be uploaded; contacts nothing
+echo '<h1>Hi</h1>' | kofra publish --stdin index.html   # piped bytes as one file (see below)
 ```
 
 How it works: the CLI hashes every file (SHA-256), sends the list, uploads only the files the
@@ -349,6 +350,36 @@ Nothing publishable is refused with `no_files` (exit 2) before anything is conta
 local inventory of what the CLI would send: it does not validate server policy, quotas or limits,
 and it is not the server's dry run. ZIP dry-runs stay an opaque archive summary (`{zip: true,
 bytes}`); the CLI never unpacks the archive locally.
+
+### Publishing piped bytes
+
+`kofra publish --stdin <filename>` publishes the bytes piped on stdin as exactly one file named
+`<filename>`. It is the same publish as a path (same `--json` shape, `--wait`, `--dry-run`, secret
+scan, `--encrypt`, idempotency and exit codes), only the source of the bytes differs.
+
+```sh
+echo '<h1>Hello</h1>' | kofra publish --stdin index.html --site hello --wait
+weekly-report --format md | kofra publish --stdin assets/report.md --site weekly --json
+```
+
+- stdin is read once, as raw bytes (binary is byte-identical), up to **100 MiB**; more is refused
+  with `file_too_large` (exit 6) without contacting the instance. The server's own per-file limit
+  still applies.
+- `<filename>` is the site path: `__dropway/`, `..`, control characters and never-published names
+  such as `.env` are refused before any read or request (`reserved_path`, `invalid_path`,
+  `ignored_file`). A file named `index.html` is served at the site root.
+- `--stdin` and a `<path>` (including `-`) are mutually exclusive (exit 2). A terminal on stdin is
+  refused (exit 2) instead of waiting. A pipe that stays silent for 30 s is refused with
+  `stdin_timeout` (exit 2), even with `--allow-empty`: the producer may still be working.
+- **Empty input is refused** (`empty_stdin`, exit 2) so a failed producer never publishes a blank
+  page by accident; pass `--allow-empty` to publish a zero-byte file on purpose. Only a real EOF
+  with zero bytes counts as empty.
+- `--dry-run` runs the offline preflight over the piped bytes (size, SHA-256, secret scan) and
+  contacts nothing. Credential-looking text refuses with `possible_secrets` unless `--allow-secrets`.
+- A piped publish does not read or write `./dropway.json` (there is no path to remember): pass
+  `--site` to update the same site, otherwise each run creates a new one.
+- A piped `.zip` is stored as one file, not unpacked. Multi-file input is not supported: publish
+  a folder or `.zip` path instead.
 
 Anonymous publishing (`--anonymous`) works only on instances that turned it on. The site expires and
 the output includes a `claimToken`: keep it to update the site (`--key <claimToken> --site <name>`) or
