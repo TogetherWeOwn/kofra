@@ -296,9 +296,11 @@ extra local files are **never deleted** and their names are reported on stderr
 are refused rather than followed or removed, including a symlink in any parent of
 the destination below your working directory (`kofra pull site link/out` is
 refused when `link` is a symlink). Windows drive/alternate-stream
-syntax and reserved names are also refused, as is any `.git` path segment:
-publishing never includes `.git`, and server bytes must not become trusted
-Git configuration on the local disk. A path that aliases an earlier
+syntax and reserved names are also refused, as is any `.git`, `.gitmodules`
+or `.gitattributes` path segment (case-insensitive): publishing never
+includes `.git`, and server bytes must not become trusted Git configuration
+on the local disk (`--force` into a worktree would otherwise let a manifest
+replace the submodule or attribute config later Git operations read). A path that aliases an earlier
 download or a differently named local extra on a case-insensitive filesystem
 fails with `pull_path_collision`, rather than overwriting it. The same code
 refuses a parent directory that differs only in case or normalization

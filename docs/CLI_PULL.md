@@ -98,10 +98,12 @@ fail closed before any request or write.
   and their names are reported on stderr.
 - Every manifest path passes `pathSegments`: nonempty forward-slash names,
   no dot segments, no backslash/colon/control characters, no Windows
-  drive/UNC/reserved-name/trailing-dot-or-space spellings, and no `.git`
-  segment in any case (publishing excludes `.git`, so server bytes must not
-  become trusted Git configuration on disk). Anything else fails the file
-  with `unsafe_pull_path`.
+  drive/UNC/reserved-name/trailing-dot-or-space spellings, and no `.git`,
+  `.gitmodules` or `.gitattributes` segment in any case (publishing excludes
+  `.git`, and server bytes must not become trusted Git configuration on
+  disk: `--force` into a worktree would otherwise let a manifest replace the
+  submodule or attribute config later Git operations read). Anything else
+  fails the file with `unsafe_pull_path`.
 - Destination ancestors below the working directory must be plain
   directories: a symlink or non-directory parent is refused with
   `invalid_pull_directory` before anything is created. The walk is
@@ -167,8 +169,8 @@ a mutant-checked test:
 - Base64 pages must round-trip canonically; noncanonical encodings are
   rejected instead of decoded leniently.
 - Manifest paths are validated before anything is created (section 5),
-  including case-insensitive `.git` refusal so pulled bytes cannot become
-  Git configuration.
+  including case-insensitive `.git`/`.gitmodules`/`.gitattributes` refusal
+  so pulled bytes cannot become Git configuration.
 - Ancestor and parent checks refuse symlinks rather than following them,
   independent of visit order or missing intermediates.
 - Alias collisions (files and parent directories) fail closed with
@@ -180,9 +182,9 @@ Residual limits (documented, not fixed): ancestor checks and the final
 rename are not atomic against a hostile local actor swapping directories
 mid-run — run pull on a trusted local disk, not a shared mount. Native
 Windows/macOS filesystem behavior was exercised only via simulation, not
-on those platforms (CI runs Linux). `.gitmodules` and other non-`.git`
-dotfiles are treated as ordinary site bytes: `--force` into a Git worktree
-replaces them like any pulled path.
+on those platforms (CI runs Linux). Other non-`.git` dotfiles are treated
+as ordinary site bytes: `--force` into a Git worktree replaces them like
+any pulled path.
 
 ## 8. Verification
 

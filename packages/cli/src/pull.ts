@@ -91,7 +91,11 @@ function pathSegments(path: string): string[] {
   // and dot/empty segments must not acquire a different local meaning. A
   // `.git` segment is never site content (publishing excludes it); materializing
   // one would let server bytes become trusted Git configuration on this disk.
-  if (!path || /[\\:\u0000-\u001f\u007f]/.test(path) || segments.some(s => !s || s === "." || s === ".." || s.toLowerCase() === ".git" || /[. ]$/.test(s)
+  // The same holds for `.gitmodules` and `.gitattributes`: with `--force` into
+  // a Git worktree, replacing either lets an untrusted site change the
+  // configuration later Git operations read.
+  const lower = (s: string) => s.toLowerCase();
+  if (!path || /[\\:\u0000-\u001f\u007f]/.test(path) || segments.some(s => !s || s === "." || s === ".." || lower(s) === ".git" || lower(s) === ".gitmodules" || lower(s) === ".gitattributes" || /[. ]$/.test(s)
     || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(s))) {
     throw new CliError({ code: "unsafe_pull_path", message: "The listed path is not a safe relative file path.", hint: "Use paths with nonempty forward-slash-separated names, without dot segments or drive syntax.", exitCode: EXIT.invalid });
   }

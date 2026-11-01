@@ -77,7 +77,7 @@ describe("pull guards", () => {
     } finally { process.umask(previous); }
   });
 
-  it.each([".git/config", ".GIT/config", "nested/.Git/hooks/x"])("refuses %s as unsafe", async path => {
+  it.each([".git/config", ".GIT/config", "nested/.Git/hooks/x", ".gitmodules", "nested/.gitattributes", ".GITMODULES"])("refuses %s as unsafe", async path => {
     const r = await pull("out", { path });
     expect(r.code, r.stdout + r.stderr).toBeGreaterThan(0);
     expect(JSON.parse(r.stdout).failures).toEqual([expect.objectContaining({ path, code: "unsafe_pull_path" })]);
