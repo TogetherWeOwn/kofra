@@ -143,6 +143,13 @@ export interface RequestOptions {
   accept?: number[];
   /** Sent as Idempotency-Key (the server replays repeats for idempotent operations). */
   idempotencyKey?: string;
+  /**
+   * Aborts the wait between retries: when signaled while backing off (for
+   * example after a 429 with a long Retry-After), the call rejects with the
+   * abort reason instead of sleeping out the timer. In-flight fetches are
+   * unaffected; only the retry delay is cancellable.
+   */
+  signal?: AbortSignal;
 }
 
 export interface ApiResponse<T> {
@@ -233,7 +240,27 @@ export function normaliseApi(input: string): string {
   return url.origin;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/**
+ * Resolve after `ms`, or reject with the abort reason when `signal` fires
+ * first (a pre-aborted signal rejects without arming a timer). The abort
+ * listener is removed either way so repeated retries never leak handlers.
+ */
+const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
+  new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal!.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 
 /** Registry routing metadata for one operation (the generated OPERATIONS table). */
 export interface OperationMeta {
@@ -249,6 +276,8 @@ export interface CallOptions {
   accept?: number[];
   idempotencyKey?: string;
   retry?: RequestOptions["retry"];
+  /** See RequestOptions.signal. */
+  signal?: AbortSignal;
 }
 
 function queryValue(value: unknown): string[] {
@@ -358,7 +387,7 @@ export class DropwayHttpClient {
           retryable: true,
         });
         if (retry === "safe" && attempt < attempts) {
-          await sleep(this.backoff(attempt));
+          await sleep(this.backoff(attempt), opts.signal);
           continue;
         }
         throw lastError;
@@ -380,7 +409,7 @@ export class DropwayHttpClient {
       if (retryable && attempt < attempts) {
         const ra = Number(res.headers.get("retry-after"));
         if (res.status === 429 && Number.isFinite(ra) && ra > this.maxRetryAfter) throw err;
-        await sleep(res.status === 429 && Number.isFinite(ra) && ra > 0 ? ra * 1000 : this.backoff(attempt));
+        await sleep(res.status === 429 && Number.isFinite(ra) && ra > 0 ? ra * 1000 : this.backoff(attempt), opts.signal);
         lastError = err;
         continue;
       }
