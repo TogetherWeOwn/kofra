@@ -20,16 +20,40 @@ commit.
 
 Severity is impact times confidence, after the disproof pass below:
 
-- **Severe (red):** production-reachable cross-principal data access, user
-  content executing on the app origin, API-key/secret disclosure, a publish
-  that corrupts or overwrites another version/site, or a broken deploy —
-  with the mechanism verified.
+- **Severe (red):** only an outcome listed under "What counts as Severe"
+  below, with the mechanism verified.
 - **Non-severe:** a real defect with limited blast radius or a narrow trigger.
 - **Investigate/flag, not a bug:** the mechanism depends on an assumption you
   could not verify in this repo or its pinned dependencies.
 - **Security exception:** never drop or downgrade a plausible security issue
   for lack of full verification. Report it as a security Warning and state
   the unverified step; reserve Critical for a traced, verified path.
+
+## What counts as Severe
+
+Severe only when merging the change would cause one of these:
+
+- **Data loss or corruption:** `packages/core/src/services/publish.ts`
+  overwriting another version's files, or `blob-cleanup.ts` deleting blobs a
+  live version still serves.
+- **Security or auth/authz weakness:** a service in
+  `packages/core/src/services/` acting on another principal's site, an API
+  key or secret disclosed, or published content executing on the app origin.
+- **Production breakage or a broken deploy/rollback gate:** a
+  `wrangler.jsonc` change that drops a binding the Worker needs, or
+  `publish.yml` releasing a package that fails to install.
+- **Wrong user-visible behavior with no workaround:** the CLI in
+  `packages/cli` reporting a publish as successful when no files uploaded.
+- **A test or gate that can no longer fail:** `scripts/guard-open-core.mjs`
+  passing every file, or a test whose precondition can never hold.
+
+Not Severe (use Non-severe): missing edge-case tests (no exactly-at-cap
+case for an upload limit), naming (a function name in `packages/core`),
+docs drift (`docs/SPEC.md` lagging a change), refactor suggestions
+(splitting `publish.ts`), performance without a measured regression ("this
+listing may be slow" with no payload size), and defensive checks for states
+the callers already prevent (re-checking a principal the service already
+scoped).
 
 ## Disproof pass (before posting any finding)
 
