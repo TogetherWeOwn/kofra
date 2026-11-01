@@ -207,7 +207,7 @@ export function normaliseStdinPath(input: string): string {
   return path;
 }
 
-/** Wrap already-read piped bytes as the single file `path` (from `normaliseStdinPath`), hashed and secret-scanned like a file on disk. */
+/** Wrap already-read piped bytes as the single file `path` (from `normaliseStdinPath`), hashed and secret-scanned. Unlike path publishing (which skips files over 4 MiB), piped input is always scanned: fail-closed for piped secrets. */
 export function collectStdinFile(path: string, bytes: Uint8Array, opts: Pick<CollectOptions, "allowSecrets"> = {}): Collected {
   const secrets = !opts.allowSecrets && looksTextual(bytes) ? findSecrets(path, new TextDecoder("latin1").decode(bytes)) : [];
   const file: SourceFile = {
