@@ -155,11 +155,11 @@ describe("issued upload token boundaries", () => {
   it("loses upload authority when its pending version is deleted", async () => {
     const dw = await freshInstance();
     const source = await pending(dw, "deleted-upload", { "data.txt": "deleted bytes" });
-    expect((await dw.json(`/api/v1/sites/deleted-upload/versions/${source.version.id}`, { method: "DELETE", key: dw.ownerKey })).status).toBe(200);
+    expect((await dw.json(`/api/v1/sites/deleted-upload/versions/${source.version.id}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: "deleted-upload" }), key: dw.ownerKey })).status).toBe(200);
     expect(await env.DB.prepare("SELECT id FROM versions WHERE id = ?").bind(source.version.id).first()).toBeNull();
     const refused = await put(dw, source.entries[0]!, source.token);
     expect([403, 410]).toContain(refused.status);
-    expect(await env.FILES.head(`blobs/${source.entries[0]!.sha256}`)).toBeNull();
+    expect((await env.FILES.list({ prefix: `blobs/${source.entries[0]!.sha256}` })).objects).toEqual([]);
   });
 
   it("loses upload authority when its site is deleted while the version is pending", async () => {
@@ -168,7 +168,7 @@ describe("issued upload token boundaries", () => {
     expect((await dw.json("/api/v1/sites/deleted-upload-site", { method: "DELETE", key: dw.ownerKey })).status).toBe(200);
     const refused = await put(dw, source.entries[0]!, source.token);
     expect([403, 410]).toContain(refused.status);
-    expect(await env.FILES.head(`blobs/${source.entries[0]!.sha256}`)).toBeNull();
+    expect((await env.FILES.list({ prefix: `blobs/${source.entries[0]!.sha256}` })).objects).toEqual([]);
   });
 
   it("a shared SHA on two pending versions cannot widen one token to the other's extra blob", async () => {
@@ -180,7 +180,7 @@ describe("issued upload token boundaries", () => {
     expectForbidden(await put(dw, b.entries[1]!, a.token));
     expect((await put(dw, a.entries[0]!, a.token)).status).toBe(201);
     expectForbidden(await put(dw, b.entries[1]!, a.token));
-    expect(await env.FILES.head(`blobs/${b.entries[1]!.sha256}`)).toBeNull();
+    expect((await env.FILES.list({ prefix: `blobs/${b.entries[1]!.sha256}` })).objects).toEqual([]);
     const state = await dw.json(`/api/v1/sites/shared-sha-b/versions/${b.version.id}`, { key: dw.ownerKey });
     expect(state.status).toBe(200);
     expect(state.body.version.status).toBe("pending");

@@ -16,8 +16,8 @@
     "mcp",
     "cli"
   ],
-  "homepage": "https://github.com/TogetherWeOwn/dropway/tree/main/packages/cli#readme",
-  "bugs": "https://github.com/TogetherWeOwn/dropway/issues",
+  "homepage": "https://github.com/TogetherWeOwn/kofra/tree/main/packages/cli#readme",
+  "bugs": "https://github.com/TogetherWeOwn/kofra/issues",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/TogetherWeOwn/kofra.git",

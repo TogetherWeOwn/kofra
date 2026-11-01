@@ -32,7 +32,7 @@ npx @modelcontextprotocol/inspector --cli https://<app>/mcp --transport http \
   --header "Authorization: Bearer $KOFRA_API_KEY" --method tools/list
 ```
 
-The skill: `npx skills add TogetherWeOwn/dropway` (generic copy from this
+The skill: `npx skills add TogetherWeOwn/kofra` (generic copy from this
 repository) or `npx skills add https://<app>` (templated with that instance).
 
 ## How the server works
@@ -44,7 +44,7 @@ repository) or `npx skills add https://<app>` (templated with that instance).
 - Auth: `Authorization: Bearer` with an API key (or the `dwc_` claim token of an
   anonymous site), resolved by the same identity adapter as the REST API.
   Missing or bad credentials get `401` with `WWW-Authenticate: Bearer`.
-- Narrowing: `?toolsets=core,sites,versions,keys,members` (default: all) and
+- Narrowing: `?toolsets=core,sites,versions,keys,members,folders,transfers` (default: all) and
   `?read_only=1`; or the headers `X-Kofra-Toolsets` and `X-Kofra-Read-Only`.
   All 31 tools (32 when `claim_site` is enabled) are about 9k tokens of definitions; `core` is about 5.5k.
 - Results: `structuredContent` matching the tool's `outputSchema`, plus one text
@@ -74,11 +74,14 @@ repository) or `npx skills add https://<app>` (templated with that instance).
 | `claim_site` | core | Claim an anonymous site (listed only when anonymous publishing is on) | `POST .../claim` |
 | `create_site` | sites | Reserve a site without files | `POST /api/v1/sites` |
 | `rename_site` | sites | New slug (the old URL stops working) | `POST .../rename` |
-| `duplicate_site` | sites | Copy the live version into a new slug, live at once (SPA mode only; re-apply a password) | `POST .../duplicate` |
+| `duplicate_site` | sites | Copy the live version into a new slug, live at once (only SPA mode carries over; re-apply a password) | `POST .../duplicate` |
+| `release_slug` | sites | Release a held site name early | `POST /api/v1/slugs/release` |
 | `get_version` | versions | One version; missing uploads of a pending one | `GET .../versions/{version}` |
 | `delete_version` | versions | Delete a non-live version (needs `confirm`) | `DELETE .../versions/{id}` |
 | `list_api_keys`, `create_api_key`, `revoke_api_key` | keys | Scoped keys | `/api/v1/keys` |
 | `list_members`, `add_member`, `update_member`, `remove_member` | members | Members and roles | `/api/v1/members` |
+| `delete_folder` | folders | Delete an organizer folder; its sites become unfiled (needs `confirm` = name) | `DELETE /api/v1/folders/{folder}` |
+| `create_transfer`, `get_transfer`, `update_transfer`, `revoke_transfers` | transfers | Expiring file deliveries | `/api/v1/transfers` |
 
 Not tools, on purpose: blob uploads (`PUT /api/v1/blobs/{sha256}`: raw bytes should
 not pass through a model; upload items carry ready `curl` lines), first-run setup
@@ -92,9 +95,11 @@ and owner recovery (bootstrap key only), and HTML pages.
 |---|---|
 | `content` (+ `encoding: "utf8"`, up to 1 MB) | Text the agent just wrote |
 | `content` + `encoding: "base64"` (up to 256 KB) | Small binaries only |
-| `url` (+ `headers`) | Files already online. https only, public hosts only (re-checked on each of up to 3 redirects), 25 MB, 30 s |
+| `url` (+ `headers`) | Files already online. https only, public hosts only (re-checked on each of up to 3 redirects), up to the per-file limit (100 MB by default) and 25 MB in total per call (`ONESHOT_MAX_BYTES`), 30 s |
 | `sha256` + `size` | Bytes already stored are reused at once; otherwise the result is `awaiting_upload` with `upload.items` (PUT, then `finalize_version`) |
 | `copyFrom: { site?, version?, path? }` | A file you already published (same owner) |
+| `download_url` + `file_name` (+ `headers`) | A chat-client attachment: fetched under the same https/SSRF guards as `url`, stored at `file_name` |
+| `archiveUrl` (top level, instead of `files`) | A public https .zip the server downloads and unpacks like an uploaded zip |
 
 Sites can be named by slug, site id or any URL of the site. Versions by `live`,
 `v3`, `3` or id.
@@ -108,6 +113,12 @@ Sites can be named by slug, site id or any URL of the site. Versions by `live`,
 - `update_site_files` and `publish_site` take `baseVersionId`; a newer publish by
   someone else gives `409 version_conflict` with the live version in `details`.
 - Destructive tools need `confirm` (the slug, or the member's email).
+- `restore_version` and `delete_version` use the [version-action replay contract](OPERATIONS.md#version-action-replay):
+  fresh site authorization and canonical delete confirmation precede any replay;
+  target resolution is inside the claim. Callback exceptions retain an unknown
+  pending claim (409) rather than permit another effect. REST/MCP keys are scoped
+  separately. Retention is bounded to 24 hours, not an exactly-once guarantee;
+  never infer success from a subsequent 404 or live-pointer read.
 
 ## Extending (embedding applications)
 

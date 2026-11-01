@@ -67,7 +67,7 @@ jobs:
         run: npm ci && npm run build
       - name: Publish or clean up
         id: preview
-        uses: TogetherWeOwn/dropway@REVIEWED_COMMIT_SHA
+        uses: TogetherWeOwn/kofra@REVIEWED_COMMIT_SHA
         with:
           folder: dist
           api: ${{ vars.KOFRA_API }}

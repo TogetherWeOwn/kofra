@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { mcpInstructions } from "@dropway/server";
 import { sha256Hex } from "@dropway/core";
-import { BOOTSTRAP, freshInstance, jsonBody, type Instance } from "./helpers";
+import { BOOTSTRAP, form, freshInstance, jsonBody, type Instance } from "./helpers";
 import { b64, connectLegacyMcp, connectMcp, type McpTestClient } from "./mcp-helpers";
 
 let dw: Instance;
@@ -294,6 +294,158 @@ describe("MCP tools: publish, read back, edit, roll back", () => {
     expect(bin.data.content).toBe(b64(new Uint8Array([0, 1, 2, 255])));
     const missing = await mcp.call("read_file", { site: "paging", path: "nope.txt" });
     expect(missing.data.error.code).toBe("file_not_found");
+  });
+
+  it("read_file preserves UTF-8 characters across byte pages", async () => {
+    const small = "aé中💩\uFEFFz";
+    const boundary = "a".repeat(65_535) + "é" + "z";
+    await mcp.call("publish_site", { site: "utf8-pages", files: [{ path: "small.txt", content: small }, { path: "boundary.txt", content: boundary }] });
+    for (const [path, expected, length] of [
+      ["small.txt", small, 1], ["small.txt", small, 2], ["small.txt", small, 3],
+      ["boundary.txt", boundary, undefined],
+    ] as const) {
+      let offset = 0;
+      let content = "";
+      do {
+        const page = await mcp.call("read_file", { site: "utf8-pages", path, offset, ...(length === undefined ? {} : { length }) });
+        expect(page.isError).toBe(false);
+        expect(page.data.offset).toBe(offset);
+        expect(page.data.length).toBe(new TextEncoder().encode(page.data.content).length);
+        expect(page.data.length).toBeGreaterThan(0);
+        expect(page.data.length).toBeLessThanOrEqual((length ?? 65_536) + 3);
+        content += page.data.content;
+        if (page.data.nextOffset === null) {
+          expect(page.data.truncated).toBe(false);
+          expect(offset + page.data.length).toBe(page.data.size);
+          break;
+        }
+        expect(page.data.truncated).toBe(true);
+        expect(page.data.nextOffset).toBe(offset + page.data.length);
+        offset = page.data.nextOffset;
+      } while (true);
+      expect(content).toBe(expected);
+    }
+  });
+
+  it("read_file keeps text pages within the 1 MiB cap without splitting UTF-8", async () => {
+    const prefix = "a".repeat(1_048_575);
+    // Multipart publishing avoids the separate 1 MiB inline-file limit.
+    const published = await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, body: form({ "big.txt": prefix + "💩z" }, { slug: "utf8-cap" }) });
+    expect(published.status).toBe(201);
+    const first = await mcp.call("read_file", { site: "utf8-cap", path: "big.txt", length: 1_048_576 });
+    expect(first.isError).toBe(false);
+    expect(first.data).toMatchObject({ content: prefix, offset: 0, length: 1_048_575, truncated: true, nextOffset: 1_048_575 });
+    const last = await mcp.call("read_file", { site: "utf8-cap", path: "big.txt", offset: first.data.nextOffset, length: 1_048_576 });
+    expect(last.data).toMatchObject({ content: "💩z", length: 5, truncated: false, nextOffset: null });
+  });
+
+  it("read_file defers a UTF-8 character that would cross the cap at a near-cap length", async () => {
+    const prefix = "a".repeat(1_048_574);
+    const content = prefix + "💩z";
+    // Multipart publishing avoids the separate 1 MiB inline-file limit.
+    const published = await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, body: form({ "big.txt": content }, { slug: "utf8-near-cap" }) });
+    expect(published.status).toBe(201);
+    const first = await mcp.call("read_file", { site: "utf8-near-cap", path: "big.txt", offset: 0, length: 1_048_575 });
+    expect(first.isError).toBe(false);
+    // Extending this page to finish the four-byte character would return
+    // 1,048,578 bytes, over the 1 MiB cap, so the character is deferred.
+    expect(first.data).toMatchObject({ content: prefix, offset: 0, length: 1_048_574, truncated: true, nextOffset: 1_048_574, encoding: "text", size: 1_048_579 });
+    expect(first.data.length).toBe(new TextEncoder().encode(first.data.content).length);
+    expect(first.data.length).toBeGreaterThan(0);
+    expect(first.data.nextOffset).toBe(first.data.offset + first.data.length);
+    expect(first.data.nextOffset).toBeGreaterThan(first.data.offset);
+    const last = await mcp.call("read_file", { site: "utf8-near-cap", path: "big.txt", offset: first.data.nextOffset, length: 1_048_575 });
+    expect(last.isError).toBe(false);
+    expect(last.data).toMatchObject({ content: "💩z", offset: 1_048_574, length: 5, truncated: false, nextOffset: null, encoding: "text", size: 1_048_579 });
+    expect(first.data.content + last.data.content).toBe(content);
+  });
+
+  it("read_file applies the cap page-relatively at a large nonzero offset", async () => {
+    const content = "a".repeat(1_048_576) + "💩z";
+    // Multipart publishing avoids the separate 1 MiB inline-file limit.
+    const published = await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, body: form({ "big.txt": content }, { slug: "utf8-large-offset" }) });
+    expect(published.status).toBe(201);
+    const first = await mcp.call("read_file", { site: "utf8-large-offset", path: "big.txt", offset: 1_048_576, length: 1 });
+    expect(first.isError).toBe(false);
+    // The cap applies to this page (4 bytes), not the absolute file position.
+    expect(first.data).toMatchObject({ content: "💩", offset: 1_048_576, length: 4, truncated: true, nextOffset: 1_048_580, encoding: "text", size: 1_048_581 });
+    expect(first.data.length).toBeGreaterThan(0);
+    expect(first.data.nextOffset).toBe(first.data.offset + first.data.length);
+    expect(first.data.nextOffset).toBeGreaterThan(first.data.offset);
+    const last = await mcp.call("read_file", { site: "utf8-large-offset", path: "big.txt", offset: first.data.nextOffset, length: 1 });
+    expect(last.isError).toBe(false);
+    expect(last.data).toMatchObject({ content: "z", offset: 1_048_580, length: 1, truncated: false, nextOffset: null, encoding: "text", size: 1_048_581 });
+    expect(first.data.content + last.data.content).toBe("💩z");
+  });
+
+  it("read_file leaves base64 byte ranges exact and does not move an explicit text offset", async () => {
+    await mcp.call("publish_site", { site: "utf8-ranges", files: [{ path: "text.txt", content: "éz" }] });
+    for (const [offset, content] of [[0, "ww=="], [1, "qQ=="], [2, "eg=="]] as const) {
+      const page = await mcp.call("read_file", { site: "utf8-ranges", path: "text.txt", encoding: "base64", offset, length: 1 });
+      expect(page.data).toMatchObject({ content, offset, length: 1, nextOffset: offset < 2 ? offset + 1 : null });
+    }
+    const partial = await mcp.call("read_file", { site: "utf8-ranges", path: "text.txt", encoding: "text", offset: 1 });
+    expect(partial.data).toMatchObject({ content: "�z", offset: 1, length: 2, nextOffset: null });
+    const eof = await mcp.call("read_file", { site: "utf8-ranges", path: "text.txt", offset: 3 });
+    expect(eof.data).toMatchObject({ content: "", length: 0, truncated: false, nextOffset: null });
+  });
+
+  it("read_file completes a valid E0 lower-bound sequence across a byte page", async () => {
+    // E0 A0 80 is U+0800, the lowest valid three-byte UTF-8 sequence.
+    const published = await mcp.call("publish_site", { site: "utf8-valid-e0", files: [{ path: "text.txt", content: b64(new Uint8Array([0xe0, 0xa0, 0x80, 0x7a])), encoding: "base64" }] });
+    expect(published.isError).toBe(false);
+    const first = await mcp.call("read_file", { site: "utf8-valid-e0", path: "text.txt", encoding: "text", offset: 0, length: 1 });
+    expect(first.isError).toBe(false);
+    expect(first.data).toMatchObject({ content: "ࠀ", offset: 0, length: 3, truncated: true, nextOffset: 3, encoding: "text", size: 4 });
+    expect(first.data.length).toBeGreaterThan(0);
+    expect(first.data.nextOffset).toBe(first.data.offset + first.data.length);
+    expect(first.data.nextOffset).toBeGreaterThan(first.data.offset);
+    const last = await mcp.call("read_file", { site: "utf8-valid-e0", path: "text.txt", encoding: "text", offset: first.data.nextOffset, length: 1 });
+    expect(last.isError).toBe(false);
+    expect(last.data).toMatchObject({ content: "z", offset: 3, length: 1, truncated: false, nextOffset: null, encoding: "text", size: 4 });
+    expect(first.data.content + last.data.content).toBe("ࠀz");
+  });
+
+  it("read_file does not extend a page for a malformed UTF-8 crossing", async () => {
+    // Publish the exact bytes as base64 so no text decoding rewrites them.
+    const published = await mcp.call("publish_site", { site: "utf8-malformed", files: [{ path: "bad.txt", content: b64(new Uint8Array([0xe0, 0x80, 0x80, 0x41])), encoding: "base64" }] });
+    expect(published.isError).toBe(false);
+    const page = await mcp.call("read_file", { site: "utf8-malformed", path: "bad.txt", encoding: "text", offset: 0, length: 1 });
+    expect(page.isError).toBe(false);
+    // E0 80 80 is not a valid sequence, so the page is not extended to three
+    // bytes: the one requested byte decodes to a single replacement char.
+    expect(page.data).toMatchObject({ content: "�", offset: 0, length: 1, truncated: true, nextOffset: 1, encoding: "text", size: 4 });
+    // length/nextOffset count consumed file bytes, not the 3 bytes the
+    // replacement character would re-encode to.
+    expect(new TextEncoder().encode(page.data.content).length).toBe(3);
+    expect(page.data.length).toBeGreaterThan(0);
+    expect(page.data.nextOffset).toBe(page.data.offset + page.data.length);
+    expect(page.data.nextOffset).toBeGreaterThan(page.data.offset);
+  });
+
+  it("read_file strips only an initial BOM and advances by consumed bytes", async () => {
+    // Publish the exact BOM bytes as base64 so they stay at the file start.
+    const bytes = new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode("hello")]);
+    const published = await mcp.call("publish_site", { site: "utf8-initial-bom", files: [{ path: "bom.txt", content: b64(bytes), encoding: "base64" }] });
+    expect(published.isError).toBe(false);
+    // An ordinary initial read strips the BOM but consumes all 8 file bytes.
+    const full = await mcp.call("read_file", { site: "utf8-initial-bom", path: "bom.txt", offset: 0 });
+    expect(full.isError).toBe(false);
+    expect(full.data).toMatchObject({ content: "hello", offset: 0, length: 8, truncated: false, nextOffset: null, encoding: "text", size: 8 });
+    expect(new TextEncoder().encode(full.data.content).length).toBe(5);
+    // A one-byte request extends to the whole 3-byte BOM, which decodes to
+    // empty content; the cursor still advances by the consumed bytes.
+    const first = await mcp.call("read_file", { site: "utf8-initial-bom", path: "bom.txt", encoding: "text", offset: 0, length: 1 });
+    expect(first.isError).toBe(false);
+    expect(first.data).toMatchObject({ content: "", offset: 0, length: 3, truncated: true, nextOffset: 3, encoding: "text", size: 8 });
+    expect(new TextEncoder().encode(first.data.content).length).toBe(0);
+    expect(first.data.length).toBeGreaterThan(0);
+    expect(first.data.nextOffset).toBe(first.data.offset + first.data.length);
+    expect(first.data.nextOffset).toBeGreaterThan(first.data.offset);
+    const rest = await mcp.call("read_file", { site: "utf8-initial-bom", path: "bom.txt", encoding: "text", offset: first.data.nextOffset });
+    expect(rest.isError).toBe(false);
+    expect(rest.data).toMatchObject({ content: "hello", offset: 3, length: 5, truncated: false, nextOffset: null, encoding: "text", size: 8 });
+    expect(first.data.content + rest.data.content).toBe("hello");
   });
 
   it("versions: list, get by number, restore by number, delete with confirm", async () => {
