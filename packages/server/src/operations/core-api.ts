@@ -18,7 +18,7 @@ import {
   requireConfirm,
   resolveSiteSlug,
   resolveVersionRef,
-  restoreVersion,
+  restoreVersionByRef,
   serializeMember,
   serializeTenant,
   setSiteAccess,
@@ -33,6 +33,7 @@ import {
 import { CONFIRM_SLUG, FILE_INPUT, PUBLISH_OUT, SETTINGS_INPUT, SITE_OUT, SITE_REF, VERSION_OUT, VERSION_REF, obj } from "../mcp/schemas";
 import { readJson } from "../routes/api";
 import { defineOperation, rawRequestInput } from "../operations";
+import { markReplayReceipt } from "../replay-receipt";
 import { fromSchema, ANY, ANY_OR_NULL, RO, WRITE, DESTROY, siteOut, str, settingsFrom, publishSummary, whoamiPrincipal, P, D } from "./shared";
 
 export const CORE_API_OPERATIONS = [
@@ -170,7 +171,7 @@ export const CORE_API_OPERATIONS = [
     mcp: { alwaysLoad: true },
     scopes: ["sites:write"],
     description:
-      "Publish files to a live URL in one call. Without `site` a new site with a generated name is created; with `site` set to a slug you own, ALL its files are replaced by `files` (a new immutable version); with a new slug, a site of that name is created. Each file needs a path plus one source: content (text, or base64 for small binaries), url (the server downloads a public https URL), sha256+size (bytes already stored or uploaded afterwards), or copyFrom. Returns status (live, unchanged or awaiting_upload), the live `url`, version and next steps. Share `url` exactly as returned. Use update_site_files for partial edits. A root index.html, index.md or README.md opens as the site's page.",
+      "Publish files to a live URL in one call. Without `site` a new site with a generated name is created; with `site` set to a slug you own, ALL its files are replaced by `files` (a new immutable version); with a new slug, a site of that name is created. Each file needs a path plus one source: content (text, or base64 for small binaries), url (the server downloads a public https URL), sha256+size (bytes already stored or uploaded afterwards), copyFrom, or a chat attachment (download_url+file_name). Instead of files, pass archiveUrl alone: a public https .zip the server downloads and unpacks. Returns status (live, unchanged or awaiting_upload), the live `url`, version and next steps. Share `url` exactly as returned. Use update_site_files for partial edits. A root index.html, index.md or README.md opens as the site's page.",
     input: fromSchema({
       type: "object",
       properties: {
@@ -178,7 +179,11 @@ export const CORE_API_OPERATIONS = [
           type: "array",
           minItems: 1,
           items: FILE_INPUT,
-          description: "Every file of the site.",
+          description: "Every file of the site. Omit when archiveUrl is given.",
+        },
+        archiveUrl: {
+          type: "string",
+          description: "Public https .zip to unpack, instead of files (never both).",
         },
         site: {
           type: "string",
@@ -201,8 +206,13 @@ export const CORE_API_OPERATIONS = [
           description: "Fail with version_conflict if the live version is no longer this one (protects someone else's newer publish).",
         },
       },
-      required: ["files"],
       additionalProperties: false,
+    }).superRefine((value: { files?: unknown; archiveUrl?: unknown }, ctx) => {
+      const hasFiles = value?.files != null;
+      const hasArchive = value?.archiveUrl != null;
+      if (hasFiles === hasArchive) {
+        ctx.addIssue({ code: "custom", path: [hasFiles ? "archiveUrl" : "files"], message: "Give exactly one of files or archiveUrl." });
+      }
     }),
     output: fromSchema(PUBLISH_OUT),
     annotations: {
@@ -661,7 +671,7 @@ export const CORE_API_OPERATIONS = [
     toolset: "core",
     scopes: ["sites:read"],
     description:
-      "Read back one published file. Text types return UTF-8 text; images and other binaries return base64 (force either with encoding). Reads up to 64 KB by default (max 1 MB per call); when truncated, call again with offset = nextOffset. Use it to check what you published.",
+      "Read back one published file. Text types return UTF-8 text; images and other binaries return base64 (force either with encoding). Reads 64 KB by default (max 1 MB per call); text page boundaries may adjust by up to 3 bytes to preserve UTF-8 characters. When truncated, call again with offset = nextOffset. Use it to check what you published.",
     input: fromSchema({
       type: "object",
       properties: {
@@ -819,20 +829,24 @@ export const CORE_API_OPERATIONS = [
     id: "restore_version",
     method: "POST",
     path: "/api/v1/sites/{slug}/versions/{id}/restore",
-    summary: "Restore a version",
+    summary: "Restore version",
     toolset: "core",
     scopes: ["sites:write"],
     description:
       'Make an older version live again (instant rollback; nothing is copied). version accepts "v3", "3" or a version id. Restoring the version that is already live is a harmless no-op.',
     input: fromSchema({
       type: "object",
-      properties: { site: SITE_REF, version: VERSION_REF },
+      properties: {
+        site: SITE_REF, version: VERSION_REF,
+        idempotencyKey: { type: "string", minLength: 1 },
+      },
       required: ["site", "version"],
       additionalProperties: false,
     }),
     output: fromSchema(
       obj(
         {
+          replayed: { type: "boolean" },
           restored: { type: "boolean" },
           alreadyLive: { type: "boolean" },
           version: VERSION_OUT,
@@ -844,10 +858,10 @@ export const CORE_API_OPERATIONS = [
     ),
     annotations: WRITE,
     async handler(a, { dw, principal }) {
-      const site = await getSiteByRef(dw, principal, a.site, "sites:write");
-      const version = await resolveVersionRef(dw, site, a.version);
-      const out = await restoreVersion(dw, principal, site, version.id);
-      return { ...out, slug: site.slug, url: siteUrl(dw, site.slug) };
+      const result = await restoreVersionByRef(dw, principal, a.site, a.version, {
+        transport: "mcp", idempotencyKey: a.idempotencyKey,
+      });
+      return "replayed" in result && result.replayed === true ? markReplayReceipt(result) : result;
     },
     http: {
       input: fromSchema({
@@ -857,11 +871,10 @@ export const CORE_API_OPERATIONS = [
       }),
       output: fromSchema({ type: "object" }),
       handler: async (c) => {
-        const dw = D(c);
-        const site = await getSiteByRef(dw, P(c), c.req.param("slug")!, "sites:write");
-        const version = await resolveVersionRef(dw, site, c.req.param("id")!);
-        const out = await restoreVersion(dw, P(c), site, version.id);
-        return c.json({ ...out, url: siteUrl(dw, site.slug) });
+        const { slug: _slug, ...out } = await restoreVersionByRef(D(c), P(c), c.req.param("slug")!, c.req.param("id")!, {
+          transport: "rest", idempotencyKey: c.req.header("idempotency-key"),
+        });
+        return c.json(out);
       },
     },
     tool: {
@@ -890,10 +903,11 @@ export const CORE_API_OPERATIONS = [
     method: "PATCH",
     path: "/api/v1/sites/{slug}",
     summary: "Change site settings",
+    cli: { command: ["settings"] },
     toolset: "core",
     scopes: ["sites:write"],
     description:
-      "Change a site's title, description or serving settings: spa (unknown paths serve index.html, for single-page apps), renderMarkdown (browsers see .md rendered; false serves raw), crossOriginIsolation (COOP/COEP headers for SharedArrayBuffer). Only the fields you pass change. Passwords: set_site_access.",
+      "Change a site's title, description, spa, renderMarkdown or crossOriginIsolation. Only passed fields change. Passwords: set_site_access.",
     input: fromSchema({
       type: "object",
       properties: { site: SITE_REF, ...SETTINGS_INPUT },

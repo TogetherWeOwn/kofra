@@ -6,6 +6,7 @@ import {
   appOrigin,
   defaultIdentity,
   defaultPolicy,
+  isApiError,
   noopMetering,
   resolveConfig,
   runCleanup,
@@ -174,7 +175,12 @@ export function createDropway(opts: CreateDropwayOptions = {}): Dropway {
       }
     } catch (e) {
       console.error(JSON.stringify({ event: "serve_error", ...requestErrorDetails(request, e) }));
-      const response = new Response("Internal error", { status: 500, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } });
+      // No signing secret: password and signed-link pages refuse rather than accept forgeable values.
+      const missingSecret = isApiError(e) && e.code === "signing_secret_missing";
+      const response = new Response(missingSecret ? "Service unavailable" : "Internal error", {
+        status: missingSecret ? 503 : 500,
+        headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+      });
       return preview ? previewResponse(response) : response;
     }
   }

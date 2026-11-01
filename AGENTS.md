@@ -19,3 +19,4 @@ Read `docs/ARCHITECTURE.md` first. The short version:
 - Before committing: `npm run check` (guard, typecheck, all tests).
 - Do not deploy the root `wrangler.jsonc` to an account that also runs a hosted
   Kofra (names collide). Test instances use their own config.
+- PRs follow the org contract in `TogetherWeOwn/.github` CONTRIBUTING + this repo's overrides; the PR template's Attestation is mandatory.

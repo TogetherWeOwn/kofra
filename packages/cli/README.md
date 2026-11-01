@@ -1,6 +1,6 @@
 # kofra CLI
 
-Publish a folder, a file or a `.zip` to a live URL on any [Kofra](https://github.com/TogetherWeOwn/dropway)
+Publish a folder, a file or a `.zip` to a live URL on any [Kofra](https://github.com/TogetherWeOwn/kofra)
 instance. Built for AI agents and scripts: one command, one JSON object on stdout, stable exit codes,
 and only the bytes the instance does not already have are uploaded.
 
@@ -24,6 +24,7 @@ Zero runtime dependencies. Node.js 20 or newer.
 | `duplicate <source> <new-slug>` | Copy an explicit live site into a new slug (`--message`, `--idempotency-key`, offline `--dry-run`) |
 | `list` | Your sites (`--all` for every page) |
 | `site <name>` | One site: URL, live version, settings |
+| `settings <site>` | Inspect non-secret site settings, PATCH explicit fields, or plan a patch offline with `--dry-run` |
 | `rename <source> <new-slug> --yes` | Rename an explicit site; offline `--dry-run`; saved local project mappings remain unchanged |
 | `claim <site> --token <claimToken>` | Keep an anonymous site in your account; the site stops expiring (offline `--dry-run`) |
 | `files <name>` | Files of the live version (or `--version <ref>` with `live`, `v3`, `3` or a version id, read directly) with their URLs |
@@ -51,6 +52,77 @@ kofra keys ls --all --json  # every member's keys (needs members:write) as one J
 `*` marks the current key and terminal control characters are shown as visible `\uXXXX` escapes,
 keeping each key on one row. `--json` preserves the original metadata values. Create and revoke
 keys with the generic command, e.g. `kofra api POST /keys --data '{"name":"ci"}'`.
+
+## Site settings
+
+Always supply one explicit site **slug**, even if `dropway.json` maps this folder to a site.
+`settings` never infers a target, creates a site, publishes, changes credentials or writes config.
+
+```sh
+kofra settings disposable-report --json                    # inspect: authenticated GET only
+kofra settings disposable-report --title 'Report' --json   # write: PATCH only this title
+kofra settings disposable-report --spa false --render-markdown false --cross-origin-isolation true --json
+kofra settings disposable-report --title '' --description '' --json  # clear both to null
+kofra settings disposable-report --spa false --dry-run --json       # offline; no credential needed
+```
+
+| Flag | Accepted value / PATCH field |
+|---|---|
+| `--title <text>` | Literal string, including spaces; `''` clears `title` to `null` |
+| `--description <text>` | Literal string; `''` clears `description` to `null` |
+| `--spa true\|false` | Lower-case literal boolean / `spa` |
+| `--render-markdown true\|false` | Lower-case literal boolean / `renderMarkdown` |
+| `--cross-origin-isolation true\|false` | Lower-case literal boolean / `crossOriginIsolation` |
+| `--dry-run` | Requires at least one explicit field; prints the exact normalized patch offline |
+
+Use each option only once. `--flag=value` also works; boolean field flags still require an explicit
+`true` or `false` (no `1`, `0`, `yes`, `--no-spa` or implicit toggle). Unknown options, extra/missing
+sites, repeated flags and unsupported controls fail with exit 2 **before any request**. Passwords,
+access modes, key management, tenant/runtime settings and instance limits are not supported by this
+command and are never forwarded. Omitted fields are not sent, so existing values survive. Empty
+strings are the only CLI clearing spelling; the literal string `null` is just text.
+
+Inspect needs an authenticated site read; member keys changing settings need both `sites:read`
+and `sites:write`. A write sends only the
+existing PATCH, with no preliminary GET. Reapplying the same patch preserves the settings and
+version history (server timestamps may change). Site bytes and version identity are not republished.
+`--dry-run` does not contact the instance, read credentials or write local state; it checks CLI syntax,
+not site existence, permission or server policy. No non-TTY prompt or fallback to another command
+occurs, including on errors.
+
+JSON success is exactly one object on stdout; progress goes to stderr. The response is allowlisted:
+
+```json
+{"ok":true,"site":{"id":"site_example","slug":"disposable-report","title":null,"description":null,"currentVersionId":"ver_example","settings":{"spa":false,"renderMarkdown":true,"crossOriginIsolation":false}}}
+```
+
+`site.id` is a stable string on current instances and `null` on older instances that omit it;
+human output omits a missing id. Existing site slugs up to 63 characters remain supported.
+Authenticated requests require HTTPS except for loopback HTTP development instances.
+
+No claim token, visitor password, key or other access data is included. Dry-run returns a versioned
+plan with the explicit slug, never an invented stable id:
+
+```json
+{"ok":true,"schemaVersion":1,"dryRun":true,"site":"disposable-report","patch":{"spa":false}}
+```
+
+Errors use the normal `{ok:false,exitCode,error}` envelope and preserve the server's code, hint,
+HTTP status, request id, retryability, next-call array and retry delay when present. See the exit-code
+table below; this command never changes the target or falls back to publish/setup after a refusal.
+
+Disposable, agent-runnable verification from the repository root (no remote account, deployment or
+production request; builds the CLI, starts a temporary local Worker, applies local migrations and
+checks inspect/PATCH/reapply against isolated D1/R2/KV):
+
+```sh
+npm ci --include=dev --no-audit --no-fund
+npm run build -w kofra
+npm run test:cli -- test/site-settings/
+```
+
+The suite also observes wire requests, checks exact offline plans without credentials, fingerprints
+local config before/after, and exercises invalid flags, explicit false, secret projection and errors.
 
 ## Versions
 
@@ -431,9 +503,19 @@ Error objects preserve the server's optional recovery metadata alongside the sta
 delay (`null` means no guidance), a `docs` reference and a `next` array of suggested
 `{tool, args, why}` calls. Malformed optional fields are omitted independently, and
 unknown envelope fields are never copied. `next` and `docs` are informational only: the
-client never executes a suggested call or fetches a docs URL, and retry scheduling is
-unchanged (any method retries 429 within the `Retry-After` cap, 5xx and network errors
-retry only for `GET`/`HEAD`, idempotency keys never authorize unsafe retries).
+client never executes a suggested call or fetches a docs URL. Reads retain bounded
+429/5xx/network retries. Restore (including omitted-version restore) and version
+delete make **one mutation attempt**, even on 429; rate limits, 5xx and network loss
+surface as exit 7. Other transport policies are unchanged. Error metadata and
+idempotency keys never authorize an automatic unsafe retry.
+
+Each restore/version-delete invocation sends a fresh UUID `Idempotency-Key`, without
+printing or saving it. There is no key flag for these commands. A new invocation is
+fresh deliberate intent, not recovery of the old attempt: an uncertain restore may
+already have moved live, and a later publish may have moved it again. Inspect the
+same site/version before deciding to act again; neither a live pointer nor a 404
+proves who performed the earlier operation. Explicit API/SDK consumers can retain
+and replay a key under the [bounded server contract](../../docs/OPERATIONS.md#version-action-replay).
 
 `read-file` without `--json` prints exactly the page content to stdout; a truncated page
 adds a stderr continuation pinned to the successful response's immutable `versionId`, so

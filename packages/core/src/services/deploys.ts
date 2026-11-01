@@ -10,7 +10,7 @@ import { findSecrets, lineAt } from "../lib/secrets";
 import { detectFileKind } from "../lib/filetypes";
 import { stringField } from "../lib/input";
 import { hasScope, type Principal } from "../principal";
-import { blobKey, blobScope, putVerifiedBlob } from "./blobs";
+import { blobScope, putVerifiedBlob } from "./blobs";
 import { emit, meter } from "./events";
 import { refreshLive } from "./live";
 import { createSite, discardNewSite, getSiteFor, getVersion, serializeVersion, type SiteRow, type SiteSettingsInput, type VersionRow } from "./sites";
@@ -347,18 +347,21 @@ export async function createSiteWithDeploy(
   }
 }
 
-/** Read the live pointer and publication metadata together, not from a stale caller snapshot. */
-export async function versionConflict(dc: DropwayContext, site: SiteRow, base?: VersionRow): Promise<ApiError> {
+/** Read live metadata together, still bound to the authorized site's ownership snapshot. */
+export async function versionConflict(dc: DropwayContext, site: SiteRow, base?: VersionRow, hint?: string): Promise<ApiError> {
   const live = await dc.env.DB.prepare(
     `SELECT s.current_version_id AS id, v.number, v.client, v.finalized_at
        FROM sites s LEFT JOIN versions v ON v.id = s.current_version_id AND v.site_id = s.id
-      WHERE s.id = ? AND s.deleted_at IS NULL`,
-  ).bind(site.id).first<{ id: string | null; number: number | null; client: string | null; finalized_at: number | null }>();
+      WHERE s.id = ? AND s.tenant_id IS ? AND s.deleted_at IS NULL`,
+  ).bind(site.id, site.tenant_id).first<{ id: string | null; number: number | null; client: string | null; finalized_at: number | null }>();
+  if (!live) {
+    return notFound("site_not_found", `No site "${site.slug}" that this key can access.`, "List your sites with GET /api/v1/sites.");
+  }
   return new ApiError(
     409,
     "version_conflict",
     `The live version is ${live?.number != null ? `v${live.number}` : "none"}; someone published since your base version.`,
-    "Call get_site to see what changed, re-apply your change, and pass the live version id as baseVersionId.",
+    hint ?? "Call get_site to see what changed, re-apply your change, and pass the live version id as baseVersionId.",
     {
       liveVersionId: live?.id ?? null,
       liveVersionNumber: live?.number ?? null,
@@ -540,11 +543,15 @@ export async function deployWarnings(dc: DropwayContext, site: SiteRow, versionI
   const warnings: Warning[] = [];
   // Advisory reads must not turn an already-published version into an API failure.
   // Keep this guard local to the scan: authorization and finalization still fail normally.
+  type StoredEntry = NormalisedEntry & { storageKey: string | null };
   const files = await dc.env.DB.prepare(
-    "SELECT path, sha256, size, content_type AS contentType FROM version_files WHERE version_id = ? ORDER BY path",
+    `SELECT vf.path, vf.sha256, vf.size, vf.content_type AS contentType,
+       COALESCE(b.storage_key, 'blobs/' || b.sha256) AS storageKey
+     FROM version_files vf LEFT JOIN blobs b ON b.sha256 = vf.sha256
+     WHERE vf.version_id = ? ORDER BY vf.path`,
   )
     .bind(versionId)
-    .all<NormalisedEntry>()
+    .all<StoredEntry>()
     .then((result) => result.results)
     .catch(() => null);
   if (files === null) return warnings;
@@ -572,14 +579,14 @@ export async function deployWarnings(dc: DropwayContext, site: SiteRow, versionI
   // into the shared edge cache as a side effect of publishing.
   const texts = new Map<string, Promise<string | null>>();
   let scanned = 0;
-  const textFor = (f: NormalisedEntry): Promise<string | null> => {
+  const textFor = (f: StoredEntry): Promise<string | null> => {
     let pending = texts.get(f.sha256);
     if (!pending) {
       pending =
-        f.size > WARN_SCAN_MAX_BYTES || scanned >= WARN_SCAN_MAX_FILES
+        !f.storageKey || f.size > WARN_SCAN_MAX_BYTES || scanned >= WARN_SCAN_MAX_FILES
           ? Promise.resolve(null)
           : ((scanned += 1),
-            dc.env.FILES.get(blobKey(f.sha256), { range: { offset: 0, length: f.size } })
+            dc.env.FILES.get(f.storageKey, { range: { offset: 0, length: f.size } })
               .then((obj) => (obj ? obj.text() : null))
               .catch(() => null));
       texts.set(f.sha256, pending);
@@ -717,16 +724,53 @@ export async function listVersions(dc: DropwayContext, site: SiteRow, opts: { li
   return results.map((v) => serializeVersion(v, site.current_version_id));
 }
 
+/** Guidance for a restore that lost a live-pointer race: re-inspect, then make a fresh deliberate call. */
+const RESTORE_CONFLICT_HINT =
+  "Call get_site to inspect the current live version, then decide on a fresh intentional restore invocation. Do not automatically retry this restore.";
+
 /** Make an older finalized version live again (a pointer flip; no files are copied). */
-export async function restoreVersion(dc: DropwayContext, p: Principal, site: SiteRow, versionId: string) {
+export async function restoreVersion(dc: DropwayContext, p: Principal, site: SiteRow, versionId: string, opts?: { symbolicLive?: boolean }) {
+  const originalSiteId = site.id;
+  site = await getSiteFor(dc, p, site.slug, "sites:write");
+  if (site.id !== originalSiteId) {
+    throw notFound("site_not_found", `No site "${site.slug}" that this key can access.`, "List your sites with GET /api/v1/sites.");
+  }
   if (site.mode === "transfer") throw conflict("transfer_immutable", "Transfer files cannot be restored.", "Create a new transfer instead.");
-  const version = await getVersion(dc, site.id, versionId);
+  // A symbolic "live" ref must resolve against this fresh anchor, never against the id a
+  // caller resolved from an older snapshot: that stale id would flip a moved pointer back.
+  let targetId = versionId;
+  if (opts?.symbolicLive) {
+    if (!site.current_version_id) {
+      throw notFound("version_not_found", `Site ${site.slug} has no live version yet.`, "Publish files first with publish_site.");
+    }
+    targetId = site.current_version_id;
+  }
+  const version = await getVersion(dc, site.id, targetId);
   if (!version || version.status !== "ready") {
-    throw notFound("version_not_found", `No finalized version ${versionId} on site ${site.slug}.`, "List versions with GET /api/v1/sites/:slug/versions.");
+    throw notFound("version_not_found", `No finalized version ${targetId} on site ${site.slug}.`, "List versions with GET /api/v1/sites/:slug/versions.");
   }
   if (version.id === site.current_version_id) return { restored: false, alreadyLive: true, version: serializeVersion(version, version.id) };
   const now = Date.now();
-  await dc.env.DB.prepare("UPDATE sites SET current_version_id = ?, updated_at = ? WHERE id = ?").bind(version.id, now, site.id).run();
+  const [upd] = await dc.env.DB.batch([
+    dc.env.DB.prepare(
+      `UPDATE sites SET current_version_id = ?, updated_at = ?
+        WHERE id = ? AND tenant_id IS ? AND deleted_at IS NULL AND current_version_id IS ?
+          AND EXISTS (SELECT 1 FROM versions WHERE id = ? AND site_id = ? AND status = 'ready')`,
+    ).bind(version.id, now, site.id, site.tenant_id, site.current_version_id, version.id, site.id),
+  ]);
+  if (!upd?.meta.changes) {
+    // Bind diagnostics to the original site by immutable id: the addressed slug may now
+    // resolve to a different same-tenant site, whose metadata must never leak into this error.
+    const original = await dc.env.DB.prepare("SELECT * FROM sites WHERE id = ?").bind(site.id).first<SiteRow>();
+    if (!original || original.deleted_at !== null || original.slug !== site.slug || original.tenant_id !== site.tenant_id) {
+      throw notFound("site_not_found", `No site "${site.slug}" that this key can access.`, "List your sites with GET /api/v1/sites.", { slug: site.slug });
+    }
+    const latest = await getVersion(dc, site.id, version.id);
+    if (!latest || latest.status !== "ready") {
+      throw notFound("version_not_found", `No finalized version ${versionId} on site ${site.slug}.`, "List versions with GET /api/v1/sites/:slug/versions.");
+    }
+    throw await versionConflict(dc, original, undefined, RESTORE_CONFLICT_HINT);
+  }
   await refreshLive(dc, site.id);
   emit(dc, "onPublish", {
     kind: "restore",
@@ -740,16 +784,50 @@ export async function restoreVersion(dc: DropwayContext, p: Principal, site: Sit
 
 /** Permanently delete one non-live version (for example one that leaked a secret). */
 export async function deleteVersion(dc: DropwayContext, p: Principal, site: SiteRow, versionId: string) {
+  const originalSiteId = site.id;
   site = await getSiteFor(dc, p, site.slug, "sites:delete");
+  if (site.id !== originalSiteId) {
+    throw notFound("site_not_found", `No site "${site.slug}" that this key can access.`, "List your sites with GET /api/v1/sites.");
+  }
   if (site.mode === "transfer") throw conflict("transfer_immutable", "Transfer files cannot be deleted separately.", "Revoke the transfer; retained bytes are purged by cleanup when not held.");
   const version = await getVersion(dc, site.id, versionId);
   if (!version) throw notFound("version_not_found", `No version ${versionId} on site ${site.slug}.`);
   if (version.id === site.current_version_id) throw conflict("version_is_live", "You cannot delete the live version.", "Restore or publish another version first.");
-  await dc.env.DB.batch([
-    dc.env.DB.prepare("DELETE FROM version_files WHERE version_id = ?").bind(version.id),
-    dc.env.DB.prepare("DELETE FROM versions WHERE id = ?").bind(version.id),
-    ...usageStatements(dc, site.tenant_id),
-  ]);
+  try {
+    await dc.env.DB.batch([
+      // A SQL failure, not a zero-row DELETE, refuses the whole batch before any
+      // manifest or usage write. CASE keeps the diagnostic bound to this site.
+      dc.env.DB.prepare(`SELECT CASE
+        WHEN s.id IS NULL THEN json_extract('{}', 'kofra_delete_version_site_changed')
+        WHEN s.mode = 'transfer' THEN json_extract('{}', 'kofra_delete_version_transfer')
+        WHEN v.id IS NULL THEN json_extract('{}', 'kofra_delete_version_missing')
+        WHEN s.current_version_id = v.id THEN json_extract('{}', 'kofra_delete_version_live')
+        ELSE 1 END
+        FROM (SELECT 1) AS anchor
+        LEFT JOIN sites AS s ON s.id = ? AND s.slug = ? AND s.tenant_id IS ? AND s.deleted_at IS NULL
+        LEFT JOIN versions AS v ON v.id = ? AND v.site_id = s.id`)
+        .bind(site.id, site.slug, site.tenant_id, version.id),
+      dc.env.DB.prepare("DELETE FROM version_files WHERE version_id = ?").bind(version.id),
+      dc.env.DB.prepare("DELETE FROM versions WHERE id = ?").bind(version.id),
+      ...usageStatements(dc, site.tenant_id),
+    ]);
+  } catch (error) {
+    const message = String(error);
+    if (!message.includes("JSON path")) throw error;
+    if (message.includes("kofra_delete_version_site_changed")) {
+      throw notFound("site_not_found", `No site "${site.slug}" that this key can access.`, "List your sites with GET /api/v1/sites.", { slug: site.slug });
+    }
+    if (message.includes("kofra_delete_version_transfer")) {
+      throw conflict("transfer_immutable", "Transfer files cannot be deleted separately.", "Revoke the transfer; retained bytes are purged by cleanup when not held.");
+    }
+    if (message.includes("kofra_delete_version_missing")) {
+      throw notFound("version_not_found", `No version ${versionId} on site ${site.slug}.`);
+    }
+    if (message.includes("kofra_delete_version_live")) {
+      throw conflict("version_is_live", "You cannot delete the live version.", "Restore or publish another version first.");
+    }
+    throw error;
+  }
   return { deleted: true, id: version.id };
 }
 
@@ -789,5 +867,15 @@ export async function getFile(dc: DropwayContext, site: SiteRow, path: string, v
   if (site.mode === "transfer") throw forbidden("Transfer bytes are only available as sites-host downloads.", "Use the transfer page's download links.", "transfer_download_required");
   const vid = versionId ?? site.current_version_id;
   if (!vid) return null;
-  return dc.env.DB.prepare("SELECT path, sha256, size, content_type FROM version_files WHERE version_id = ? AND path = ?").bind(vid, path).first<FileRow>();
+  // The version must belong to this site, and a pending version's bytes are only
+  // readable once this owner has uploaded them: its manifest can name any sha256.
+  return dc.env.DB.prepare(
+    `SELECT vf.path, vf.sha256, vf.size, vf.content_type
+       FROM version_files vf
+       JOIN versions v ON v.id = vf.version_id AND v.site_id = ?
+      WHERE vf.version_id = ? AND vf.path = ?
+        AND (v.status = 'ready' OR EXISTS (SELECT 1 FROM blob_scopes bs WHERE bs.sha256 = vf.sha256 AND bs.scope = ?))`,
+  )
+    .bind(site.id, vid, path, blobScope(siteOwner(site)))
+    .first<FileRow>();
 }

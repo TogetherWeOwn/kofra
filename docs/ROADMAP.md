@@ -29,17 +29,18 @@ The first three feature branches are merged into `main` on top of the baseline b
 
 | Item | State | What landed |
 |---|---|---|
-| R-01 | Done | Open-core guard and self-test in CI (npm, Yarn, pnpm and Bun text locks); `EXTENSION_API_VERSION = 1`, Extension API changelog and contract tests for every existing extension point. |
+| R-01 | Done | Open-core guard and self-test in CI (npm, Yarn, pnpm and Bun text locks); `EXTENSION_API_VERSION`, Extension API changelog and contract tests for every existing extension point. |
 | R-04 | Partial | File sources (`content`, `url`, `sha256` + upload link, `copyFrom`) and idempotency keys for agent writes. |
 | R-05 | Done | Canonical `/versions` routes with `/deploys` kept as aliases, partial updates (`PATCH /api/v1/sites/:slug/files`), `GET` version status returning fresh upload items, fresh upload items in `missing_blobs`, rename. |
 | R-13 | Done | Exact ready-version previews in path and subdomain modes, owner credentials or 24-hour signed links, preview-root cookies, private/no-store privacy headers and stale-live-KV bypass. |
+| R-14 | Partial | Cache API pointer memo (10 s) in front of KV, blob cache capped at 25 MB, `scripts/measure-freshness.mjs`; the `workers.dev` p50/p95 and cache probe in `docs/SELF_HOST.md` are pending. |
 | R-06 | Done | Remote MCP server at `/mcp` (Streamable HTTP) with a tool for every core capability, toolsets and read-only mode. |
 | R-07, R-08 | Done | Viewer bar with Rendered / Source / Raw, HTML frame, code highlighting, Markdown, JSON, CSV, images, SVG, PDF, video, audio, fonts, notebooks, binary info, cached renders. |
 | R-09, R-10 | Done | `kofra` CLI: publish (hash locally, upload only missing files), list, versions, restore, delete, login, whoami, setup, `api`. Not yet published to npm. |
 | R-11 | Done | `/llms.txt`, `/llms-full.txt`, `/skill.md`, `/.well-known/agent-skills`, repo skill in `skills/kofra`, `/connect`, `/connect.md`, `/.well-known/api-catalog`, `/robots.txt`. |
 | R-22 | Partial | Dashboard (sign-in with an API key, sites, versions, publish, keys, members, settings) and the app-origin file browser `/v/:slug/`. Sessions and login links are R-21. |
 
-Next: R-02 (operation registry), R-12 (path-mode hardening), R-13 (version preview URLs), R-14, R-15, R-16.
+Next: R-02 (operation registry), R-12 (path-mode hardening), R-13 (version preview URLs), R-14 (measurement), R-15, R-16.
 
 ## Baseline (in `main` at `866ca07`)
 
@@ -61,7 +62,7 @@ Delivers: OPS-08 (part). Depends: none.
 - Done: `scripts/guard-open-core.mjs` (`npm run guard`) runs in CI and fails on: the private-code SPDX
   marker (the guard holds the exact string), payment SDK dependencies in any `package.json` or lockfile, a `.gitmodules`
   file, or code that imports a package outside this repo's `@dropway/*` and declared dependencies.
-- `packages/server` exports `EXTENSION_API_VERSION = 1`; `CHANGELOG.md` has an "Extension API" section.
+- `packages/server` exports `EXTENSION_API_VERSION`; `CHANGELOG.md` has an "Extension API" section.
 - `test/extension-contract.test.ts` exercises every existing extension point with fakes: identity,
   policy limits and refusals (`beforeCreateSite`, `beforeDeploy`), metering events (all 5 kinds), all 3
   hooks, an API route override, an app route, an MCP tool registration, UI slots, a viewer, `scheduled`.
@@ -474,7 +475,7 @@ Delivers: AX-13. Depends: R-02.
 
 ### R-46 GitHub Action and pull-request previews (2 days)
 Delivers: PUB-20. Depends: R-09.
-- `TogetherWeOwn/dropway-action`-style composite action in this repo (`action.yml`): publish a folder,
+- `TogetherWeOwn/kofra-action`-style composite action in this repo (`action.yml`): publish a folder,
   comment the preview URL on the PR, delete the preview when the PR closes.
 
 ### R-47 End-to-end encrypted sites (2-3 days)
