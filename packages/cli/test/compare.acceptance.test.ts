@@ -540,6 +540,9 @@ describe("compare: discoverability and non-TTY output", () => {
     expect(r.stdout).toBe("");
     expect(r.stderr).toContain("Error (version_not_found):");
     expect(r.stderr).toMatch(/Fix: .*kofra versions/);
+    // Separator newlines stay raw: only untrusted fields are escaped.
+    expect(r.stderr).toContain("\n  Fix: ");
+    expect(r.stderr).not.toContain("\\u000a  Fix: ");
   });
 
   it("keeps quiet JSON successful and progress-free even on a terminal", async () => {

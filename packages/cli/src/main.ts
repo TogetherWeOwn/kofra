@@ -115,14 +115,16 @@ class Output {
       this.io.stdout(`${JSON.stringify({ ok: false, exitCode: err.exitCode, error: err.toJSON() }, null, 2)}\n`);
       return;
     }
-    let text = `Error (${err.code}): ${err.message}`;
-    if (err.hint) text += `\n  Fix: ${err.hint}`;
+    let text = `Error (${escapeControl(err.code)}): ${escapeControl(err.message)}`;
+    if (err.hint) text += `\n  Fix: ${escapeControl(err.hint)}`;
     const findings = err.details?.findings as Array<{ path: string; line: number; kind: string }> | undefined;
-    if (findings?.length) text += `\n${findings.map((f) => `  ${f.path}:${f.line}  ${f.kind}`).join("\n")}`;
-    if (err.requestId) text += `\n  Request id: ${err.requestId}`;
+    if (findings?.length)
+      text += `\n${findings.map((f) => `  ${escapeControl(f.path)}:${f.line}  ${escapeControl(f.kind)}`).join("\n")}`;
+    if (err.requestId) text += `\n  Request id: ${escapeControl(err.requestId)}`;
     // Human errors are the presentation boundary: control characters from
-    // untrusted input (paths, refs, server text) are escaped, never raw.
-    this.io.stderr(`${escapeControl(text)}\n`);
+    // untrusted input (paths, refs, server text) are escaped per field above,
+    // while the renderer's own separator newlines stay raw.
+    this.io.stderr(`${text}\n`);
   }
 }
 
