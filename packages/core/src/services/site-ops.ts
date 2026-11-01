@@ -225,12 +225,12 @@ export async function duplicateSite(dc: DropwayContext, p: Principal, ref: unkno
     );
     const [inserted, , , madeLive] = await dc.env.DB.batch<VersionRow>([
       dc.env.DB.prepare(
-        `INSERT INTO versions (id, site_id, number, status, file_count, total_bytes, manifest_hash, base_version_id, source, client, message, created_by, created_at, finalized_at, config_json)
-         VALUES (?, ?, (SELECT COALESCE(MAX(number), 0) + 1 FROM versions WHERE site_id = ?), 'ready', ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+        `INSERT INTO versions (id, site_id, number, status, file_count, total_bytes, manifest_hash, base_version_id, source, client, message, created_by, created_at, finalized_at)
+         VALUES (?, ?, (SELECT COALESCE(MAX(number), 0) + 1 FROM versions WHERE site_id = ?), 'ready', ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?) RETURNING *`,
       ).bind(
         versionId, site.id, site.id, live.file_count, live.total_bytes, live.manifest_hash,
         input.source ?? "api", input.client ? String(input.client).slice(0, 120) : null, message,
-        p.kind === "member" ? p.memberId : p.kind, now, now, live.config_json ?? null,
+        p.kind === "member" ? p.memberId : p.kind, now, now,
       ),
       // Pointer copy: the new version's rows reference the same stored blobs.
       dc.env.DB.prepare(

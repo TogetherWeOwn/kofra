@@ -3,11 +3,9 @@ import {
   baseType,
   encodePath,
   extname,
-  findSiteRedirect,
   getLiveSite,
   hmacHex,
   isHtml,
-  isSiteConfigPath,
   isTextual,
   isApiError,
   spendSitePasswordAttempt,
@@ -19,7 +17,6 @@ import {
   requestPathToFilePath,
   resolveSlugRedirect,
   signingSecret,
-  siteHeadersFor,
   siteUrl,
   timingSafeEqualStr,
   verifyPassword,
@@ -86,7 +83,7 @@ export function isNavigation(req: Request): boolean {
 
 /** Private configuration paths are stored with the version but never served. */
 function isPrivatePath(p: string): boolean {
-  return p === ".dropway" || p.startsWith(".dropway/") || isSiteConfigPath(p);
+  return p === ".dropway" || p.startsWith(".dropway/");
 }
 
 /** A directory counts for serving only when it holds at least one non-private entry. */
@@ -127,8 +124,8 @@ export function resolvePath(live: LiveSite, p: string, req: Request, mode: Serve
   if (p === "" || p.endsWith("/")) {
     for (const name of INDEX_NAMES) if (files[p + name]) return { kind: "file", path: p + name, status: 200 };
     if (p === "") {
-      const keys = Object.keys(files).filter((k) => !isPrivatePath(k));
-      if (keys.length === 1) return { kind: "file", path: keys[0]!, status: 200 };
+      const keys = Object.keys(files);
+      if (keys.length === 1 && keys[0] !== ".dropway" && !keys[0]!.startsWith(".dropway/")) return { kind: "file", path: keys[0]!, status: 200 };
     }
     if (hasVisibleChildren(files, p)) return { kind: "listing", dir: p };
   } else {
@@ -167,18 +164,6 @@ export function cacheControlFor(path: string, live: LiveSite): string {
 /** Anonymous, expiring and explicitly noindex sites stay out of search indexes (SRV-12). */
 export function isNoindex(live: LiveSite): boolean {
   return live.tenantId === null || live.expiresAt !== null || live.noindex === true;
-}
-
-/**
- * Apply the site's `_headers` entries matching `requestPath` (leading "/").
- * Callers apply platform security headers afterwards, so those always win;
- * a gated site's Cache-Control is never customised.
- */
-function applySiteHeaders(h: Headers, live: LiveSite, requestPath: string) {
-  for (const { name, value } of siteHeadersFor(live.config, requestPath)) {
-    if (live.passwordHash && name.toLowerCase() === "cache-control") continue;
-    h.set(name, value);
-  }
 }
 
 /**
@@ -494,29 +479,6 @@ export async function serveSiteContent(
   }
   if (!live.versionId) return systemResponse(dw, req, mode, live, 404, "EMPTY", "Nothing published yet", "This site exists but has no live version yet. See {app}.");
 
-  const requestPath = `/${filePath}`;
-
-  // The site-config files are platform inputs, never site content (SRV-09).
-  if (isSiteConfigPath(filePath)) {
-    const response = systemResponse(dw, req, mode, live, 404, "404", "Page not found", `There is no file at <code>/${escapeHtml(filePath)}</code> on this site.`);
-    recordHit(dw, req, live, filePath, response.status, 0, Date.now() - started);
-    return response;
-  }
-
-  // `_redirects` rules run before file resolution; the first non-self match
-  // wins (self-looping rules are skipped, so `/* /index.html` style
-  // catch-alls cannot loop on their destination). robots.txt keeps its
-  // dedicated response below, even when a catch-all matches it.
-  const redirect = filePath === "robots.txt" ? null : findSiteRedirect(live.config, requestPath, { url, base: mode.base });
-  if (redirect) {
-    const h = new Headers({ Location: redirect.destination, "Cache-Control": live.passwordHash ? "private, no-store" : "public, max-age=0, must-revalidate" });
-    applySiteHeaders(h, live, requestPath);
-    securityHeaders(h, live, mode);
-    const response = new Response(null, { status: redirect.rule.status, headers: h });
-    recordHit(dw, req, live, filePath, response.status, 0, Date.now() - started);
-    return response;
-  }
-
   // A site's own robots.txt is served verbatim; without one, noindex sites
   // get a generated disallow-all and indexable sites a plain 404. None is
   // ever answered by the SPA or 404.html fallbacks (SRV-12). The password
@@ -525,7 +487,7 @@ export async function serveSiteContent(
   if (filePath === "robots.txt") {
     let response: Response;
     if (live.files["robots.txt"]) {
-      response = await serveFile(req, dw, url, live, mode, "robots.txt", 200, viewers, { requestPath: "/robots.txt", forceRaw: true });
+      response = await serveFile(req, dw, url, live, mode, "robots.txt", 200, viewers, { forceRaw: true });
     } else if (isNoindex(live)) {
       const h = new Headers({ "Content-Type": "text/plain; charset=utf-8", "Cache-Control": cacheControlFor("robots.txt", live) });
       securityHeaders(h, live, mode);
@@ -557,7 +519,7 @@ export async function serveSiteContent(
     response = renderListing(live, resolved.dir, mode, `${appOrigin(dw)}/v/${live.slug}/${encodePath(resolved.dir)}`, url.searchParams.get("sort"), url.origin);
     securityHeaders(response.headers, live, mode);
   } else {
-    response = await serveFile(req, dw, url, live, mode, resolved.path, resolved.status, viewers, { requestPath });
+    response = await serveFile(req, dw, url, live, mode, resolved.path, resolved.status, viewers);
     bytes = Number(response.headers.get("Content-Length") ?? 0);
   }
   recordHit(dw, req, live, filePath, response.status, bytes, Date.now() - started);
@@ -573,7 +535,7 @@ async function serveFile(
   path: string,
   status: number,
   viewers: readonly Viewer[],
-  opts: { requestPath: string; forceRaw?: boolean },
+  opts?: { forceRaw?: boolean },
 ): Promise<Response> {
   const [sha256, size, contentType] = live.files[path]!;
   const file = toViewerFile(path, sha256, size, contentType);
@@ -581,7 +543,7 @@ async function serveFile(
   const raw = flag(sp, "raw");
   const download = flag(sp, "download");
   const head = req.method === "HEAD";
-  const viewMode = raw || download || opts.forceRaw ? null : requestedViewMode(req, sp);
+  const viewMode = raw || download || opts?.forceRaw ? null : requestedViewMode(req, sp);
   const viewer = viewMode ? findViewer(file, live, viewers, viewMode) : null;
   const report = live.tenantId === null && !raw && !download && !precompressed(path) && baseType(contentType) === "text/html";
   const reportVariant = report ? `-report${REPORT_LINK_VERSION}` : "";
@@ -601,7 +563,6 @@ async function serveFile(
     const h = new Headers();
     if (status === 200 && etagMatches(req, etag)) {
       h.set("ETag", etag);
-      applySiteHeaders(h, live, opts.requestPath);
       securityHeaders(h, live, mode);
       return new Response(null, { status: 304, headers: h });
     }
@@ -641,10 +602,9 @@ async function serveFile(
     // withhold the success ETag: revalidating the fallback as if it were
     // the healthy render would strand browsers on it after recovery.
     const viewerCacheControl = out.get("Cache-Control");
-    applySiteHeaders(out, live, opts.requestPath);
     if (status >= 400 || viewerCacheControl?.includes("no-store")) out.delete("ETag");
     else out.set("ETag", etag);
-    out.set("Cache-Control", status >= 400 || live.passwordHash ? "private, no-store" : viewerCacheControl?.includes("no-store") ? viewerCacheControl : out.get("Cache-Control") ?? "public, max-age=0, must-revalidate");
+    out.set("Cache-Control", status >= 400 || live.passwordHash ? "private, no-store" : viewerCacheControl ?? "public, max-age=0, must-revalidate");
     out.set("Vary", "Accept, Sec-Fetch-Dest");
     // Headers.set throws on CR, LF and NUL: a viewer id containing them would
     // 500 an otherwise healthy render. Omit this diagnostic header for such
@@ -667,14 +627,13 @@ async function serveFile(
   }
 
   // Path mode: HTML and CSS get root-relative URLs prefixed with the site base.
-  const rewriteKind = mode.rewrite && !raw && !download && !opts.forceRaw && !precompressed(path) ? (isHtml(contentType) ? "html" : baseType(contentType) === "text/css" && size <= MAX_CSS_REWRITE_BYTES ? "css" : null) : null;
+  const rewriteKind = mode.rewrite && !raw && !download && !opts?.forceRaw && !precompressed(path) ? (isHtml(contentType) ? "html" : baseType(contentType) === "text/css" && size <= MAX_CSS_REWRITE_BYTES ? "css" : null) : null;
   if (rewriteKind || report) {
     // Sandboxed pages and private previews send no Referer, so they need runtime URL repair.
     const shim = rewriteKind === "html" && (mode.sandbox || mode.pathShim === true);
     const etag = `W/"${rewriteKind ? "pm-" : ""}${sha256}${shim ? `-js${PATH_SHIM_VERSION}` : ""}${reportVariant}"`;
     const h = new Headers({ "Content-Type": contentType, ETag: etag, "Cache-Control": cacheControlFor(path, live) });
     if (rewriteKind) h.set("X-Kofra-Rewritten", "path-prefix");
-    applySiteHeaders(h, live, opts.requestPath);
     securityHeaders(h, live, mode);
     if (etagMatches(req, etag)) return new Response(null, { status: 304, headers: h });
     if (head) return new Response(null, { status, headers: h });
@@ -707,7 +666,6 @@ async function serveFile(
     h.set("Content-Type", contentType);
   }
   if (download) h.set("Content-Disposition", attachmentDisposition(path.split("/").pop() ?? "file"));
-  applySiteHeaders(h, live, opts.requestPath);
   securityHeaders(h, live, mode);
 
   if (etagMatches(req, etag)) return new Response(null, { status: 304, headers: h });

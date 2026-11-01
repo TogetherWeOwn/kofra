@@ -1,5 +1,4 @@
 import type { DropwayContext } from "../context";
-import { emptySiteConfig, parseSiteConfigJson, type SiteConfig } from "./site-config";
 
 /**
  * The "live manifest": everything the edge needs to serve a site, cached in KV
@@ -11,9 +10,7 @@ import { emptySiteConfig, parseSiteConfigJson, type SiteConfig } from "./site-co
  * v4: adds the live version's number and go-live time (the embeddable badge reads
  * them from this entry, so it costs no extra D1 or R2 read); v3 entries are rebuilt.
  * v5: read fills are verified against D1 (fillLive); v4 entries may hold an unverified
- * fill that overwrote a later change, so they are rebuilt too. The live version's
- * parsed _redirects/_headers travel in the entry (SRV-09); v5 entries written
- * without them default to no rules on read.
+ * fill that overwrote a later change, so they are rebuilt too.
  */
 export interface LiveSite {
   /** Older versions are stale (rebuilt on read); fresh writes are LIVE_VERSION. */
@@ -31,8 +28,6 @@ export interface LiveSite {
   crossOriginIsolation: boolean;
   /** Per-site crawler opt-out (SRV-12). Optional so fixtures built against older entries keep compiling; undefined = false. */
   noindex?: boolean;
-  /** Parsed _redirects/_headers of the live version (SRV-09). Optional as above; undefined = no rules. */
-  config?: SiteConfig;
   passwordHash: string | null;
   expiresAt: number | null;
   files: Record<string, [sha256: string, size: number, contentType: string]>;
@@ -139,14 +134,12 @@ export async function getLiveSite(dc: DropwayContext, slug: string): Promise<Liv
     const memo = await readPointer(dc, slug);
     if (memo && memo.v === LIVE_VERSION && memo.files && typeof memo.files === "object") {
       memo.files = ownFiles(memo.files);
-      memo.config ??= emptySiteConfig();
       if (reading.get(slug) === fence) remember(slug, memo);
       return memo;
     }
     const cached = await dc.env.CACHE.get<LiveSite>(liveKey(slug), { type: "json", cacheTtl: dc.config.liveCacheTtlSeconds }).catch(() => null);
     if (cached && cached.v === LIVE_VERSION && cached.files && typeof cached.files === "object") {
       cached.files = ownFiles(cached.files);
-      cached.config ??= emptySiteConfig();
       if (reading.get(slug) === fence) {
         remember(slug, cached);
         const gen = pointerGen.get(slug) ?? 0;
@@ -194,21 +187,19 @@ async function fillLive(dc: DropwayContext, live: LiveSite): Promise<void> {
   if (!now || !sameSettings(now, live)) await dropLive(dc, live.slug);
 }
 
-/** Field-by-field equality of everything but the file map. The parsed site config is compared by value. */
+/** Field-by-field equality of everything but the file map. */
 function sameSettings(a: LiveSite, b: LiveSite): boolean {
-  const { files: _af, config: _ac, ...ar } = a;
-  const { files: _bf, config: _bc, ...br } = b;
+  const { files: _af, ...ar } = a;
+  const { files: _bf, ...br } = b;
   const keys = Object.keys(ar) as (keyof typeof ar)[];
-  return keys.length === Object.keys(br).length
-    && keys.every((k) => ar[k] === br[k])
-    && JSON.stringify(_ac ?? null) === JSON.stringify(_bc ?? null);
+  return keys.length === Object.keys(br).length && keys.every((k) => ar[k] === br[k]);
 }
 
 /** withFiles = false skips the version_files query and returns an empty file map. */
 export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string; siteId?: string }, withFiles = true): Promise<LiveSite | null> {
   const site = await dc.env.DB.prepare(
     `SELECT s.id, s.slug, s.tenant_id, s.current_version_id, s.spa, s.render_markdown, s.cross_origin_isolation, s.noindex, s.password_hash, s.expires_at,
-            v.number AS version_number, COALESCE(v.finalized_at, v.created_at) AS version_at, v.config_json
+            v.number AS version_number, COALESCE(v.finalized_at, v.created_at) AS version_at
        FROM sites s LEFT JOIN versions v ON v.id = s.current_version_id WHERE s.${by.siteId ? "id" : "slug"} = ? AND s.deleted_at IS NULL`,
   )
     .bind(by.siteId ?? by.slug)
@@ -225,7 +216,6 @@ export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string
       noindex: number;
       password_hash: string | null;
       expires_at: number | null;
-      config_json: string | null;
     }>();
   if (!site) return null;
   const files: LiveSite["files"] = Object.create(null);
@@ -247,7 +237,6 @@ export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string
     renderMarkdown: site.render_markdown === 1,
     crossOriginIsolation: site.cross_origin_isolation === 1,
     noindex: site.noindex === 1,
-    config: parseSiteConfigJson(site.config_json),
     passwordHash: site.password_hash,
     expiresAt: site.expires_at,
     files,
