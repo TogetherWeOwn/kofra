@@ -93,7 +93,7 @@ async function walk(
   try {
     dirents = await readdir(join(root, relDir), { withFileTypes: true, encoding: "buffer" });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT" && relDir) sourceChanged(relDir);
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") sourceChanged(relDir || ".");
     throw error;
   }
   // Decode raw bytes strictly: a non-UTF-8 name must fail instead of
