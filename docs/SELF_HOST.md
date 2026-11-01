@@ -332,8 +332,9 @@ Range requests go straight to R2 and never touch the Cache API. A publish, setti
 delete drops the memo in the data center that handled it (the next read refills it from KV); other data centers pick the
 change up within the memo's 10 s plus KV's cache TTL.
 
-Measure how long a change takes to appear on your own deployment (it overwrites `measure.txt` on
-the site you name, once per sample):
+Measure how long a change takes to appear on your own deployment. Point it at an existing site:
+each sample updates `measure.txt` in place with a partial file update, leaving the rest of the
+site untouched:
 
 ```sh
 KOFRA_API_KEY=<owner key> node scripts/measure-freshness.mjs \

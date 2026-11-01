@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
- * Freshness measurement (R-14): publish a change to a site, then poll the live URL until the new
- * bytes are served, and report how long that took. Run against a deployment you own; each sample
- * overwrites one file on the chosen site.
+ * Freshness measurement (R-14): update one file on a site, then poll the live URL until the new
+ * bytes are served, and report how long that took. Run against a deployment you own and a site
+ * that already exists; each sample updates that file in place, leaving the rest of the site
+ * untouched (a one-shot publish would replace the whole manifest and delete the other files).
  *
  *   KOFRA_API_KEY=... node scripts/measure-freshness.mjs --api https://example.workers.dev --site freshness
  *
@@ -32,14 +33,16 @@ function positiveInt(value, name, fallback) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function publish(api, key, site, file, content) {
-  const form = new FormData();
-  form.append("slug", site);
-  form.append(file, new File([content], file, { type: "text/plain" }));
-  const res = await fetch(new URL("/api/v1/publish", api), { method: "POST", headers: { Authorization: `Bearer ${key}` }, body: form });
-  if (!res.ok) throw new MeasureError(`publish failed with HTTP ${res.status}`);
+async function updateFile(api, key, site, file, content) {
+  // Partial file update, not a one-shot publish: the rest of the site's manifest is carried over.
+  const res = await fetch(new URL(`/api/v1/sites/${encodeURIComponent(site)}/files`, api), {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ files: [{ path: file, content }], message: "freshness probe sample" }),
+  });
+  if (!res.ok) throw new MeasureError(`file update failed with HTTP ${res.status}`);
   const body = await res.json();
-  if (typeof body.url !== "string") throw new MeasureError("publish response has no url");
+  if (typeof body.url !== "string") throw new MeasureError("update response has no url");
   return body.url;
 }
 
@@ -73,7 +76,7 @@ async function main() {
   const runs = [];
   for (let i = 0; i < samples; i++) {
     const content = `freshness sample ${i + 1} ${randomUUID()}\n`;
-    const url = await publish(api, key, values.site, values.file, content);
+    const url = await updateFile(api, key, values.site, values.file, content);
     runs.push(await waitForBytes(new URL(values.file, url).href, content, intervalMs, timeoutMs));
   }
   const sorted = runs.map((r) => r.ms).sort((a, b) => a - b);

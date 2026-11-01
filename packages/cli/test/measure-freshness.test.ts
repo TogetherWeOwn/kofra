@@ -26,44 +26,29 @@ async function fixture(visible: boolean) {
   const errors: string[] = [];
   const server = createServer(async (req, res) => {
     try {
-      if (req.method === "POST" && req.url === "/api/v1/publish") {
+      if (req.method === "PATCH" && req.url === "/api/v1/sites/freshness/files") {
         if (req.headers.authorization !== `Bearer ${KEY}`) {
           res.writeHead(401).end();
           return;
         }
         const chunks: Buffer[] = [];
         for await (const chunk of req) chunks.push(Buffer.from(chunk));
-        const body = Buffer.concat(chunks);
-        let slug: string;
-        let content: string;
-        if (req.headers["content-type"]?.includes("application/json")) {
-          const json = JSON.parse(body.toString());
-          slug = json.slug;
-          const file = json.files[0];
-          content = file.encoding === "base64" ? Buffer.from(file.content, "base64").toString() : file.content;
-        } else {
-          const request = new Request(`${api}/api/v1/publish`, {
-            method: "POST", headers: { "Content-Type": req.headers["content-type"] ?? "" }, body,
-          });
-          const form = await request.formData();
-          slug = String(form.get("slug"));
-          const file = [...form.values()].find((value): value is File => typeof value !== "string");
-          if (!file) throw new Error("measurement publish has no file");
-          content = await file.text();
-        }
-        if (slug !== "freshness" || typeof content !== "string" || content === newBody) {
-          throw new Error("each sample must change the bytes on the selected site");
+        const json = JSON.parse(Buffer.concat(chunks).toString());
+        const file = json.files?.[0];
+        const content = typeof file?.content === "string" ? file.content : undefined;
+        if (file?.path !== "measure.txt" || typeof content !== "string" || content === newBody) {
+          throw new Error("each sample must change the bytes of the probe file via partial update");
         }
         if (version) oldBody = newBody;
         newBody = content;
         published.push(content);
         version++;
         polls = 0;
-        res.writeHead(version === 1 ? 201 : 200, { "Content-Type": "application/json" });
+        res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
           status: "live", slug: "freshness", url: `${api}/s/freshness/`,
           version: { id: `version-${version}`, number: version, live: true },
-          files: ["index.txt"], created: version === 1, uploaded: 1, reused: 0,
+          changes: { written: 1, carriedOver: 1 },
         }));
       } else if (req.method === "GET" && req.url?.startsWith("/s/freshness/")) {
         // After each publish the first two live reads are stale. A successful
