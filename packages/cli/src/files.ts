@@ -159,18 +159,19 @@ async function walk(
       try {
         s = await abortable(stat(abs), signal);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-          // A link whose target is gone is broken; a link that itself vanished
-          // raced with the walk and must surface as a change, not a stale skip.
-          const gone = await abortable(lstat(abs), signal).then(
-            () => false,
-            (e: NodeJS.ErrnoException) => e?.code === "ENOENT",
-          );
-          if (gone) sourceChanged(rel);
-          omissions.push({ path: rel, reason: "broken_symlink" });
-          continue;
-        }
-        throw error;
+        // Cancellation must propagate, not become a stale skip.
+        signal?.throwIfAborted();
+        // A link whose target is unresolvable — gone (ENOENT), looping
+        // (ELOOP), through a non-directory (ENOTDIR), or unreadable
+        // (EACCES) — is broken; a link that itself vanished raced with the
+        // walk and must surface as a change, not a stale skip.
+        const gone = await abortable(lstat(abs), signal).then(
+          () => false,
+          (e: NodeJS.ErrnoException) => e?.code === "ENOENT",
+        );
+        if (gone) sourceChanged(rel);
+        omissions.push({ path: rel, reason: "broken_symlink" });
+        continue;
       }
       if (s.isDirectory()) {
         // Following directory links can loop or escape the folder being published.
@@ -249,8 +250,14 @@ async function hashFile(
 
 /** Collect the files to publish from a directory or a single file. */
 export async function collectFiles(path: string, opts: CollectOptions = {}): Promise<Collected> {
+  // An already-aborted call must report cancellation, not block on root
+  // reads or fall through to path_not_found.
+  opts.signal?.throwIfAborted();
   const root = resolve(path);
-  const st = await stat(root).catch(() => null);
+  const st = await abortable(
+    stat(root).catch(() => null),
+    opts.signal,
+  );
   if (!st) throw new CliError({ code: "path_not_found", message: `No such file or directory: ${path}`, exitCode: EXIT.usage });
   const exclude = new Set((opts.exclude ?? []).map((p) => resolve(p)));
   const ignored: string[] = [];
@@ -261,7 +268,11 @@ export async function collectFiles(path: string, opts: CollectOptions = {}): Pro
 
   if (st.isDirectory()) {
     kind = "dir";
-    const ignoreFile = await readFile(join(root, ".dropwayignore"), "utf8").catch(() => "");
+    const ignoreFile = await readFile(join(root, ".dropwayignore"), { encoding: "utf8", signal: opts.signal }).catch(() => {
+      // A missing ignore file is fine, but cancellation must propagate.
+      opts.signal?.throwIfAborted();
+      return "";
+    });
     const matcher = new IgnoreMatcher(ignoreFile.split("\n"));
     await walk(root, matcher, exclude, entries, ignored, links, omissions, new Set(), opts.signal);
   } else if (st.isFile()) {

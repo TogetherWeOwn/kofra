@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -164,6 +164,33 @@ describe("collector fail-fast", () => {
   );
 });
 
+describe("collector cancellation before root reads", () => {
+  it("prefers cancellation over path_not_found when already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    // Without the pre-check, the root stat runs first and a missing root
+    // reports path_not_found instead of the abort reason.
+    const err = await collectFiles(join(dir, "missing"), { signal: controller.signal }).then(
+      () => {
+        throw new Error("expected collectFiles to reject");
+      },
+      (e) => e,
+    );
+    expect(err?.name).toBe("AbortError");
+    expect(err).not.toBeInstanceOf(CliError);
+  });
+
+  it("aborts before reading the ignore file when already aborted", async () => {
+    await writeFile(join(dir, ".dropwayignore"), "*.log\n");
+    await writeFile(join(dir, "keep.txt"), "keep");
+    const controller = new AbortController();
+    controller.abort();
+    await expect(collectFiles(dir, { signal: controller.signal })).rejects.toMatchObject({
+      name: "AbortError",
+    });
+  });
+});
+
 describe("collector read-boundary ENOENT", () => {
   it("maps a file that disappears at read to source_changed naming the relative path", async () => {
     await writeFile(join(dir, "payload.txt"), "payload");
@@ -219,6 +246,27 @@ describe.runIf(process.platform !== "win32")("collector filename decoding (POSIX
     await writeFile(rawPath(Buffer.from([0xef, 0xbb, 0xbf, 0x61, 0x2e, 0x74, 0x78, 0x74])) as unknown as string, "bom");
     const c = await collectFiles(dir);
     expect(c.files.map((f) => f.path)).toEqual(["\uFEFFa.txt"]);
+  });
+
+  it("records a symlink loop as broken_symlink instead of failing", async () => {
+    // stat on a cycle fails with ELOOP; publish skips unresolvable links.
+    await symlink("b", join(dir, "a"));
+    await symlink("a", join(dir, "b"));
+    const c = await collectFiles(dir);
+    expect(c.files).toEqual([]);
+    expect(c.omissions).toEqual([
+      { path: "a", reason: "broken_symlink" },
+      { path: "b", reason: "broken_symlink" },
+    ]);
+  });
+
+  it("records a link through a non-directory as broken_symlink", async () => {
+    // stat on real.txt/child fails with ENOTDIR; the link is unresolvable.
+    await writeFile(join(dir, "real.txt"), "x");
+    await symlink(join("real.txt", "child"), join(dir, "bad"));
+    const c = await collectFiles(dir);
+    expect(c.files.map((f) => f.path)).toEqual(["real.txt"]);
+    expect(c.omissions).toContainEqual({ path: "bad", reason: "broken_symlink" });
   });
 
   it("does not let a non-UTF-8 name and a U+FFFD name collapse in a Map", async () => {
