@@ -208,9 +208,17 @@ export function normaliseApi(input: string): string {
   if (!s) throw new DropwayError({ code: "invalid_api_url", message: "The instance URL is empty.", retryable: false });
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) {
     const authority = s.split("/")[0]!;
-    const host = authority.startsWith("[")
+    let host = authority.startsWith("[")
       ? authority.slice(0, authority.indexOf("]") + 1)
       : authority.split(":")[0]!;
+    try {
+      // Canonicalise before classifying: the URL parser expands IPv4
+      // shorthands such as `127.1` to dotted form, which the raw text
+      // does not match.
+      host = new URL(`http://${authority}`).hostname;
+    } catch {
+      // Keep the raw host; the parse below reports the invalid input.
+    }
     s = `${isLoopbackHostname(host) ? "http" : "https"}://${s}`;
   }
   let url: URL;

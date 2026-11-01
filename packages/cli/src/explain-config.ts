@@ -1,7 +1,7 @@
 /** Offline diagnostics only. Never use file-health classification to tighten the resolver. */
 import { readFile } from "node:fs/promises";
 import { configDir, credentialsPath, linkKey, linkPath } from "./config.ts";
-import { normaliseApi } from "./client.ts";
+import { isLoopbackHostname, normaliseApi } from "./client.ts";
 import { withLegacyEnv } from "./legacy-brand.ts";
 
 interface Source {
@@ -95,9 +95,18 @@ function describeKey(value: unknown, selected: Source): KeyReport {
 }
 
 function removedParts(raw: string): string[] {
-  // Match normaliseApi's scheme inference, including the localhost exception.
+  // Match normaliseApi's scheme inference, including the loopback exception:
+  // canonicalise through the URL parser so IPv4 shorthands count as loopback.
   let input = raw.trim();
-  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(input)) input = `${/^(localhost|127\.|\[::1\])/.test(input) ? "http" : "https"}://${input}`;
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(input)) {
+    let host = input.split("/")[0]!;
+    try {
+      host = new URL(`http://${host}`).hostname;
+    } catch {
+      // Keep the raw host; the parse below reports the invalid input.
+    }
+    input = `${isLoopbackHostname(host) ? "http" : "https"}://${input}`;
+  }
   const url = new URL(input);
   return [
     ...(url.username || url.password ? ["userinfo"] : []),
