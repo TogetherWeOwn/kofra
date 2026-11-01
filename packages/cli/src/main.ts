@@ -117,9 +117,16 @@ class Output {
     }
     let text = `Error (${escapeControl(err.code)}): ${escapeControl(err.message)}`;
     if (err.hint) text += `\n  Fix: ${escapeControl(err.hint)}`;
-    const findings = err.details?.findings as Array<{ path: string; line: number; kind: string }> | undefined;
+    // details come from the server unchecked: tolerate non-array findings
+    // and malformed rows rather than crashing while reporting the real error.
+    const findings = Array.isArray(err.details?.findings) ? err.details.findings : undefined;
     if (findings?.length)
-      text += `\n${findings.map((f) => `  ${escapeControl(f.path)}:${f.line}  ${escapeControl(f.kind)}`).join("\n")}`;
+      text += `\n${findings
+        .map((f) => {
+          const row = f && typeof f === "object" ? (f as { path?: unknown; line?: unknown; kind?: unknown }) : {};
+          return `  ${escapeControl(row.path)}:${escapeControl(row.line)}  ${escapeControl(row.kind)}`;
+        })
+        .join("\n")}`;
     if (err.requestId) text += `\n  Request id: ${escapeControl(err.requestId)}`;
     // Human errors are the presentation boundary: control characters from
     // untrusted input (paths, refs, server text) are escaped per field above,

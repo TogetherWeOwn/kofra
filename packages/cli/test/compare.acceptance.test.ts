@@ -45,7 +45,7 @@ type Seen = { method: string; path: string; search: string; authorization: strin
 type Options = {
   local?: Tree; remote?: Row[]; historical?: Row[]; manifestFiles?: Row[];
   noLive?: boolean; restoredLive?: boolean; redirectManifest?: boolean;
-  error?: { status: number; code: string; hint: string }; env?: NodeJS.ProcessEnv;
+  error?: { status: number; code: string; hint: string; details?: unknown }; env?: NodeJS.ProcessEnv;
   target?: string; cwd?: string; tty?: boolean;
 };
 let work: string;
@@ -543,6 +543,20 @@ describe("compare: discoverability and non-TTY output", () => {
     // Separator newlines stay raw: only untrusted fields are escaped.
     expect(r.stderr).toContain("\n  Fix: ");
     expect(r.stderr).not.toContain("\\u000a  Fix: ");
+  });
+
+  it("human error output survives malformed server finding rows", async () => {
+    const r = await compare([], {
+      error: {
+        status: 403, code: "insufficient_scope", hint: "Use a key with sites:read.",
+        details: { findings: [null, { path: 123, line: "x", kind: null }, "oops", { path: "ok.txt", line: 7, kind: "aws_access_key_id" }] },
+      },
+    });
+    expect(r.code).toBe(3);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("Error (insufficient_scope):");
+    expect(r.stderr).toContain("ok.txt:7  aws_access_key_id");
+    expect(r.stderr).not.toContain("unexpected_error");
   });
 
   it("keeps quiet JSON successful and progress-free even on a terminal", async () => {
