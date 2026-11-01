@@ -354,11 +354,14 @@ to the shared `dropway_hits` dataset; filter by worker name when reading it.
 Cache probe: no `cf-cache-status` header is present on `*.workers.dev` responses.
 The Cache API is internal to the Workers runtime, not the CDN cache, so there is
 nothing to emit that header. Repeat reads of the same file from the same colo return
-identical bytes and ETag (`cache-control: immutable` on fingerprinted assets); by
-construction the edge cache is consulted before R2, which is not externally
-observable. Cross-colo propagation of a new version was observed within seconds:
-immediately after a publish one colo served the new version while another still
-served the previous one, converging on the next reads.
+identical bytes and ETag (`cache-control: immutable` on fingerprinted assets), but
+from outside a Cache API hit is indistinguishable from another R2 read, so this probe
+verifies byte stability and cache headers, not hit rate. The [backup runbook](BACKUP.md)
+conservatively calls the edge Cache API a no-op on `*.workers.dev`; confirming or
+revising that needs Worker-side instrumentation (for example a debug hit/miss header
+or an analytics counter) and is out of scope here. Cross-colo propagation of a new
+version was observed within seconds: immediately after a publish one colo served the
+new version while another still served the previous one, converging on the next reads.
 
 ## Upgrades, backups, removal
 

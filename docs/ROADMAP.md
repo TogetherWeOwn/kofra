@@ -33,7 +33,7 @@ The first three feature branches are merged into `main` on top of the baseline b
 | R-04 | Partial | File sources (`content`, `url`, `sha256` + upload link, `copyFrom`) and idempotency keys for agent writes. |
 | R-05 | Done | Canonical `/versions` routes with `/deploys` kept as aliases, partial updates (`PATCH /api/v1/sites/:slug/files`), `GET` version status returning fresh upload items, fresh upload items in `missing_blobs`, rename. |
 | R-13 | Done | Exact ready-version previews in path and subdomain modes, owner credentials or 24-hour signed links, preview-root cookies, private/no-store privacy headers and stale-live-KV bypass. |
-| R-14 | Partial | Cache API pointer memo (10 s) in front of KV, blob cache capped at 25 MB, `scripts/measure-freshness.mjs`; the `workers.dev` p50/p95 and cache probe in `docs/SELF_HOST.md` are pending. |
+| R-14 | Done | Cache API pointer memo (10 s) in front of KV, blob cache capped at 25 MB, `scripts/measure-freshness.mjs`; `workers.dev` p50/p95 and cache probe in `docs/SELF_HOST.md` (2026-11-01: 20 samples, p50 163 ms, p95 235 ms). |
 | R-06 | Done | Remote MCP server at `/mcp` (Streamable HTTP) with a tool for every core capability, toolsets and read-only mode. |
 | R-07, R-08 | Done | Viewer bar with Rendered / Source / Raw, HTML frame, code highlighting, Markdown, JSON, CSV, images, SVG, PDF, video, audio, fonts, notebooks, binary info, cached renders. |
 | R-09, R-10 | Done | `kofra` CLI: publish (hash locally, upload only missing files), list, versions, restore, delete, login, whoami, setup, `api`. Not yet published to npm. |
