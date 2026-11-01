@@ -24,6 +24,11 @@ export interface CollectOptions {
   concurrency?: number;
   /** Abort collection (the future `diff` cancels here; publish never passes one). */
   signal?: AbortSignal;
+  /** Refuse an oversized eligible set before reading any file content (compare only). */
+  maxFiles?: number;
+  maxBytes?: number;
+  /** Refuse files whose size or mtime changes between enumeration and hashing (compare only). */
+  verifyUnchanged?: boolean;
 }
 
 /** Why one relative path was left out of the publish payload. Stable wire values. */
@@ -52,6 +57,7 @@ export interface Collected {
 interface Entry {
   abs: string;
   rel: string;
+  snapshot?: { size: number; mtimeMs: number };
 }
 
 const toPosix = (p: string) => p.split(sep).join("/");
@@ -207,7 +213,7 @@ const asErrno = (error: unknown): NodeJS.ErrnoException | null =>
 
 async function hashFile(
   e: Entry,
-  opts: { allowSecrets?: boolean; signal?: AbortSignal },
+  opts: { allowSecrets?: boolean; signal?: AbortSignal; verifyUnchanged?: boolean },
   secrets: SecretFinding[],
 ): Promise<SourceFile> {
   opts.signal?.throwIfAborted();
@@ -219,6 +225,9 @@ async function hashFile(
     throw error;
   }
   const size = s.size;
+  // A file rewritten between the snapshot pass and this stat hashes neither
+  // the old nor the new bytes: refuse instead of reporting a mixed hash.
+  if (opts.verifyUnchanged && e.snapshot && (size !== e.snapshot.size || s.mtimeMs !== e.snapshot.mtimeMs)) sourceChanged(e.rel);
   let sha256: string;
   if (size <= IN_MEMORY_MAX) {
     let bytes: Uint8Array;
@@ -245,6 +254,17 @@ async function hashFile(
     sha256 = h.digest("hex");
   }
   opts.signal?.throwIfAborted();
+  // ...nor one rewritten while its bytes were being read.
+  if (opts.verifyUnchanged) {
+    let after;
+    try {
+      after = await abortable(stat(e.abs), opts.signal);
+    } catch (error) {
+      if (asErrno(error)?.code === "ENOENT") sourceChanged(e.rel);
+      throw error;
+    }
+    if (after.size !== size || after.mtimeMs !== s.mtimeMs) sourceChanged(e.rel);
+  }
   return {
     path: e.rel,
     size,
@@ -297,6 +317,34 @@ export async function collectFiles(path: string, opts: CollectOptions = {}): Pro
     throw new CliError({ code: "path_not_supported", message: `${path} is not a regular file or directory.`, exitCode: EXIT.usage });
   }
 
+  // Compare-only bounds, checked from stat sizes before any file content is
+  // read, so a refusal never claims a full comparison from a partial walk.
+  if (opts.maxFiles !== undefined && entries.length > opts.maxFiles) {
+    throw new CliError({ code: "collection_cap_exceeded", message: `Eligible file count ${entries.length} exceeds --max-files ${opts.maxFiles}.`,
+      hint: "Raise --max-files or narrow the directory.", exitCode: EXIT.usage });
+  }
+  if (opts.maxBytes !== undefined || opts.verifyUnchanged) {
+    let bytes = 0;
+    for (const entry of entries) {
+      opts.signal?.throwIfAborted();
+      let s;
+      try {
+        s = await abortable(stat(entry.abs), opts.signal);
+      } catch (error) {
+        // Cancellation must propagate, not become a stale refusal.
+        opts.signal?.throwIfAborted();
+        if (opts.verifyUnchanged && asErrno(error)?.code === "ENOENT") sourceChanged(entry.rel);
+        throw error;
+      }
+      entry.snapshot = { size: s.size, mtimeMs: s.mtimeMs };
+      bytes += s.size;
+    }
+    if (opts.maxBytes !== undefined && bytes > opts.maxBytes) {
+      throw new CliError({ code: "collection_cap_exceeded", message: `Eligible bytes ${bytes} exceeds --max-bytes ${opts.maxBytes}.`,
+        hint: "Raise --max-bytes or narrow the directory.", exitCode: EXIT.usage });
+    }
+  }
+
   const secrets: SecretFinding[] = [];
   const files: SourceFile[] = new Array(entries.length);
   // Fail fast: the first worker error aborts the shared signal so stalled
@@ -316,7 +364,7 @@ export async function collectFiles(path: string, opts: CollectOptions = {}): Pro
         if (failure !== undefined || internal.signal.aborted) return;
         const i = next++;
         if (i >= entries.length) return;
-        files[i] = await hashFile(entries[i]!, { allowSecrets: opts.allowSecrets, signal: internal.signal }, secrets);
+        files[i] = await hashFile(entries[i]!, { allowSecrets: opts.allowSecrets, signal: internal.signal, verifyUnchanged: opts.verifyUnchanged }, secrets);
       }
     } catch (error) {
       failure ??= error;
