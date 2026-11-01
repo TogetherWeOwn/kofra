@@ -474,7 +474,7 @@ Delivers: AX-13. Depends: R-02.
 
 ### R-46 GitHub Action and pull-request previews (2 days)
 Delivers: PUB-20. Depends: R-09.
-- `TogetherWeOwn/dropway-action`-style composite action in this repo (`action.yml`): publish a folder,
+- `TogetherWeOwn/kofra-action`-style composite action in this repo (`action.yml`): publish a folder,
   comment the preview URL on the PR, delete the preview when the PR closes.
 
 ### R-47 End-to-end encrypted sites (2-3 days)

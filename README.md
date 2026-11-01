@@ -5,8 +5,8 @@ Publish a file, a folder or a whole site to a live URL with one command or one
 HTTP call. Every publish is an immutable version you can restore. MIT licensed;
 runs on your own Cloudflare account.
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/TogetherWeOwn/dropway)
-[![ci](https://github.com/TogetherWeOwn/dropway/actions/workflows/ci.yml/badge.svg)](https://github.com/TogetherWeOwn/dropway/actions/workflows/ci.yml)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/TogetherWeOwn/kofra)
+[![ci](https://github.com/TogetherWeOwn/kofra/actions/workflows/ci.yml/badge.svg)](https://github.com/TogetherWeOwn/kofra/actions/workflows/ci.yml)
 
 Prefer not to self-host? A hosted version is coming.
 
@@ -28,7 +28,7 @@ Prefer not to self-host? A hosted version is coming.
 - **Dashboard**: sign in with an API key, drag-and-drop publish, versions, restore, files, keys,
   members and settings; a file browser at `/v/<site>/` that never renders user content on the app origin.
 - **Agent-first**: a remote MCP server at `/mcp` with a tool for every capability, a CLI with JSON
-  output and stable exit codes, an installable Agent Skill (`npx skills add TogetherWeOwn/dropway`),
+  output and stable exit codes, an installable Agent Skill (`npx skills add TogetherWeOwn/kofra`),
   `/openapi.json`, `/llms.txt` and `/llms-full.txt` on every instance. Every error has a stable `code`
   and a `hint`; writes take idempotency keys.
 - **Scoped API keys** (`sites:read`, `sites:write`, `sites:delete`, `keys:write`, `members:write`,

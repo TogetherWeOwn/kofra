@@ -1,6 +1,6 @@
 # kofra CLI
 
-Publish a folder, a file or a `.zip` to a live URL on any [Kofra](https://github.com/TogetherWeOwn/dropway)
+Publish a folder, a file or a `.zip` to a live URL on any [Kofra](https://github.com/TogetherWeOwn/kofra)
 instance. Built for AI agents and scripts: one command, one JSON object on stdout, stable exit codes,
 and only the bytes the instance does not already have are uploaded.
 

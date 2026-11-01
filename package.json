@@ -4,7 +4,7 @@
   "private": true,
   "license": "MIT",
   "description": "Instant web hosting for AI agents and people, built entirely on Cloudflare. Self-hostable, single tenant, MIT.",
-  "repository": "github:TogetherWeOwn/dropway",
+  "repository": "github:TogetherWeOwn/kofra",
   "type": "module",
   "workspaces": [
     "packages/*",

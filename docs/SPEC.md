@@ -1810,7 +1810,7 @@ The link alone is not an operational reporting channel.
    cannot do) and a GitHub or GitLab account. Workers Paid ($5/month on Cloudflare) is recommended: the Free
    plan's 10 ms CPU per request breaks zip uploads and large renders, and Email sending and Dynamic Workers
    need Paid.
-2. **Click** `https://deploy.workers.cloudflare.com/?url=https://github.com/TogetherWeOwn/dropway`.
+2. **Click** `https://deploy.workers.cloudflare.com/?url=https://github.com/TogetherWeOwn/kofra`.
    Cloudflare copies the repo into the operator's account, creates D1 `dropway`, R2 `dropway-files`, KV,
    the Analytics Engine dataset (on first write) and, once added to `wrangler.jsonc`, the Queue and Durable
    Objects; it prompts for `ADMIN_BOOTSTRAP_KEY` (from `.dev.vars.example`, with help text from

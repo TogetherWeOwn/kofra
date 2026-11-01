@@ -41,7 +41,7 @@ packages/server           @dropway/server: createDropway() Hono app factory
   src/discovery.ts        /llms.txt, /llms-full.txt, /skill.md, /connect(.md), /.well-known/*, /robots.txt (generated)
   src/extensions.ts       Types for routes, MCP tools, UI slots, createDropway options
 packages/cli              `kofra` CLI (npm package "kofra", Node 20+, zero runtime dependencies)
-skills/kofra/SKILL.md   Agent Skill (`npx skills add TogetherWeOwn/dropway`); generated, `npm run skill:sync`
+skills/kofra/SKILL.md   Agent Skill (`npx skills add TogetherWeOwn/kofra`); generated, `npm run skill:sync`
 scripts/guard-open-core.mjs  CI guard: no billing, pricing, payment or hosted-service code in this repo
 test/                     vitest + @cloudflare/vitest-plugin (runs inside workerd)
 ```
