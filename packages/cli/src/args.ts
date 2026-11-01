@@ -10,6 +10,8 @@ export interface FlagSpec {
   kind: FlagKind;
   /** One-letter alias, e.g. "y" for --yes. */
   short?: string;
+  /** Refuse repeated flags rather than silently choosing a value. */
+  once?: boolean;
 }
 
 export type FlagSpecs = Record<string, FlagSpec>;
@@ -43,13 +45,14 @@ export function parseArgs(argv: string[], specs: FlagSpecs): Parsed {
       const eq = arg.indexOf("=");
       let name = eq === -1 ? arg.slice(2) : arg.slice(2, eq);
       let value: string | boolean | undefined = eq === -1 ? undefined : arg.slice(eq + 1);
-      let spec = specs[name];
+      let spec = Object.hasOwn(specs, name) ? specs[name] : undefined;
       if (!spec && name.startsWith("no-") && specs[name.slice(3)]?.kind === "boolean" && value === undefined) {
         name = name.slice(3);
         spec = specs[name];
         value = false;
       }
       if (!spec) throw new UsageError(`Unknown option --${name}.`);
+      if (spec.once && Object.hasOwn(flags, name)) throw new UsageError(`Pass --${name} only once.`);
       if (spec.kind === "boolean") {
         if (typeof value === "string") {
           if (!["true", "false", "1", "0"].includes(value)) throw new UsageError(`--${name} takes no value (or true/false).`);
@@ -74,6 +77,7 @@ export function parseArgs(argv: string[], specs: FlagSpecs): Parsed {
         const name = byShort.get(letters[j]!);
         if (!name) throw new UsageError(`Unknown option -${letters[j]}.`);
         const spec = specs[name]!;
+        if (spec.once && Object.hasOwn(flags, name)) throw new UsageError(`Pass --${name} only once.`);
         if (spec.kind === "boolean") {
           flags[name] = true;
           continue;
