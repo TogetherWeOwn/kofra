@@ -240,24 +240,33 @@ export async function createDeploy(dc: DropwayContext, p: Principal, site: SiteR
       // carry config_json null even when their manifest ships root hosting
       // files, so their rules stay inactive while serving hides the files.
       // An identical republish parses and stores the config in place (no new
-      // version) and refreshes serving; unreadable blobs leave the null in
-      // place rather than failing a previously successful republish.
+      // version) and refreshes serving; an unreadable blob leaves the null
+      // in place, while a failed cache refresh after a stored backfill
+      // fails retryably, so the next republish retries the refresh instead
+      // of reporting success on a stale cache.
       let backfilled = current;
       if (current.config_json == null) {
         const { results: hostingFiles } = await dc.env.DB.prepare(
           "SELECT path, sha256, size, content_type AS contentType FROM version_files WHERE version_id = ? AND (path = '_redirects' OR path = '_headers')",
         ).bind(current.id).all<NormalisedEntry>();
         if (hostingFiles.length > 0) {
+          // An unreadable blob means there is no parsed config to store, so
+          // the null stays and a later republish tries again.
+          let parsed: { configJson: string | null; warnings: Warning[] } | null = null;
           try {
-            const { configJson } = await loadVersionSiteConfig(dc, hostingFiles);
-            const filled = await dc.env.DB.prepare("UPDATE versions SET config_json = ? WHERE id = ? AND config_json IS NULL")
-              .bind(configJson, current.id).run();
-            if ((filled?.meta.changes ?? 0) > 0) {
-              backfilled = { ...current, config_json: configJson };
-              await refreshLive(dc, site.id);
-            }
+            parsed = await loadVersionSiteConfig(dc, hostingFiles);
           } catch {
-            // Blob reads failed: keep serving the legacy version as-is.
+            parsed = null;
+          }
+          if (parsed) {
+            const filled = await dc.env.DB.prepare("UPDATE versions SET config_json = ? WHERE id = ? AND config_json IS NULL")
+              .bind(parsed.configJson, current.id).run();
+            if ((filled?.meta.changes ?? 0) > 0) backfilled = { ...current, config_json: parsed.configJson };
+            try {
+              await refreshLive(dc, site.id);
+            } catch {
+              throw new ApiError(502, "cache_refresh_failed", "The site rules were stored but serving could not be refreshed.", "Retry the identical publish shortly; it re-attempts the refresh.", { retryable: true });
+            }
           }
         }
       }
