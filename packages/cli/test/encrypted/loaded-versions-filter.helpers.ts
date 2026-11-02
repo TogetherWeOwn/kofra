@@ -155,8 +155,10 @@ export async function startHistoryFixture() {
       // The Versions section renders only after the site + versions bootstrap
       // resolves, for populated and empty histories alike.
       await page.getByRole("heading", { name: /^versions$/i }).waitFor();
-      await expect.poll(() => view.wire.filter(call => call.path === `${base}/versions`).length).toBe(1);
-      if (options.linked !== undefined) await expect.poll(() => page.locator("#files").innerText()).toContain(artifact(options.linked));
+      // Polls keep this helper's navigation budget: vitest's poll timeout
+      // defaults to 1s and ignores page.setDefaultTimeout, so state it explicitly.
+      await expect.poll(() => view.wire.filter(call => call.path === `${base}/versions`).length, { timeout: 2000 }).toBe(1);
+      if (options.linked !== undefined) await expect.poll(() => page.locator("#files").innerText(), { timeout: 2000 }).toContain(artifact(options.linked));
       initialDashboardLoad = false;
       return view;
     };

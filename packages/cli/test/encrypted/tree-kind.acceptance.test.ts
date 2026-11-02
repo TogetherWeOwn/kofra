@@ -160,15 +160,26 @@ async function visit(options: Options = {}) {
       // file-list request finishes. Gate on it first: the /me cache write below
       // rides an independent request and cannot synchronize the tree.
       await page.getByRole("combobox", { name: /(?:file\s*)?kind|file type/i }).waitFor();
-      await expect.poll(() => page.locator("a[data-kind]").count()).toBe((options.rows ?? mixed).length);
+      // Polls keep the file's navigation budget: vitest's poll timeout defaults
+      // to 1s and ignores page.setDefaultTimeout, so state it explicitly.
+      await expect.poll(() => page.locator("a[data-kind]").count(), { timeout: 2500 }).toBe((options.rows ?? mixed).length);
       // The viewer boots renderAccount() without awaiting it: /me resolves after
       // first paint and caches into sessionStorage (dropway.me). Snapshot tests
       // below compare storage digests, so wait for that write to land — otherwise
       // it races the `before` snapshot under CI load and the digests differ.
-      await expect.poll(() => page.evaluate(() => (globalThis as any).sessionStorage.getItem("dropway.me"))).toBeTruthy();
+      await expect.poll(() => page.evaluate(() => (globalThis as any).sessionStorage.getItem("dropway.me")), { timeout: 2500 }).toBeTruthy();
+      if (options.mode) {
+        // The mode-filtering tests count framenavigated after visit returns. The
+        // shell iframe navigates from page load (and go() may replace it once the
+        // manifest resolves), so settle its load here — a CDP-level wait, safe for
+        // the sandboxed opaque-origin frame, unlike a contentDocument probe.
+        const preview = page.frame({ name: "dw-frame" });
+        expect(preview, "viewer preview frame must exist before mode filtering").toBeTruthy();
+        await preview!.waitForLoadState("load", { timeout: 2500 });
+      }
     }
     else if (options.state === "anonymous") await page.getByRole("link", { name: /sign in/i }).first().waitFor();
-    else await expect.poll(() => page.locator("body").innerText()).toMatch(options.state === "forbidden" ? /not authorized|forbidden/i : /unavailable|try again|error/i);
+    else await expect.poll(() => page.locator("body").innerText(), { timeout: 2500 }).toMatch(options.state === "forbidden" ? /not authorized|forbidden/i : /unavailable|try again|error/i);
     return {
       context, page, requests, external, errors, response,
       manifestLoads: () => manifestLoads,
