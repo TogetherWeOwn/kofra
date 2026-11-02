@@ -242,18 +242,34 @@ export async function effectiveSigningSecret(dc: {
   return signingSecret(config);
 }
 
+/** True for loopback hostnames only: localhost, *.localhost, 127.0.0.0/8 and ::1. */
+function isLoopbackHostname(host: string): boolean {
+  const normalized = host.toLowerCase();
+  // WHATWG URLs keep IPv6 brackets on hostname ("[::1]").
+  const bare = normalized.replace(/^\[(.*)\]$/, "$1");
+  if (bare === "localhost" || bare.endsWith(".localhost") || bare === "::1") return true;
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(bare);
+}
+
 /** True for loopback origins only: localhost, *.localhost, 127.0.0.0/8 and ::1. */
 function isLoopbackOrigin(origin: string): boolean {
-  let hostname = "";
   try {
-    hostname = new URL(origin).hostname.toLowerCase();
+    return isLoopbackHostname(new URL(origin).hostname);
   } catch {
     return false;
   }
-  // WHATWG URLs keep IPv6 brackets on hostname ("[::1]").
-  const host = hostname.replace(/^\[(.*)\]$/, "$1");
-  if (host === "localhost" || host.endsWith(".localhost") || host === "::1") return true;
-  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
+
+/**
+ * True for loopback SITES_DOMAIN values, using the same loopback test as origins.
+ * The domain is bare (sites serve at https://<slug>.<sitesDomain>/), so a leading
+ * wildcard is stripped before the test; anything else that is not a loopback
+ * hostname — including unparseable values — fails closed (false), as origins do.
+ */
+function isLoopbackDomain(domain: string): boolean {
+  const host = domain.trim().toLowerCase().replace(/^\*\./, "");
+  if (!host) return false;
+  return isLoopbackHostname(host);
 }
 
 export function resolveConfig(vars: DropwayVars, overrides: ConfigOverrides = {}): DropwayConfig {
@@ -319,8 +335,17 @@ export function resolveConfig(vars: DropwayVars, overrides: ConfigOverrides = {}
   const signingSecretValue = overrides.signingSecret !== undefined ? (overrides.signingSecret ?? "").trim() || null
     : vars.SIGNING_SECRET?.trim() || adminBootstrapKey || (bool(vars.ALLOW_INSECURE_DEV_SECRET, false) ? INSECURE_DEV_SECRET : null);
   if (signingSecretValue === INSECURE_DEV_SECRET) {
-    const offending = [appOrigin, ...legacyAppOrigins, sitesOrigin, ...legacySitesOrigins]
+    const offendingOrigin = [appOrigin, ...legacyAppOrigins, sitesOrigin, ...legacySitesOrigins]
       .find((o) => o !== null && !isLoopbackOrigin(o));
+    // SITES_DOMAIN is a bare domain (sites serve at https://<slug>.<sitesDomain>/),
+    // not an origin, so it gets the same loopback test at the domain level. Path mode
+    // discards the domain (it resolves to null below), so only an effective
+    // subdomain-mode domain refuses — mirroring how SITES_ORIGIN is only checked
+    // when it is effective in path mode.
+    const offendingDomain = !offendingOrigin && sitesMode === "subdomain" && sitesDomain && !isLoopbackDomain(sitesDomain)
+      ? sitesDomain
+      : undefined;
+    const offending = offendingOrigin ?? offendingDomain ?? undefined;
     if (offending !== undefined) {
       throw new Error(`Invalid ALLOW_INSECURE_DEV_SECRET: configured origin ${offending} is not loopback. ` +
         "The fixed dev secret is public, so it is refused with any non-loopback origin; use loopback origins " +
