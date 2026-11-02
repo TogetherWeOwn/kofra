@@ -192,7 +192,7 @@ export const CORE_API_OPERATIONS = [
         ...SETTINGS_INPUT,
         password: {
           type: "string",
-          minLength: 4,
+          minLength: 8,
           maxLength: 200,
           description: "Optional visitor password (see set_site_access).",
         },
@@ -1002,7 +1002,7 @@ export const CORE_API_OPERATIONS = [
         },
         password: {
           type: "string",
-          minLength: 4,
+          minLength: 8,
           maxLength: 200,
           description: 'Required for mode "password".',
         },
@@ -1025,7 +1025,7 @@ export const CORE_API_OPERATIONS = [
         required: ["mode", "slug"],
         properties: {
           mode: { enum: ["public", "password", "restricted", "private"] },
-          password: { type: "string", minLength: 4, maxLength: 200 },
+          password: { type: "string", minLength: 8, maxLength: 200 },
           slug: { type: "string" },
         },
       }),

@@ -1,8 +1,8 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { hashPassword, refreshLive, verifyPassword } from "@dropway/core";
+import { hashPassword, refreshLive, setSiteAccess, verifyPassword } from "@dropway/core";
 import type { ServerBindings } from "@dropway/server";
-import { form, freshInstance, jsonBody } from "./helpers";
+import { form, freshInstance, jsonBody, ORIGIN } from "./helpers";
 import { attempt, freezePasswordClock, lockedSite, SITE_PASSWORD } from "./site-password-fixtures";
 
 const IP = "192.0.2.10";
@@ -36,6 +36,19 @@ describe("site-password cookie expiry (M1)", () => {
     vi.setSystemTime(until + 1000);
     const expired = await siteGet(dw, url, cookie);
     expect(expired!.status).toBe(401);
+  });
+
+  it("accepts a fresh cookie on an edge whose clock runs slightly behind", async () => {
+    const dw = await freshInstance();
+    const url = await lockedSite(dw, "expiry-skew");
+    const unlocked = await attempt(dw, url, SITE_PASSWORD, IP);
+    expect(unlocked.status).toBe(303);
+    const cookie = unlocked.headers.get("set-cookie")!.split(";")[0]!;
+    // The issuing edge's clock runs ahead of this validator: a fresh cookie's
+    // `until` sits just past our now + TTL, within the same skew the form-token check allows.
+    vi.setSystemTime(Date.now() - 30_000);
+    const page = await siteGet(dw, url, cookie);
+    expect(page!.status).toBe(200);
   });
 
   it("rejects forged, malformed and pre-change cookies without unlocking", async () => {
@@ -119,7 +132,7 @@ describe("verifyPassword bounds (L2)", () => {
 });
 
 describe("site-password minimum of 8 (L3)", () => {
-  it("rejects newly set 7-character passwords with invalid_password", async () => {
+  it("rejects newly set 7-character passwords at the API boundary", async () => {
     const dw = await freshInstance();
     const pub = await dw.json("/api/v1/publish", {
       method: "POST", key: dw.ownerKey, body: form({ "index.html": "minimum content" }, { slug: "minimum-site" }),
@@ -130,14 +143,30 @@ describe("site-password minimum of 8 (L3)", () => {
       key: dw.ownerKey, ...jsonBody({ mode: "password", password: "1234567" }), method: "PUT",
     });
     expect(access.status).toBe(400);
-    expect(access.body.error.code).toBe("invalid_password");
-    expect(access.body.error.message).toContain("8-200");
+    expect(access.body.error.code).toBe("invalid_request");
 
     const created = await dw.json("/api/v1/sites", {
       key: dw.ownerKey, ...jsonBody({ slug: "minimum-create", password: "1234567" }),
     });
     expect(created.status).toBe(400);
+    // Create-site passes the raw value through to the service, which refuses it.
     expect(created.body.error.code).toBe("invalid_password");
+  });
+
+  it("rejects 7-character passwords in the service with invalid_password", async () => {
+    const dw = await freshInstance();
+    const pub = await dw.json("/api/v1/publish", {
+      method: "POST", key: dw.ownerKey, body: form({ "index.html": "minimum content" }, { slug: "minimum-service" }),
+    });
+    expect(pub.status).toBe(201);
+    const ctx = createExecutionContext();
+    try {
+      const dc = dw.dropway.context(env as unknown as ServerBindings, ctx);
+      const principal = await dc.adapters.identity.resolve(
+        new Request(`${ORIGIN}/api/v1/me`, { headers: { Authorization: `Bearer ${dw.ownerKey}` } }), dc);
+      await expect(setSiteAccess(dc, principal, "minimum-service", { mode: "password", password: "1234567" }))
+        .rejects.toMatchObject({ status: 400, code: "invalid_password" });
+    } finally { await waitOnExecutionContext(ctx); }
   });
 
   it("still unlocks a site whose existing password predates the minimum", async () => {

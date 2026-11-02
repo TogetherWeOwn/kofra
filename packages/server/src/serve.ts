@@ -255,7 +255,9 @@ async function passwordCookieValid(dw: DropwayContext, live: LiveSite, cookie: s
   const [until, signature] = cookie.split(".");
   if (!until || !signature || !/^\d+$/.test(until)) return false;
   const expires = Number(until);
-  if (expires < Date.now() || expires > Date.now() + SITE_PASSWORD_COOKIE_TTL) return false;
+  // Edges' clocks differ slightly: a cookie minted by an edge ahead of this one may
+  // carry an `until` just past our now + TTL, same tolerance as the form-token check.
+  if (expires < Date.now() || expires > Date.now() + SITE_PASSWORD_COOKIE_TTL + PASSWORD_FORM_CLOCK_SKEW) return false;
   return timingSafeEqualStr(cookie, await passwordCookieValue(dw, live, expires));
 }
 

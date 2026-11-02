@@ -2673,7 +2673,7 @@ export function dropwayClient() {
       h("label", { class: "dw-check" }, h("input", { type: "checkbox", name: "crossOriginIsolation", checked: s.crossOriginIsolation }), h("span", {}, "Cross-origin isolation", h("span", { class: "dw-sub", text: "Sends COOP/COEP so threaded WebAssembly (SharedArrayBuffer) works. Cross-origin embeds then need CORP." }))),
       h("div", { class: "dw-field", style: "margin-top:.9rem" },
         h("label", { class: "dw-label", for: "dw-s-pw", text: s.passwordProtected ? "Password (set; type a new one to change it)" : "Password (optional)" }),
-        h("div", { class: "dw-row" }, h("input", { class: "dw-input", id: "dw-s-pw", name: "password", type: "password", autocomplete: "new-password", minlength: "4", maxlength: "200", style: "max-width:18rem" }),
+        h("div", { class: "dw-row" }, h("input", { class: "dw-input", id: "dw-s-pw", name: "password", type: "password", autocomplete: "new-password", minlength: "8", maxlength: "200", style: "max-width:18rem" }),
           s.passwordProtected ? h("button", { type: "button", class: "dw-btn", "data-site-mutation": "", text: "Remove password", onclick: async function () { await saveSettings({ password: null }, "Password removed."); } }) : null),
         h("p", { class: "dw-help", text: "Visitors must enter it. Changing it signs everyone out." }),
       ),
