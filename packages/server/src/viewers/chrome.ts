@@ -157,8 +157,8 @@ export const VIEWER_CSS = `
 
 /** An opening <main> tag (quoted attribute values may hold `>`); group 1 is the attribute text. */
 const MAIN_OPEN = /<main(?=[\s>/])((?:[^>"']|"[^"]*"|'[^']*')*)>/;
-/** The id attribute of an opening tag. */
-const MAIN_ID = /\bid\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/;
+/** The id attribute of an opening tag's attribute text (group 1 of MAIN_OPEN, so `data-id` and friends cannot match). */
+const MAIN_ID = /(?:\s|^)id\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/;
 
 /** A complete viewer page response. `body` is trusted HTML (escape user content before passing it). */
 export function viewerPage(
@@ -177,8 +177,8 @@ export function viewerPage(
   let content: string;
   if (!open) {
     content = `<main id="dw-content" tabindex="-1">${opts.body}</main>`;
-  } else if (MAIN_ID.test(open[0])) {
-    target = MAIN_ID.exec(open[0])![1]!.replace(/^["']|["']$/g, "");
+  } else if (MAIN_ID.test(open[1])) {
+    target = MAIN_ID.exec(open[1])![1]!.replace(/^["']|["']$/g, "");
     content = opts.body.replace(MAIN_OPEN, '<main tabindex="-1"$1>');
   } else {
     content = opts.body.replace(MAIN_OPEN, '<main id="dw-content" tabindex="-1"$1>');

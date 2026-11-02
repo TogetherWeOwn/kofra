@@ -8,8 +8,10 @@ import { sanitizeHtml } from "./sanitize";
 
 // 4 was issued separately for the report print treatment plus shared-link
 // head tags and for the Phone disclosure in the viewer bar; neither 4
-// identifies the merged bytes, so the merged render moves to 5.
-const MD_VERSION = 5;
+// identifies the merged bytes, so the merged render moves to 5. 6 retires
+// fragments cached before the sanitizer demoted authored <main> landmarks,
+// which would otherwise nest inside the page landmark on a cache hit.
+const MD_VERSION = 6;
 
 const MD_CSS = `
 .dw-md{max-width:48rem;margin:0 auto;padding:2.5rem 1.25rem 5rem}
