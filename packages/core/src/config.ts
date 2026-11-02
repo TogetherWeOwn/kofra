@@ -338,8 +338,13 @@ export function resolveConfig(vars: DropwayVars, overrides: ConfigOverrides = {}
     const offendingOrigin = [appOrigin, ...legacyAppOrigins, sitesOrigin, ...legacySitesOrigins]
       .find((o) => o !== null && !isLoopbackOrigin(o));
     // SITES_DOMAIN is a bare domain (sites serve at https://<slug>.<sitesDomain>/),
-    // not an origin, so it gets the same loopback test at the domain level.
-    const offendingDomain = !offendingOrigin && sitesDomain && !isLoopbackDomain(sitesDomain) ? sitesDomain : undefined;
+    // not an origin, so it gets the same loopback test at the domain level. Path mode
+    // discards the domain (it resolves to null below), so only an effective
+    // subdomain-mode domain refuses — mirroring how SITES_ORIGIN is only checked
+    // when it is effective in path mode.
+    const offendingDomain = !offendingOrigin && sitesMode === "subdomain" && sitesDomain && !isLoopbackDomain(sitesDomain)
+      ? sitesDomain
+      : undefined;
     const offending = offendingOrigin ?? offendingDomain ?? undefined;
     if (offending !== undefined) {
       throw new Error(`Invalid ALLOW_INSECURE_DEV_SECRET: configured origin ${offending} is not loopback. ` +

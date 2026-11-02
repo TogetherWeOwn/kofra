@@ -85,6 +85,9 @@ describe("signing secret", () => {
     expect(resolveConfig({ ...dev, SITES_MODE: "subdomain", SITES_DOMAIN: "127.0.0.1" }).signingSecret).toBeTruthy();
     expect(resolveConfig({ ...dev, SITES_MODE: "subdomain", SITES_DOMAIN: "::1" }).signingSecret).toBeTruthy();
     expect(resolveConfig(dev, { sitesMode: "subdomain", sitesDomain: "sites.localhost" }).signingSecret).toBeTruthy();
+    // Path mode discards SITES_DOMAIN, so a leftover non-loopback domain does not refuse.
+    expect(resolveConfig({ ...dev, SITES_MODE: "path", SITES_DOMAIN: "example.com" }).signingSecret).toBeTruthy();
+    expect(resolveConfig(dev, { sitesMode: "path", sitesDomain: "sites.example.com" }).signingSecret).toBeTruthy();
     // Any configured non-loopback origin refuses at startup.
     for (const vars of [
       { ...dev, APP_ORIGIN: "https://example.com" },
