@@ -32,8 +32,9 @@
 # deployment branches to `main` (and add a required reviewer if available):
 # masking protects logs, not against a modified workflow dispatched from
 # another branch. Mint ADMIN_BOOTSTRAP_KEY randomly (e.g.
-# `openssl rand -hex 32`); the workflow's length check enforces the app's
-# 32-character minimum, not entropy.
+# `openssl rand -hex 32`, stored with no surrounding whitespace); the
+# workflow's length/padding check enforces the app's 32-character minimum
+# as the app applies it (after trimming), not entropy.
 # The app's SIGNING_SECRET is generated per run inside the job, put on the
 # Worker as a secret, and never leaves the job. ADMIN_BOOTSTRAP_KEY is
 # read from the environment secret above and likewise only ever passed to
@@ -65,8 +66,12 @@ jobs:
     environment: verification
     # Cloudflare credentials are deliberately NOT job-level env: they are set
     # only on the steps that call wrangler (and the step that checks they
-    # exist), so dependency install scripts (`npm ci`) and other steps never
-    # run with the verification account token in their environment.
+    # exist), so other steps never run with the verification account token
+    # in their environment. Dependency lifecycle scripts do not run at all
+    # (`npm ci --ignore-scripts` below), so an install script can neither see
+    # the token nor replace the wrangler this job later calls with it;
+    # wrangler/esbuild ship their binaries as platform packages and deploy
+    # fine without them (verified with `wrangler deploy --dry-run`).
     env:
       WRANGLER_CONFIG: wrangler.verification.jsonc
     steps:
@@ -82,8 +87,26 @@ jobs:
             echo "::error::WRANGLER_CONFIG is '$WRANGLER_CONFIG', expected wrangler.verification.jsonc. Refusing to run."
             exit 1
           fi
+          # Escaped keys (e.g. "name" spelled with a \uXXXX escape) decode to a
+          # real key for wrangler's JSONC parser but are invisible to the
+          # greps below, and block comments could hide a fake name line, so
+          # this config (which needs neither) refuses both outright.
+          if grep -qF '\' "$WRANGLER_CONFIG" || grep -qF '/*' "$WRANGLER_CONFIG"; then
+            echo "::error::$WRANGLER_CONFIG contains a backslash escape or block comment; the verification config must stay plain JSONC so the guard sees every key wrangler sees. Refusing to run."
+            exit 1
+          fi
           # Exactly-once checks: a first-match grep alone would let a comment
           # or a second binding smuggle another resource name past the guard.
+          # Raw key counts too: an extracted match plus a second literal key
+          # the extraction pattern cannot see (split across lines, or with a
+          # comment between key and colon) must also refuse.
+          for key in '"name"' '"database_name"' '"bucket_name"'; do
+            count="$(grep -oF "$key" "$WRANGLER_CONFIG" | wc -l | tr -d ' ' || true)"
+            if [ "$count" -ne 1 ]; then
+              echo "::error::$WRANGLER_CONFIG must contain the key $key exactly once (found $count). Refusing to run."
+              exit 1
+            fi
+          done
           names="$(grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "$WRANGLER_CONFIG" | sed -E 's/.*"([^"]*)"$/\1/' || true)"
           if [ "$names" != "kofra-verification" ]; then
             echo "::error::$WRANGLER_CONFIG must declare Worker name 'kofra-verification' exactly once (found: $(echo "$names" | tr '\n' ' ')). Refusing to run wrangler against any other name."
@@ -99,8 +122,10 @@ jobs:
             echo "::error::$WRANGLER_CONFIG must declare R2 bucket_name 'kofra-verification-files' exactly once (found: $(echo "$buckets" | tr '\n' ' ')). Refusing to run."
             exit 1
           fi
-          # ID-addressed resources would bypass the name checks above.
-          if grep -qE '"(database_id|preview_database_id|id|preview_id)"[[:space:]]*:' "$WRANGLER_CONFIG"; then
+          # ID-addressed resources would bypass the name checks above. Any
+          # literal occurrence refuses (no colon pattern: a key split across
+          # lines must not slip past either).
+          if grep -qE '"(database_id|preview_database_id|id|preview_id)"' "$WRANGLER_CONFIG"; then
             echo "::error::$WRANGLER_CONFIG addresses a resource by ID (database_id / id / preview_id); verification resources must be addressed by the kofra-verification* names only. Refusing to run."
             exit 1
           fi
@@ -110,7 +135,7 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: package-lock.json
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - name: Environment secrets are set
         env:
           ACTION: ${{ inputs.action }}
@@ -141,20 +166,45 @@ jobs:
             echo "::error::Environment secret ADMIN_BOOTSTRAP_KEY is shorter than the app's 32-character minimum (see workflow header); the instance would refuse it."
             missing=1
           fi
+          # The app trims the key before applying that minimum
+          # (packages/core/src/config.ts), so a padded value could pass the
+          # raw length check above yet be refused by the deployed Worker.
+          if [ "$ACTION" = "deploy" ] && [ -n "${ADMIN_BOOTSTRAP_KEY:-}" ] && [[ "$ADMIN_BOOTSTRAP_KEY" =~ ^[[:space:]] || "$ADMIN_BOOTSTRAP_KEY" =~ [[:space:]]$ ]]; then
+            echo "::error::Environment secret ADMIN_BOOTSTRAP_KEY has leading or trailing whitespace; the app trims it before the 32-character check. Re-create the secret without padding (see workflow header)."
+            missing=1
+          fi
           exit "$missing"
       # Same guard as after checkout, repeated inline on purpose: it re-runs
-      # after `npm ci`, so a config rewritten by a dependency install script
-      # is still refused before any wrangler call, and the check itself comes
-      # from the workflow definition, not from a workspace file an install
-      # script could tamper with. Keep the two copies in sync.
+      # after `npm ci`, so a config rewritten between checkout and deploy is
+      # still refused before any wrangler call, and the check itself comes
+      # from the workflow definition, not from a workspace file. Keep the
+      # two copies in sync.
       - name: Guard (re-check after npm ci) — config targets only kofra-verification resources
         run: |
           if [ "$WRANGLER_CONFIG" != "wrangler.verification.jsonc" ]; then
             echo "::error::WRANGLER_CONFIG is '$WRANGLER_CONFIG', expected wrangler.verification.jsonc. Refusing to run."
             exit 1
           fi
+          # Escaped keys (e.g. "name" spelled with a \uXXXX escape) decode to a
+          # real key for wrangler's JSONC parser but are invisible to the
+          # greps below, and block comments could hide a fake name line, so
+          # this config (which needs neither) refuses both outright.
+          if grep -qF '\' "$WRANGLER_CONFIG" || grep -qF '/*' "$WRANGLER_CONFIG"; then
+            echo "::error::$WRANGLER_CONFIG contains a backslash escape or block comment; the verification config must stay plain JSONC so the guard sees every key wrangler sees. Refusing to run."
+            exit 1
+          fi
           # Exactly-once checks: a first-match grep alone would let a comment
           # or a second binding smuggle another resource name past the guard.
+          # Raw key counts too: an extracted match plus a second literal key
+          # the extraction pattern cannot see (split across lines, or with a
+          # comment between key and colon) must also refuse.
+          for key in '"name"' '"database_name"' '"bucket_name"'; do
+            count="$(grep -oF "$key" "$WRANGLER_CONFIG" | wc -l | tr -d ' ' || true)"
+            if [ "$count" -ne 1 ]; then
+              echo "::error::$WRANGLER_CONFIG must contain the key $key exactly once (found $count). Refusing to run."
+              exit 1
+            fi
+          done
           names="$(grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "$WRANGLER_CONFIG" | sed -E 's/.*"([^"]*)"$/\1/' || true)"
           if [ "$names" != "kofra-verification" ]; then
             echo "::error::$WRANGLER_CONFIG must declare Worker name 'kofra-verification' exactly once (found: $(echo "$names" | tr '\n' ' ')). Refusing to run wrangler against any other name."
@@ -170,8 +220,10 @@ jobs:
             echo "::error::$WRANGLER_CONFIG must declare R2 bucket_name 'kofra-verification-files' exactly once (found: $(echo "$buckets" | tr '\n' ' ')). Refusing to run."
             exit 1
           fi
-          # ID-addressed resources would bypass the name checks above.
-          if grep -qE '"(database_id|preview_database_id|id|preview_id)"[[:space:]]*:' "$WRANGLER_CONFIG"; then
+          # ID-addressed resources would bypass the name checks above. Any
+          # literal occurrence refuses (no colon pattern: a key split across
+          # lines must not slip past either).
+          if grep -qE '"(database_id|preview_database_id|id|preview_id)"' "$WRANGLER_CONFIG"; then
             echo "::error::$WRANGLER_CONFIG addresses a resource by ID (database_id / id / preview_id); verification resources must be addressed by the kofra-verification* names only. Refusing to run."
             exit 1
           fi
@@ -237,7 +289,7 @@ jobs:
             echo "## Verification environment deployed"
             echo "- Instance URL: $WORKER_URL"
             echo "- Git SHA: $GITHUB_SHA"
-            echo "- Next: run docs/RELEASE_CHECKLIST.md against the instance URL, using the bootstrap key from the operator-provisioned secret (the same value as the \`verification\` environment's ADMIN_BOOTSTRAP_KEY secret — it is never published by this workflow), then dispatch action=teardown."
+            echo "- Next: run docs/RELEASE_CHECKLIST.md against the instance URL **from Part A step 4 onward** (see its verification-instance variant: steps 1–3 are substituted by this deploy and recorded as a deviation — do not run the Deploy button or the root config in this shared account), using the bootstrap key from the operator-provisioned secret (the same value as the \`verification\` environment's ADMIN_BOOTSTRAP_KEY secret — it is never published by this workflow), then dispatch action=teardown."
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Tear down verification environment
         if: inputs.action == 'teardown'
