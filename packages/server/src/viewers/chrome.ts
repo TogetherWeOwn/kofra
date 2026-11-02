@@ -173,12 +173,13 @@ export function viewerPage(
   // made focusable so keyboard focus follows the skip link; anything else
   // is wrapped in a fresh landmark.
   const open = MAIN_OPEN.exec(opts.body);
+  const attrs = open?.[1] ?? "";
   let target = "dw-content";
   let content: string;
   if (!open) {
     content = `<main id="dw-content" tabindex="-1">${opts.body}</main>`;
-  } else if (MAIN_ID.test(open[1])) {
-    target = MAIN_ID.exec(open[1])![1]!.replace(/^["']|["']$/g, "");
+  } else if (MAIN_ID.test(attrs)) {
+    target = MAIN_ID.exec(attrs)![1]!.replace(/^["']|["']$/g, "");
     content = opts.body.replace(MAIN_OPEN, '<main tabindex="-1"$1>');
   } else {
     content = opts.body.replace(MAIN_OPEN, '<main id="dw-content" tabindex="-1"$1>');
