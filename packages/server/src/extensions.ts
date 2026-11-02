@@ -1,6 +1,6 @@
 import type { Context, Hono, MiddlewareHandler } from "hono";
-import type { ConfigOverrides, DropwayAdapters, DropwayContext, DropwayHooks, Principal, Scope } from "@dropway/core";
-import type { DropwayEnv, ServerBindings } from "./env";
+import type { ConfigOverrides, KofraAdapters, KofraContext, KofraHooks, Principal, Scope } from "@kofra/core";
+import type { KofraEnv, ServerBindings } from "./env";
 import type { Viewer } from "./viewers";
 import type { OperationDefinition } from "./operations";
 
@@ -11,11 +11,11 @@ import type { OperationDefinition } from "./operations";
  * extension can replace a core route by registering the same method + path.
  * Keep routes thin: parse input, call a service, shape JSON.
  */
-export type RouteExtension = (routers: { api: Hono<DropwayEnv>; app: Hono<DropwayEnv> }) => void;
+export type RouteExtension = (routers: { api: Hono<KofraEnv>; app: Hono<KofraEnv> }) => void;
 
 /** What an MCP tool handler receives. */
 export interface McpToolContext {
-  dw: DropwayContext;
+  dw: KofraContext;
   principal: Principal;
   request: Request;
   /** Who is calling, for attribution: MCP clientInfo ("claude-code/2.1"), X-Kofra-Client or User-Agent. */
@@ -26,8 +26,8 @@ export interface McpToolContext {
 
 /**
  * An MCP tool contributed by core or an extension. The MCP server (packages/server/src/mcp,
- * built on the Cloudflare Agents SDK) registers every tool in dropway.mcpTools.
- * Handlers must call @dropway/core services, never fetch the REST API.
+ * built on the Cloudflare Agents SDK) registers every tool in kofra.mcpTools.
+ * Handlers must call @kofra/core services, never fetch the REST API.
  *
  * Handlers return a plain JSON object. The server sends it as `structuredContent`,
  * plus a text block (one plain-English line from `summarize`, then the compact JSON)
@@ -61,17 +61,17 @@ export interface McpToolDefinition {
   /** Reauthorize a cached result before exposing it; generated registry tools recheck policy here. */
   beforeReplay?(args: Record<string, unknown>, ctx: McpToolContext): void | Promise<void>;
   /** Only list the tool when this returns true (e.g. a feature switched on in config). */
-  enabled?(dw: DropwayContext): boolean;
+  enabled?(dw: KofraContext): boolean;
   /** One plain-English line describing a successful result. */
   summarize?(result: any, args: Record<string, unknown>): string;
   handler(args: Record<string, unknown>, ctx: McpToolContext): Promise<unknown>;
 }
 
 /**
- * Serves the MCP endpoint. createDropway mounts it at /mcp on the app origin.
+ * Serves the MCP endpoint. createKofra mounts it at /mcp on the app origin.
  * Receives the tools to expose (core + extensions).
  */
-export type McpHandlerFactory = (tools: readonly McpToolDefinition[]) => (c: Context<DropwayEnv>) => Promise<Response>;
+export type McpHandlerFactory = (tools: readonly McpToolDefinition[]) => (c: Context<KofraEnv>) => Promise<Response>;
 
 export interface NavItem {
   label: string;
@@ -86,7 +86,7 @@ export interface UiPage {
   title: string;
   /** Show in the dashboard navigation. */
   nav?: boolean;
-  handler(c: Context<DropwayEnv>): Response | Promise<Response>;
+  handler(c: Context<KofraEnv>): Response | Promise<Response>;
 }
 
 /** An extra section on the dashboard settings page (/dashboard/settings). */
@@ -95,13 +95,13 @@ export interface UiSection {
   id: string;
   title: string;
   /** Trusted HTML for the section body. Escape anything that came from users. */
-  render(c: Context<DropwayEnv>): string | Promise<string>;
+  render(c: Context<KofraEnv>): string | Promise<string>;
 }
 
 /**
  * Dashboard/UI extension slots. The dashboard reads these to build its
  * navigation and pages. Extension pages can share the dashboard frame by
- * rendering with renderAppPage() from @dropway/server.
+ * rendering with renderAppPage() from @kofra/server.
  */
 export interface UiSlots {
   /** Extra links in the dashboard navigation. */
@@ -109,13 +109,13 @@ export interface UiSlots {
   /** Extra app-origin pages; registered before core pages, so the same path replaces a core page. */
   pages: UiPage[];
   /** Replace the app-origin home page (GET /). */
-  landing?: (c: Context<DropwayEnv>) => Response | Promise<Response>;
+  landing?: (c: Context<KofraEnv>) => Response | Promise<Response>;
   /** Extra HTML injected into <head> of Kofra-rendered app pages. */
   headHtml?: string;
   /** Extra sections at the end of /dashboard/settings. */
   settingsSections?: UiSection[];
   /** One-line notice (trusted HTML) above every app page, or null for none. */
-  banner?: (c: Context<DropwayEnv>) => string | null | Promise<string | null>;
+  banner?: (c: Context<KofraEnv>) => string | null | Promise<string | null>;
   /**
    * Browser sessions provided by the embedding app (for example cookie sessions
    * after an email sign-in). When set, the dashboard also treats a request the
@@ -134,15 +134,15 @@ export interface UiSession {
   signOutPath: string;
 }
 
-export interface CreateDropwayOptions {
+export interface CreateKofraOptions {
   /** Config overrides on top of Worker vars. A function receives the bindings. */
   config?: ConfigOverrides | ((env: ServerBindings) => ConfigOverrides);
   /** Replace any adapter; unspecified ones use the open-source defaults. */
-  adapters?: Partial<DropwayAdapters>;
+  adapters?: Partial<KofraAdapters>;
   /** Event hooks (one object or several). */
-  hooks?: DropwayHooks | DropwayHooks[];
+  hooks?: KofraHooks | KofraHooks[];
   /** Middleware run on /api/* after the principal is resolved and before routes. */
-  apiMiddleware?: MiddlewareHandler<DropwayEnv>[];
+  apiMiddleware?: MiddlewareHandler<KofraEnv>[];
   /** Extra REST/app routes. */
   routes?: RouteExtension[];
   /** Operations registered once for REST, OpenAPI, MCP and the CLI command table. */
@@ -156,5 +156,5 @@ export interface CreateDropwayOptions {
   /** Extra file viewers, tried before the core ones. */
   viewers?: Viewer[];
   /** Extra cron work (runs after core cleanup). */
-  scheduled?: (dc: DropwayContext, controller: ScheduledController) => Promise<void>;
+  scheduled?: (dc: KofraContext, controller: ScheduledController) => Promise<void>;
 }

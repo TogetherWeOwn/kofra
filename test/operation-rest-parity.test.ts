@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { createDropway, defineOperation } from "@dropway/server";
+import { createKofra, defineOperation } from "@kofra/server";
 import { BOOTSTRAP, freshInstance, jsonBody, type Instance } from "./helpers";
 import { commandRows } from "./operation-fixtures";
 
@@ -108,14 +108,14 @@ describe("operation route uniqueness", () => {
   });
 
   it("rejects a POST route and a post alias for the same path at app construction", () => {
-    expect(() => createDropway({ operations: [reviewOperation(
+    expect(() => createKofra({ operations: [reviewOperation(
       "review_case_collision", "/api/v1/review-items",
       [{ method: "post", path: "/api/v1/review-items" }],
     )] })).toThrowError(/duplicate.*route/i);
   });
 
   it("rejects structurally identical routes even when their path parameter names differ", () => {
-    expect(() => createDropway({ operations: [
+    expect(() => createKofra({ operations: [
       reviewOperation("review_item_id", "/api/v1/review-items/{id}"),
       reviewOperation("review_item_slug", "/api/v1/review-items/{slug}"),
     ] })).toThrowError(/duplicate.*route/i);

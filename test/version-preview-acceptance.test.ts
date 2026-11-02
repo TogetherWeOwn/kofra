@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
-import { clearLiveMemoryCache, type ConfigOverrides } from "@dropway/core";
+import { clearLiveMemoryCache, type ConfigOverrides } from "@kofra/core";
 import { form, freshInstance, jsonBody, manifestEntry, ORIGIN, type Instance } from "./helpers";
 
 // R-13 / SRV-07: black-box acceptance tests, derived from docs/ROADMAP.md.

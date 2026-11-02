@@ -1,6 +1,6 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { effectiveSigningSecret, hmacHex, ipHash, resolveConfig, sha256Hex, signingSecret, type DropwayContext } from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+import { effectiveSigningSecret, hmacHex, ipHash, resolveConfig, sha256Hex, signingSecret, type KofraContext } from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { describe, expect, it } from "vitest";
 import { BOOTSTRAP, freshInstance, jsonBody, manifestEntry, ORIGIN, type Instance } from "./helpers";
 import { lockedSite, SITE_PASSWORD } from "./site-password-fixtures";
@@ -14,7 +14,7 @@ function withoutSecrets(dw: Instance) {
     const headers = new Headers(rest.headers);
     if (key) headers.set("Authorization", `Bearer ${key}`);
     const ctx = createExecutionContext();
-    const res = await dw.dropway.fetch(new Request(url.startsWith("http") ? url : `${ORIGIN}${url}`, { ...rest, headers, redirect: "manual" }), bare, ctx);
+    const res = await dw.kofra.fetch(new Request(url.startsWith("http") ? url : `${ORIGIN}${url}`, { ...rest, headers, redirect: "manual" }), bare, ctx);
     await waitOnExecutionContext(ctx);
     return res;
   };
@@ -64,7 +64,7 @@ describe("signing secret", () => {
   });
 
   it("keys IP hashes instead of salting them", async () => {
-    const dc = { config: resolveConfig({ ADMIN_BOOTSTRAP_KEY: BOOTSTRAP }) } as unknown as DropwayContext;
+    const dc = { config: resolveConfig({ ADMIN_BOOTSTRAP_KEY: BOOTSTRAP }) } as unknown as KofraContext;
     const key = await effectiveSigningSecret(dc);
     await expect(ipHash(dc, "192.0.2.1")).resolves.toBe((await hmacHex(key, "ip:192.0.2.1")).slice(0, 32));
     // The old salted construction no longer matches.

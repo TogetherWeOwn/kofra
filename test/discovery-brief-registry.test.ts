@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { defineOperation } from "@dropway/server";
+import { defineOperation } from "@kofra/server";
 import { freshInstance } from "./helpers";
 
 function discoveryOperation(id: string, path: string) {

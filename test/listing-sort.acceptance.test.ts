@@ -493,7 +493,7 @@ describe("listing sort: nothing else changes", () => {
     const withSort = await listing(dw, `/s/${s}/?sort=size`);
     expect(withSort.html).toBe(plain.html);
     expect(withSort.html).toContain("<title>Home</title>");
-    expect(withSort.html.split('<script data-dropway="path-shim">')).toHaveLength(2);
+    expect(withSort.html.split('<script data-kofra="path-shim">')).toHaveLength(2);
     expect(withSort.html).not.toContain("Largest first");
 
     await dw.json(`/api/v1/sites/${s}`, {

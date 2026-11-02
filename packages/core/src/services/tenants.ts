@@ -1,4 +1,4 @@
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import { ApiError, BOOTSTRAP_MISMATCH_HINT, badRequest, bootstrapKeyMismatch, conflict, forbidden, notFound } from "../errors";
 import { newId } from "../lib/crypto";
 import { stringField } from "../lib/input";
@@ -68,24 +68,24 @@ function memberRow(input: MemberInput): MemberRow {
   };
 }
 
-function tenantInsert(dc: DropwayContext, t: TenantRow): D1PreparedStatement {
+function tenantInsert(dc: KofraContext, t: TenantRow): D1PreparedStatement {
   return dc.env.DB.prepare("INSERT INTO tenants (id, name, created_at) VALUES (?, ?, ?)").bind(t.id, t.name, t.created_at);
 }
 
-function memberInsert(dc: DropwayContext, m: MemberRow): D1PreparedStatement {
+function memberInsert(dc: KofraContext, m: MemberRow): D1PreparedStatement {
   return dc.env.DB.prepare("INSERT INTO members (id, tenant_id, email, name, role, external_ref, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
     .bind(m.id, m.tenant_id, m.email, m.name, m.role, m.external_ref, m.created_at);
 }
 
 /** Low-level: create a tenant. No checks; for setup and for extensions that onboard tenants. */
-export async function createTenant(dc: DropwayContext, input: { name?: string | null } = {}): Promise<TenantRow> {
+export async function createTenant(dc: KofraContext, input: { name?: string | null } = {}): Promise<TenantRow> {
   const t = tenantRow(input);
   await tenantInsert(dc, t).run();
   return t;
 }
 
 /** Low-level: add a member to a tenant. No permission checks. */
-export async function insertMember(dc: DropwayContext, input: MemberInput): Promise<MemberRow> {
+export async function insertMember(dc: KofraContext, input: MemberInput): Promise<MemberRow> {
   const m = memberRow(input);
   try {
     await memberInsert(dc, m).run();
@@ -105,13 +105,13 @@ export interface CreateTenantWithOwnerOptions {
   /** Prepare same-DB SQL before any insert; no independent writes or irreversible effects. */
   extend?(
     rows: { tenant: Readonly<TenantRow>; owner: Readonly<MemberRow> },
-    dc: DropwayContext,
+    dc: KofraContext,
   ): AtomicWriteExtension | Promise<AtomicWriteExtension>;
 }
 
 /** Low-level: caller owns admission. Key issuance is NOT part of this transaction. */
 export async function createTenantWithOwner(
-  dc: DropwayContext,
+  dc: KofraContext,
   input: CreateTenantWithOwnerInput,
   options: CreateTenantWithOwnerOptions = {},
 ): Promise<{ tenant: TenantRow; owner: MemberRow }> {
@@ -124,23 +124,23 @@ export async function createTenantWithOwner(
   return { tenant, owner };
 }
 
-export async function getTenant(dc: DropwayContext, id: string): Promise<TenantRow> {
+export async function getTenant(dc: KofraContext, id: string): Promise<TenantRow> {
   const t = await dc.env.DB.prepare("SELECT * FROM tenants WHERE id = ?").bind(id).first<TenantRow>();
   if (!t) throw notFound("tenant_not_found", "Tenant not found.");
   return t;
 }
 
-export async function getMember(dc: DropwayContext, id: string): Promise<MemberRow> {
+export async function getMember(dc: KofraContext, id: string): Promise<MemberRow> {
   const m = await dc.env.DB.prepare("SELECT * FROM members WHERE id = ?").bind(id).first<MemberRow>();
   if (!m) throw notFound("member_not_found", "Member not found.");
   return m;
 }
 
-async function tenantCount(dc: DropwayContext): Promise<number> {
+async function tenantCount(dc: KofraContext): Promise<number> {
   return (await dc.env.DB.prepare("SELECT COUNT(*) AS n FROM tenants").first<{ n: number }>())?.n ?? 0;
 }
 
-export async function isSetUp(dc: DropwayContext): Promise<boolean> {
+export async function isSetUp(dc: KofraContext): Promise<boolean> {
   return (await tenantCount(dc)) > 0;
 }
 
@@ -148,7 +148,7 @@ export async function isSetUp(dc: DropwayContext): Promise<boolean> {
  * First run: the bootstrap key creates the tenant, its owner and an owner API key.
  * In single-tenant mode this works exactly once.
  */
-export async function setupInstance(dc: DropwayContext, p: Principal, input: { email?: unknown; name?: unknown; tenantName?: unknown; keyName?: unknown }) {
+export async function setupInstance(dc: KofraContext, p: Principal, input: { email?: unknown; name?: unknown; tenantName?: unknown; keyName?: unknown }) {
   if (p.kind !== "bootstrap") {
     if (p.kind === "anonymous") {
       throw new ApiError(403, "bootstrap_key_required", "Setup needs the bootstrap key.", BOOTSTRAP_MISMATCH_HINT);
@@ -173,7 +173,7 @@ export async function setupInstance(dc: DropwayContext, p: Principal, input: { e
 }
 
 /** Break-glass: the bootstrap key mints a fresh full-scope key for the (first) owner. */
-export async function recoverOwnerKey(dc: DropwayContext, p: Principal) {
+export async function recoverOwnerKey(dc: KofraContext, p: Principal) {
   if (p.kind !== "bootstrap") {
     if (p.kind === "anonymous") {
       throw new ApiError(403, "bootstrap_key_required", "Recovery needs the bootstrap key.", BOOTSTRAP_MISMATCH_HINT);
@@ -187,7 +187,7 @@ export async function recoverOwnerKey(dc: DropwayContext, p: Principal) {
   return { member: serializeMember(owner), apiKey };
 }
 
-export async function listMembers(dc: DropwayContext, p: Principal) {
+export async function listMembers(dc: KofraContext, p: Principal) {
   const caller = requireMember(p, "sites:read");
   const { results } = await dc.env.DB.prepare("SELECT * FROM members WHERE tenant_id = ? AND disabled_at IS NULL ORDER BY created_at")
     .bind(caller.tenantId)
@@ -196,7 +196,7 @@ export async function listMembers(dc: DropwayContext, p: Principal) {
 }
 
 /** Add a member and give them their first API key (there is no email login in the core). */
-export async function createMember(dc: DropwayContext, p: Principal, input: { email?: unknown; name?: unknown; role?: unknown; scopes?: unknown; keyName?: unknown }) {
+export async function createMember(dc: KofraContext, p: Principal, input: { email?: unknown; name?: unknown; role?: unknown; scopes?: unknown; keyName?: unknown }) {
   const caller = requireMember(p, "members:write");
   const role = cleanRole(input.role, "member");
   if (role === "owner" && caller.role !== "owner") throw forbidden("Only owners can add owners.");
@@ -217,7 +217,7 @@ export async function createMember(dc: DropwayContext, p: Principal, input: { em
   return { member: serializeMember(member), apiKey };
 }
 
-export async function updateMember(dc: DropwayContext, p: Principal, memberId: string, input: { name?: unknown; role?: unknown }) {
+export async function updateMember(dc: KofraContext, p: Principal, memberId: string, input: { name?: unknown; role?: unknown }) {
   const caller = requireMember(p, "members:write");
   const m = await dc.env.DB.prepare("SELECT * FROM members WHERE id = ? AND tenant_id = ? AND disabled_at IS NULL")
     .bind(memberId, caller.tenantId)
@@ -231,7 +231,7 @@ export async function updateMember(dc: DropwayContext, p: Principal, memberId: s
   return serializeMember({ ...m, role, name });
 }
 
-async function assertAnotherOwner(dc: DropwayContext, tenantId: string, exceptId: string) {
+async function assertAnotherOwner(dc: KofraContext, tenantId: string, exceptId: string) {
   const other = await dc.env.DB.prepare("SELECT COUNT(*) AS n FROM members WHERE tenant_id = ? AND role = 'owner' AND disabled_at IS NULL AND id != ?")
     .bind(tenantId, exceptId)
     .first<{ n: number }>();
@@ -239,7 +239,7 @@ async function assertAnotherOwner(dc: DropwayContext, tenantId: string, exceptId
 }
 
 /** Disable a member and revoke all their keys. Their sites stay with the tenant. */
-export async function removeMember(dc: DropwayContext, p: Principal, memberId: string) {
+export async function removeMember(dc: KofraContext, p: Principal, memberId: string) {
   const caller = requireMember(p, "members:write");
   const m = await dc.env.DB.prepare("SELECT * FROM members WHERE id = ? AND tenant_id = ? AND disabled_at IS NULL")
     .bind(memberId, caller.tenantId)

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { build } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CliError, DropwayClient, errorFromResponse } from "../src/client.ts";
+import { CliError, KofraClient, errorFromResponse } from "../src/client.ts";
 
 // Only the external HTTP boundary is a fixture; error conversion, serialization,
 // process exits and generated shell continuations run through the real CLI.
@@ -78,7 +78,7 @@ describe("CLI recovery error translation", () => {
   it("preserves all recovery fields through errorFromResponse and typed client conversion", async () => {
     const body = { error: { ...fields, ...recovery }, requestId: "body-request" };
     const direct = await errorFromResponse(new Response(JSON.stringify(body), { status: 409 }));
-    const converted = await new DropwayClient({ api: "https://recovery.test", token: null, attempts: 1,
+    const converted = await new KofraClient({ api: "https://recovery.test", token: null, attempts: 1,
       fetch: async () => new Response(JSON.stringify(body), { status: 409 }) }).getSite({ slug: "sample" }).then(
         () => { throw new Error("fixture must fail"); }, (error: unknown) => error as CliError);
     for (const error of [direct, converted]) {

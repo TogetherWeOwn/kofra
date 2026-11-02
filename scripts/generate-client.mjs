@@ -3,7 +3,7 @@
  * operation registry (R-45, SPEC AX-13).
  *
  * The registry is the source of truth: every operation gets an input/output
- * interface plus a typed method on DropwayClient. Wire shapes follow the REST
+ * interface plus a typed method on KofraClient. Wire shapes follow the REST
  * transport (`http.input ?? input`, like the OpenAPI generator), not the MCP
  * transport. Raw-body operations keep their bytes:
  * - an operation returning octet-stream or ZIP reads bytes;
@@ -133,7 +133,7 @@ function isBytesIn(op) {
 export function emitClient(operations) {
   const chunks = [];
   chunks.push("// DO NOT EDIT: generated from the operation registry by `npm run client:generate` (R-45).");
-  chunks.push('import { DropwayHttpClient, type BytesResult, type CallOptions } from "./http.ts";');
+  chunks.push('import { KofraHttpClient, type BytesResult, type CallOptions } from "./http.ts";');
   chunks.push("");
   for (const op of operations) {
     const type = toTypeName(op.id);
@@ -150,7 +150,7 @@ export function emitClient(operations) {
   chunks.push("");
   chunks.push("export type OperationId = keyof typeof OPERATIONS;");
   chunks.push("");
-  chunks.push("export class DropwayClient extends DropwayHttpClient {");
+  chunks.push("export class KofraClient extends KofraHttpClient {");
   for (const op of operations) {
     const type = toTypeName(op.id);
     const method = toMethodName(op.id);

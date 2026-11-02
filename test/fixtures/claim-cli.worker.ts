@@ -1,4 +1,4 @@
-import { createDropway } from "@dropway/server";
+import { createKofra } from "@kofra/server";
 
 // Disposable local-only fixture for the `kofra claim` CLI acceptance tests
 // (packages/cli/test/claim-*.acceptance.test.ts). It is the real app plus one
@@ -6,7 +6,7 @@ import { createDropway } from "@dropway/server";
 // site" case needs no 24 h wait. The route only answers on the local fixture
 // Worker (bound to 127.0.0.1, torn down after the suite) and requires the
 // fixture bootstrap key. Never deployed; never imported by source code.
-export default createDropway({
+export default createKofra({
   routes: [
     ({ api }) => {
       api.post("/__fixture/expire-site", async (c) => {

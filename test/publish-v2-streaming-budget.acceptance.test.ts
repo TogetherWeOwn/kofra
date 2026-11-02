@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { resolveFileInputs, type Limits } from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+import { resolveFileInputs, type Limits } from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { freshInstance, ORIGIN } from "./helpers";
 
 // Review-round regression: the aggregate URL budget (oneShotMaxBytes) must be
@@ -64,7 +64,7 @@ function stubFetcher(bodies: Map<string, { bytes: number; probe: Probe }>): type
 async function resolveWith(fetcher: typeof fetch, files: unknown) {
   const dw = await freshInstance();
   const ctx = createExecutionContext();
-  const dc = dw.dropway.context(env as unknown as ServerBindings, ctx, new URL(ORIGIN));
+  const dc = dw.kofra.context(env as unknown as ServerBindings, ctx, new URL(ORIGIN));
   try {
     const principal = await dc.adapters.identity.resolve(
       new Request(`${ORIGIN}/api/v1/me`, { headers: { Authorization: `Bearer ${dw.ownerKey}` } }),

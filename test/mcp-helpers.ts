@@ -2,7 +2,7 @@ import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { Client as LegacyClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport as LegacyTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { ServerBindings } from "@dropway/server";
+import type { ServerBindings } from "@kofra/server";
 import { ORIGIN, type Instance } from "./helpers";
 
 export interface ToolCall {
@@ -26,7 +26,7 @@ export function mcpFetch(dw: Instance, key: string | null, extraHeaders: Record<
     if (key) headers.set("Authorization", `Bearer ${key}`);
     for (const [k, v] of Object.entries(extraHeaders)) headers.set(k, v);
     const ctx = createExecutionContext();
-    const res = await dw.dropway.fetch(new Request(req, { headers }), env as unknown as ServerBindings, ctx);
+    const res = await dw.kofra.fetch(new Request(req, { headers }), env as unknown as ServerBindings, ctx);
     await waitOnExecutionContext(ctx);
     return res;
   };

@@ -1,4 +1,4 @@
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import { siteUrl } from "../context";
 import { cleanupBlobs } from "./blob-cleanup";
 import { emit, meter } from "./events";
@@ -36,7 +36,7 @@ export interface CleanupReport {
  * orphans 201 + inventory 6, idempotency 1. This reserves 209 of Free's 1000 calls for
  * other invocation work; embedding hooks must budget their own calls.
  */
-export async function runCleanup(dc: DropwayContext, now = Date.now()): Promise<CleanupReport> {
+export async function runCleanup(dc: KofraContext, now = Date.now()): Promise<CleanupReport> {
   const report: CleanupReport = { expiredSites: 0, purgedSites: 0, abandonedDeploys: 0, deletedBlobs: 0, expiredUploads: 0, ...await cleanupTransfers(dc, now) };
   const db = dc.env.DB;
 

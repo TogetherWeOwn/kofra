@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { Context } from "hono";
-import { accessModeOf, describeSite, parseSettings, type DropwayContext, type Principal, type SiteRow } from "@dropway/core";
+import { accessModeOf, describeSite, parseSettings, type KofraContext, type Principal, type SiteRow } from "@kofra/core";
 import { SETTINGS_INPUT } from "../mcp/schemas";
-import type { DropwayEnv } from "../env";
+import type { KofraEnv } from "../env";
 
 export const fromSchema = (schema: Record<string, any>): z.ZodType<any> => z.fromJSONSchema(schema);
 
@@ -40,7 +40,7 @@ export const DESTROY = {
   openWorldHint: false,
 };
 
-export async function siteOut(dw: DropwayContext, site: SiteRow) {
+export async function siteOut(dw: KofraContext, site: SiteRow) {
   return {
     ...(await describeSite(dw, site)),
     access: { mode: accessModeOf(site) },
@@ -79,8 +79,8 @@ export function whoamiPrincipal(p: Principal) {
   return { kind: p.kind };
 }
 
-export const P = (c: Context<DropwayEnv>) => c.get("principal");
+export const P = (c: Context<KofraEnv>) => c.get("principal");
 
-export const D = (c: Context<DropwayEnv>) => c.get("dw");
+export const D = (c: Context<KofraEnv>) => c.get("dw");
 
-export const clientOf = (c: Context<DropwayEnv>) => c.req.header("x-kofra-client") ?? null;
+export const clientOf = (c: Context<KofraEnv>) => c.req.header("x-kofra-client") ?? null;

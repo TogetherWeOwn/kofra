@@ -1,9 +1,9 @@
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import { dropLive } from "./live";
 import { TRANSFER_DAY, transferEvent, type TransferRow } from "./transfers";
 
 /** Expiry is independent of legal hold. Only manifest/byte purge is fenced. */
-export async function cleanupTransfers(dc: DropwayContext, now: number) {
+export async function cleanupTransfers(dc: KofraContext, now: number) {
   const db = dc.env.DB;
   const { results: expired } = await db.prepare(`UPDATE transfers SET expired_at = ?, revision = revision + 1
     WHERE id IN (SELECT id FROM transfers WHERE expires_at < ? AND expired_at IS NULL AND revoked_at IS NULL AND deleted_at IS NULL LIMIT 200)

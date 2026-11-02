@@ -1,4 +1,4 @@
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import { appOrigin } from "../context";
 import { canAccess, serializeVersion, type SiteRow, type VersionRow } from "./sites";
 import { missingForScope } from "./deploys";
@@ -24,7 +24,7 @@ export interface UploadItem {
 const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /** Fresh upload items for `missing` hashes of a pending version (new dwu_ token). */
-export async function uploadItemsFor(dc: DropwayContext, version: VersionRow, entries: Array<{ path: string; sha256: string; size: number; contentType: string }>, missing: Iterable<string>): Promise<UploadItem[]> {
+export async function uploadItemsFor(dc: KofraContext, version: VersionRow, entries: Array<{ path: string; sha256: string; size: number; contentType: string }>, missing: Iterable<string>): Promise<UploadItem[]> {
   const authorization = `Bearer ${await createUploadToken(dc, version)}`;
   const bySha = new Map<string, Array<{ path: string; size: number; contentType: string }>>();
   for (const e of entries) bySha.set(e.sha256, [...(bySha.get(e.sha256) ?? []), e]);
@@ -54,7 +54,7 @@ export async function uploadItemsFor(dc: DropwayContext, version: VersionRow, en
  * and — for writers only — fresh upload items for what is still missing.
  * Read-only principals never receive a dwu_ write capability here.
  */
-export async function getVersionStatus(dc: DropwayContext, site: SiteRow, version: VersionRow, caller?: Principal) {
+export async function getVersionStatus(dc: KofraContext, site: SiteRow, version: VersionRow, caller?: Principal) {
   let missing: string[] = [];
   let entries: Array<{ path: string; sha256: string; size: number; contentType: string }> = [];
   if (version.status === "pending") {
@@ -149,7 +149,7 @@ const partSizeFor = (session: Pick<SessionRow, "size" | "part_size" | "part_coun
  * version, an expired anonymous site or an expired/false upload capability
  * stops the session at once. Foreign versions read as missing.
  */
-async function pendingTarget(dc: DropwayContext, p: Principal, versionId: string, sha256: string): Promise<PendingTarget> {
+async function pendingTarget(dc: KofraContext, p: Principal, versionId: string, sha256: string): Promise<PendingTarget> {
   const now = Date.now();
   if (p.kind === "upload") {
     if (now >= p.expiresAt) throw uploadExpired();
@@ -187,7 +187,7 @@ async function pendingTarget(dc: DropwayContext, p: Principal, versionId: string
   return { version, site, size: file.size, contentType: file.content_type, scope: blobScope({ tenantId: site.tenant_id, siteId: site.id }) };
 }
 
-async function sessionParts(dc: DropwayContext, sessionId: string): Promise<Array<MultipartPartView & { sha256: string }>> {
+async function sessionParts(dc: KofraContext, sessionId: string): Promise<Array<MultipartPartView & { sha256: string }>> {
   // Only acknowledged parts (a real R2 etag) resume or complete. Claimed
   // rows with an empty etag are in-flight uploads, not resumable state.
   const { results } = await dc.env.DB.prepare("SELECT part_number, size, etag, sha256 FROM upload_parts WHERE session_id = ? AND etag <> '' ORDER BY part_number")
@@ -197,7 +197,7 @@ async function sessionParts(dc: DropwayContext, sessionId: string): Promise<Arra
 }
 
 /** One part's claim row, acknowledged or still in flight, if any. */
-async function sessionClaim(dc: DropwayContext, sessionId: string, partNumber: number): Promise<{ partNumber: number; size: number; etag: string; sha256: string } | null> {
+async function sessionClaim(dc: KofraContext, sessionId: string, partNumber: number): Promise<{ partNumber: number; size: number; etag: string; sha256: string } | null> {
   const row = await dc.env.DB.prepare("SELECT part_number, size, etag, sha256 FROM upload_parts WHERE session_id = ? AND part_number = ?")
     .bind(sessionId, partNumber)
     .first<{ part_number: number; size: number; etag: string; sha256: string }>();
@@ -211,7 +211,7 @@ function isClosedMultipartUpload(e: unknown): boolean {
   return /NoSuchUpload|specified multipart upload does not exist/.test(String((e as Error | null)?.message ?? e));
 }
 
-async function sessionView(dc: DropwayContext, session: SessionRow): Promise<MultipartUploadView> {
+async function sessionView(dc: KofraContext, session: SessionRow): Promise<MultipartUploadView> {
   const parts = (await sessionParts(dc, session.id)).map(({ sha256: _digest, ...part }) => part);
   return {
     id: session.id,
@@ -230,14 +230,14 @@ function missingUpload() {
   return notFound("upload_not_found", "No upload session this credential can access.", "Start one with POST /api/v1/uploads for a pending version you control.");
 }
 
-async function loadSession(dc: DropwayContext, sessionId: string): Promise<SessionRow> {
+async function loadSession(dc: KofraContext, sessionId: string): Promise<SessionRow> {
   const session = await dc.env.DB.prepare("SELECT * FROM upload_sessions WHERE id = ?").bind(sessionId).first<SessionRow>();
   if (!session) throw missingUpload();
   return session;
 }
 
 /** Load a session and re-authorize its pending target and lifetime for this call. */
-async function authorizedSession(dc: DropwayContext, p: Principal, sessionId: string): Promise<{ session: SessionRow; target: PendingTarget }> {
+async function authorizedSession(dc: KofraContext, p: Principal, sessionId: string): Promise<{ session: SessionRow; target: PendingTarget }> {
   const session = await loadSession(dc, sessionId);
   let target: PendingTarget;
   try {
@@ -254,14 +254,14 @@ async function authorizedSession(dc: DropwayContext, p: Principal, sessionId: st
 }
 
 /** The single unfinished session for a pending file, regardless of requested geometry. */
-async function activeSession(dc: DropwayContext, versionId: string, sha256: string): Promise<SessionRow | null> {
+async function activeSession(dc: KofraContext, versionId: string, sha256: string): Promise<SessionRow | null> {
   return dc.env.DB.prepare("SELECT * FROM upload_sessions WHERE version_id = ? AND sha256 = ? AND status IN ('active', 'completing')")
     .bind(versionId, sha256).first<SessionRow>();
 }
 
 /** POST /api/v1/uploads: start or resume the one R2 multipart session for a pending manifest file. */
 export async function createMultipartUpload(
-  dc: DropwayContext,
+  dc: KofraContext,
   p: Principal,
   input: { versionId: unknown; sha256: unknown; partSize?: unknown },
 ): Promise<MultipartUploadView> {
@@ -334,7 +334,7 @@ export async function createMultipartUpload(
 }
 
 /** GET /api/v1/uploads/{id}: the durable acknowledgement list a client resumes from. */
-export async function getMultipartUpload(dc: DropwayContext, p: Principal, sessionId: string): Promise<MultipartUploadView> {
+export async function getMultipartUpload(dc: KofraContext, p: Principal, sessionId: string): Promise<MultipartUploadView> {
   const { session } = await authorizedSession(dc, p, sessionId);
   return sessionView(dc, session);
 }
@@ -377,7 +377,7 @@ async function readPartBody(body: ReadableStream | null, expected: number): Prom
 
 /** PUT /api/v1/uploads/{id}/parts/{n}: acknowledge one part's exact bytes. Identical retries replay; changed bytes are refused. */
 export async function uploadMultipartPart(
-  dc: DropwayContext,
+  dc: KofraContext,
   p: Principal,
   sessionId: string,
   partNumberInput: string,
@@ -477,7 +477,7 @@ export async function uploadMultipartPart(
 }
 
 /** Streaming SHA-256 of the staged object, without holding its bytes in memory. */
-async function hashStagedObject(dc: DropwayContext, key: string): Promise<{ hash: string; size: number }> {
+async function hashStagedObject(dc: KofraContext, key: string): Promise<{ hash: string; size: number }> {
   const obj = await dc.env.FILES.get(key);
   if (!obj) throw new ApiError(502, "blob_missing", "The completed upload's staged bytes could not be read.", "Retry shortly; if it repeats, start a new upload session.");
   if (typeof crypto.DigestStream === "function") {
@@ -490,7 +490,7 @@ async function hashStagedObject(dc: DropwayContext, key: string): Promise<{ hash
   return { hash: await sha256Hex(bytes), size: obj.size };
 }
 
-async function markSession(dc: DropwayContext, sessionId: string, status: SessionRow["status"]): Promise<void> {
+async function markSession(dc: KofraContext, sessionId: string, status: SessionRow["status"]): Promise<void> {
   await dc.env.DB.prepare("UPDATE upload_sessions SET status = ?, completed_at = ? WHERE id = ?")
     .bind(status, status === "completed" ? Date.now() : null, sessionId)
     .run();
@@ -500,7 +500,7 @@ async function markSession(dc: DropwayContext, sessionId: string, status: Sessio
  * Register against current ownership in the same transaction as the lifetime
  * fence. With a storage key, this also attaches that freshly written generation.
  */
-async function registerVerifiedUpload(dc: DropwayContext, p: Principal, session: SessionRow, completed: boolean, storageKey: string | null = null): Promise<string | null> {
+async function registerVerifiedUpload(dc: KofraContext, p: Principal, session: SessionRow, completed: boolean, storageKey: string | null = null): Promise<string | null> {
   const now = Date.now();
   let authority: string;
   let values: Array<string | number | null>;
@@ -561,7 +561,7 @@ async function registerVerifiedUpload(dc: DropwayContext, p: Principal, session:
 }
 
 /** Best effort: the reservation sweep and inventory sweep recover failures. */
-async function discardGeneration(dc: DropwayContext, storageKey: string): Promise<void> {
+async function discardGeneration(dc: KofraContext, storageKey: string): Promise<void> {
   try {
     await dc.env.DB.prepare("DELETE FROM blob_uploads WHERE storage_key = ?").bind(storageKey).run();
     await dc.env.FILES.delete(storageKey);
@@ -571,7 +571,7 @@ async function discardGeneration(dc: DropwayContext, storageKey: string): Promis
 }
 
 /** Persist cleanup intent before removing corrupt bytes; retain the allocation fence until deletion succeeds. */
-async function rejectCorruptUpload(dc: DropwayContext, session: SessionRow): Promise<never> {
+async function rejectCorruptUpload(dc: KofraContext, session: SessionRow): Promise<never> {
   if (session.staged !== 2) {
     await dc.env.DB.prepare("UPDATE upload_sessions SET staged = 2 WHERE id = ? AND status = 'completing'").bind(session.id).run();
   }
@@ -587,7 +587,7 @@ async function rejectCorruptUpload(dc: DropwayContext, session: SessionRow): Pro
  * fresh blobs/<sha256>/<uuid> generation. Safe to repeat. The generation's D1
  * reservation is the cleanup inventory if the request dies before attaching it.
  */
-export async function completeMultipartUpload(dc: DropwayContext, p: Principal, sessionId: string): Promise<{ sha256: string; size: number; stored: true }> {
+export async function completeMultipartUpload(dc: KofraContext, p: Principal, sessionId: string): Promise<{ sha256: string; size: number; stored: true }> {
   const loaded = await authorizedSession(dc, p, sessionId);
   let { session } = loaded;
   const { target } = loaded;
@@ -666,7 +666,7 @@ export async function completeMultipartUpload(dc: DropwayContext, p: Principal, 
 }
 
 /** Remove staging, or fail while its durable session row still owns every resource. */
-async function discardSessionStorage(dc: DropwayContext, session: SessionRow): Promise<void> {
+async function discardSessionStorage(dc: KofraContext, session: SessionRow): Promise<void> {
   if (session.status !== "completed" && session.staged !== 1) {
     try {
       await dc.env.FILES.resumeMultipartUpload(session.r2_key, session.r2_upload_id).abort();
@@ -684,7 +684,7 @@ async function discardSessionStorage(dc: DropwayContext, session: SessionRow): P
  * slice). Sessions that already completed only lose their session rows; the
  * R2 multipart handles of unfinished ones are aborted first.
  */
-export async function cleanupExpiredMultipartUploads(dc: DropwayContext, now = Date.now()): Promise<number> {
+export async function cleanupExpiredMultipartUploads(dc: KofraContext, now = Date.now()): Promise<number> {
   const { results } = await dc.env.DB.prepare("SELECT * FROM upload_sessions WHERE expires_at <= ? ORDER BY expires_at, id LIMIT 100")
     .bind(now)
     .all<SessionRow>();

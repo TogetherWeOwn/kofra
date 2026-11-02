@@ -3,7 +3,7 @@
  * These assertions inspect delivered representations, never implementation text.
  * Geometry, disclosure and print visibility are tested in the browser companion.
  */
-import { sha256Hex } from "@dropway/core";
+import { sha256Hex } from "@kofra/core";
 import { beforeAll, describe, expect, it } from "vitest";
 import { form, freshInstance, type Instance } from "./helpers";
 import { printCapFiles, printFiles } from "./viewer-print.fixtures";

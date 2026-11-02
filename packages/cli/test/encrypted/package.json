@@ -1,5 +1,5 @@
 {
-  "name": "dropway-encrypted-acceptance",
+  "name": "kofra-encrypted-acceptance",
   "private": true,
   "type": "module",
   "description": "Test-only Chromium driver and ZIP fixtures; never packaged with the CLI.",

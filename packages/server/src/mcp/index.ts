@@ -7,10 +7,10 @@ import {
   idempotencyScope,
   validateIdempotencyKey,
   withIdempotency,
-  type DropwayContext,
+  type KofraContext,
   type Principal,
-} from "@dropway/core";
-import type { DropwayEnv } from "../env";
+} from "@kofra/core";
+import type { KofraEnv } from "../env";
 import type { McpHandlerFactory, McpToolDefinition } from "../extensions";
 import { IDEMPOTENCY_KEY } from "./schemas";
 import { requireOperationScopes } from "../operations";
@@ -26,7 +26,7 @@ import { isReplayReceipt } from "../replay-receipt";
  *   clients use the per-request envelope; 2025-era clients use the stateless legacy lane.
  * - Auth: `Authorization: Bearer dw_...` (or a dwc_ claim token), resolved by the same
  *   identity adapter as the REST API. Missing or bad credentials get 401 + WWW-Authenticate.
- * - Tools come from dropway.mcpTools (core + extensions). Narrow them with
+ * - Tools come from kofra.mcpTools (core + extensions). Narrow them with
  *   ?toolsets=core,keys (or X-Kofra-Toolsets) and ?read_only=1 (or X-Kofra-Read-Only).
  */
 
@@ -36,7 +36,7 @@ export interface McpEndpointOptions {
   /** Server name sent in initialize/discover. Default "kofra". */
   name?: string;
   /** Replace the server instructions. */
-  instructions?: (dw: DropwayContext) => string;
+  instructions?: (dw: KofraContext) => string;
   /**
    * Browser Origin hostnames allowed to call /mcp. Default: localhost and the app's own
    * hostname. Calls without an Origin header (every non-browser MCP client) are always allowed.
@@ -54,7 +54,7 @@ type CompiledTool = {
 };
 
 /** Server instructions (kept under 4,096 characters; a test checks). */
-export function mcpInstructions(dw: DropwayContext): string {
+export function mcpInstructions(dw: KofraContext): string {
   const o = appOrigin(dw);
   return `${dw.config.instanceName} publishes files, folders and small static sites to live URLs. Every publish is an immutable version you can roll back.
 
@@ -171,7 +171,7 @@ function truthy(v: string | null | undefined): boolean {
 }
 
 /** Which tools this request sees: enabled for the instance, in the requested toolsets, read-only if asked. */
-export function selectTools<T extends { def: McpToolDefinition } | McpToolDefinition>(tools: readonly T[], dw: DropwayContext, request: Request): T[] {
+export function selectTools<T extends { def: McpToolDefinition } | McpToolDefinition>(tools: readonly T[], dw: KofraContext, request: Request): T[] {
   const url = new URL(request.url);
   const wanted = (url.searchParams.get("toolsets") ?? request.headers.get("x-kofra-toolsets") ?? "all")
     .split(",")
@@ -197,7 +197,7 @@ function clientName(server: McpServer, request: Request): string | null {
   return ua ? ua.split(/\s+/)[0]!.slice(0, 120) : null;
 }
 
-function errorText(err: ApiError, requestId: string, dw: DropwayContext): string {
+function errorText(err: ApiError, requestId: string, dw: KofraContext): string {
   const json = err.toJSON(requestId, appOrigin(dw));
   return `${err.code}: ${err.message}${err.hint ? ` Fix: ${err.hint}` : ""}\n${JSON.stringify(json)}`;
 }
@@ -212,7 +212,7 @@ function scopeCheck(principal: Principal, def: McpToolDefinition): void {
   requireOperationScopes(principal, def.scopes ?? [], def.name);
 }
 
-function buildServer(compiled: CompiledTool[], ctx: { dw: DropwayContext; principal: Principal; request: Request; requestId: string }, options: McpEndpointOptions): McpServer {
+function buildServer(compiled: CompiledTool[], ctx: { dw: KofraContext; principal: Principal; request: Request; requestId: string }, options: McpEndpointOptions): McpServer {
   const { dw, principal, request, requestId } = ctx;
   const server = new McpServer(
     { name: options.name ?? "kofra", title: dw.config.instanceName, version: MCP_SERVER_VERSION, websiteUrl: appOrigin(dw) },
@@ -286,7 +286,7 @@ const CORS = {
   maxAge: 86400,
 };
 
-function authError(dw: DropwayContext, err: ApiError, requestId: string): Response {
+function authError(dw: KofraContext, err: ApiError, requestId: string): Response {
   const o = appOrigin(dw);
   const headers = new Headers({
     "Content-Type": "application/json",
@@ -305,13 +305,13 @@ function authError(dw: DropwayContext, err: ApiError, requestId: string): Respon
 }
 
 /**
- * The default MCP endpoint. createDropway() mounts it at /mcp unless options.mcp
- * replaces it. Extensions add tools through createDropway({ mcpTools }).
+ * The default MCP endpoint. createKofra() mounts it at /mcp unless options.mcp
+ * replaces it. Extensions add tools through createKofra({ mcpTools }).
  */
 export function createMcpEndpoint(options: McpEndpointOptions = {}): McpHandlerFactory {
   return (tools) => {
     const compiled = compile(tools);
-    return async (c: Context<DropwayEnv>) => {
+    return async (c: Context<KofraEnv>) => {
       const dw = c.get("dw");
       const request = c.req.raw;
       const requestId = c.get("requestId");

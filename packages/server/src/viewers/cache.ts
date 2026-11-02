@@ -1,4 +1,4 @@
-import type { DropwayContext } from "@dropway/core";
+import type { KofraContext } from "@kofra/core";
 
 /**
  * Cache for the expensive part of a viewer page (highlighted code, rendered
@@ -32,8 +32,8 @@ export function clearRenderMemoryCache() {
   memoryChars = 0;
 }
 
-function cacheRequest(dw: DropwayContext, key: string): Request {
-  const host = dw.requestUrl?.host ?? "dropway.invalid";
+function cacheRequest(dw: KofraContext, key: string): Request {
+  const host = dw.requestUrl?.host ?? "kofra.invalid";
   return new Request(`https://${host}/__dropway/render/${key}`);
 }
 
@@ -44,7 +44,7 @@ export interface RenderResult {
 }
 
 /** Return the cached fragment for `key`, or produce, store and return it. */
-export async function cachedRender(dw: DropwayContext, key: string, produce: () => Promise<string>): Promise<RenderResult> {
+export async function cachedRender(dw: KofraContext, key: string, produce: () => Promise<string>): Promise<RenderResult> {
   const mem = memory.get(key);
   if (mem !== undefined) {
     memory.delete(key);

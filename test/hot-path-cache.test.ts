@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
-import { clearLiveMemoryCache, sha256Hex } from "@dropway/core";
+import { clearLiveMemoryCache, sha256Hex } from "@kofra/core";
 import { form, freshInstance, jsonBody, type Instance } from "./helpers";
 
 // R-14 / SRV-06. Exercise HTTP serving with real workerd D1/R2/KV/Cache API.
@@ -203,7 +203,7 @@ describe("R-14: 10-second Cache API pointer memo before KV", () => {
 
   // Break caught: a publish or restore serving the previous memo instead of the new live version.
   it("invalidates the cached pointer on publish and on restore", async () => {
-    const ptr = "https://dropway.invalid/__dropway/ptr/cache-invalidate";
+    const ptr = "https://kofra.invalid/__dropway/ptr/cache-invalidate";
     const v1 = await publish("cache-invalidate", { "payload.txt": "v1" });
     // Warm the memo from a cold isolate (waitUntil fills are flushed per call).
     clearLiveMemoryCache();

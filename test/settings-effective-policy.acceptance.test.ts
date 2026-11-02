@@ -11,15 +11,15 @@
 
 import { describe, expect, it } from "vitest";
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { ApiError, CAPABILITIES, type PolicyAdapter } from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+import { ApiError, CAPABILITIES, type PolicyAdapter } from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { BOOTSTRAP, freshInstance, jsonBody, ORIGIN, type Instance } from "./helpers";
 
 async function boundJson(dw: Instance, bindings: ServerBindings, path: string, init: RequestInit = {}) {
   const ctx = createExecutionContext();
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${dw.ownerKey}`);
-  const response = await dw.dropway.fetch(new Request(`${ORIGIN}${path}`, { ...init, headers }), bindings, ctx);
+  const response = await dw.kofra.fetch(new Request(`${ORIGIN}${path}`, { ...init, headers }), bindings, ctx);
   await waitOnExecutionContext(ctx);
   return { status: response.status, body: (await response.json()) as Record<string, any> };
 }

@@ -1,7 +1,7 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { clearLiveMemoryCache, runCleanup } from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+import { clearLiveMemoryCache, runCleanup } from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { form, freshInstance, jsonBody, manifestEntry, type Instance } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
 
@@ -117,7 +117,7 @@ describe("keyed-site TTL (PUB-16)", () => {
     expect(await gone.text()).toContain("TTL");
 
     const ctx = createExecutionContext();
-    const report = await runCleanup(dw.dropway.context(env as unknown as ServerBindings, ctx));
+    const report = await runCleanup(dw.kofra.context(env as unknown as ServerBindings, ctx));
     await waitOnExecutionContext(ctx);
     expect(report.expiredSites).toBe(1);
     // The keyed expiry refreshed its tenant's counters at once.

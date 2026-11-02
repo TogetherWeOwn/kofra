@@ -6,7 +6,7 @@
  */
 import { env } from "cloudflare:test";
 import { afterEach, expect, it, vi } from "vitest";
-import { runCleanup, sha256Hex } from "@dropway/core";
+import { runCleanup, sha256Hex } from "@kofra/core";
 import { freshInstance, jsonBody } from "./helpers";
 import { context, DAY, MiB } from "./resumable-upload.helpers";
 

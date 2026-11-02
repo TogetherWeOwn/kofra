@@ -9,7 +9,7 @@
  *     follows manifest insertion order.
  */
 import { beforeAll, describe, expect, it } from "vitest";
-import type { LiveSite } from "@dropway/core";
+import type { LiveSite } from "@kofra/core";
 import { renderListing } from "../packages/server/src/viewers/listing";
 import { form, freshInstance, type Instance } from "./helpers";
 

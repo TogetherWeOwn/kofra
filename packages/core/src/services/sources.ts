@@ -1,5 +1,5 @@
 import { effectiveSigningSecret, type Limits } from "../config";
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import { appOrigin, siteUrl } from "../context";
 import { ApiError, badRequest, forbidden, notFound, tooLarge } from "../errors";
 import { SHA256_RE, sha256Hex } from "../lib/crypto";
@@ -249,7 +249,7 @@ export function callerBlobScope(p: Principal, site: Pick<SiteRow, "id" | "tenant
   return null;
 }
 
-async function storedSize(dc: DropwayContext, scope: string, sha: string): Promise<number | null> {
+async function storedSize(dc: KofraContext, scope: string, sha: string): Promise<number | null> {
   const row = await dc.env.DB.prepare("SELECT b.size FROM blob_scopes bs JOIN blobs b ON b.sha256 = bs.sha256 WHERE bs.scope = ? AND bs.sha256 = ?")
     .bind(scope, sha)
     .first<{ size: number }>();
@@ -261,7 +261,7 @@ async function storedSize(dc: DropwayContext, scope: string, sha: string): Promi
  * is reported at once in details.fields; fetch problems name the failing URL.
  */
 export async function resolveFileInputs(
-  dc: DropwayContext,
+  dc: KofraContext,
   p: Principal,
   inputs: unknown,
   opts: { lim: Limits; scope: string | null; site: SiteRow | null; field?: string; allowEmpty?: boolean; fetcher?: typeof fetch },
@@ -485,7 +485,7 @@ export interface NextStep {
   why: string;
 }
 
-async function loadSite(dc: DropwayContext, id: string): Promise<SiteRow> {
+async function loadSite(dc: KofraContext, id: string): Promise<SiteRow> {
   return (await dc.env.DB.prepare("SELECT * FROM sites WHERE id = ?").bind(id).first<SiteRow>())!;
 }
 
@@ -494,7 +494,7 @@ async function loadSite(dc: DropwayContext, id: string): Promise<SiteRow> {
  * Shared by publishSources and updateSiteFiles.
  */
 async function completeVersion(
-  dc: DropwayContext,
+  dc: KofraContext,
   actor: Principal,
   site: SiteRow,
   deploy: Awaited<ReturnType<typeof createDeploy>>,
@@ -628,7 +628,7 @@ export interface PublishSourcesInput {
  * bytes held to the one-shot budget; per-file/site/count caps still apply to
  * the extracted manifest).
  */
-async function resolveArchiveUrl(dc: DropwayContext, archiveUrl: string, lim: Limits, fetcher?: typeof fetch): Promise<{ files: ResolvedFile[]; fetched: number }> {
+async function resolveArchiveUrl(dc: KofraContext, archiveUrl: string, lim: Limits, fetcher?: typeof fetch): Promise<{ files: ResolvedFile[]; fetched: number }> {
   let fetchedBytes = 0;
   const got = await fetchUrlSource(archiveUrl, {
     maxBytes: dc.config.urlFetchMaxBytes,
@@ -656,7 +656,7 @@ async function resolveArchiveUrl(dc: DropwayContext, archiveUrl: string, lim: Li
   return { files, fetched: 1 };
 }
 
-export async function publishSources(dc: DropwayContext, p: Principal, input: PublishSourcesInput) {
+export async function publishSources(dc: KofraContext, p: Principal, input: PublishSourcesInput) {
   if (input.archiveUrl != null && input.files != null) {
     throw invalid([{ field: "archiveUrl", problem: "send either files or archiveUrl, not both" }]);
   }
@@ -737,7 +737,7 @@ export interface UpdateSiteFilesInput {
  * version by hash, so nothing is re-sent. If someone published since the base
  * version, this fails with 409 version_conflict instead of overwriting their work.
  */
-export async function updateSiteFiles(dc: DropwayContext, p: Principal, siteRef: unknown, input: UpdateSiteFilesInput) {
+export async function updateSiteFiles(dc: KofraContext, p: Principal, siteRef: unknown, input: UpdateSiteFilesInput) {
   const site = await getSiteByRef(dc, p, siteRef, "sites:write");
   let base: VersionRow | null = null;
   if (input.baseVersionId !== undefined && input.baseVersionId !== null && input.baseVersionId !== "") {
@@ -836,7 +836,7 @@ export async function updateSiteFiles(dc: DropwayContext, p: Principal, siteRef:
  * Make a pending version live once its uploads are done. Safe to repeat. When bytes
  * are still missing, the 409 missing_blobs error carries fresh upload items.
  */
-export async function finalizeVersionByRef(dc: DropwayContext, p: Principal, siteRef: unknown, versionRef: unknown) {
+export async function finalizeVersionByRef(dc: KofraContext, p: Principal, siteRef: unknown, versionRef: unknown) {
   const site = await getSiteByRef(dc, p, siteRef, "sites:write");
   const version = await resolveVersionRef(dc, site, versionRef);
   try {

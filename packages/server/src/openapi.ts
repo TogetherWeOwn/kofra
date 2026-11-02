@@ -1,7 +1,7 @@
 import { createOperationRegistry } from "./operations/registry";
 import { schemaJson, type OperationDefinition } from "./operations";
 import { PAGE_PATHS } from "./page-openapi";
-import { ApiError, resolveConfig, type DropwayContext } from "@dropway/core";
+import { ApiError, resolveConfig, type KofraContext } from "@kofra/core";
 
 type Json = Record<string, any>;
 const json = (schema: Json, example: unknown, description = "OK") => ({
@@ -9,7 +9,7 @@ const json = (schema: Json, example: unknown, description = "OK") => ({
   content: { "application/json": { schema, example } },
 });
 
-function toolAvailable(op: OperationDefinition, context: DropwayContext): boolean {
+function toolAvailable(op: OperationDefinition, context: KofraContext): boolean {
   if (!op.tool?.enabled) return true;
   try { return op.tool.enabled(context); } catch { return true; }
 }
@@ -19,7 +19,7 @@ export function buildOpenApi(origin: string, instanceName: string, anonymousOrOp
   const anonymousPublish = typeof anonymousOrOperations === "boolean" ? anonymousOrOperations : false;
   const operations = typeof anonymousOrOperations === "boolean" ? registry ?? createOperationRegistry() : anonymousOrOperations;
   // Static callers have configuration only. Request routes pass the actual visible inventory.
-  const discoveryContext = { config: resolveConfig({ ANONYMOUS_PUBLISH: String(anonymousPublish) }, { instanceName }) } as DropwayContext;
+  const discoveryContext = { config: resolveConfig({ ANONYMOUS_PUBLISH: String(anonymousPublish) }, { instanceName }) } as KofraContext;
   const paths: Json = Object.create(null);
   for (const [path, item] of Object.entries(PAGE_PATHS)) paths[path] = Object.assign(Object.create(null), structuredClone(item));
   for (const item of Object.values<Json>(paths))

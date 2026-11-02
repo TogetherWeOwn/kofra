@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { strToU8, unzipSync, Zip, ZipPassThrough, zipSync } from "fflate";
-import { sha256Hex, unzipFiles } from "@dropway/core";
+import { sha256Hex, unzipFiles } from "@kofra/core";
 import { freshInstance, jsonBody } from "./helpers";
 
 // Ordinary format compatibility: a small valid ZIP whose outer entries are

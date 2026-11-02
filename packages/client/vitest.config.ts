@@ -1,6 +1,6 @@
 import { defineConfig } from "vitest/config";
 
-// Node-side tests for @dropway/client: the generator, the fetch-only runtime
+// Node-side tests for @kofra/client: the generator, the fetch-only runtime
 // (against stub fetch) and the npm publish configuration. End-to-end behaviour
 // against the real Worker lives in /test/typed-client.test.ts (workerd).
 export default defineConfig({

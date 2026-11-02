@@ -1,4 +1,4 @@
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import { badRequest, conflict, forbidden, notFound, type ApiError } from "../errors";
 import { newId } from "../lib/crypto";
 import { looksLikeSlug } from "../lib/slug";
@@ -40,7 +40,7 @@ export interface TombstoneInput {
  * slug). The write lands only when the site's delete did (same batch, guarded
  * on the deleted_at the caller just set), so a refused delete holds nothing.
  */
-export function insertTombstone(dc: DropwayContext, input: TombstoneInput & { deletedAt?: number }): D1PreparedStatement {
+export function insertTombstone(dc: KofraContext, input: TombstoneInput & { deletedAt?: number }): D1PreparedStatement {
   const values = [newId("hold"), input.slug, input.tenantId, input.siteId, input.chosen ? 1 : 0, input.holdUntil, input.reason, input.createdAt];
   if (input.deletedAt === undefined) {
     return dc.env.DB.prepare(
@@ -61,7 +61,7 @@ export function insertTombstone(dc: DropwayContext, input: TombstoneInput & { de
  * and guarded on the delete landing like insertTombstone.
  */
 export function convertRedirectsStatements(
-  dc: DropwayContext,
+  dc: KofraContext,
   input: { siteId: string; tenantId: string | null; reason: TombstoneReason; now: number; deletedAt: number },
 ): D1PreparedStatement[] {
   const chosenUntil = input.now + dc.config.slugHolds.chosenMs;
@@ -79,18 +79,18 @@ export function convertRedirectsStatements(
 }
 
 /** Reclaim the caller's own hold as part of acquiring the name (same batch). */
-export function reclaimTombstone(dc: DropwayContext, slug: string, tenantId: string): D1PreparedStatement {
+export function reclaimTombstone(dc: KofraContext, slug: string, tenantId: string): D1PreparedStatement {
   return dc.env.DB.prepare("DELETE FROM slug_tombstones WHERE slug = ? AND released_at IS NULL AND tenant_id IS ?").bind(slug, tenantId);
 }
 
 /** Rename-back: the site takes its own old name again, so its redirect row goes. */
-export function collapseOwnRedirect(dc: DropwayContext, slug: string, siteId: string): D1PreparedStatement {
+export function collapseOwnRedirect(dc: KofraContext, slug: string, siteId: string): D1PreparedStatement {
   return dc.env.DB.prepare("DELETE FROM slug_redirects WHERE slug = ? AND site_id = ?").bind(slug, siteId);
 }
 
 /** Record that an old name 308s to its site. Clears only expired rows first (active ones are never ours to drop). */
 export function insertRedirect(
-  dc: DropwayContext,
+  dc: KofraContext,
   input: { slug: string; siteId: string; chosen: boolean; holdUntil: number; createdAt: number },
 ): D1PreparedStatement[] {
   return [
@@ -125,7 +125,7 @@ function heldError(slug: string, holdUntil: number, redirect: boolean): ApiError
  * renamer's site id on rename (same-site rename-back passes); null on create.
  * Same-tenant tombstones pass: the caller reclaims them in the same batch.
  */
-export async function checkNameAvailable(dc: DropwayContext, slug: string, tenantId: string | null, siteId: string | null): Promise<void> {
+export async function checkNameAvailable(dc: KofraContext, slug: string, tenantId: string | null, siteId: string | null): Promise<void> {
   const now = Date.now();
   const tombstone = await dc.env.DB.prepare(
     "SELECT tenant_id, hold_until FROM slug_tombstones WHERE slug = ? AND released_at IS NULL AND hold_until > ? LIMIT 1",
@@ -140,7 +140,7 @@ export async function checkNameAvailable(dc: DropwayContext, slug: string, tenan
 }
 
 /** Serve-time: where does an old name redirect, if anywhere (active redirect + site still live)? */
-export async function resolveSlugRedirect(dc: DropwayContext, slug: string): Promise<{ slug: string; until: number } | null> {
+export async function resolveSlugRedirect(dc: KofraContext, slug: string): Promise<{ slug: string; until: number } | null> {
   const row = await dc.env.DB.prepare(
     `SELECT r.hold_until AS hold_until, s.slug AS current FROM slug_redirects r
      JOIN sites s ON s.id = r.site_id WHERE r.slug = ? AND r.hold_until > ? AND s.deleted_at IS NULL`,
@@ -161,7 +161,7 @@ export type VersionAddress =
  * deleted is `gone` (410, never another site's bytes); a live version's
  * preview is R-13's to serve (stays 404 here); unknown names are `absent`.
  */
-export async function resolveVersionAddress(dc: DropwayContext, baseSlug: string, num: number): Promise<VersionAddress> {
+export async function resolveVersionAddress(dc: KofraContext, baseSlug: string, num: number): Promise<VersionAddress> {
   const now = Date.now();
   const site = await dc.env.DB.prepare("SELECT id, current_version_id FROM sites WHERE slug = ? AND deleted_at IS NULL").bind(baseSlug).first<{ id: string; current_version_id: string | null }>();
   if (site) {
@@ -185,7 +185,7 @@ export async function resolveVersionAddress(dc: DropwayContext, baseSlug: string
 }
 
 /** Hourly purge of expired, unreleased holds. Released rows are the audit trail and stay. */
-export async function purgeExpiredHolds(dc: DropwayContext, now: number): Promise<{ tombstones: number; redirects: number }> {
+export async function purgeExpiredHolds(dc: KofraContext, now: number): Promise<{ tombstones: number; redirects: number }> {
   const [tombstones, redirects] = await dc.env.DB.batch([
     dc.env.DB.prepare("DELETE FROM slug_tombstones WHERE released_at IS NULL AND hold_until <= ? AND id IN (SELECT id FROM slug_tombstones WHERE released_at IS NULL AND hold_until <= ? LIMIT 500)").bind(now, now),
     dc.env.DB.prepare("DELETE FROM slug_redirects WHERE hold_until <= ? AND slug IN (SELECT slug FROM slug_redirects WHERE hold_until <= ? LIMIT 500)").bind(now, now),
@@ -198,7 +198,7 @@ export async function purgeExpiredHolds(dc: DropwayContext, now: number): Promis
  * Tenant-grantable scopes never confer cross-tenant or ownerless release rights.
  * Stamped tombstone rows are the audit trail; a redirect-only release writes one.
  */
-export async function releaseSlug(dc: DropwayContext, p: Principal, slugInput: unknown, reasonInput: unknown) {
+export async function releaseSlug(dc: KofraContext, p: Principal, slugInput: unknown, reasonInput: unknown) {
   const operator = requireMember(p, "admin");
   const denied = () => forbidden(
     "This key cannot release the held name.",

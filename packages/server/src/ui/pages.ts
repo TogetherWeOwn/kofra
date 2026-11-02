@@ -1,6 +1,6 @@
 import type { Context } from "hono";
-import { appOrigin, encodePath, isSetUp, looksLikeSlug, requestPathToFilePath, siteUrl, type DropwayContext } from "@dropway/core";
-import type { DropwayEnv } from "../env";
+import { appOrigin, encodePath, isSetUp, looksLikeSlug, requestPathToFilePath, siteUrl, type KofraContext } from "@kofra/core";
+import type { KofraEnv } from "../env";
 import type { UiSlots } from "../extensions";
 import { mcpJsonSnippets } from "../discovery";
 import { escapeHtml, formatBytes } from "../html";
@@ -15,7 +15,7 @@ function pageHead(title: string, sub: string, actions = ""): string {
 const NOSCRIPT = `<noscript><p class="dw-muted">The dashboard loads its data with JavaScript.</p></noscript>`;
 
 /** Where sites are served, in words. */
-function sitesWhere(dw: DropwayContext): string {
+function sitesWhere(dw: KofraContext): string {
   const c = dw.config;
   const example = siteUrl(dw, "SITE");
   if (c.sitesMode === "subdomain") return `Each site on its own origin: <code>${e(example)}</code>`;
@@ -48,7 +48,7 @@ function snippet(id: string, text: string): string {
   return `<div class="dw-snipwrap"><pre class="dw-snippet" id="${id}">${e(text)}</pre><button type="button" class="dw-btn small" data-copy="#${id}" hidden>Copy</button></div>`;
 }
 
-export async function homePage(c: Context<DropwayEnv>): Promise<Response> {
+export async function homePage(c: Context<KofraEnv>): Promise<Response> {
   const dw = c.get("dw");
   const o = appOrigin(dw);
   const name = dw.config.instanceName;
@@ -125,7 +125,7 @@ ${snippet("dw-s-setup", `curl -X POST ${o}/api/v1/setup \\\n  -H "Authorization:
 
 const AUTH_CSS = `.dw-auth{max-width:30rem;margin:4vh auto 0}.dw-auth h1{margin-bottom:1.25rem}.dw-auth details{margin:1rem 0}.dw-auth summary{cursor:pointer;font-weight:600;font-size:.92rem}`;
 
-export async function loginPage(c: Context<DropwayEnv>): Promise<Response> {
+export async function loginPage(c: Context<KofraEnv>): Promise<Response> {
   const dw = c.get("dw");
   const session = uiSlotsOf(c).session;
   const next = c.req.query("next");
@@ -164,7 +164,7 @@ ${NOSCRIPT}
 
 // ------------------------------------------------------------------ dashboard
 
-export function sitesPage(c: Context<DropwayEnv>): Promise<Response> {
+export function sitesPage(c: Context<KofraEnv>): Promise<Response> {
   return renderAppPage(c, {
     title: "Sites",
     page: "sites",
@@ -173,7 +173,7 @@ export function sitesPage(c: Context<DropwayEnv>): Promise<Response> {
   });
 }
 
-export function sitePage(c: Context<DropwayEnv>): Promise<Response> {
+export function sitePage(c: Context<KofraEnv>): Promise<Response> {
   const slug = c.req.param("slug") ?? "";
   return renderAppPage(c, {
     title: slug,
@@ -184,7 +184,7 @@ export function sitePage(c: Context<DropwayEnv>): Promise<Response> {
   });
 }
 
-export function publishPage(c: Context<DropwayEnv>): Promise<Response> {
+export function publishPage(c: Context<KofraEnv>): Promise<Response> {
   return renderAppPage(c, {
     title: "Publish",
     page: "publish",
@@ -193,7 +193,7 @@ export function publishPage(c: Context<DropwayEnv>): Promise<Response> {
   });
 }
 
-export function keysPage(c: Context<DropwayEnv>): Promise<Response> {
+export function keysPage(c: Context<KofraEnv>): Promise<Response> {
   return renderAppPage(c, {
     title: "API keys",
     page: "keys",
@@ -202,7 +202,7 @@ export function keysPage(c: Context<DropwayEnv>): Promise<Response> {
   });
 }
 
-export async function settingsPage(c: Context<DropwayEnv>, slots: UiSlots): Promise<Response> {
+export async function settingsPage(c: Context<KofraEnv>, slots: UiSlots): Promise<Response> {
   const dw = c.get("dw");
   const cfg = dw.config;
   const lim = cfg.limits;
@@ -271,7 +271,7 @@ body.dw-wide{height:100vh;min-height:0;overflow:hidden}
 @media (max-width:760px){.dw-main-wide{flex-direction:column}.dw-side{width:auto;max-height:32vh;border-right:0;border-bottom:1px solid var(--line)}}
 `;
 
-export function viewerPage(c: Context<DropwayEnv>): Response | Promise<Response> {
+export function viewerPage(c: Context<KofraEnv>): Response | Promise<Response> {
   const dw = c.get("dw");
   const slug = (c.req.param("slug") ?? "").toLowerCase();
   if (!looksLikeSlug(slug)) return c.notFound();

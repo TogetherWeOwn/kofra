@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { verifyPassword } from "@dropway/core";
+import { verifyPassword } from "@kofra/core";
 import { form, ORIGIN, type Instance } from "./helpers";
 import {
   attributeUrl, cookies, create, DAY, FILES, get, instance, op, PASSWORD, passwordDigest,

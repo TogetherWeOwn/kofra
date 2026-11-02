@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DropwayClient, DropwayError, type FetchLike, type RequestOptions } from "../src/index.ts";
+import { KofraClient, KofraError, type FetchLike, type RequestOptions } from "../src/index.ts";
 
 const RAW_KEY = "retained-valid-intent";
 const RECEIPT = { ok: true };
@@ -8,7 +8,7 @@ const json = (data: unknown, status = 200, headers: Record<string, string> = {})
 
 type EntryPoint = {
   name: string;
-  invoke(client: DropwayClient, options: RequestOptions): Promise<unknown>;
+  invoke(client: KofraClient, options: RequestOptions): Promise<unknown>;
 };
 
 const ENTRIES: EntryPoint[] = [
@@ -53,7 +53,7 @@ function transport(handler: (request: Request, attempt: number) => Response | Pr
     requests.push(request);
     return handler(request, requests.length);
   };
-  const client = new DropwayClient({ api: "https://sdk.test", token: null, fetch, attempts: 3, backoffMs: 1 });
+  const client = new KofraClient({ api: "https://sdk.test", token: null, fetch, attempts: 3, backoffMs: 1 });
   return { client, requests };
 }
 
@@ -68,7 +68,7 @@ for (const entry of ENTRIES) describe(`${entry.name} idempotency-key boundary`, 
       };
       const error: unknown = await Promise.resolve().then(() => entry.invoke(h.client, options))
         .then(() => null, error => error);
-      expect.soft(error, "invalid options cannot execute unkeyed or replay the retained header").toBeInstanceOf(DropwayError);
+      expect.soft(error, "invalid options cannot execute unkeyed or replay the retained header").toBeInstanceOf(KofraError);
       expect.soft(error).toMatchObject({
         code: "invalid_idempotency_key",
         retryable: false,
@@ -113,7 +113,7 @@ for (const entry of ENTRIES.filter(entry => entry.name === "restoreVersion" || e
     const error: unknown = await entry.invoke(h.client, {
       idempotencyKey: key, headers: { "Idempotency-Key": RAW_KEY }, retry,
     }).then(() => null, error => error);
-    expect(error, "must not retry to the later success").toBeInstanceOf(DropwayError);
+    expect(error, "must not retry to the later success").toBeInstanceOf(KofraError);
     expect(error).toMatchObject({ code: "rate_limited", status: 429 });
     expect(h.requests).toHaveLength(1);
     expect(h.requests[0]!.headers.get("Idempotency-Key")).toBe(key);

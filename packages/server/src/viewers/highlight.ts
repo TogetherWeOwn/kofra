@@ -5,7 +5,7 @@ import hljs from "./hljs.js";
  * Server-side syntax highlighting (highlight.js core + about 80 languages,
  * registered in ./hljs.js so the Worker bundle stays small). Highlighting runs
  * once per file content: the output is cached by sha256 (see ./cache.ts).
- * Language ids come from @dropway/core languageFor(); ALIASES maps the few
+ * Language ids come from @kofra/core languageFor(); ALIASES maps the few
  * that highlight.js lacks to a close relative.
  */
 

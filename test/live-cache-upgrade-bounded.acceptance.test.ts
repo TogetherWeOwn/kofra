@@ -1,6 +1,6 @@
 import { createExecutionContext, env } from "cloudflare:test";
-import { clearLiveMemoryCache, getLiveSite, liveKey } from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+import { clearLiveMemoryCache, getLiveSite, liveKey } from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { afterEach, describe, expect, it } from "vitest";
 import { form, freshInstance } from "./helpers";
 
@@ -91,7 +91,7 @@ describe("live cache upgrade reads", () => {
 
     const counter: ManifestCounter = { manifestRows: 0, manifestLoads: 0 };
     const pending: Promise<unknown>[] = [];
-    const base = dw.dropway.context(env as unknown as ServerBindings, createExecutionContext());
+    const base = dw.kofra.context(env as unknown as ServerBindings, createExecutionContext());
     const dc = {
       ...base,
       env: { ...base.env, DB: countingDb(counter) },

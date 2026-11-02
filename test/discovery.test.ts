@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { sha256Hex } from "@dropway/core";
-import { CORE_MCP_TOOLS, skillMarkdown } from "@dropway/server";
+import { sha256Hex } from "@kofra/core";
+import { CORE_MCP_TOOLS, skillMarkdown } from "@kofra/server";
 import repoSkill from "../skills/kofra/SKILL.md?raw";
 import { freshInstance, jsonBody, ORIGIN, type Instance } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
@@ -32,7 +32,7 @@ describe.each([
       for (const method of Object.keys(item)) documented.add(`${method.toUpperCase()} ${shape(path)}`);
     }
     const missing: string[] = [];
-    for (const r of dw.dropway.app.routes) {
+    for (const r of dw.kofra.app.routes) {
       if (r.method === "ALL" && r.path.endsWith("*")) continue; // middleware (and the /mcp/* catch-all, which only 404s)
       const method = r.method === "ALL" ? "POST" : r.method;
       if (!documented.has(`${method} ${shape(r.path)}`)) missing.push(`${r.method} ${r.path}`);

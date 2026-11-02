@@ -35,7 +35,7 @@ it to their own Cloudflare account with the Deploy to Cloudflare button.
 
 This edition is **single tenant**: one owner, optional members, scoped API keys. It has no sign-up for
 strangers, no plans, no prices, no billing and no payment code. Limits are whatever the instance owner
-configures. An embedding application can add those things from outside through `createDropway()`
+configures. An embedding application can add those things from outside through `createKofra()`
 (section 6); nothing in this repository depends on such an application.
 
 What Kofra is not:
@@ -53,7 +53,7 @@ What Kofra is not:
 |---|---|---|---|
 | **Coding agent with a shell** (Claude Code, Codex, Cursor, OpenCode, CI bots) | Publish a build or a report, update a few files, check the result, roll back, share privately | CLI `npx kofra`, local or remote MCP, REST | One command publishes; no file bytes pass through the model; JSON on stdout; errors say what to do next; the URL works when the command returns |
 | **Chat or IDE agent without a shell** (Claude.ai, Claude Desktop, ChatGPT, VS Code) | Publish a page it just wrote, publish files that are already online, read back what it published | Remote MCP (OAuth or API key) | Small default toolset, inline text and URL sources, a preview card in the chat |
-| **Developer** | Self-host for their team, script publishes, embed Kofra in their own product, extend it | REST + OpenAPI, CLI, `createDropway()` | One-click deploy, stable typed API, documented extension points, tests that run locally |
+| **Developer** | Self-host for their team, script publishes, embed Kofra in their own product, extend it | REST + OpenAPI, CLI, `createKofra()` | One-click deploy, stable typed API, documented extension points, tests that run locally |
 | **Non-technical user** | Open a link, read a report, view a PDF, CSV or image, enter a password, drop a folder in the dashboard | Browser: sites origin and dashboard | Every file type looks right in the browser with a "raw" and "download" option; nothing to install |
 | **Small team self-hosting** | Share internal prototypes and documents safely; give each person and agent its own key; keep everything on their own Cloudflare account | Dashboard, API keys, members | Private by default for sensitive sites, audit of who published what, near-zero running cost |
 
@@ -79,7 +79,7 @@ What Kofra is not:
 9. **Destructive actions need a cheap explicit confirmation** (`confirm: "<slug>"` in MCP; `--yes` in the CLI).
 10. **The app origin never serves user content.** User bytes are only ever served from the sites origin(s).
 11. **Anything a person can click, an agent can call.** The dashboard uses only public REST operations.
-12. **Logic lives in `@dropway/core` services; every surface is thin.** REST, MCP, CLI and dashboard
+12. **Logic lives in `@kofra/core` services; every surface is thin.** REST, MCP, CLI and dashboard
     call the same services, so permissions, limits and errors are identical.
 13. **No SaaS concepts here.** No plans, prices, billing, payment code, public sign-up or usage-based
     limits beyond admin-set config. Extension points name capabilities and events, never plans.
@@ -232,7 +232,7 @@ the local filter.
 | AX-10 | `call_api` (any operation by method and path) and `search_docs` | P1 | R-25 |
 | AX-11 | Code Mode endpoint `/mcp/code` (`search` + `execute` over the OpenAPI) | P2 | R-43 |
 | AX-12 | Webhooks on site events, HMAC-signed | P2 | R-40 |
-| AX-13 | Typed TypeScript client `@dropway/client` | P2 | Done (R-45) |
+| AX-13 | Typed TypeScript client `@kofra/client` | P2 | Done (R-45) |
 
 ### 4.10 Small apps without a backend (APP)
 
@@ -489,73 +489,73 @@ batch 10, retries 3, dead-letter queue `dropway-jobs-dlq`). Kinds: `metadata`, `
 ```
 wrangler.jsonc            Self-host config (repo root on purpose: the Deploy button treats the chosen
                           folder as the whole repo)
-apps/worker               The single-tenant Worker: createDropway() with defaults
-packages/core             @dropway/core   service layer: storage, publish protocol, versions, manifests,
+apps/worker               The single-tenant Worker: createKofra() with defaults
+packages/core             @kofra/core   service layer: storage, publish protocol, versions, manifests,
                                           file-type detection, auth interfaces, tenant services, migrations
-packages/server           @dropway/server createDropway(): Hono app factory, operation registry, REST, MCP,
+packages/server           @kofra/server createKofra(): Hono app factory, operation registry, REST, MCP,
                                           serving, viewers, dashboard, Durable Object classes, testing kit
 packages/cli              kofra         CLI and local stdio MCP (npm package "kofra")
-packages/client           @dropway/client typed REST client generated from the registry
+packages/client           @kofra/client typed REST client generated from the registry
 ```
 
 Rules:
 
-- Dependencies point one way: `apps/*` -> `@dropway/server` -> `@dropway/core`. Nothing in this repo
+- Dependencies point one way: `apps/*` -> `@kofra/server` -> `@kofra/core`. Nothing in this repo
   imports an embedding application, and embedding applications import only package names
-  (`@dropway/server`, `@dropway/core`, documented subpaths). Deep imports are blocked by `exports` maps.
+  (`@kofra/server`, `@kofra/core`, documented subpaths). Deep imports are blocked by `exports` maps.
 - Packages export TypeScript source; wrangler/esbuild bundles it. No build step.
 - Public extension points name **capabilities** and **events**, never plans or prices.
 - Any breaking change to anything in this section bumps `EXTENSION_API_VERSION` and gets a changelog entry.
 
-### 6.2 `createDropway(options)`
+### 6.2 `createKofra(options)`
 
 Existing fields are marked `// exists`; the rest are planned, with the roadmap item.
 
 ```ts
-import { createDropway } from "@dropway/server";
+import { createKofra } from "@kofra/server";
 
-export interface CreateDropwayOptions {
+export interface CreateKofraOptions {
   config?: ConfigOverrides | ((env: ServerBindings) => ConfigOverrides);           // exists
-  adapters?: Partial<DropwayAdapters>;                                              // exists (identity, policy, metering)
-  hooks?: DropwayHooks | DropwayHooks[];                                            // exists
-  apiMiddleware?: MiddlewareHandler<DropwayEnv>[];                                  // exists
+  adapters?: Partial<KofraAdapters>;                                              // exists (identity, policy, metering)
+  hooks?: KofraHooks | KofraHooks[];                                            // exists
+  apiMiddleware?: MiddlewareHandler<KofraEnv>[];                                  // exists
   routes?: RouteExtension[];                                                        // exists; R-18 adds OpenAPI fragments
   operations?: OperationDefinition[];                                               // R-02: typed operations -> REST + MCP + OpenAPI + CLI
   mcpTools?: McpToolDefinition[];                                                   // exists (prefer operations)
   mcp?: McpHandlerFactory;                                                          // exists; R-06 ships the default handler
   uiSlots?: Partial<UiSlots>;                                                       // exists; R-22 adds settingsSections, banner
   viewers?: Viewer[];                                                               // exists
-  scheduled?: (dc: DropwayContext, controller: ScheduledController) => Promise<void>; // exists
+  scheduled?: (dc: KofraContext, controller: ScheduledController) => Promise<void>; // exists
   queues?: Record<string, QueueConsumer>;                                           // R-18
 }
 
-export interface Dropway {
+export interface Kofra {
   fetch(request: Request, env: ServerBindings, ctx: ExecutionContext): Promise<Response>;        // exists
   scheduled(controller: ScheduledController, env: ServerBindings, ctx: ExecutionContext): Promise<void>; // exists
   queue(batch: MessageBatch<unknown>, env: ServerBindings, ctx: ExecutionContext): Promise<void>; // R-18
-  app: Hono<DropwayEnv>;                                                                          // exists
+  app: Hono<KofraEnv>;                                                                          // exists
   operations: readonly OperationDefinition[];                                                     // R-02
   mcpTools: readonly McpToolDefinition[];                                                         // exists
-  uiSlots: UiSlots; viewers: readonly Viewer[]; adapters: DropwayAdapters;                        // exists
-  context(env: ServerBindings, ctx: Pick<ExecutionContext, "waitUntil">, requestUrl?: URL | null): DropwayContext; // exists
+  uiSlots: UiSlots; viewers: readonly Viewer[]; adapters: KofraAdapters;                        // exists
+  context(env: ServerBindings, ctx: Pick<ExecutionContext, "waitUntil">, requestUrl?: URL | null): KofraContext; // exists
 }
 
 export const EXTENSION_API_VERSION: number;   // R-01, starts at 1
-export type QueueConsumer = (batch: MessageBatch<unknown>, dc: DropwayContext) => Promise<void>;
+export type QueueConsumer = (batch: MessageBatch<unknown>, dc: KofraContext) => Promise<void>;
 ```
 
 The single-tenant entry stays three lines:
 
 ```ts
-const dropway = createDropway();
-export default { fetch: dropway.fetch, scheduled: dropway.scheduled, queue: dropway.queue } satisfies ExportedHandler<ServerBindings>;
-export { SiteDataStore, LiveChannel } from "@dropway/server/durable-objects";   // R-30, R-41
+const kofra = createKofra();
+export default { fetch: kofra.fetch, scheduled: kofra.scheduled, queue: kofra.queue } satisfies ExportedHandler<ServerBindings>;
+export { SiteDataStore, LiveChannel } from "@kofra/server/durable-objects";   // R-30, R-41
 ```
 
 ### 6.3 Adapters
 
 ```ts
-export interface DropwayAdapters {
+export interface KofraAdapters {
   identity: IdentityAdapter;      // exists
   policy: PolicyAdapter;          // exists; extended below
   metering: MeteringAdapter;      // exists
@@ -567,22 +567,22 @@ export interface DropwayAdapters {
 
 /** Who is calling. Owns tenancy: a member principal names its tenant. (exists) */
 export interface IdentityAdapter {
-  resolve(request: Request, dc: DropwayContext): Promise<Principal>;
+  resolve(request: Request, dc: KofraContext): Promise<Principal>;
 }
 
 /** Limits and allow/deny decisions. Throw an ApiError to refuse. */
 export interface PolicyAdapter {
-  limits(principal: Principal, owner: SiteOwner, dc: DropwayContext): Limits | Promise<Limits>;          // exists
-  beforeCreateSite?(principal: Principal, input: { slug: string | null; tenantId: string | null }, dc: DropwayContext): void | Promise<void>; // exists
-  beforeDeploy?(principal: Principal, input: { siteId: string; tenantId: string | null; fileCount: number; totalBytes: number; newBytes: number }, dc: DropwayContext): void | Promise<void>; // exists; newBytes added in R-17
+  limits(principal: Principal, owner: SiteOwner, dc: KofraContext): Limits | Promise<Limits>;          // exists
+  beforeCreateSite?(principal: Principal, input: { slug: string | null; tenantId: string | null }, dc: KofraContext): void | Promise<void>; // exists
+  beforeDeploy?(principal: Principal, input: { siteId: string; tenantId: string | null; fileCount: number; totalBytes: number; newBytes: number }, dc: KofraContext): void | Promise<void>; // exists; newBytes added in R-17
   /** R-17. Is this capability allowed for this caller? Core checks instance support first (binding present). */
-  capability?(principal: Principal, capability: Capability, owner: SiteOwner | null, dc: DropwayContext): CapabilityDecision | Promise<CapabilityDecision>;
+  capability?(principal: Principal, capability: Capability, owner: SiteOwner | null, dc: KofraContext): CapabilityDecision | Promise<CapabilityDecision>;
   /** R-17. Numeric quota for a resource. null = unlimited. Default: config.quotas[key] (admin-set). */
-  quota?(principal: Principal, key: QuotaKey, owner: SiteOwner | null, dc: DropwayContext): number | null | Promise<number | null>;
+  quota?(principal: Principal, key: QuotaKey, owner: SiteOwner | null, dc: KofraContext): number | null | Promise<number | null>;
   /** R-36. Rate rule for a bucket. Default: config.rateLimits[bucket]. */
-  rateLimit?(principal: Principal, bucket: RateBucket, dc: DropwayContext): RateRule | null | Promise<RateRule | null>;
+  rateLimit?(principal: Principal, bucket: RateBucket, dc: KofraContext): RateRule | null | Promise<RateRule | null>;
   /** R-17. Runs before every registry operation (after auth and validation, before the handler). */
-  beforeOperation?(principal: Principal, op: OperationMeta, input: unknown, dc: DropwayContext): void | Promise<void>;
+  beforeOperation?(principal: Principal, op: OperationMeta, input: unknown, dc: KofraContext): void | Promise<void>;
 }
 
 export type CapabilityDecision = { allowed: true } | { allowed: false; error: ApiError };
@@ -609,7 +609,7 @@ export type RateBucket = "publish" | "read" | "anonymous_create" | "anonymous_re
 export interface RateRule { limit: number; windowSeconds: number; burst?: { limit: number; windowSeconds: 10 | 60 } }
 
 /** Usage events, recorded after the response (waitUntil). Default: no-op. (exists; new kinds in R-17) */
-export interface MeteringAdapter { record(event: UsageEvent, dc: DropwayContext): void | Promise<void> }
+export interface MeteringAdapter { record(event: UsageEvent, dc: KofraContext): void | Promise<void> }
 export type UsageEvent =
   | { type: "deploy"; tenantId: string | null; siteId: string; versionId: string; fileCount: number; totalBytes: number; at: number } // exists
   | { type: "blob_upload"; tenantId: string | null; sha256: string; bytes: number; at: number }                                     // exists
@@ -624,21 +624,21 @@ export type UsageEvent =
 /** R-18. Hot-path hooks for serving. Must answer from memory or KV (no D1 on the hot path). */
 export interface ServingAdapter {
   /** Map a host that is neither the app origin nor a SITES_DOMAIN subdomain to a site (custom domains). */
-  resolveHost?(host: string, dc: DropwayContext): Promise<{ slug: string; mountPath: string; redirectTo?: string } | null>;
+  resolveHost?(host: string, dc: KofraContext): Promise<{ slug: string; mountPath: string; redirectTo?: string } | null>;
   /** Return a Response to short-circuit (owner suspended, takedown page, interstitial); null to continue. */
-  beforeServe?(site: { id: string; slug: string; tenantId: string | null; versionId: string | null; anonymous: boolean }, request: Request, dc: DropwayContext): Promise<Response | null>;
+  beforeServe?(site: { id: string; slug: string; tenantId: string | null; versionId: string | null; anonymous: boolean }, request: Request, dc: KofraContext): Promise<Response | null>;
 }
 
 /** R-21. Default: Cloudflare Email Service binding EMAIL when bound; otherwise features that need email report feature_unavailable. */
 export interface EmailAdapter {
-  send(message: { to: string[]; subject: string; text: string; html?: string; kind: "sign_in" | "site_access" | "invite" | "notice" }, dc: DropwayContext): Promise<{ id: string }>;
+  send(message: { to: string[]; subject: string; text: string; html?: string; kind: "sign_in" | "site_access" | "invite" | "notice" }, dc: KofraContext): Promise<{ id: string }>;
 }
 
 /** R-33. Default: "manual" (DNS and route instructions); "cloudflare_api" when CF_API_TOKEN and zones are configured. */
 export interface DomainAdapter {
-  add(hostname: string, dc: DropwayContext): Promise<DomainStatus>;
-  check(hostname: string, dc: DropwayContext): Promise<DomainStatus>;
-  remove(hostname: string, dc: DropwayContext): Promise<void>;
+  add(hostname: string, dc: KofraContext): Promise<DomainStatus>;
+  check(hostname: string, dc: KofraContext): Promise<DomainStatus>;
+  remove(hostname: string, dc: KofraContext): Promise<void>;
 }
 export interface DomainStatus {
   hostname: string; status: "pending" | "active" | "action_required" | "error";
@@ -648,7 +648,7 @@ export interface DomainStatus {
 
 /** R-37. Default: cheap heuristics on anonymous publishes only. */
 export interface ModerationAdapter {
-  scanVersion(input: { siteId: string; versionId: string; anonymous: boolean; principal: Principal; files: { path: string; sha256: string; size: number; contentType: string }[] }, dc: DropwayContext): Promise<
+  scanVersion(input: { siteId: string; versionId: string; anonymous: boolean; principal: Principal; files: { path: string; sha256: string; size: number; contentType: string }[] }, dc: KofraContext): Promise<
     { action: "allow" } | { action: "hold"; reason: string; challengeUrl?: string } | { action: "block"; reason: string }>;
 }
 ```
@@ -675,13 +675,13 @@ the adapter.
 ### 6.4 Hooks (after the response)
 
 ```ts
-export interface DropwayHooks {
-  onPublish?(event: PublishEvent, dc: DropwayContext): void | Promise<void>;     // exists ("deploy" | "restore")
-  onDelete?(event: DeleteEvent, dc: DropwayContext): void | Promise<void>;       // exists ("api" | "expired")
-  onRequest?(event: SiteRequestEvent, dc: DropwayContext): void | Promise<void>; // exists (every site request; keep cheap)
-  onEvent?(event: DropwayEvent, dc: DropwayContext): void | Promise<void>;       // R-18: catch-all, same events webhooks use
+export interface KofraHooks {
+  onPublish?(event: PublishEvent, dc: KofraContext): void | Promise<void>;     // exists ("deploy" | "restore")
+  onDelete?(event: DeleteEvent, dc: KofraContext): void | Promise<void>;       // exists ("api" | "expired")
+  onRequest?(event: SiteRequestEvent, dc: KofraContext): void | Promise<void>; // exists (every site request; keep cheap)
+  onEvent?(event: KofraEvent, dc: KofraContext): void | Promise<void>;       // R-18: catch-all, same events webhooks use
 }
-export type DropwayEvent =
+export type KofraEvent =
   | { type: "site.created" | "site.claimed" | "site.deleted" | "site.settings_changed" | "site.access_changed"; siteId: string; tenantId: string | null; actor: string; at: number }
   | { type: "version.published" | "version.restored" | "version.deleted"; siteId: string; versionId: string; actor: string; at: number }
   | { type: "member.added" | "member.removed" | "key.created" | "key.revoked"; tenantId: string; targetId: string; actor: string; at: number }
@@ -694,7 +694,7 @@ Hooks never block or fail a request; errors are logged. Use `PolicyAdapter` to r
 
 Every API operation is defined once. The registry generates the Hono route (with validation), the
 OpenAPI operation, the MCP tool, the CLI command table (`GET /api/v1/operations`), the typed client
-(`@dropway/client`, R-45), `llms.txt` lines and docs pages. Embedding apps add operations the same way,
+(`@kofra/client`, R-45), `llms.txt` lines and docs pages. Embedding apps add operations the same way,
 so their REST, MCP and docs stay consistent.
 
 ```ts
@@ -719,7 +719,7 @@ export interface OperationDefinition<I extends z.ZodTypeAny = z.ZodTypeAny, O ex
   handler(input: z.infer<I>, ctx: OperationContext): Promise<z.infer<O>>;
 }
 export interface OperationContext {
-  dw: DropwayContext; principal: Principal; request: Request;
+  dw: KofraContext; principal: Principal; request: Request;
   client: string | null;              // X-Kofra-Client or MCP clientInfo
   idempotencyKey: string | null;
 }
@@ -731,7 +731,7 @@ handler can throw is in the error catalog.
 
 ### 6.6 Tenant services (R-18)
 
-`@dropway/core` exports the only code that writes tenant rows, so an embedding app never writes SQL into
+`@kofra/core` exports the only code that writes tenant rows, so an embedding app never writes SQL into
 core tables:
 
 ```ts
@@ -750,10 +750,10 @@ recomputeUsage(dc, tenantId): Promise<UsageCounters>       // true-up of usage_c
 export interface UiSlots {
   navItems: NavItem[];                                       // exists
   pages: UiPage[];                                           // exists
-  landing?: (c: Context<DropwayEnv>) => Response | Promise<Response>; // exists
+  landing?: (c: Context<KofraEnv>) => Response | Promise<Response>; // exists
   headHtml?: string;                                         // exists
   settingsSections?: UiSection[];                            // R-22: extra sections on the settings page
-  banner?: (c: Context<DropwayEnv>) => Promise<string | null>;        // R-22: one-line notice above every dashboard page
+  banner?: (c: Context<KofraEnv>) => Promise<string | null>;        // R-22: one-line notice above every dashboard page
 }
 ```
 
@@ -766,15 +766,15 @@ run before core viewers. Section 10 lists core viewers.
 
 ### 6.9 Testing kit and contract (R-01 done, R-18 remaining)
 
-- `@dropway/server` exports `EXTENSION_API_VERSION = 6`; extension API changes update that value and
+- `@kofra/server` exports `EXTENSION_API_VERSION = 7`; extension API changes update that value and
   the Extension API section in `CHANGELOG.md`.
-- `test/extension-contract.test.ts` builds `createDropway()` with fake adapters and exercises every
+- `test/extension-contract.test.ts` builds `createKofra()` with fake adapters and exercises every
   existing point: identity and scopes, policy limits and refusals, all five metering event kinds,
   all three hooks, API middleware, a route override, an app route, contexts, MCP tools and endpoint
   replacement, UI slots, a viewer and `scheduled`. Public CI catches breakage without any private code.
 - Future contracts arrive with their features: operations (R-02), capability denial, quota and rate
   rules (R-17/R-36), `queue`, `beforeServe`, `resolveHost` and the testing kit (R-18).
-- `@dropway/server/testing` exports `createTestDropway(options)`, `seedTenant()`, `seedSite()`,
+- `@kofra/server/testing` exports `createTestKofra(options)`, `seedTenant()`, `seedSite()`,
   `publishFixture()`, and the Miniflare bindings needed by `@cloudflare/vitest-plugin`.
 
 ---
@@ -1082,7 +1082,7 @@ CREATE TABLE webhooks (
   id                 TEXT PRIMARY KEY,
   tenant_id          TEXT NOT NULL REFERENCES tenants(id),
   url                TEXT NOT NULL,       -- https only, public addresses only
-  events             TEXT NOT NULL,       -- space-separated DropwayEvent types
+  events             TEXT NOT NULL,       -- space-separated KofraEvent types
   site_id            TEXT,                -- NULL = every site
   secret_ciphertext  TEXT NOT NULL,       -- HMAC signing secret, encrypted like variables
   secret_iv          TEXT NOT NULL,
@@ -1356,7 +1356,7 @@ App origin:
 | `/oauth/authorize`, `/oauth/token`, `/oauth/register`, `/oauth/device` | OAuth 2.1 | P1 | R-24 |
 | `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource/mcp` | OAuth discovery | P1 | R-24 |
 | `/login`, `/dashboard/*`, `/view/{site}/{path}` | Dashboard and viewer page | P1 | R-21, R-22 |
-| `/cli/dropway.tgz` | The CLI tarball for `npx -y --package=<app>/cli/dropway.tgz dropway`, for instances whose users cannot reach npm | P1 | R-09 |
+| `/cli/kofra.tgz` | The CLI tarball for `npx -y --package=<app>/cli/kofra.tgz dropway`, for instances whose users cannot reach npm | P1 | R-09 |
 
 Sites origin:
 

@@ -1,5 +1,5 @@
 import { effectiveSigningSecret } from "../config";
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import { siteUrl } from "../context";
 import { readBlob, readBlobRange } from "./blobs";
 import { ApiError, forbidden, rateLimited } from "../errors";
@@ -7,14 +7,14 @@ import { hmacHex, newSecret, timingSafeEqualStr, verifyPassword } from "../lib/c
 import { transferConflict, transferMissing, transferRecipients, validateTransferPassword, type TransferFile, type TransferRow } from "./transfers";
 
 export interface PublicTransfer extends TransferRow { password_hash: string | null }
-export async function publicTransfer(dc: DropwayContext, slug: string): Promise<PublicTransfer> {
+export async function publicTransfer(dc: KofraContext, slug: string): Promise<PublicTransfer> {
   const t = await dc.env.DB.prepare(`SELECT t.*, s.password_hash FROM transfers t JOIN sites s ON s.id = t.site_id
     WHERE s.slug = ? AND s.mode = 'transfer' AND s.deleted_at IS NULL AND t.deleted_at IS NULL AND s.current_version_id IS NOT NULL`)
     .bind(slug).first<PublicTransfer>();
   if (!t) throw transferMissing();
   return t;
 }
-export async function publicTransferFile(dc: DropwayContext, t: TransferRow, path: string): Promise<TransferFile> {
+export async function publicTransferFile(dc: KofraContext, t: TransferRow, path: string): Promise<TransferFile> {
   const file = await dc.env.DB.prepare("SELECT * FROM transfer_files WHERE transfer_id = ? AND path = ?").bind(t.id, path).first<TransferFile>();
   if (!file || t.purged_at !== null) throw transferMissing();
   return file;
@@ -29,12 +29,12 @@ export function checkTransferGate(t: TransferRow): void {
 }
 export const transferCookieName = (t: TransferRow) => `__Host-dw_transfer_${t.id}`;
 
-export async function makeTransferGrant(dc: DropwayContext, t: PublicTransfer): Promise<string> {
+export async function makeTransferGrant(dc: KofraContext, t: PublicTransfer): Promise<string> {
   const until = Math.min(Date.now() + 15 * 60_000, t.expires_at);
   const value = String(until);
   return `${value}.${await hmacHex(await effectiveSigningSecret(dc), `transfer:${t.id}:${t.password_hash}:${value}`)}`;
 }
-export async function transferUnlocked(dc: DropwayContext, t: PublicTransfer, request: Request): Promise<boolean> {
+export async function transferUnlocked(dc: KofraContext, t: PublicTransfer, request: Request): Promise<boolean> {
   if (!t.password_hash) return true;
   const cookies = new Map((request.headers.get("Cookie") ?? "").split(";").map((s) => { const i = s.indexOf("="); return [s.slice(0, i).trim(), s.slice(i + 1)] as const; }));
   const grants = [new URL(request.url).searchParams.get("grant"), cookies.get(transferCookieName(t))];
@@ -47,7 +47,7 @@ export async function transferUnlocked(dc: DropwayContext, t: PublicTransfer, re
   }
   return false;
 }
-async function spendUnlock(dc: DropwayContext, bucket: string, cap: number) {
+async function spendUnlock(dc: KofraContext, bucket: string, cap: number) {
   const windowMs = 15 * 60_000;
   const window = Math.floor(Date.now() / windowMs);
   // The conditional upsert matches no row once the counter is at its allowance, so a full counter is never written
@@ -68,12 +68,12 @@ async function spendUnlock(dc: DropwayContext, bucket: string, cap: number) {
   throw new ApiError(503, "transfer_unlock_unavailable", "Password unlock is unavailable.", "Retry later.");
 }
 /** Separate namespaces prevent site password attempts from consuming transfer budgets. */
-export async function spendSitePasswordAttempt(dc: DropwayContext, siteId: string, ip: string) {
+export async function spendSitePasswordAttempt(dc: KofraContext, siteId: string, ip: string) {
   await spendUnlock(dc, `site-ip:${await hmacHex(await effectiveSigningSecret(dc), `ip:${ip}`)}`, 10);
   await spendUnlock(dc, `site:${siteId}`, 30);
 }
 
-export async function unlockTransfer(dc: DropwayContext, t: PublicTransfer, password: unknown, ip: string) {
+export async function unlockTransfer(dc: KofraContext, t: PublicTransfer, password: unknown, ip: string) {
   checkTransferGate(t);
   await spendUnlock(dc, `ip:${await hmacHex(await effectiveSigningSecret(dc), `ip:${ip}`)}`, 10);
   await spendUnlock(dc, `transfer:${t.id}`, 30);
@@ -83,7 +83,7 @@ export async function unlockTransfer(dc: DropwayContext, t: PublicTransfer, pass
 }
 
 /** Atomic state recheck and accounting, after a real blob/range has been opened. */
-export async function recordTransferDownload(dc: DropwayContext, t: PublicTransfer, file: TransferFile, recipientToken: string | null, count: boolean) {
+export async function recordTransferDownload(dc: KofraContext, t: PublicTransfer, file: TransferFile, recipientToken: string | null, count: boolean) {
   const recipients = transferRecipients(t);
   const index = recipientToken ? recipients.findIndex((r) => r.token === recipientToken) : -1;
   if (recipientToken && index < 0) throw transferMissing();
@@ -117,7 +117,7 @@ export async function recordTransferDownload(dc: DropwayContext, t: PublicTransf
   }
 }
 
-export async function openTransferDownload(dc: DropwayContext, request: Request, slug: string, path: string) {
+export async function openTransferDownload(dc: KofraContext, request: Request, slug: string, path: string) {
   const origin = new URL(request.url).origin;
   const isolated = dc.config.sitesOrigin || (dc.config.sitesMode === "subdomain" && dc.config.sitesDomain);
   if (!isolated || origin !== new URL(siteUrl(dc, slug)).origin || (dc.config.appOrigin && origin === new URL(dc.config.appOrigin).origin)) throw transferMissing();

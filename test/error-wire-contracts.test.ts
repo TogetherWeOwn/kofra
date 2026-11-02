@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ApiError, defaultIdentity, errorCatalogMarkdown } from "@dropway/core";
+import { ApiError, defaultIdentity, errorCatalogMarkdown } from "@kofra/core";
 import { fromJsonSchema } from "@modelcontextprotocol/server";
 import { freshInstance, jsonBody, ORIGIN } from "./helpers";
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { buildOpenApi, defineOperation, type OperationDefinition } from "@dropway/server";
+import { buildOpenApi, defineOperation, type OperationDefinition } from "@kofra/server";
 
 function operation(overrides: Partial<OperationDefinition> = {}): OperationDefinition {
   return {

@@ -26,8 +26,8 @@ import {
   recoverOwnerKey,
   setupInstance,
   uploadBlob,
-} from "@dropway/core";
-import type { DropwayEnv } from "../env";
+} from "@kofra/core";
+import type { KofraEnv } from "../env";
 import { readJson } from "../routes/api";
 import { defineOperation, rawRequestInput } from "../operations";
 import { fromSchema, RO, WRITE, P, D, clientOf } from "./shared";
@@ -65,7 +65,7 @@ export const HTTP_OPERATIONS = [
         output: {
           name: "Kofra API",
           version: "v1",
-          openapi: "https://dropway.example/openapi.json",
+          openapi: "https://kofra.example/openapi.json",
         },
       },
     ],
@@ -97,7 +97,7 @@ export const HTTP_OPERATIONS = [
     mcp: { exclude: "needs the bootstrap key, which MCP never accepts" },
     http: {
       statuses: [201],
-      handler: async (c: Context<DropwayEnv>) => {
+      handler: async (c: Context<KofraEnv>) => {
         const body = await readJson(c);
         const out = await setupInstance(D(c), P(c), body);
         return c.json(
@@ -260,13 +260,13 @@ export const HTTP_OPERATIONS = [
       {
         input: { files: [{ path: "index.html", content: "Hello" }] },
         output: {
-          url: "https://dropway.example/s/bright-otter-x7k2/",
+          url: "https://kofra.example/s/bright-otter-x7k2/",
           slug: "bright-otter-x7k2",
           created: true,
           unchanged: false,
           site: {
             slug: "bright-otter-x7k2",
-            url: "https://dropway.example/s/bright-otter-x7k2/",
+            url: "https://kofra.example/s/bright-otter-x7k2/",
             currentVersionId: "ver_example",
           },
           version: {
@@ -384,7 +384,7 @@ export const HTTP_OPERATIONS = [
           },
           missing: ["0000000000000000000000000000000000000000000000000000000000000000"],
           uploads: [],
-          finalizeUrl: "https://dropway.example/api/v1/sites/bright-otter-x7k2/versions/ver_example/finalize",
+          finalizeUrl: "https://kofra.example/api/v1/sites/bright-otter-x7k2/versions/ver_example/finalize",
         },
       },
     ],

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { runCleanup } from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+import { runCleanup } from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { freshInstance, type Instance } from "./helpers";
 
 const NOW = 1_800_000_000_000;
@@ -42,7 +42,7 @@ async function stored() {
 async function cleanup(dw: Instance) {
   const ctx = createExecutionContext();
   try {
-    await runCleanup(dw.dropway.context(env as unknown as ServerBindings, ctx), NOW);
+    await runCleanup(dw.kofra.context(env as unknown as ServerBindings, ctx), NOW);
   } finally {
     await waitOnExecutionContext(ctx);
   }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
-import { claimSite, deleteSite, mintApiKey, renameSite, runCleanup } from "@dropway/core";
+import { claimSite, deleteSite, mintApiKey, renameSite, runCleanup } from "@kofra/core";
 import { asOwner } from "./atomic-extensions.helpers";
 import { freshInstance, jsonBody, type Instance } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
@@ -13,7 +13,7 @@ async function create(dw: Instance, slug: string, key = dw.ownerKey) {
 }
 
 async function otherTenantKey(dw: Instance) {
-  const { createTenantWithOwner } = await import("@dropway/core");
+  const { createTenantWithOwner } = await import("@kofra/core");
   return asOwner(dw, async (dc) => {
     const { tenant, owner } = await createTenantWithOwner(dc, { owner: { name: "Other owner" } });
     return (await mintApiKey(dc, { tenantId: tenant.id, memberId: owner.id, scopes: ["admin", "sites:read", "sites:write", "sites:delete"] })).key;

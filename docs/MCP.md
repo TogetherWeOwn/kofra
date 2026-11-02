@@ -123,7 +123,7 @@ Sites can be named by slug, site id or any URL of the site. Versions by `live`,
 ## Extending (embedding applications)
 
 ```ts
-import { createDropway, type McpToolDefinition } from "@dropway/server";
+import { createKofra, type McpToolDefinition } from "@kofra/server";
 
 const myTool: McpToolDefinition = {
   name: "my_tool",
@@ -134,15 +134,15 @@ const myTool: McpToolDefinition = {
   annotations: { readOnlyHint: true },
   scopes: ["sites:read"],
   async handler(args, { dw, principal, client }) {
-    // call @dropway/core services; throw ApiError for business errors
+    // call @kofra/core services; throw ApiError for business errors
     return { ok: true };
   },
   summarize: (r) => "Done.",
 };
 
-export default createDropway({ mcpTools: [myTool] });
+export default createKofra({ mcpTools: [myTool] });
 ```
 
 Extension tools appear after the core tools; one with a core tool's name replaces
 it. `createMcpEndpoint({ name, instructions, allowedOriginHostnames })` customises
-the endpoint itself (`createDropway({ mcp: createMcpEndpoint(...) })`).
+the endpoint itself (`createKofra({ mcp: createMcpEndpoint(...) })`).

@@ -1,11 +1,11 @@
 /**
  * Extension points. The open-source worker uses the defaults below; an embedding
  * app (for example a hosted, multi-tenant layer) passes its own implementations
- * to createDropway({ adapters, hooks }). Nothing in this package knows about
+ * to createKofra({ adapters, hooks }). Nothing in this package knows about
  * plans, prices or billing; those live entirely in adapters supplied from outside.
  */
 import type { Limits } from "./config";
-import type { DropwayContext } from "./context";
+import type { KofraContext } from "./context";
 import type { Principal } from "./principal";
 import type { Capability, CapabilityDecision, OperationMeta, QuotaKey } from "./policy";
 import type { ApiError } from "./errors";
@@ -32,7 +32,7 @@ export interface IdentityAdapter {
    * credential that is present but invalid; return { kind: "anonymous" } when
    * there is none.
    */
-  resolve(request: Request, dc: DropwayContext): Promise<Principal>;
+  resolve(request: Request, dc: KofraContext): Promise<Principal>;
 }
 
 /** The owner a site belongs to, as seen by policy checks. */
@@ -44,9 +44,9 @@ export interface SiteOwner {
 /** Limits and allow/deny decisions. Throw an ApiError to refuse. */
 export interface PolicyAdapter {
   /** Caps for a publish by `principal` to a site owned by `owner`. */
-  limits(principal: Principal, owner: SiteOwner, dc: DropwayContext): Limits | Promise<Limits>;
+  limits(principal: Principal, owner: SiteOwner, dc: KofraContext): Limits | Promise<Limits>;
   /** Once-per-create preflight (null for generated names), not an atomic allocation guard. */
-  beforeCreateSite?(principal: Principal, input: { slug: string | null; tenantId: string | null }, dc: DropwayContext): void | Promise<void>;
+  beforeCreateSite?(principal: Principal, input: { slug: string | null; tenantId: string | null }, dc: KofraContext): void | Promise<void>;
   /**
    * Prepare once per concrete create/rename candidate, outside the transaction.
    * Do not write independently here. Enforce refusal with a failing SQL constraint
@@ -55,20 +55,20 @@ export interface PolicyAdapter {
   siteNameMutation?(
     principal: Principal,
     input: Readonly<SiteNameMutation>,
-    dc: DropwayContext,
+    dc: KofraContext,
   ): AtomicWriteExtension | Promise<AtomicWriteExtension>;
   /** Called before a deploy is recorded, with its totals. */
   beforeDeploy?(
     principal: Principal,
     input: { siteId: string; tenantId: string | null; fileCount: number; totalBytes: number; newBytes: number },
-    dc: DropwayContext,
+    dc: KofraContext,
   ): void | Promise<void>;
   /** Core checks instance support before consulting the adapter. */
-  capability?(principal: Principal, capability: Capability, owner: SiteOwner | null, dc: DropwayContext): CapabilityDecision | Promise<CapabilityDecision>;
+  capability?(principal: Principal, capability: Capability, owner: SiteOwner | null, dc: KofraContext): CapabilityDecision | Promise<CapabilityDecision>;
   /** null means unlimited; omitted hooks use the instance's configured quotas. */
-  quota?(principal: Principal, key: QuotaKey, owner: SiteOwner | null, dc: DropwayContext): number | null | Promise<number | null>;
+  quota?(principal: Principal, key: QuotaKey, owner: SiteOwner | null, dc: KofraContext): number | null | Promise<number | null>;
   /** After authorization and validation, before registry dispatch. */
-  beforeOperation?(principal: Principal, op: OperationMeta, input: unknown, dc: DropwayContext): void | Promise<void>;
+  beforeOperation?(principal: Principal, op: OperationMeta, input: unknown, dc: KofraContext): void | Promise<void>;
 }
 
 export type UsageEvent =
@@ -81,10 +81,10 @@ export type UsageEvent =
 
 /** Usage metering. The default does nothing. Called off the hot path (waitUntil). */
 export interface MeteringAdapter {
-  record(event: UsageEvent, dc: DropwayContext): void | Promise<void>;
+  record(event: UsageEvent, dc: KofraContext): void | Promise<void>;
 }
 
-export interface DropwayAdapters {
+export interface KofraAdapters {
   identity: IdentityAdapter;
   policy: PolicyAdapter;
   metering: MeteringAdapter;
@@ -135,12 +135,12 @@ export interface TransferEvent {
   at: number;
 }
 
-export interface DropwayHooks {
-  onEvent?(event: TransferEvent, dc: DropwayContext): void | Promise<void>;
-  onPublish?(event: PublishEvent, dc: DropwayContext): void | Promise<void>;
-  onDelete?(event: DeleteEvent, dc: DropwayContext): void | Promise<void>;
+export interface KofraHooks {
+  onEvent?(event: TransferEvent, dc: KofraContext): void | Promise<void>;
+  onPublish?(event: PublishEvent, dc: KofraContext): void | Promise<void>;
+  onDelete?(event: DeleteEvent, dc: KofraContext): void | Promise<void>;
   /** Every request served for a site (including 404s). Keep it cheap. */
-  onRequest?(event: SiteRequestEvent, dc: DropwayContext): void | Promise<void>;
+  onRequest?(event: SiteRequestEvent, dc: KofraContext): void | Promise<void>;
 }
 
 /** Default policy: the instance's configured limits; anonymous sites get the anonymous caps. */

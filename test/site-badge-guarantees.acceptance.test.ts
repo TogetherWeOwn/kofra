@@ -7,7 +7,7 @@
  */
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { clearLiveMemoryCache } from "@dropway/core";
+import { clearLiveMemoryCache } from "@kofra/core";
 import { freshInstance } from "./helpers";
 import { badgeUrl, expectBadgeHeaders, expectGenericBadge, expectVersionedBadge, publishAnonymous, publishSite } from "./site-badge.helpers";
 

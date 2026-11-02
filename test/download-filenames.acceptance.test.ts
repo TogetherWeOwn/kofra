@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { gzipSync, strToU8 } from "fflate";
-import { clearLiveMemoryCache, sha256Hex } from "@dropway/core";
-import { DropwayClient, type FetchLike } from "../packages/cli/src/client.ts";
+import { clearLiveMemoryCache, sha256Hex } from "@kofra/core";
+import { KofraClient, type FetchLike } from "../packages/cli/src/client.ts";
 import { publish as cliPublish, type SourceFile } from "../packages/cli/src/publish.ts";
 import { freshInstance, jsonBody, ORIGIN, type Instance } from "./helpers";
 import { create, get, instance, siteFile } from "./transfer-fixtures";
@@ -139,7 +139,7 @@ describe("published download filenames", () => {
       if (body) headers.set("content-length", String(body.byteLength));
       return dw.call(request.url, { method: request.method, headers, body });
     };
-    const client = new DropwayClient({ api: ORIGIN, token: dw.ownerKey, fetch });
+    const client = new KofraClient({ api: ORIGIN, token: dw.ownerKey, fetch });
     const files: SourceFile[] = await Promise.all([NAMES[0]!, NAMES[3]!].map(async ({ path }) => ({
       path, size: PAYLOAD.length, sha256: await sha256Hex(PAYLOAD), body: async () => PAYLOAD,
     })));

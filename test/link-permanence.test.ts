@@ -5,10 +5,10 @@ import {
   mintApiKey,
   resolveVersionAddress,
   runCleanup,
-  type DropwayContext,
+  type KofraContext,
   type MemberPrincipal,
-} from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+} from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { form, freshInstance, ORIGIN, type Instance } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
 import { SITES as TRANSFER_SITES, create as createTransfer, instance as transferInstance, op as transferOp } from "./transfer-fixtures";
@@ -37,11 +37,11 @@ async function rename(dw: Instance, slug: string, newSlug: string, key?: string)
   });
 }
 
-/** Run a function with a DropwayContext for an instance (for low-level tenant/key setup). */
-async function asDc<T>(dw: Instance, fn: (dc: DropwayContext) => Promise<T>): Promise<T> {
+/** Run a function with a KofraContext for an instance (for low-level tenant/key setup). */
+async function asDc<T>(dw: Instance, fn: (dc: KofraContext) => Promise<T>): Promise<T> {
   const ctx = createExecutionContext();
   try {
-    return await fn(dw.dropway.context(env as unknown as ServerBindings, ctx));
+    return await fn(dw.kofra.context(env as unknown as ServerBindings, ctx));
   } finally {
     await waitOnExecutionContext(ctx);
   }

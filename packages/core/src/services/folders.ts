@@ -1,11 +1,11 @@
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import type { Principal } from "../principal";
 import { requireMember } from "../principal";
 import { forbidden, notFound } from "../errors";
 import { requireConfirm } from "./site-ops";
 
 /** Removing an organizer never deletes its sites; they become unfiled. */
-export async function deleteFolder(dc: DropwayContext, p: Principal, id: string, confirm: string) {
+export async function deleteFolder(dc: KofraContext, p: Principal, id: string, confirm: string) {
   const member = requireMember(p, "sites:delete");
   if (member.siteId) throw forbidden("A single-site key cannot delete folders.", "Use an unrestricted member key.", "key_site_restricted");
   const folder = await dc.env.DB.prepare("SELECT id, name FROM folders WHERE tenant_id = ? AND id = ?").bind(member.tenantId, id).first<{ id: string; name: string }>();

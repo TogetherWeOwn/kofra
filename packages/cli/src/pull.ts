@@ -2,7 +2,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, open, readdir, rename, unlink } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
-import { CliError, EXIT, type DropwayClient, type ExitCode } from "./client.ts";
+import { CliError, EXIT, type KofraClient, type ExitCode } from "./client.ts";
 
 interface FileInfo {
   path: string;
@@ -159,7 +159,7 @@ async function localFiles(dir: string, prefix = ""): Promise<string[]> {
   return result;
 }
 
-async function manifest(client: DropwayClient, site: string, versionId: string): Promise<FileInfo[]> {
+async function manifest(client: KofraClient, site: string, versionId: string): Promise<FileInfo[]> {
   const files: FileInfo[] = [];
   const cursors = new Set<string>();
   let cursor: string | null = null;
@@ -183,7 +183,7 @@ async function manifest(client: DropwayClient, site: string, versionId: string):
   return files;
 }
 
-async function download(client: DropwayClient, site: string, versionId: string, file: FileInfo, target: string): Promise<void> {
+async function download(client: KofraClient, site: string, versionId: string, file: FileInfo, target: string): Promise<void> {
   const temporary = join(dirname(target), `.kofra-pull-${randomUUID()}.tmp`);
   const handle = await open(temporary, "wx", 0o600);
   try {
@@ -224,7 +224,7 @@ async function download(client: DropwayClient, site: string, versionId: string, 
   }
 }
 
-export async function pullVersion(client: DropwayClient, site: string, versionId: string, dir: string, note: (text: string) => void): Promise<{ receipt: PullReceipt; exitCode: ExitCode }> {
+export async function pullVersion(client: KofraClient, site: string, versionId: string, dir: string, note: (text: string) => void): Promise<{ receipt: PullReceipt; exitCode: ExitCode }> {
   const files = await manifest(client, site, versionId);
   const receipt: PullReceipt = { site, versionId, dir, files: [], failures: [] };
   const paths = new Set<string>();

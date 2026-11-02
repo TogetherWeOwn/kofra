@@ -1,12 +1,12 @@
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { cors } from "hono/cors";
 import { cloneRawRequest } from "hono/request";
-import { ApiError, appOrigin, badRequest, bootstrapKeyMismatch, defaultIdentity } from "@dropway/core";
+import { ApiError, appOrigin, badRequest, bootstrapKeyMismatch, defaultIdentity } from "@kofra/core";
 import { withLegacyHeaderNames } from "../legacy-brand";
-import type { DropwayEnv } from "../env";
+import type { KofraEnv } from "../env";
 
 /** Bound wire bytes before decoding or parsing an object body. Raw uploads use their own reader. */
-export async function readJson(c: Context<DropwayEnv>, maxBytes = 8 * 1024 * 1024): Promise<Record<string, unknown>> {
+export async function readJson(c: Context<KofraEnv>, maxBytes = 8 * 1024 * 1024): Promise<Record<string, unknown>> {
   const tooLarge = () => new ApiError(413, "request_too_large", `JSON requests accept up to ${maxBytes} bytes.`, "Split the request or use sha256 upload links for file bytes.", { limit: maxBytes });
   if (Number(c.req.header("content-length")) > maxBytes) {
     if (!c.req.raw.body?.locked) await c.req.raw.body?.cancel().catch(() => {});
@@ -49,7 +49,7 @@ export async function readJson(c: Context<DropwayEnv>, maxBytes = 8 * 1024 * 102
   throw badRequest("invalid_json", "The request body must be a JSON object.", "Send Content-Type: application/json with an object body.");
 }
 
-export function apiErrorResponse(c: Context<DropwayEnv>, err: unknown): Response {
+export function apiErrorResponse(c: Context<KofraEnv>, err: unknown): Response {
   const requestId = c.get("requestId");
   c.header("X-Request-Id", requestId);
   if (err instanceof ApiError) {
@@ -77,14 +77,14 @@ export function apiErrorResponse(c: Context<DropwayEnv>, err: unknown): Response
  * operation): the only routes where a principal-resolution failure is
  * re-read as a bootstrap mismatch.
  */
-function isBootstrapRoute(c: Context<DropwayEnv>): boolean {
+function isBootstrapRoute(c: Context<KofraEnv>): boolean {
   if (c.req.method !== "POST") return false;
   const path = c.req.path;
   return path === "/api/v1/setup" || path === "/api/v1/setup/recover" || path === "/api/v1/accounts";
 }
 
 /** CORS, principal resolution, error shaping, then extension middleware. */
-export function installApiMiddleware(api: Hono<DropwayEnv>, middleware: MiddlewareHandler<DropwayEnv>[]) {
+export function installApiMiddleware(api: Hono<KofraEnv>, middleware: MiddlewareHandler<KofraEnv>[]) {
   api.use(
     "*",
     cors({

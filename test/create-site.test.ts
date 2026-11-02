@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
-import { tooLarge, type UsageEvent } from "@dropway/core";
+import { tooLarge, type UsageEvent } from "@kofra/core";
 import { form, freshInstance, jsonBody, manifestEntry } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
 

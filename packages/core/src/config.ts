@@ -1,6 +1,6 @@
 /**
  * Instance configuration. Resolved from Worker vars/secrets (see wrangler.jsonc),
- * then overridden by whatever the embedding app passes to createDropway({ config }).
+ * then overridden by whatever the embedding app passes to createKofra({ config }).
  */
 
 import { ApiError } from "./errors";
@@ -48,7 +48,7 @@ export interface SlugHolds {
   generatedMs: number;
 }
 
-export interface DropwayConfig {
+export interface KofraConfig {
   /** Shown in pages and API responses. */
   instanceName: string;
   /** Public origin of the app + API, no trailing slash. null = the origin of each request. */
@@ -121,7 +121,7 @@ export interface DropwayConfig {
   slugHolds: SlugHolds;
 }
 
-export type ConfigOverrides = Partial<Omit<DropwayConfig, "anonymous" | "limits" | "quotas" | "slugHolds">> & {
+export type ConfigOverrides = Partial<Omit<KofraConfig, "anonymous" | "limits" | "quotas" | "slugHolds">> & {
   anonymous?: Partial<Omit<AnonymousConfig, "limits">> & { limits?: Partial<Limits> };
   limits?: Partial<Limits>;
   quotas?: Partial<Quotas>;
@@ -129,7 +129,7 @@ export type ConfigOverrides = Partial<Omit<DropwayConfig, "anonymous" | "limits"
 };
 
 /** Worker vars and secrets read by resolveConfig. All optional strings. */
-export interface DropwayVars extends Partial<Record<`QUOTA_${Uppercase<QuotaKey>}`, string>> {
+export interface KofraVars extends Partial<Record<`QUOTA_${Uppercase<QuotaKey>}`, string>> {
   INSTANCE_NAME?: string;
   APP_ORIGIN?: string;
   LEGACY_APP_ORIGINS?: string;
@@ -205,7 +205,7 @@ const INSECURE_DEV_SECRET = "dropway-insecure-dev-secret";
  * The instance signing secret. Fails closed: without one, signed capabilities and salted IP hashes
  * are refused (503) instead of falling back to a guessable key. Unsigned routes keep working.
  */
-export function signingSecret(config: Pick<DropwayConfig, "signingSecret">): string {
+export function signingSecret(config: Pick<KofraConfig, "signingSecret">): string {
   if (config.signingSecret) return config.signingSecret;
   throw new ApiError(503, "signing_secret_missing", "This instance has no signing secret configured.",
     "The operator must set SIGNING_SECRET (or ADMIN_BOOTSTRAP_KEY) as a Worker secret.", undefined, { retryable: false });
@@ -217,7 +217,7 @@ const MIN_SECRET_LENGTH = 32;
 /** Label binding a bootstrap-derived key to capability signing, so the bearer itself never signs. */
 const SIGNING_DERIVATION_LABEL = "dw-signing-v1";
 
-/** Derivations cached per resolved config object (configs are cached per env in createDropway). */
+/** Derivations cached per resolved config object (configs are cached per env in createKofra). */
 const derivedSigningSecrets = new WeakMap<object, Promise<string>>();
 
 /**
@@ -227,7 +227,7 @@ const derivedSigningSecrets = new WeakMap<object, Promise<string>>();
  * verifying. Unset still fails closed with 503, like signingSecret().
  */
 export async function effectiveSigningSecret(dc: {
-  config: Pick<DropwayConfig, "signingSecret" | "adminBootstrapKey" | "signingSecretFromBootstrap">;
+  config: Pick<KofraConfig, "signingSecret" | "adminBootstrapKey" | "signingSecretFromBootstrap">;
 }): Promise<string> {
   const config = dc.config;
   if (config.signingSecret && !config.signingSecretFromBootstrap) return config.signingSecret;
@@ -256,7 +256,7 @@ function isLoopbackOrigin(origin: string): boolean {
   return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
 }
 
-export function resolveConfig(vars: DropwayVars, overrides: ConfigOverrides = {}): DropwayConfig {
+export function resolveConfig(vars: KofraVars, overrides: ConfigOverrides = {}): KofraConfig {
   const sitesDomain = overrides.sitesDomain !== undefined ? overrides.sitesDomain : normaliseDomain(vars.SITES_DOMAIN);
   const requestedMode = (overrides.sitesMode ?? vars.SITES_MODE ?? "").trim().toLowerCase();
   let sitesMode: SitesMode = requestedMode === "subdomain" || (!requestedMode && sitesDomain) ? "subdomain" : "path";
@@ -345,7 +345,7 @@ export function resolveConfig(vars: DropwayVars, overrides: ConfigOverrides = {}
     anonymous,
     limits,
     quotas: Object.fromEntries(QUOTA_KEYS.map((key) => {
-      const value = overrides.quotas?.[key] !== undefined ? overrides.quotas[key] : vars[`QUOTA_${key.toUpperCase()}` as keyof DropwayVars];
+      const value = overrides.quotas?.[key] !== undefined ? overrides.quotas[key] : vars[`QUOTA_${key.toUpperCase()}` as keyof KofraVars];
       const n = value === null || value === undefined || value === "" ? null : Number(value);
       if (n !== null && (!Number.isSafeInteger(n) || n < 0)) throw new Error(`Invalid quota ${key}: expected a non-negative integer or null.`);
       return [key, n];

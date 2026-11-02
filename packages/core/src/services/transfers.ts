@@ -1,4 +1,4 @@
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import { effectiveSigningSecret } from "../config";
 import { appOrigin, siteFileUrl, siteUrl } from "../context";
 import { ApiError, badRequest, conflict, forbidden, notFound } from "../errors";
@@ -30,10 +30,10 @@ export const transferMissing = () => notFound("transfer_not_found", "No transfer
 export const transferConflict = () => conflict("transfer_conflict", "The transfer changed or no longer permits this operation.", "Read the transfer again; closed or notified deliveries cannot be edited.");
 
 export function transferRecipients(t: TransferRow): TransferRecipient[] { return JSON.parse(t.recipients_json); }
-export function transferPageUrl(dc: DropwayContext, slug: string, recipient?: string) {
+export function transferPageUrl(dc: KofraContext, slug: string, recipient?: string) {
   return `${appOrigin(dc)}/t/${encodeURIComponent(slug)}${recipient ? `?recipient=${encodeURIComponent(recipient)}` : ""}`;
 }
-export function transferFileUrl(dc: DropwayContext, slug: string, path: string, recipient?: string) {
+export function transferFileUrl(dc: KofraContext, slug: string, path: string, recipient?: string) {
   const url = new URL(siteFileUrl(dc, slug, path));
   if (recipient) url.searchParams.set("recipient", recipient);
   return url.href;
@@ -54,7 +54,7 @@ export function validateTransferPassword(password: unknown): string | null {
   }
   return password;
 }
-async function validate(dc: DropwayContext, p: Principal, input: TransferInput, siteId: string | null) {
+async function validate(dc: KofraContext, p: Principal, input: TransferInput, siteId: string | null) {
   const member = requireMember(p, "sites:write");
   if (input.message !== undefined && input.message !== null && (typeof input.message !== "string" || input.message.length > 10_000)) {
     throw badRequest("invalid_transfer", "The message is too long or not text.", "Use at most 10,000 characters of plain text.");
@@ -72,14 +72,14 @@ async function validate(dc: DropwayContext, p: Principal, input: TransferInput, 
   }
   return { member, limits, days };
 }
-export async function ownedTransfer(dc: DropwayContext, p: Principal, reference: string, write = false): Promise<TransferRow> {
+export async function ownedTransfer(dc: KofraContext, p: Principal, reference: string, write = false): Promise<TransferRow> {
   const member = requireMember(p, write ? "sites:write" : "sites:read");
   const t = await dc.env.DB.prepare("SELECT * FROM transfers WHERE (id = ? OR slug = ?) AND tenant_id = ? AND member_id = ? AND deleted_at IS NULL")
     .bind(reference, reference, member.tenantId, member.memberId).first<TransferRow>();
   if (!t || (member.siteId && member.siteId !== t.site_id)) throw transferMissing();
   return t;
 }
-export async function describeTransfer(dc: DropwayContext, t: TransferRow) {
+export async function describeTransfer(dc: KofraContext, t: TransferRow) {
   const { results: files } = await dc.env.DB.prepare("SELECT * FROM transfer_files WHERE transfer_id = ? ORDER BY path").bind(t.id).all<TransferFile>();
   return {
     id: t.id, slug: t.slug, mode: "transfer" as const, url: transferPageUrl(dc, t.slug), message: t.message,
@@ -89,14 +89,14 @@ export async function describeTransfer(dc: DropwayContext, t: TransferRow) {
     files: files.map((f) => ({ path: f.path, sha256: f.sha256, size: f.size, contentType: f.content_type, downloads: f.downloads })),
   };
 }
-export async function getTransfer(dc: DropwayContext, p: Principal, reference: string) {
+export async function getTransfer(dc: KofraContext, p: Principal, reference: string) {
   return describeTransfer(dc, await ownedTransfer(dc, p, reference));
 }
-export function transferEvent(dc: DropwayContext, t: Pick<TransferRow, "id" | "revision">, type: "transfer.created" | "transfer.updated" | "transfer.revoked" | "transfer.expired") {
+export function transferEvent(dc: KofraContext, t: Pick<TransferRow, "id" | "revision">, type: "transfer.created" | "transfer.updated" | "transfer.revoked" | "transfer.expired") {
   emit(dc, "onEvent", { id: `${t.id}:${t.revision}:${type}`, type, transferId: t.id, at: Date.now() });
 }
 
-export async function createTransfer(dc: DropwayContext, p: Principal, input: TransferInput) {
+export async function createTransfer(dc: KofraContext, p: Principal, input: TransferInput) {
   const { member, limits, days } = await validate(dc, p, input, null);
   if (new URL(siteUrl(dc, input.slug ?? "delivery")).origin === new URL(appOrigin(dc)).origin) {
     throw new ApiError(409, "transfer_origin_required", "Transfers require a separate sites origin.", "Configure SITES_ORIGIN or subdomain serving before creating transfers.");
@@ -143,7 +143,7 @@ const LIVE = `${REVOKABLE} AND legal_hold = 0`;
 function assertMutable(t: TransferRow, update: boolean) {
   if (t.revoked_at !== null || t.expired_at !== null || t.deleted_at !== null || t.expires_at < Date.now() || t.takedown_at !== null || (t.download_limit !== null && t.downloads >= t.download_limit) || (update && (t.legal_hold || t.notified_at !== null))) throw transferConflict();
 }
-export async function updateTransfer(dc: DropwayContext, p: Principal, reference: string, input: TransferInput) {
+export async function updateTransfer(dc: KofraContext, p: Principal, reference: string, input: TransferInput) {
   const t = await ownedTransfer(dc, p, reference, true);
   assertMutable(t, true);
   await validate(dc, p, input, t.site_id);
@@ -187,7 +187,7 @@ export async function updateTransfer(dc: DropwayContext, p: Principal, reference
   transferEvent(dc, changed, "transfer.updated");
   return describeTransfer(dc, changed);
 }
-export async function revokeTransfers(dc: DropwayContext, p: Principal, input: { ids?: string[]; allLive?: boolean }) {
+export async function revokeTransfers(dc: KofraContext, p: Principal, input: { ids?: string[]; allLive?: boolean }) {
   const member = requireMember(p, "sites:write");
   if ((!input.allLive && !input.ids?.length) || (input.allLive && input.ids !== undefined) || (input.ids && input.ids.length > 100)) throw badRequest("invalid_transfer", "Choose transfer IDs or allLive.", "Supply 1-100 IDs, or allLive: true, not both.");
   const rows = input.allLive

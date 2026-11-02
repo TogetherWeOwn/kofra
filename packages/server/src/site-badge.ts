@@ -1,4 +1,4 @@
-import type { LiveSite } from "@dropway/core";
+import type { LiveSite } from "@kofra/core";
 import { escapeHtml } from "./html";
 
 /**

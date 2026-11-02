@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { parseArgs, UsageError } from "../src/args.ts";
-import { CliError, DropwayClient, EXIT, exitCodeForStatus, movedTo, normaliseApi, errorFromResponse } from "../src/client.ts";
+import { CliError, KofraClient, EXIT, exitCodeForStatus, movedTo, normaliseApi, errorFromResponse } from "../src/client.ts";
 import { run, type Io } from "../src/main.ts";
 import { configDir, linkKey, readCredentials, readLink, removeCredentials, saveCredentials, writeLink } from "../src/config.ts";
 import { collectFiles } from "../src/files.ts";
@@ -66,7 +66,7 @@ describe("client helpers", () => {
 
     const seen: string[] = [];
     const urls: string[] = [];
-    const client = new DropwayClient({
+    const client = new KofraClient({
       api: "https://old.test",
       token: "dw_x",
       onMoved: (o) => seen.push(o),
@@ -104,7 +104,7 @@ describe("client helpers", () => {
 
   it("maps a refused credential-bearing instance URL to the usage exit class", async () => {
     let calls = 0;
-    const client = new DropwayClient({
+    const client = new KofraClient({
       api: "http://remote.test", token: "dw_secret",
       fetch: async () => { calls++; return new Response("{}"); },
     });
@@ -114,7 +114,7 @@ describe("client helpers", () => {
 
   it("refuses an anonymous publish over non-loopback HTTP before creating a site it could not claim", async () => {
     let calls = 0;
-    const client = new DropwayClient({
+    const client = new KofraClient({
       api: "http://remote.test", token: null,
       fetch: async () => { calls++; return new Response("{}"); },
     });
@@ -125,7 +125,7 @@ describe("client helpers", () => {
 
   it("keeps an anonymous loopback publish working with the minted claim token", async () => {
     const seen: Array<[string, string, string | null]> = [];
-    const client = new DropwayClient({
+    const client = new KofraClient({
       api: "http://127.0.0.1:8787", token: null,
       fetch: async (req) => {
         const url = new URL(req.url);

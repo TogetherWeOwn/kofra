@@ -1,6 +1,6 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { clearLiveMemoryCache, runCleanup, type ConfigOverrides } from "@dropway/core";
-import type { CreateDropwayOptions, ServerBindings } from "@dropway/server";
+import { clearLiveMemoryCache, runCleanup, type ConfigOverrides } from "@kofra/core";
+import type { CreateKofraOptions, ServerBindings } from "@kofra/server";
 import { expect } from "vitest";
 import { freshInstance, jsonBody, ORIGIN, type Instance } from "./helpers";
 
@@ -40,7 +40,7 @@ export const input = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-export function instance(config: ConfigOverrides = {}, extra: Omit<CreateDropwayOptions, "config"> = {}) {
+export function instance(config: ConfigOverrides = {}, extra: Omit<CreateKofraOptions, "config"> = {}) {
   return freshInstance({ appOrigin: ORIGIN, sitesOrigin: SITES, ...config }, extra);
 }
 
@@ -53,7 +53,7 @@ export async function instanceWithVars(vars: Record<string, string>) {
     const headers = new Headers(rest.headers);
     if (key) headers.set("Authorization", `Bearer ${key}`);
     const ctx = createExecutionContext();
-    const res = await dw.dropway.fetch(new Request(new URL(path, origin ?? ORIGIN), { ...rest, headers, redirect: "manual" }), bindings, ctx);
+    const res = await dw.kofra.fetch(new Request(new URL(path, origin ?? ORIGIN), { ...rest, headers, redirect: "manual" }), bindings, ctx);
     await waitOnExecutionContext(ctx);
     return res;
   };
@@ -213,7 +213,7 @@ export async function storageUsage() {
 
 export async function sweep(dw: Instance): Promise<Record<string, number>> {
   const ctx = createExecutionContext();
-  const report = await runCleanup(dw.dropway.context(env as unknown as ServerBindings, ctx));
+  const report = await runCleanup(dw.kofra.context(env as unknown as ServerBindings, ctx));
   await waitOnExecutionContext(ctx);
   return report as unknown as Record<string, number>;
 }

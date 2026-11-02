@@ -1,4 +1,4 @@
-import { detectFileKind, encodePath, isSiteConfigPath, KIND_LABELS, type LiveSite } from "@dropway/core";
+import { detectFileKind, encodePath, isSiteConfigPath, KIND_LABELS, type LiveSite } from "@kofra/core";
 import { escapeHtml, formatBytes, htmlPage } from "../html";
 import type { ServeMode } from "../serve";
 import { unfurlHead } from "./unfurl";

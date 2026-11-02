@@ -1,4 +1,4 @@
-import { completeMultipartUpload, createMultipartUpload, getMultipartUpload, uploadMultipartPart, MULTIPART_DEFAULT_PART_BYTES, MULTIPART_MAX_PART_BYTES, MULTIPART_MIN_PART_BYTES } from "@dropway/core";
+import { completeMultipartUpload, createMultipartUpload, getMultipartUpload, uploadMultipartPart, MULTIPART_DEFAULT_PART_BYTES, MULTIPART_MAX_PART_BYTES, MULTIPART_MIN_PART_BYTES } from "@kofra/core";
 import { defineOperation } from "../operations";
 import { fromSchema, RO, WRITE, P, D } from "./shared";
 

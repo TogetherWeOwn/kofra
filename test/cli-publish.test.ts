@@ -6,9 +6,9 @@
  */
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { sha256Hex } from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
-import { CliError, DropwayClient, EXIT, type FetchLike } from "../packages/cli/src/client.ts";
+import { sha256Hex } from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
+import { CliError, KofraClient, EXIT, type FetchLike } from "../packages/cli/src/client.ts";
 import { publish, type SourceFile } from "../packages/cli/src/publish.ts";
 import { freshInstance, ORIGIN, type Instance } from "./helpers";
 
@@ -34,7 +34,7 @@ function workerFetch(dw: Instance, intercept?: (req: Request) => Response | null
     const injected = intercept?.(req);
     if (injected) return injected;
     const ctx = createExecutionContext();
-    const res = await dw.dropway.fetch(req, env as unknown as ServerBindings, ctx);
+    const res = await dw.kofra.fetch(req, env as unknown as ServerBindings, ctx);
     await waitOnExecutionContext(ctx);
     return res;
   };
@@ -47,7 +47,7 @@ async function mem(path: string, content: string): Promise<SourceFile> {
 }
 
 const client = (dw: Instance, fetch: FetchLike, token: string | null = dw.ownerKey) =>
-  new DropwayClient({ api: ORIGIN, token, fetch, backoffMs: 1, client: "test/cli-publish" });
+  new KofraClient({ api: ORIGIN, token, fetch, backoffMs: 1, client: "test/cli-publish" });
 
 describe("CLI publish protocol", () => {
   it("creates a site, uploads in parallel, and serves it", async () => {

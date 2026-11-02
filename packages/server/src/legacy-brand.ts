@@ -5,7 +5,7 @@
  * Clients built before the rename send X-Dropway-* request headers and read X-Dropway-*
  * response headers, and installed Agent Skills point at the skill named "dropway".
  * All of that keeps working: requests are read under both prefixes, responses carry both.
- * createDropway() applies this around fetch (every request, sites included) and as the first
+ * createKofra() applies this around fetch (every request, sites included) and as the first
  * middleware of its app, so the exported app (composition, tests) behaves the same.
  */
 import type { MiddlewareHandler } from "hono";

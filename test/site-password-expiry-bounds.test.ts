@@ -1,7 +1,7 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { hashPassword, refreshLive, setSiteAccess, verifyPassword } from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+import { hashPassword, refreshLive, setSiteAccess, verifyPassword } from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { form, freshInstance, jsonBody, ORIGIN } from "./helpers";
 import { attempt, freezePasswordClock, lockedSite, SITE_PASSWORD } from "./site-password-fixtures";
 
@@ -161,7 +161,7 @@ describe("site-password minimum of 8 (L3)", () => {
     expect(pub.status).toBe(201);
     const ctx = createExecutionContext();
     try {
-      const dc = dw.dropway.context(env as unknown as ServerBindings, ctx);
+      const dc = dw.kofra.context(env as unknown as ServerBindings, ctx);
       const principal = await dc.adapters.identity.resolve(
         new Request(`${ORIGIN}/api/v1/me`, { headers: { Authorization: `Bearer ${dw.ownerKey}` } }), dc);
       await expect(setSiteAccess(dc, principal, "minimum-service", { mode: "password", password: "1234567" }))
@@ -181,7 +181,7 @@ describe("site-password minimum of 8 (L3)", () => {
       .bind(await hashPassword("1234"), "legacy-short-pw").run();
     const ctx = createExecutionContext();
     const site = await env.DB.prepare("SELECT id FROM sites WHERE slug = ?").bind("legacy-short-pw").first<{ id: string }>();
-    await refreshLive(dw.dropway.context(env as unknown as ServerBindings, ctx), site!.id);
+    await refreshLive(dw.kofra.context(env as unknown as ServerBindings, ctx), site!.id);
     await waitOnExecutionContext(ctx);
 
     expect((await dw.call(url, { headers: { Accept: "text/html" } })).status).toBe(401);

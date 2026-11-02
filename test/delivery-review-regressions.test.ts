@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ServerBindings } from "@dropway/server";
+import type { ServerBindings } from "@kofra/server";
 import { ORIGIN, type Instance } from "./helpers";
 import {
   DAY, get, instance, op, operations, refusal, SITES, state, storageUsage, sweep, update,

@@ -11,7 +11,7 @@
  * are never uploaded again, and a byte-identical republish creates no version.
  * Runtime-neutral (fetch only), so it is tested inside the Workers runtime.
  */
-import { CliError, EXIT, isCredentialSafeUrl, type DropwayClient } from "./client.ts";
+import { CliError, EXIT, isCredentialSafeUrl, type KofraClient } from "./client.ts";
 import { LEGACY_HEADER_PREFIX } from "./legacy-brand.ts";
 
 export interface SourceFile {
@@ -130,7 +130,7 @@ function settingsOf(opts: PublishOptions): Record<string, unknown> {
 }
 
 /** Publish a set of files as a new version of a site (creating the site when needed). */
-export async function publish(client: DropwayClient, files: SourceFile[], opts: PublishOptions = {}): Promise<PublishResult> {
+export async function publish(client: KofraClient, files: SourceFile[], opts: PublishOptions = {}): Promise<PublishResult> {
   if (!files.length) {
     throw new CliError({ code: "no_files", message: "There are no files to publish.", hint: "Check the path, and .dropwayignore rules.", exitCode: EXIT.usage });
   }
@@ -348,7 +348,7 @@ export async function publish(client: DropwayClient, files: SourceFile[], opts: 
  * Publish a .zip in one request: the instance unpacks it (one-shot publish, up
  * to the instance's ONESHOT_MAX_BYTES, 25 MB by default).
  */
-export async function publishZip(client: DropwayClient, zip: Blob | Uint8Array, opts: Pick<PublishOptions, "site" | "message" | "title" | "spa" | "baseVersionId"> = {}): Promise<PublishResult> {
+export async function publishZip(client: KofraClient, zip: Blob | Uint8Array, opts: Pick<PublishOptions, "site" | "message" | "title" | "spa" | "baseVersionId"> = {}): Promise<PublishResult> {
   const q = new URLSearchParams();
   if (opts.site) q.set("slug", opts.site.trim().toLowerCase());
   if (opts.message !== undefined) q.set("message", opts.message);

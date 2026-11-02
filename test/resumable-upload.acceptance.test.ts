@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, bearerToken, defaultIdentity, principalFromToken, requestIp, runCleanup, sha256Hex, type Principal } from "@dropway/core";
+import { ApiError, bearerToken, defaultIdentity, principalFromToken, requestIp, runCleanup, sha256Hex, type Principal } from "@kofra/core";
 import { freshInstance, jsonBody, manifestEntry } from "./helpers";
 import { accepted, complete, context, DAY, finalize, foreignKey, MiB, pending, putPart, refused, session, start, state, unregistered } from "./resumable-upload.helpers";
 

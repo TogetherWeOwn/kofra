@@ -123,7 +123,7 @@ async function preview() {
   }
 
   // Keep caller dropway.json, saved credentials and other CI credentials out of the CLI.
-  const temp = await mkdtemp(join(process.env.RUNNER_TEMP ?? tmpdir(), "dropway-preview-"));
+  const temp = await mkdtemp(join(process.env.RUNNER_TEMP ?? tmpdir(), "kofra-preview-"));
   async function cli(args) {
     try {
       const result = await promisify(execFile)(process.execPath, [

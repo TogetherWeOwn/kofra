@@ -1,6 +1,6 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { ServerBindings } from "@dropway/server";
+import type { ServerBindings } from "@kofra/server";
 import { jsonBody, ORIGIN, type Instance } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
 import {
@@ -163,7 +163,7 @@ describe("bulk revoke boundaries", () => {
     const operation = (await operations(dw)).find((o) => o.id === "revoke_transfers")!;
     expect(operation).toBeDefined();
     const ctx = createExecutionContext();
-    const response = await dw.dropway.fetch(new Request(new URL(operation.path, ORIGIN), {
+    const response = await dw.kofra.fetch(new Request(new URL(operation.path, ORIGIN), {
       ...jsonBody({ ids: selected.map((t) => t.id) }), method: operation.method,
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${dw.ownerKey}` },
     }), { ...env, DB: database } as unknown as ServerBindings, ctx);

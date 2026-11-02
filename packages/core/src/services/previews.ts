@@ -1,5 +1,5 @@
 import { effectiveSigningSecret } from "../config";
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import { siteUrl } from "../context";
 import { hmacHex, timingSafeEqualStr } from "../lib/crypto";
 import type { Principal } from "../principal";
@@ -12,7 +12,7 @@ const PREVIEW_TTL_MS = 24 * 60 * 60 * 1000;
 const payload = (siteId: string, versionId: string, expiresAt: number) => `dw-preview:${siteId}:${versionId}:${expiresAt}`;
 
 /** A bearer capability for one version, independent of the eventually consistent live pointer. */
-export async function versionPreviewUrl(dc: DropwayContext, principal: Principal, site: Pick<SiteRow, "id" | "slug" | "tenant_id">, version: Pick<VersionRow, "id" | "number">): Promise<string | undefined> {
+export async function versionPreviewUrl(dc: KofraContext, principal: Principal, site: Pick<SiteRow, "id" | "slug" | "tenant_id">, version: Pick<VersionRow, "id" | "number">): Promise<string | undefined> {
   try {
     const url = new URL(siteUrl(dc, `${site.slug}--v${version.number}`));
     const loopback = url.hostname === "localhost" || url.hostname === "[::1]" || /^127\.\d+\.\d+\.\d+$/.test(url.hostname);
@@ -41,7 +41,7 @@ const FILES_TTL_MS = 5_000;
 const FILES_MAX = 32;
 const filesMemory = new Map<string, { at: number; files: LiveSite["files"] }>();
 
-async function versionFiles(dc: DropwayContext, versionId: string): Promise<LiveSite["files"]> {
+async function versionFiles(dc: KofraContext, versionId: string): Promise<LiveSite["files"]> {
   const hit = filesMemory.get(versionId);
   if (hit && Date.now() - hit.at < FILES_TTL_MS) return hit.files;
   const files: LiveSite["files"] = Object.create(null);
@@ -55,7 +55,7 @@ async function versionFiles(dc: DropwayContext, versionId: string): Promise<Live
 
 /** Read a ready version from D1 only, after checking its owner or exact signed capability. */
 export async function readVersionPreview(
-  dc: DropwayContext,
+  dc: KofraContext,
   principal: Principal,
   slug: string,
   number: number,

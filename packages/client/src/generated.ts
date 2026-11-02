@@ -1,5 +1,5 @@
 // DO NOT EDIT: generated from the operation registry by `npm run client:generate` (R-45).
-import { DropwayHttpClient, type BytesResult, type CallOptions } from "./http.ts";
+import { KofraHttpClient, type BytesResult, type CallOptions } from "./http.ts";
 
 export type WhoamiInput = Record<string, unknown>;
 
@@ -1292,7 +1292,7 @@ export const OPERATIONS = {
 
 export type OperationId = keyof typeof OPERATIONS;
 
-export class DropwayClient extends DropwayHttpClient {
+export class KofraClient extends KofraHttpClient {
   /** Who am I */
   async whoami(input?: WhoamiInput, opts?: CallOptions): Promise<WhoamiOutput> {
     return this.call<WhoamiInput, WhoamiOutput>(OPERATIONS["whoami"], input ?? {}, opts);

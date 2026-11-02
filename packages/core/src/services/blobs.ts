@@ -1,11 +1,11 @@
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import { badRequest, conflict } from "../errors";
 
 /** Legacy physical key. New uploads use a unique generation under this prefix. */
 export const blobKey = (sha256: string) => `blobs/${sha256}`;
 
 /** Resolve the verified generation, retaining existing pre-migration objects. */
-export async function storedBlobKey(dc: DropwayContext, sha256: string): Promise<string | null> {
+export async function storedBlobKey(dc: KofraContext, sha256: string): Promise<string | null> {
   const row = await dc.env.DB.prepare("SELECT storage_key FROM blobs WHERE sha256 = ?")
     .bind(sha256).first<{ storage_key: string | null }>();
   return row ? row.storage_key ?? blobKey(sha256) : null;
@@ -23,7 +23,7 @@ export function blobScope(owner: { tenantId: string | null; siteId: string }): s
 
 function edgeCacheKey(requestUrl: URL | null, sha256: string): Request {
   // Blobs are immutable, so one edge-cache entry per sha256 serves every site on the zone.
-  const host = requestUrl?.host ?? "dropway.invalid";
+  const host = requestUrl?.host ?? "kofra.invalid";
   return new Request(`https://${host}/__dropway/blob/${sha256}`);
 }
 
@@ -37,7 +37,7 @@ export interface BlobBody {
  * Blobs over BLOB_CACHE_MAX_BYTES skip the cache in both directions. Whether the Cache API works
  * on *.workers.dev hostnames is recorded in docs/SELF_HOST.md.
  */
-export async function readBlob(dc: DropwayContext, sha256: string, size: number): Promise<BlobBody | null> {
+export async function readBlob(dc: KofraContext, sha256: string, size: number): Promise<BlobBody | null> {
   const cache = typeof caches !== "undefined" && size <= BLOB_CACHE_MAX_BYTES ? caches.default : null;
   const key = edgeCacheKey(dc.requestUrl, sha256);
   if (cache) {
@@ -57,14 +57,14 @@ export async function readBlob(dc: DropwayContext, sha256: string, size: number)
 }
 
 /** Read a byte range straight from R2 (Range requests: video, audio, large wasm). */
-export async function readBlobRange(dc: DropwayContext, sha256: string, range: { offset: number; length: number }) {
+export async function readBlobRange(dc: KofraContext, sha256: string, range: { offset: number; length: number }) {
   const storageKey = await storedBlobKey(dc, sha256);
   if (!storageKey) return null;
   const obj = await dc.env.FILES.get(storageKey, { range });
   return obj ? obj.body : null;
 }
 
-export async function readBlobText(dc: DropwayContext, sha256: string, size: number): Promise<string | null> {
+export async function readBlobText(dc: KofraContext, sha256: string, size: number): Promise<string | null> {
   const b = await readBlob(dc, sha256, size);
   if (!b) return null;
   return b.body ? new Response(b.body).text() : "";
@@ -76,7 +76,7 @@ export async function readBlobText(dc: DropwayContext, sha256: string, size: num
  * cleanup of an older generation can never delete this upload's bytes.
  */
 export async function putVerifiedBlob(
-  dc: DropwayContext,
+  dc: KofraContext,
   scope: string,
   sha: string,
   body: ReadableStream | ArrayBuffer | Uint8Array,
@@ -105,7 +105,7 @@ export async function putVerifiedBlob(
  * its own D1 batch (multipart completion fences that against live ownership).
  */
 export async function writeVerifiedBlob(
-  dc: DropwayContext,
+  dc: KofraContext,
   sha: string,
   body: ReadableStream | ArrayBuffer | Uint8Array,
   size: number,
@@ -143,7 +143,7 @@ export async function writeVerifiedBlob(
  * statement, then `select` (pass its row to settleAttach) and `release` last.
  * Without the reservation (GC retired it) nothing attaches.
  */
-export function attachStatements(dc: DropwayContext, sha: string, size: number, storageKey: string, now: number) {
+export function attachStatements(dc: KofraContext, sha: string, size: number, storageKey: string, now: number) {
   const db = dc.env.DB;
   return {
     insert: db.prepare(`INSERT OR IGNORE INTO blobs (sha256, size, created_at, storage_key)
@@ -157,7 +157,7 @@ export function attachStatements(dc: DropwayContext, sha: string, size: number, 
 }
 
 /** Interpret attachStatements' `select` row once the batch has committed. */
-export async function settleAttach(dc: DropwayContext, storageKey: string, stored: { storage_key: string | null } | undefined): Promise<void> {
+export async function settleAttach(dc: KofraContext, storageKey: string, stored: { storage_key: string | null } | undefined): Promise<void> {
   // A slow/crashed writer's reservation may have been retired by GC. It must
   // not attach bytes after GC decided to delete this physical key.
   if (!stored) {

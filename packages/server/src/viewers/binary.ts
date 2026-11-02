@@ -1,4 +1,4 @@
-import { KIND_LABELS, type FileKind } from "@dropway/core";
+import { KIND_LABELS, type FileKind } from "@kofra/core";
 import { escapeHtml, formatBytes } from "../html";
 import { decodeText, standardTabs, viewerPage } from "./chrome";
 import { codePage, readShownText } from "./code";

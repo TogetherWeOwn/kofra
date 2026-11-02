@@ -1,22 +1,22 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { DropwayClient, DropwayError, OPERATIONS, type FetchLike } from "@dropway/client";
-import type { ServerBindings } from "@dropway/server";
+import { KofraClient, KofraError, OPERATIONS, type FetchLike } from "@kofra/client";
+import type { ServerBindings } from "@kofra/server";
 import { toMethodName as toMethod } from "../scripts/generate-client.mjs";
 import { freshInstance, ORIGIN, type Instance } from "./helpers";
 import { registry } from "./operation-fixtures";
 
-function clientFor(dw: Instance, token: string | null = dw.ownerKey): DropwayClient {
+function clientFor(dw: Instance, token: string | null = dw.ownerKey): KofraClient {
   const fetch: FetchLike = async (request) => {
     const ctx = createExecutionContext();
-    const res = await dw.dropway.fetch(request, env as unknown as ServerBindings, ctx);
+    const res = await dw.kofra.fetch(request, env as unknown as ServerBindings, ctx);
     await waitOnExecutionContext(ctx);
     return res;
   };
-  return new DropwayClient({ api: ORIGIN, token, fetch });
+  return new KofraClient({ api: ORIGIN, token, fetch });
 }
 
-describe("@dropway/client generated from the registry", () => {
+describe("@kofra/client generated from the registry", () => {
   let dw: Instance;
   beforeEach(async () => {
     dw = await freshInstance();
@@ -78,13 +78,13 @@ describe("@dropway/client generated from the registry", () => {
     expect(seen.message).toBe("For review.");
   });
 
-  it("maps server failures to DropwayError with code, hint and status", async () => {
+  it("maps server failures to KofraError with code, hint and status", async () => {
     const client = clientFor(dw);
-    const missing = await client.getSite({ slug: "no-such-site" }).catch((e) => e as DropwayError);
-    expect(missing).toBeInstanceOf(DropwayError);
+    const missing = await client.getSite({ slug: "no-such-site" }).catch((e) => e as KofraError);
+    expect(missing).toBeInstanceOf(KofraError);
     expect(missing.status).toBe(404);
     expect(typeof missing.code).toBe("string");
-    const bad = await client.createSite({ slug: "NOT A SLUG" }).catch((e) => e as DropwayError);
+    const bad = await client.createSite({ slug: "NOT A SLUG" }).catch((e) => e as KofraError);
     expect(bad.status).toBe(400);
     expect(typeof bad.hint).toBe("string");
   });

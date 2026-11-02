@@ -6,8 +6,8 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect } from "vitest";
 
-const cli = fileURLToPath(new URL("../../bin/dropway.mjs", import.meta.url));
-const bundle = fileURLToPath(new URL("../../dist/dropway.mjs", import.meta.url));
+const cli = fileURLToPath(new URL("../../bin/kofra.mjs", import.meta.url));
+const bundle = fileURLToPath(new URL("../../dist/kofra.mjs", import.meta.url));
 const transport = fileURLToPath(new URL("./stdin-publish-transport.mjs", import.meta.url));
 
 export const defaultApi = "https://default.invalid";

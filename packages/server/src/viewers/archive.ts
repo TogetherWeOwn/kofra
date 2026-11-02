@@ -1,4 +1,4 @@
-import { extname } from "@dropway/core";
+import { extname } from "@kofra/core";
 import { escapeHtml, formatBytes } from "../html";
 import { binaryInfoPage } from "./binary";
 import { cachedRender } from "./cache";

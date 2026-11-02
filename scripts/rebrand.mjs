@@ -7,7 +7,11 @@
 //
 // Renamed (user-visible):
 //   - product name in prose, UI copy, page titles, INSTANCE_NAME default   Dropway -> Kofra
-//   - CLI command in help text and docs (the `dropway` bin stays as an alias)  dropway -> kofra
+//   - workspace package scope @dropway/* -> @kofra/* and TypeScript identifiers
+//     (createDropway, DropwayContext, ...) -> createKofra, KofraContext, ...: the packages
+//     were never published under the old name, so the public API carries only Kofra names
+//   - CLI command in help text and docs, the bin file and bundle (bin/kofra.mjs,
+//     dist/kofra.mjs); the published package ships only the `kofra` bin  dropway -> kofra
 //   - CLI package name (not published) and the root package name
 //   - environment variables DROPWAY_* -> KOFRA_* (code accepts DROPWAY_* via legacy-brand.ts)
 //   - HTTP headers X-Dropway-* -> X-Kofra-* (the server still sends and accepts X-Dropway-*)
@@ -18,8 +22,7 @@
 //   - Worker names (dropway, dropway-sites), D1/R2/KV/Analytics/queue names, DB tables,
 //     cookie and localStorage names, reserved paths (/__dropway/), site files (.dropway/),
 //     CLI files (dropway.json, .dropwayignore, ~/.config/dropway), test hosts (dropway.test),
-//     TypeScript identifiers (createDropway, DropwayContext, ...), workspace package scopes
-//     (@dropway/*), the SPDX marker, CHANGELOG history, SQL migrations, CI workflow job names.
+//     the SPDX marker, CHANGELOG history, SQL migrations, CI workflow job names.
 //
 // Escape hatches: a line containing "rebrand:keep" is never edited; a file containing
 // "rebrand:keep-file" is skipped (compat shims that must spell the old names).
@@ -73,8 +76,9 @@ const KEEP = [
   /"LicenseRef", "Dropway"/g,
 ];
 
-/** TypeScript identifiers spelled exactly "Dropway" (the createDropway() return type). */
-const CODE_KEEP = [/(?<=\b(?:interface|type)\s+)Dropway(?![\w$])/g, /(?<=[\w$)]:\s*)Dropway(?=\s*[;,{=)>\]|])/g];
+/** Formerly: TypeScript identifiers kept under the old name. Nothing is kept now that
+ * the public API renamed with the packages; the array stays for --config layers. */
+const CODE_KEEP = [];
 
 const CLI_SUBCOMMANDS =
   "publish|list|site|files|versions|restore|delete|whoami|login|logout|setup|api|help|watch|mcp|drive|\\$\\{name\\}|\\$\\{VERSION\\}|<command>|<METHOD>|<operationId";
@@ -86,6 +90,12 @@ const RULES = [
   // since periods are valid in repository names) untouched, while ".git" clone URLs
   // still match and keep their suffix.
   ["repository URL", /\bTogetherWeOwn\/dropway(?![\w-]|\.(?!git(?![\w-]))[\w])/g, "TogetherWeOwn/kofra"],
+  ["package scope", /@dropway\//g, "@kofra/"],
+  ["bin file", /\bbin\/dropway\.mjs/g, "bin/kofra.mjs"],
+  ["bundle file", /\bdist\/dropway\.mjs/g, "dist/kofra.mjs"],
+  // Identifiers containing the old name (createDropway, DropwayContext, the Dropway type).
+  // Runs before "product name": a standalone Dropway in prose is renamed by either rule.
+  ["identifier", /\b[\w$]*Dropway[\w$]*/g, (m) => m.replace("Dropway", "Kofra")],
   ["header X-Dropway-*", /\bX-Dropway-/g, "X-Kofra-"],
   ["header x-dropway-*", /\bx-dropway-/g, "x-kofra-"],
   ["env DROPWAY_*", /(?<![A-Za-z0-9_])DROPWAY_(?=[A-Z0-9])/g, "KOFRA_"],
@@ -108,7 +118,10 @@ const RULES = [
 ];
 
 /** File and folder moves: [from, to]. */
-const RENAMES = [["skills/dropway", "skills/kofra"]];
+const RENAMES = [
+  ["skills/dropway", "skills/kofra"],
+  ["packages/cli/bin/dropway.mjs", "packages/cli/bin/kofra.mjs"],
+];
 
 /** package.json edits: path -> function(pkg) returning a changed copy. */
 const JSON_EDITS = {
@@ -116,11 +129,8 @@ const JSON_EDITS = {
   "packages/cli/package.json": (p) => {
     const q = { ...p };
     if (q.name === "dropway") q.name = "kofra";
-    if (q.bin && !q.bin.kofra) {
-      const target = q.bin.dropway ?? Object.values(q.bin)[0];
-      q.bin = { kofra: target, dropway: target };
-    }
-    if (Array.isArray(q.keywords) && !q.keywords.includes("kofra")) q.keywords = ["kofra", ...q.keywords];
+    if (q.bin && (q.bin.dropway !== undefined || Object.values(q.bin).includes("bin/dropway.mjs"))) q.bin = { kofra: "bin/kofra.mjs" };
+    if (Array.isArray(q.keywords)) q.keywords = [...new Set(["kofra", ...q.keywords.filter((k) => k !== "dropway")])];
     return q;
   },
 };
@@ -321,8 +331,8 @@ function selfTest() {
   expect("--check fails before the rename", runOn(a, "--check").code === 1);
   expect("apply succeeds", runOn(a).code === 0);
   expect("prose, CLI, variable, header and repository URL renamed", read(a, "README.md") === `Kofra: run \`npx kofra publish ./dist\` with KOFRA_API_KEY, then read X-Kofra-Version.\n${keptLine}\n${newRepoLine}\n${markedLine}\n`);
-  expect("identifiers and package scope kept, string renamed", read(a, "src/app.ts") === 'import { createDropway, type Dropway } from "@dropway/server";\nexport const app: Dropway = createDropway({ title: "Kofra" });\n');
-  expect("Markdown: TypeScript fences keep identifiers, prose and shell fences are renamed", read(a, "docs/api.md") === "Product: Kofra.\n\n```ts\nexport interface Dropway { fetch(): void }\nconst d: Dropway = createDropway();\n```\n\n```sh\nexport KOFRA_API=x\n```\n");
+  expect("identifiers and package scope renamed", read(a, "src/app.ts") === 'import { createKofra, type Kofra } from "@kofra/server";\nexport const app: Kofra = createKofra({ title: "Kofra" });\n');
+  expect("Markdown: identifiers in TypeScript fences, prose and shell fences are renamed", read(a, "docs/api.md") === "Product: Kofra.\n\n```ts\nexport interface Kofra { fetch(): void }\nconst d: Kofra = createKofra();\n```\n\n```sh\nexport KOFRA_API=x\n```\n");
   expect("keep-file untouched", read(a, "src/compat.ts") === '// rebrand:keep-file\nexport const OLD = "X-Dropway-";\n');
   expect("CHANGELOG untouched", read(a, "CHANGELOG.md") === "Dropway 0.1\n");
   expect("skill folder moved and renamed", read(a, "skills/kofra/SKILL.md") === "name: kofra\n" && !existsSync(join(a, "skills/dropway")));

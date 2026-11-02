@@ -1,17 +1,17 @@
 # Operations
 
-Use Zod 4.6.7 or later in your embedding app; `@dropway/server` declares it as a
+Use Zod 4.6.7 or later in your embedding app; `@kofra/server` declares it as a
 peer so operation schemas and the server share the same Zod type identity.
 
 `defineOperation()` is the public API extension boundary. One definition supplies
-REST, OpenAPI 3.1, an MCP tool, the CLI command table, the `@dropway/client`
+REST, OpenAPI 3.1, an MCP tool, the CLI command table, the `@kofra/client`
 typed method and agent discovery text. Regenerate the client after changing an
 operation (`npm run client:generate`); CI fails when it is stale.
-Business logic still belongs in a service taking `DropwayContext` and `Principal`.
+Business logic still belongs in a service taking `KofraContext` and `Principal`.
 
 ```ts
 import { z } from "zod";
-import { createDropway, defineOperation } from "@dropway/server";
+import { createKofra, defineOperation } from "@kofra/server";
 
 const echo = defineOperation({
   id: "echo_message",
@@ -33,7 +33,7 @@ const echo = defineOperation({
   },
 });
 
-export default createDropway({ operations: [echo] });
+export default createKofra({ operations: [echo] });
 ```
 
 The resolved handler context also contains the original `request`, `client`
@@ -103,7 +103,7 @@ remediation hint; both transports preserve it.
 
 ## Discovery and compatibility
 
-`dropway.operations` is instance-local. Later definitions replace by id without
+`kofra.operations` is instance-local. Later definitions replace by id without
 changing tool order. Duplicate method/path registrations are rejected. Existing
 `routes` overrides run first; `mcpTools` remains a compatibility escape hatch.
 

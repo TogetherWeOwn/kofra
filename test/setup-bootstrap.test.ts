@@ -1,7 +1,7 @@
 import { applyD1Migrations, createExecutionContext, env, reset, waitOnExecutionContext } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { ApiError, clearLiveMemoryCache, type IdentityAdapter } from "@dropway/core";
-import { createDropway, type CreateDropwayOptions, type ServerBindings } from "@dropway/server";
+import { ApiError, clearLiveMemoryCache, type IdentityAdapter } from "@kofra/core";
+import { createKofra, type CreateKofraOptions, type ServerBindings } from "@kofra/server";
 import { BOOTSTRAP, ORIGIN, freshInstance, jsonBody, type Instance } from "./helpers";
 import { CLIENT_SCRIPT } from "../packages/server/src/ui/assets";
 
@@ -17,7 +17,7 @@ const GARBAGE = "definitely-not-a-credential";
 const WRONG = [WRONG_HEX, WRONG_DW, GARBAGE];
 
 /** A Kofra that has not run setup yet, mirroring freshInstance without the setup call. */
-async function bareInstance(extra: Omit<CreateDropwayOptions, "config"> = {}): Promise<Instance> {
+async function bareInstance(extra: Omit<CreateKofraOptions, "config"> = {}): Promise<Instance> {
   await env.DB.prepare("SELECT 1").first();
   await env.FILES.list({ limit: 1 });
   await env.CACHE.list({ limit: 1 });
@@ -25,7 +25,7 @@ async function bareInstance(extra: Omit<CreateDropwayOptions, "config"> = {}): P
   await reset();
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
   clearLiveMemoryCache();
-  const dropway = createDropway({ ...extra });
+  const kofra = createKofra({ ...extra });
 
   const call: Instance["call"] = async (path, init = {}) => {
     const { key, origin, ...rest } = init;
@@ -33,7 +33,7 @@ async function bareInstance(extra: Omit<CreateDropwayOptions, "config"> = {}): P
     if (key) headers.set("Authorization", `Bearer ${key}`);
     const url = path.startsWith("http") ? path : `${origin ?? ORIGIN}${path}`;
     const ctx = createExecutionContext();
-    const res = await dropway.fetch(new Request(url, { ...rest, headers, redirect: "manual" }), env as unknown as ServerBindings, ctx);
+    const res = await kofra.fetch(new Request(url, { ...rest, headers, redirect: "manual" }), env as unknown as ServerBindings, ctx);
     await waitOnExecutionContext(ctx);
     return res;
   };
@@ -48,7 +48,7 @@ async function bareInstance(extra: Omit<CreateDropwayOptions, "config"> = {}): P
     }
     return { status: res.status, body, res };
   };
-  return { dropway, ownerKey: "", call, json };
+  return { kofra, ownerKey: "", call, json };
 }
 
 describe("setup and recovery bootstrap errors", () => {

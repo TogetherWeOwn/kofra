@@ -8,7 +8,7 @@ Read `docs/ARCHITECTURE.md` first. The short version:
 - Throw `ApiError` with a stable snake_case `code` and a `hint`.
 - This repo is the single-tenant open-source product. Do not add plans, prices,
   billing, payment code, signup or usage quotas here; hosted features plug in
-  through `createDropway()` options from outside.
+  through `createKofra()` options from outside.
 - New file viewers go in `packages/server/src/viewers/` and are registered in `VIEWERS`.
 - Never edit an applied migration; add a new numbered file in `packages/core/migrations/`.
 - The CLI (`packages/cli`) runs on Node, not Workers: keep `src/publish.ts` and `src/client.ts`

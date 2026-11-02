@@ -1,5 +1,5 @@
 import { HTTP_SITE, HTTP_MANIFEST_ENTRY, HTTP_DEPLOY } from "./http-schemas";
-import { accessModeOf, appOrigin, createSite, describeSite, duplicateSite, parseSettings, releaseSlug, renameSite, requireConfirm, siteUrl, createSiteWithDeploy, serializeSite } from "@dropway/core";
+import { accessModeOf, appOrigin, createSite, describeSite, duplicateSite, parseSettings, releaseSlug, renameSite, requireConfirm, siteUrl, createSiteWithDeploy, serializeSite } from "@kofra/core";
 import { CONFIRM_SLUG, SETTINGS_INPUT, SITE_OUT, SITE_REF, obj } from "../mcp/schemas";
 import { readJson } from "../routes/api";
 import { defineOperation, rawRequestInput } from "../operations";
@@ -134,10 +134,10 @@ export const SITE_OPERATIONS = [
         output: {
           site: {
             slug: "bright-otter-x7k2",
-            url: "https://dropway.example/s/bright-otter-x7k2/",
+            url: "https://kofra.example/s/bright-otter-x7k2/",
             currentVersionId: "ver_example",
           },
-          url: "https://dropway.example/s/bright-otter-x7k2/",
+          url: "https://kofra.example/s/bright-otter-x7k2/",
         },
       },
     ],
@@ -241,11 +241,11 @@ export const SITE_OPERATIONS = [
           renamed: true,
           oldSlug: "bright-otter-x7k2",
           slug: "renamed-page",
-          url: "https://dropway.example/s/renamed-page/",
+          url: "https://kofra.example/s/renamed-page/",
           redirectUntil: "2027-10-24T00:00:00.000Z",
           site: {
             slug: "renamed-page",
-            url: "https://dropway.example/s/bright-otter-x7k2/",
+            url: "https://kofra.example/s/bright-otter-x7k2/",
             currentVersionId: "ver_example",
           },
         },
@@ -334,10 +334,10 @@ export const SITE_OPERATIONS = [
         input: { site: "bright-otter-x7k2", newSlug: "bright-otter-staging" },
         output: {
           slug: "bright-otter-staging",
-          url: "https://dropway.example/s/bright-otter-staging/",
+          url: "https://kofra.example/s/bright-otter-staging/",
           site: {
             slug: "bright-otter-staging",
-            url: "https://dropway.example/s/bright-otter-staging/",
+            url: "https://kofra.example/s/bright-otter-staging/",
             currentVersionId: "ver_example",
           },
           versionId: "ver_example",

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
-import { clearLiveMemoryCache } from "@dropway/core";
+import { clearLiveMemoryCache } from "@kofra/core";
 import {
   ACTIONS, SLUG, SURFACES, bounded, claims, expectFailure, expectReplay, expectSuccess,
   fixture, input, observe, pointer, publish, signal, snapshot, transport, type Action, type Harness, type Outcome,

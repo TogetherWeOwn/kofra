@@ -1,4 +1,4 @@
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import { blobKey } from "./blobs";
 
 const DAY = 86_400_000;
@@ -8,7 +8,7 @@ const DAY = 86_400_000;
  * At most 201 binding calls for orphans plus 6 for reservations and the
  * inventory page (runCleanup's budget depends on these bounds).
  */
-export async function cleanupBlobs(dc: DropwayContext, now: number): Promise<number> {
+export async function cleanupBlobs(dc: KofraContext, now: number): Promise<number> {
   const db = dc.env.DB;
   let deleted = 0;
   const { results: orphans } = await db.prepare(

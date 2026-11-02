@@ -1,4 +1,4 @@
-import { ApiError, readVersionPreview, requestIp, type DropwayContext, type Principal } from "@dropway/core";
+import { ApiError, readVersionPreview, requestIp, type KofraContext, type Principal } from "@kofra/core";
 import { isNavigation, serveSiteContent, systemResponse, type ServeMode } from "./serve";
 import type { Viewer } from "./viewers";
 
@@ -13,7 +13,7 @@ export function previewResponse(response: Response): Response {
 
 export async function serveVersionPreview(
   request: Request,
-  dw: DropwayContext,
+  dw: KofraContext,
   slug: string,
   number: number,
   pathname: string,

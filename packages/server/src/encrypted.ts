@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
-import { siteUrl } from "@dropway/core";
-import type { DropwayEnv } from "./env";
+import { siteUrl } from "@kofra/core";
+import type { KofraEnv } from "./env";
 import { escapeHtml } from "./html";
 
 /** Trusted app-origin code authenticates everything before handing bytes to an opaque frame. */
@@ -137,7 +137,7 @@ function encryptedFrame() {
   w.addEventListener("message", receive);
 }
 
-export function installEncrypted(app: Hono<DropwayEnv>) {
+export function installEncrypted(app: Hono<KofraEnv>) {
   const headers = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer" };
   app.get("/__dropway/encrypted-loader.js", c => c.body(`(${encryptedLoader.toString()})();`, 200, { ...headers, "Content-Type": "text/javascript; charset=utf-8" }));
   // Wrangler keepNames injects __name into nested functions (same wrapper as ui/assets.ts).

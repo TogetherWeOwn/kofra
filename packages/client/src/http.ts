@@ -9,14 +9,14 @@ import { VERSION } from "./version.ts";
 const LEGACY_HEADER_PREFIX = "X-Dropway-"; // rebrand:keep
 
 /** One suggested follow-up call from the server error envelope. Data only: never executed. */
-export interface DropwayNextCall {
+export interface KofraNextCall {
   tool: string;
   args: Record<string, unknown>;
   why: string;
 }
 
 /** An error with a stable code, a hint for the caller and whether to retry. */
-export class DropwayError extends Error {
+export class KofraError extends Error {
   readonly code: string;
   readonly hint: string | undefined;
   readonly retryable: boolean;
@@ -28,7 +28,7 @@ export class DropwayError extends Error {
   /** Optional server docs reference; informational, never fetched. */
   readonly docs: string | undefined;
   /** Optional suggested follow-up calls; informational, never executed. */
-  readonly next: DropwayNextCall[] | undefined;
+  readonly next: KofraNextCall[] | undefined;
 
   constructor(opts: {
     code: string;
@@ -40,10 +40,10 @@ export class DropwayError extends Error {
     details?: Record<string, unknown>;
     retryAfterSeconds?: number | null;
     docs?: string;
-    next?: DropwayNextCall[];
+    next?: KofraNextCall[];
   }) {
     super(opts.message);
-    this.name = "DropwayError";
+    this.name = "KofraError";
     this.code = opts.code;
     this.hint = opts.hint;
     this.retryable = opts.retryable;
@@ -211,7 +211,7 @@ export function isCredentialSafeUrl(url: string | URL): boolean {
 }
 
 function refuseInsecureCredentials(): never {
-  throw new DropwayError({
+  throw new KofraError({
     code: "invalid_api_url", message: "Credentials require HTTPS except on loopback development instances.",
     hint: "Use an https:// instance URL, or http://localhost for local development.", retryable: false,
   });
@@ -220,7 +220,7 @@ function refuseInsecureCredentials(): never {
 /** Normalise "https://x.dev/", "x.dev", "https://x.dev/api/v1" to "https://x.dev". */
 export function normaliseApi(input: string): string {
   let s = input.trim();
-  if (!s) throw new DropwayError({ code: "invalid_api_url", message: "The instance URL is empty.", retryable: false });
+  if (!s) throw new KofraError({ code: "invalid_api_url", message: "The instance URL is empty.", retryable: false });
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) {
     const authority = s.split("/")[0]!;
     let host = authority.startsWith("[")
@@ -240,10 +240,10 @@ export function normaliseApi(input: string): string {
   try {
     url = new URL(s);
   } catch {
-    throw new DropwayError({ code: "invalid_api_url", message: `"${input}" is not a valid URL.`, hint: "Use the instance origin, e.g. https://kofra.example.workers.dev", retryable: false });
+    throw new KofraError({ code: "invalid_api_url", message: `"${input}" is not a valid URL.`, hint: "Use the instance origin, e.g. https://kofra.example.workers.dev", retryable: false });
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new DropwayError({ code: "invalid_api_url", message: `"${input}" must be an http(s) URL.`, retryable: false });
+    throw new KofraError({ code: "invalid_api_url", message: `"${input}" must be an http(s) URL.`, retryable: false });
   }
   return url.origin;
 }
@@ -294,7 +294,7 @@ function queryValue(value: unknown): string[] {
   return [String(value)];
 }
 
-export class DropwayHttpClient {
+export class KofraHttpClient {
   readonly api: string;
   token: string | null;
   protected readonly doFetch: FetchLike;
@@ -309,7 +309,7 @@ export class DropwayHttpClient {
     this.api = normaliseApi(opts.api);
     this.token = opts.token;
     this.doFetch = opts.fetch ?? ((req) => fetch(req));
-    this.clientName = opts.client ?? `dropway-client/${VERSION}`;
+    this.clientName = opts.client ?? `kofra-client/${VERSION}`;
     this.attempts = Math.max(1, opts.attempts ?? 4);
     this.backoffMs = opts.backoffMs ?? 500;
     this.maxRetryAfter = opts.maxRetryAfterSeconds ?? 30;
@@ -324,14 +324,14 @@ export class DropwayHttpClient {
     return p.startsWith("/api/") || p === "/openapi.json" || p === "/llms.txt" ? `${this.api}${p}` : `${this.api}/api/v1${p}`;
   }
 
-  /** Call the API and parse JSON. Throws DropwayError for non-2xx answers (unless accepted). */
+  /** Call the API and parse JSON. Throws KofraError for non-2xx answers (unless accepted). */
   async request<T = Record<string, unknown>>(method: string, path: string, opts: RequestOptions = {}): Promise<ApiResponse<T>> {
     const { body, headers } = requestBody(opts);
     const res = await this.send(method, this.url(path), body, headers, opts);
     return { status: res.status, data: (await parseBody(res)) as T, headers: res.headers };
   }
 
-  /** Call the API and read raw bytes (file downloads). Throws DropwayError on failures. */
+  /** Call the API and read raw bytes (file downloads). Throws KofraError on failures. */
   async requestBytes(method: string, path: string, opts: RequestOptions = {}): Promise<BytesResult> {
     const { body, headers } = requestBody(opts);
     const res = await this.send(method, this.url(path), body, headers, opts);
@@ -353,7 +353,7 @@ export class DropwayHttpClient {
     const key = opts.idempotencyKey;
     // Refuse invalid options before they can erase a caller-retained replay header.
     if (key !== undefined && (typeof key !== "string" || key.length === 0 || key.length > 255 || /[^\x21-\x7e]/.test(key))) {
-      throw new DropwayError({
+      throw new KofraError({
         code: "invalid_idempotency_key",
         message: "The idempotency key must be 1-255 printable ASCII characters without spaces.",
         hint: "Use a fresh UUID per logical operation, and reuse it only for that same operation.",
@@ -373,7 +373,7 @@ export class DropwayHttpClient {
     const authenticated = opts.authenticated ?? (Boolean(token) || hasCallerHeader || this.authenticatedDefault === true);
     if (authenticated && !isCredentialSafeUrl(url)) refuseInsecureCredentials();
     const retry = opts.retry ?? (method === "GET" || method === "HEAD" ? "safe" : "rate-limit");
-    let lastError: DropwayError | null = null;
+    let lastError: KofraError | null = null;
 
     const attempts = retry === "none" ? 1 : this.attempts;
     for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -387,8 +387,8 @@ export class DropwayHttpClient {
       try {
         res = await this.fetchFollowingRedirects(method, url, body, sent, authenticated, opts.redirect ?? "follow");
       } catch (e) {
-        if (e instanceof DropwayError) throw e;
-        lastError = new DropwayError({
+        if (e instanceof KofraError) throw e;
+        lastError = new KofraError({
           code: "network_error",
           message: `Could not reach ${new URL(url).origin}: ${(e as Error)?.message ?? String(e)}`,
           hint: "Check the instance URL (--api or KOFRA_API) and your network, then retry.",
@@ -423,7 +423,7 @@ export class DropwayHttpClient {
       }
       throw err;
     }
-    throw lastError ?? new DropwayError({ code: "request_failed", message: `${method} ${url} failed.`, retryable: false });
+    throw lastError ?? new KofraError({ code: "request_failed", message: `${method} ${url} failed.`, retryable: false });
   }
 
   /**
@@ -451,7 +451,7 @@ export class DropwayHttpClient {
       const location = res.headers.get("location");
       if (!location) return res;
       try { await res.body?.cancel(); } catch { /* the redirect response body is discarded either way */ }
-      const refused = (message: string) => new DropwayError({
+      const refused = (message: string) => new KofraError({
         code: "redirect_refused", message, status: res.status, retryable: false,
         hint: "Use the instance's canonical https:// origin (without /api/v1), then retry the same call.",
       });
@@ -493,12 +493,12 @@ export class DropwayHttpClient {
   /** Fill `{params}` from the input; the rest goes to the query string (GET/HEAD) or the JSON body. */
   protected splitInput(op: OperationMeta, input: Record<string, unknown>): { url: string; json: Record<string, unknown> } {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
-      throw new DropwayError({ code: "invalid_input", message: `Call ${op.method} ${op.path} with an object.`, retryable: false });
+      throw new KofraError({ code: "invalid_input", message: `Call ${op.method} ${op.path} with an object.`, retryable: false });
     }
     const path = op.path.replace(/\{(\w+)\}/g, (_, name: string) => {
       const value = input[name];
       if (value === undefined || value === null || typeof value === "object") {
-        throw new DropwayError({
+        throw new KofraError({
           code: "invalid_input",
           message: `Call ${op.method} ${op.path} is missing the path parameter "${name}".`,
           hint: "Pass every {parameter} in the input object.",
@@ -597,10 +597,10 @@ function validDocs(value: unknown): string | undefined {
  * stripped. Any other shape drops the whole field rather than copying raw
  * envelope data.
  */
-function validNext(value: unknown): DropwayNextCall[] | undefined {
+function validNext(value: unknown): KofraNextCall[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) return undefined;
-  const calls: DropwayNextCall[] = [];
+  const calls: KofraNextCall[] = [];
   for (const item of value) {
     if (!item || typeof item !== "object" || Array.isArray(item)) return undefined;
     const { tool, args, why } = item as Record<string, unknown>;
@@ -611,8 +611,8 @@ function validNext(value: unknown): DropwayNextCall[] | undefined {
   return calls;
 }
 
-/** Turn an error response (the API's {error:{code,message,hint,details}} envelope or anything else) into a DropwayError. */
-export async function errorFromResponse(res: Response): Promise<DropwayError> {
+/** Turn an error response (the API's {error:{code,message,hint,details}} envelope or anything else) into a KofraError. */
+export async function errorFromResponse(res: Response): Promise<KofraError> {
   const body = (await parseBody(res)) as {
     error?: {
       code?: string;
@@ -630,7 +630,7 @@ export async function errorFromResponse(res: Response): Promise<DropwayError> {
   const e = body?.error;
   const requestId = body?.requestId ?? res.headers.get("x-request-id") ?? undefined;
   if (e && typeof e === "object" && e.code) {
-    return new DropwayError({
+    return new KofraError({
       code: e.code,
       message: e.message ?? `HTTP ${res.status}`,
       hint: e.hint,
@@ -644,7 +644,7 @@ export async function errorFromResponse(res: Response): Promise<DropwayError> {
     });
   }
   const snippet = (body?.text ?? "").replace(/\s+/g, " ").slice(0, 200);
-  return new DropwayError({
+  return new KofraError({
     code: `http_${res.status}`,
     message: `The server answered HTTP ${res.status}${snippet ? `: ${snippet}` : ""}.`,
     hint: res.status === 404 ? "Is this a Kofra instance? Check --api / KOFRA_API (use the origin, without /api/v1)." : undefined,

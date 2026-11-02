@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { encodePath } from "@dropway/core";
-import { VIEWER_CSP } from "@dropway/server";
+import { encodePath } from "@kofra/core";
+import { VIEWER_CSP } from "@kofra/server";
 import { freshInstance, jsonBody, type Instance } from "./helpers";
 import { b64 } from "./mcp-helpers";
 

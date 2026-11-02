@@ -298,11 +298,11 @@ describe("kofra CLI against a local instance", () => {
         child.on("error", reject);
         child.on("close", (code) => resolve({ code, stdout }));
       });
-    const viaLauncher = await runProc([join(cliRoot, "bin/dropway.mjs"), "whoami", "--json"]);
+    const viaLauncher = await runProc([join(cliRoot, "bin/kofra.mjs"), "whoami", "--json"]);
     expect(viaLauncher.code).toBe(0);
     expect(JSON.parse(viaLauncher.stdout).signedIn).toBe(true);
 
-    const outfile = join(work, "bundle/dropway.mjs");
+    const outfile = join(work, "bundle/kofra.mjs");
     await build({ entryPoints: [join(cliRoot, "src/cli.ts")], bundle: true, platform: "node", format: "esm", target: "node20", outfile, logLevel: "silent" });
     const dir = await project("bundled", { "index.html": "<p>bundled</p>" });
     const viaBundle = await runProc([outfile, "publish", dir, "--json", "--no-save"]);

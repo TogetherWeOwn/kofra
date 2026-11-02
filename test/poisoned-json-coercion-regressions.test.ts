@@ -1,6 +1,6 @@
 import { applyD1Migrations, createExecutionContext, env, reset, waitOnExecutionContext } from "cloudflare:test";
-import { clearLiveMemoryCache } from "@dropway/core";
-import { createDropway, type ServerBindings } from "@dropway/server";
+import { clearLiveMemoryCache } from "@kofra/core";
+import { createKofra, type ServerBindings } from "@kofra/server";
 import { describe, expect, it } from "vitest";
 import { BOOTSTRAP, freshInstance, jsonBody, ORIGIN } from "./helpers";
 
@@ -44,16 +44,16 @@ async function setupStorage() {
   })));
 }
 
-async function unconfiguredDropway() {
+async function unconfiguredKofra() {
   await reset();
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
   clearLiveMemoryCache();
-  return createDropway();
+  return createKofra();
 }
 
-async function bootstrapJson(dropway: ReturnType<typeof createDropway>, body: unknown): Promise<ApiResult> {
+async function bootstrapJson(kofra: ReturnType<typeof createKofra>, body: unknown): Promise<ApiResult> {
   const ctx = createExecutionContext();
-  const res = await dropway.fetch(new Request(`${ORIGIN}/api/v1/setup`, {
+  const res = await kofra.fetch(new Request(`${ORIGIN}/api/v1/setup`, {
     method: "POST",
     headers: { Authorization: `Bearer ${BOOTSTRAP}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -144,9 +144,9 @@ describe("poisoned JSON coercion regressions", () => {
   });
 
   it("rejects a setup keyName whose string conversion throws before creating an owner", async () => {
-    const dropway = await unconfiguredDropway();
+    const kofra = await unconfiguredKofra();
     const before = await setupStorage();
-    const result = await bootstrapJson(dropway, { email: "owner@example.com", keyName: poison });
+    const result = await bootstrapJson(kofra, { email: "owner@example.com", keyName: poison });
 
     expectInvalidField(result, "keyName");
     expect(await setupStorage()).toEqual(before);

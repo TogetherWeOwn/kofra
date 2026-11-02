@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { createDropway, type OperationDefinition } from "@dropway/server";
+import { createKofra, type OperationDefinition } from "@kofra/server";
 import { freshInstance, jsonBody } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
 
@@ -141,7 +141,7 @@ describe("declarative operation confirmation (SPEC 6.5)", () => {
     ["nullable target", z.object({ name: z.string().nullable(), confirm: z.string() })],
   ])("rejects registration with %s rather than ignoring confirm metadata", (_label, input) => {
     const calls: unknown[] = [];
-    expect(() => createDropway({ operations: [destructiveOperation(calls, input)] })).toThrow();
+    expect(() => createKofra({ operations: [destructiveOperation(calls, input)] })).toThrow();
     expect(calls).toEqual([]);
   });
 });

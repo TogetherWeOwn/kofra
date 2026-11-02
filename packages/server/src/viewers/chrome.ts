@@ -1,4 +1,4 @@
-import { encodePath, isSiteConfigPath, KIND_LABELS } from "@dropway/core";
+import { encodePath, isSiteConfigPath, KIND_LABELS } from "@kofra/core";
 import { escapeHtml, formatBytes, htmlPage } from "../html";
 import type { ViewerContext } from "./index";
 import { viewerPhone } from "./phone";

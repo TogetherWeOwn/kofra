@@ -16,7 +16,7 @@ import { unstable_startWorker } from "wrangler";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
-const source = join(root, "packages/cli/bin/dropway.mjs");
+const source = join(root, "packages/cli/bin/kofra.mjs");
 const tokens = {
   owner: "dw_ownerFixture_00000000000000000000000000",
   other: "dw_otherFixture_00000000000000000000000000",

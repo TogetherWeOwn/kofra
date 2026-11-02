@@ -3,7 +3,7 @@
  * Regression: removing the pending preflight returns 200, then fails mid-stream.
  * Uses disposable workerd/D1/R2/KV fixtures and the public manifest upload flow.
  */
-import { sha256Hex } from "@dropway/core";
+import { sha256Hex } from "@kofra/core";
 import { unzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 import { freshInstance, jsonBody, type Instance } from "./helpers";

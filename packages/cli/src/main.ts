@@ -4,12 +4,12 @@
  * - writes progress and prompts to stderr only;
  * - exits with a stable code (see EXIT in client.ts), so agents can branch on it.
  */
-import type { UpdateSiteSettingsInput } from "@dropway/client";
+import type { UpdateSiteSettingsInput } from "@kofra/client";
 import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { bool, int, parseArgs, str, UsageError, type FlagSpecs, type Parsed } from "./args.ts";
-import { CliError, DropwayClient, EXIT, normaliseApi, type FetchLike } from "./client.ts";
+import { CliError, KofraClient, EXIT, normaliseApi, type FetchLike } from "./client.ts";
 import { compareCancelled, compareDirectory, compareHuman, settleBeforeOutput } from "./compare.ts";
 import { linkKey, linkPath, readCredentials, readLink, removeCredentials, saveCredentials, writeLink, type ProjectLink } from "./config.ts";
 import { collectFiles, collectStdinFile, normaliseStdinPath } from "./files.ts";
@@ -198,7 +198,7 @@ function clientName(env: NodeJS.ProcessEnv): string {
 /** Instances already reported as moved, per Io (one note per run). */
 const movedNoted = new WeakMap<Io, Set<string>>();
 
-function makeClient(io: Io, api: string, token: string | null): DropwayClient {
+function makeClient(io: Io, api: string, token: string | null): KofraClient {
   const onMoved = (to: string) => {
     const seen = movedNoted.get(io) ?? new Set<string>();
     movedNoted.set(io, seen);
@@ -206,7 +206,7 @@ function makeClient(io: Io, api: string, token: string | null): DropwayClient {
     seen.add(api);
     io.stderr(`Note: ${api} has moved to ${to}. The old address still works for now; make the new one your default with: kofra login --api ${to}\n`);
   };
-  return new DropwayClient({ api, token, fetch: io.fetch, client: clientName(io.env), onMoved });
+  return new KofraClient({ api, token, fetch: io.fetch, client: clientName(io.env), onMoved });
 }
 
 function requireKey(inst: Instance, what = "This command", hint = "Run `kofra login`, set KOFRA_API_KEY, or pass --key. (To publish without a key, use --anonymous if the instance allows it.)"): string {
@@ -254,7 +254,7 @@ interface VersionRow extends VersionInfo {
   live?: boolean;
 }
 
-async function listAllVersions(client: DropwayClient, slug: string): Promise<{ currentVersionId: string | null; versions: VersionRow[] }> {
+async function listAllVersions(client: KofraClient, slug: string): Promise<{ currentVersionId: string | null; versions: VersionRow[] }> {
   const { data } = await client.get<{ currentVersionId: string | null; versions: VersionRow[] }>(`/sites/${enc(slug)}/versions?limit=500`);
   return data;
 }
@@ -263,7 +263,7 @@ async function listAllVersions(client: DropwayClient, slug: string): Promise<{ c
  * Used only by the destructive commands (restore, delete), which keep their
  * historical list-based selection. Read-only commands resolve explicit refs
  * directly (getVersionDirect) so old versions stay readable. */
-async function resolveVersion(client: DropwayClient, slug: string, ref: string | undefined): Promise<VersionRow> {
+async function resolveVersion(client: KofraClient, slug: string, ref: string | undefined): Promise<VersionRow> {
   const { currentVersionId, versions } = await listAllVersions(client, slug);
   if (!ref) {
     const live = versions.find((v) => v.id === currentVersionId);
@@ -293,7 +293,7 @@ interface DirectVersion {
  * newest 500 stay readable. The ref travels as one encoded path segment, and
  * server errors (code, hint, request id) pass through untouched.
  */
-async function getVersionDirect(client: DropwayClient, slug: string, ref: string): Promise<DirectVersion> {
+async function getVersionDirect(client: KofraClient, slug: string, ref: string): Promise<DirectVersion> {
   // encodeURIComponent leaves "." and ".." untouched, and URL normalization
   // would then collapse the request onto a different endpoint (or the list
   // route for ""). Refuse those locally instead of changing the endpoint.
@@ -1238,7 +1238,7 @@ the owner key on a new instance with: kofra setup --api <url> --email <you>`,
       const link = await readLink(io.cwd);
       raw = link?.api ?? (await readCredentials(io.env)).default ?? undefined;
     }
-    if (!raw && io.stdinIsTTY && io.stderrIsTTY) raw = (await io.prompt("Kofra URL (e.g. https://dropway.example.workers.dev): ")).trim();
+    if (!raw && io.stdinIsTTY && io.stderrIsTTY) raw = (await io.prompt("Kofra URL (e.g. https://kofra.example.workers.dev): ")).trim();
     if (!raw) throw new UsageError("Missing the instance URL: pass --api <url>.");
     const api = normaliseApi(raw);
     const key = str(p, "key") ?? (await readSecretInput(io, "API key (dw_...): "));

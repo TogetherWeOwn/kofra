@@ -3,8 +3,8 @@ import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:
 import {
   ApiError, clearLiveMemoryCache, createTenantWithOwner, defaultPolicy, mintApiKey,
   type PolicyAdapter, type PublishEvent, type SiteOwner, type UsageEvent,
-} from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+} from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { freshInstance, jsonBody, manifestEntry, type Instance } from "./helpers";
 
 /**
@@ -113,7 +113,7 @@ async function fixture(policy: PolicyAdapter = defaultPolicy, events = sinks()) 
   let writer: string;
   let foreign: string;
   try {
-    const dc = dw.dropway.context(env as unknown as ServerBindings, ctx);
+    const dc = dw.kofra.context(env as unknown as ServerBindings, ctx);
     const owner = await env.DB.prepare("SELECT id FROM members WHERE tenant_id = ? AND role = 'owner'")
       .bind(sourceRow!.tenant_id).first<{ id: string }>();
     writer = (await mintApiKey(dc, { tenantId: sourceRow!.tenant_id, memberId: owner!.id, scopes: ["sites:read", "sites:write"] })).key;

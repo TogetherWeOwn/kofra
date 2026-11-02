@@ -1,6 +1,6 @@
 /** Protected test-first contract. Build on this artifact; do not edit it in the implementation PR. */
 import { env } from "cloudflare:test";
-import { clearLiveMemoryCache, type LiveSite } from "@dropway/core";
+import { clearLiveMemoryCache, type LiveSite } from "@kofra/core";
 import { zipSync, strToU8 } from "fflate";
 import { beforeAll, describe, expect, it } from "vitest";
 import { viewerBar } from "../packages/server/src/viewers/chrome";
@@ -262,7 +262,7 @@ describe("same-folder sibling navigation", () => {
       clearLiveMemoryCache();
       // R-14 also puts a Cache API pointer memo in front of KV; drop it too
       // so each measured request really reads the live manifest from KV.
-      await caches.default.delete(new Request(`https://dropway.invalid/__dropway/ptr/${encodeURIComponent(slug)}`));
+      await caches.default.delete(new Request(`https://kofra.invalid/__dropway/ptr/${encodeURIComponent(slug)}`));
       const res = await request(dw, `${ORIGIN}${base}${path}`, { headers: NAV }, { DB, FILES: counted(env.FILES, "r2", ["get", "head", "list"]), CACHE: counted(env.CACHE, "kv", ["get", "getWithMetadata", "list"]) });
       expect(res.status).toBe(200);
       return { counts, html: await res.text() };

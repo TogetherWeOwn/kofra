@@ -2,16 +2,16 @@ import { expect } from "vitest";
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import {
   ApiError, defaultIdentity,
-  type AtomicWriteExtension, type ConfigOverrides, type DropwayContext, type MemberPrincipal,
+  type AtomicWriteExtension, type ConfigOverrides, type KofraContext, type MemberPrincipal,
   type PolicyAdapter, type Principal, type SiteNameMutation, type SiteRow, type UsageEvent,
-} from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+} from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { freshInstance, ORIGIN, type Instance } from "./helpers";
 
 export type PrepareName = (
   principal: Principal,
   input: Readonly<SiteNameMutation>,
-  dc: DropwayContext,
+  dc: KofraContext,
 ) => AtomicWriteExtension | Promise<AtomicWriteExtension>;
 
 export function policy(prepare: PrepareName): PolicyAdapter {
@@ -25,7 +25,7 @@ export async function harness(prepare?: PrepareName, config: ConfigOverrides = {
     metering: { record: (event) => void events.push(event) },
   } });
   const ctx = createExecutionContext();
-  const dc = dw.dropway.context(env as unknown as ServerBindings, ctx);
+  const dc = dw.kofra.context(env as unknown as ServerBindings, ctx);
   const principal = await defaultIdentity.resolve(new Request(`${ORIGIN}/api/v1/me`, {
     headers: { Authorization: `Bearer ${dw.ownerKey}` },
   }), dc);
@@ -33,9 +33,9 @@ export async function harness(prepare?: PrepareName, config: ConfigOverrides = {
   return { dw, dc, principal, events, flush: () => waitOnExecutionContext(ctx) };
 }
 
-export async function asOwner<T>(dw: Instance, fn: (dc: DropwayContext, p: MemberPrincipal) => Promise<T>): Promise<T> {
+export async function asOwner<T>(dw: Instance, fn: (dc: KofraContext, p: MemberPrincipal) => Promise<T>): Promise<T> {
   const ctx = createExecutionContext();
-  const dc = dw.dropway.context(env as unknown as ServerBindings, ctx);
+  const dc = dw.kofra.context(env as unknown as ServerBindings, ctx);
   const p = await defaultIdentity.resolve(new Request(`${ORIGIN}/api/v1/me`, {
     headers: { Authorization: `Bearer ${dw.ownerKey}` },
   }), dc);
@@ -82,11 +82,11 @@ export async function extensionSchema() {
   await env.DB.batch(sql.map((s) => env.DB.prepare(s)));
 }
 
-export function audit(dc: DropwayContext, tag: string) {
+export function audit(dc: KofraContext, tag: string) {
   return dc.env.DB.prepare("INSERT INTO fixture_audit (tag) VALUES (?)").bind(tag);
 }
 
-export function receipt(dc: DropwayContext, input: Readonly<SiteNameMutation>): AtomicWriteExtension {
+export function receipt(dc: KofraContext, input: Readonly<SiteNameMutation>): AtomicWriteExtension {
   return { statements: [
     audit(dc, `${input.operation}:${input.siteId}:${input.slug}`),
     dc.env.DB.prepare("INSERT INTO fixture_receipts (site_id, slug) VALUES (?, ?)").bind(input.siteId, input.slug),

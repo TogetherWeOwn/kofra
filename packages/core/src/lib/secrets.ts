@@ -17,7 +17,7 @@ export const SECRET_PATTERNS: Array<{ kind: string; re: RegExp }> = [
   { kind: "live_secret_key", re: /\b[sr]k_live_[A-Za-z0-9]{20,}/ },
   { kind: "google_api_key", re: /\bAIza[0-9A-Za-z_-]{35}\b/ },
   { kind: "npm_token", re: /\bnpm_[A-Za-z0-9]{36}\b/ },
-  { kind: "dropway_key", re: /\bdwc?_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/ },
+  { kind: "kofra_key", re: /\bdwc?_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/ },
 ];
 
 export interface SecretFinding {

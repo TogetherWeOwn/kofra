@@ -3,9 +3,9 @@ import { createExecutionContext, createScheduledController, env, waitOnExecution
 import {
   ApiError, defaultIdentity,
   type DeleteEvent, type Limits, type Principal, type PublishEvent, type SiteRequestEvent, type UsageEvent,
-} from "@dropway/core";
-import * as server from "@dropway/server";
-import { renderAppPage, type McpToolDefinition, type ServerBindings, type Viewer } from "@dropway/server";
+} from "@kofra/core";
+import * as server from "@kofra/server";
+import { renderAppPage, type McpToolDefinition, type ServerBindings, type Viewer } from "@kofra/server";
 import { form, freshInstance, jsonBody, manifestEntry, ORIGIN } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
 import { create as createTransfer, DAY, input as transferInput, instance as transferInstance, op, update as updateTransfer } from "./transfer-fixtures";
@@ -19,8 +19,8 @@ async function storedSite(slug: string) {
 }
 
 describe("extension API contract", () => {
-  it("exports extension API version 6 from the public server entry point", () => {
-    expect(server).toHaveProperty("EXTENSION_API_VERSION", 6);
+  it("exports extension API version 7 from the public server entry point", () => {
+    expect(server).toHaveProperty("EXTENSION_API_VERSION", 7);
   });
 
   it("enforces the extension's transferMaxExpiryDays on creation and update", async () => {
@@ -236,7 +236,7 @@ describe("extension API contract", () => {
     const response = await dw.call("/contract-app");
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("Contract instance");
-    const context = dw.dropway.context(env as unknown as ServerBindings, createExecutionContext());
+    const context = dw.kofra.context(env as unknown as ServerBindings, createExecutionContext());
     expect(context.config.instanceName).toBe("Contract instance");
     expect(context.env.DB).toBe(env.DB);
   });
@@ -319,7 +319,7 @@ describe("extension API contract", () => {
     } });
     const controller = createScheduledController({ cron: "0 * * * *", scheduledTime: 1_792_699_200_000 });
     const context = createExecutionContext();
-    await dw.dropway.scheduled(controller, env as unknown as ServerBindings, context);
+    await dw.kofra.scheduled(controller, env as unknown as ServerBindings, context);
     await waitOnExecutionContext(context);
     expect(await env.CACHE.get("contract-scheduled", "json")).toMatchObject({ cron: "0 * * * *", at: 1_792_699_200_000, instance: expect.any(String) });
   });

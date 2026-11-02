@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
-import { sha256Hex } from "@dropway/core";
+import { sha256Hex } from "@kofra/core";
 import { freshInstance, jsonBody } from "./helpers";
 
 // Review-round regression: a legal keyed publish can produce a PublishResult

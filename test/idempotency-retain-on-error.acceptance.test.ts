@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { ApiError, withIdempotency } from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+import { ApiError, withIdempotency } from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { freshInstance } from "./helpers";
 import { bounded, claims, signal } from "./version-mutation-replay.helpers";
 
@@ -11,7 +11,7 @@ afterEach(() => { vi.restoreAllMocks(); });
 async function fixture() {
   const dw = await freshInstance();
   const ctx = createExecutionContext();
-  return { dc: dw.dropway.context(env as unknown as ServerBindings, ctx), flush: () => waitOnExecutionContext(ctx) };
+  return { dc: dw.kofra.context(env as unknown as ServerBindings, ctx), flush: () => waitOnExecutionContext(ctx) };
 }
 
 const options = () => ({

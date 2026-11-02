@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { clearLiveMemoryCache, forbidden, runCleanup } from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+import { clearLiveMemoryCache, forbidden, runCleanup } from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { form, freshInstance, jsonBody } from "./helpers";
 
 describe("anonymous publishing (opt-in)", () => {
@@ -59,7 +59,7 @@ describe("anonymous publishing (opt-in)", () => {
     expect(gone.status).toBe(410);
 
     const ctx = createExecutionContext();
-    const report = await runCleanup(dw.dropway.context(env as unknown as ServerBindings, ctx));
+    const report = await runCleanup(dw.kofra.context(env as unknown as ServerBindings, ctx));
     await waitOnExecutionContext(ctx);
     expect(report.expiredSites).toBe(1);
     clearLiveMemoryCache();

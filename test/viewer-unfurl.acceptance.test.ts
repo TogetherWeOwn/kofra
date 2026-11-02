@@ -42,7 +42,7 @@
 import { env } from "cloudflare:test";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { zipSync } from "fflate";
-import { viewerPage, type Viewer } from "@dropway/server";
+import { viewerPage, type Viewer } from "@kofra/server";
 import { form, freshInstance, jsonBody, ORIGIN, type Instance } from "./helpers";
 import { expectVersionedBadge } from "./site-badge.helpers";
 

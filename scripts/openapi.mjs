@@ -14,4 +14,4 @@ const bundle = await build({
   logLevel: "warning",
 });
 const { buildOpenApi } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
-process.stdout.write(`${JSON.stringify(buildOpenApi("https://dropway.example", "Kofra"), null, 2)}\n`);
+process.stdout.write(`${JSON.stringify(buildOpenApi("https://kofra.example", "Kofra"), null, 2)}\n`);

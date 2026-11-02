@@ -3,7 +3,7 @@ import { env } from "cloudflare:test";
 import {
   ApiError, clearLiveMemoryCache, defaultPolicy,
   type Limits, type PublishEvent, type SiteOwner, type UsageEvent,
-} from "@dropway/core";
+} from "@kofra/core";
 import { freshInstance, jsonBody, manifestEntry, ORIGIN, type Instance } from "./helpers";
 import { create as createTransfer, get as getTransfer, instance as transferInstance } from "./transfer-fixtures";
 

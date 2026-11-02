@@ -1,4 +1,4 @@
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import { emptySiteConfig, parseSiteConfigJson, type SiteConfig } from "./site-config";
 
 /**
@@ -82,10 +82,10 @@ const POINTER_TTL_SECONDS = 10;
 function pointerRequest(slug: string): Request {
   // A fixed synthetic host, not the request's: the API host that publishes and the site host that
   // serves differ in subdomain and second-Worker setups, and both must reach the same entry.
-  return new Request(`https://dropway.invalid/__dropway/ptr/${encodeURIComponent(slug)}`);
+  return new Request(`https://kofra.invalid/__dropway/ptr/${encodeURIComponent(slug)}`);
 }
 
-async function readPointer(dc: DropwayContext, slug: string): Promise<LiveSite | null> {
+async function readPointer(dc: KofraContext, slug: string): Promise<LiveSite | null> {
   if (typeof caches === "undefined") return null;
   try {
     const hit = await caches.default.match(pointerRequest(slug));
@@ -95,7 +95,7 @@ async function readPointer(dc: DropwayContext, slug: string): Promise<LiveSite |
   }
 }
 
-async function writePointer(dc: DropwayContext, live: LiveSite): Promise<void> {
+async function writePointer(dc: KofraContext, live: LiveSite): Promise<void> {
   if (typeof caches === "undefined") return;
   try {
     await caches.default.put(
@@ -107,7 +107,7 @@ async function writePointer(dc: DropwayContext, live: LiveSite): Promise<void> {
   }
 }
 
-async function dropPointer(dc: DropwayContext, slug: string): Promise<void> {
+async function dropPointer(dc: KofraContext, slug: string): Promise<void> {
   if (typeof caches !== "undefined") await caches.default.delete(pointerRequest(slug)).catch(() => {});
 }
 
@@ -131,7 +131,7 @@ export function getLiveReadFenceCountForTests(): number {
   return reading.size;
 }
 
-export async function getLiveSite(dc: DropwayContext, slug: string): Promise<LiveSite | null> {
+export async function getLiveSite(dc: KofraContext, slug: string): Promise<LiveSite | null> {
   const hit = memory.get(slug);
   if (hit && Date.now() - hit.at < MEMORY_TTL_MS) return hit.live;
   const fence = reading.get(slug) ?? { active: 0 };
@@ -182,7 +182,7 @@ export async function getLiveSite(dc: DropwayContext, slug: string): Promise<Liv
  * The site row is enough for both checks: a finalized version's files never change, and a version
  * deleted mid-read (its file query came back empty) is no longer current, so its id differs.
  */
-async function fillLive(dc: DropwayContext, live: LiveSite): Promise<void> {
+async function fillLive(dc: KofraContext, live: LiveSite): Promise<void> {
   const before = await loadLiveSiteFromD1(dc, { siteId: live.siteId }, false);
   if (!before || !sameSettings(before, live)) return;
   await putLive(dc, live);
@@ -207,7 +207,7 @@ function sameSettings(a: LiveSite, b: LiveSite): boolean {
 }
 
 /** withFiles = false skips the version_files query and returns an empty file map. */
-export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string; siteId?: string }, withFiles = true): Promise<LiveSite | null> {
+export async function loadLiveSiteFromD1(dc: KofraContext, by: { slug?: string; siteId?: string }, withFiles = true): Promise<LiveSite | null> {
   const site = await dc.env.DB.prepare(
     `SELECT s.id, s.slug, s.tenant_id, s.current_version_id, s.spa, s.render_markdown, s.cross_origin_isolation, s.noindex, s.viewers, s.password_hash, s.expires_at,
             v.number AS version_number, COALESCE(v.finalized_at, v.created_at) AS version_at, v.config_json
@@ -258,7 +258,7 @@ export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string
   };
 }
 
-async function putLive(dc: DropwayContext, live: LiveSite, maxTtlSeconds?: number): Promise<void> {
+async function putLive(dc: KofraContext, live: LiveSite, maxTtlSeconds?: number): Promise<void> {
   const opts: KVNamespacePutOptions = {};
   if (live.expiresAt) {
     // Keep the key a little past expiry so visitors get a clear "expired" page, then let KV drop it.
@@ -269,7 +269,7 @@ async function putLive(dc: DropwayContext, live: LiveSite, maxTtlSeconds?: numbe
 }
 
 /** Rebuild the KV entry for a site from D1. Call after any change that affects serving. */
-export async function refreshLive(dc: DropwayContext, siteId: string): Promise<LiveSite | null> {
+export async function refreshLive(dc: KofraContext, siteId: string): Promise<LiveSite | null> {
   const live = await loadLiveSiteFromD1(dc, { siteId });
   if (live) {
     reading.delete(live.slug);
@@ -281,7 +281,7 @@ export async function refreshLive(dc: DropwayContext, siteId: string): Promise<L
   return live;
 }
 
-export async function dropLive(dc: DropwayContext, slug: string): Promise<void> {
+export async function dropLive(dc: KofraContext, slug: string): Promise<void> {
   reading.delete(slug);
   memory.delete(slug);
   await dc.env.CACHE.delete(liveKey(slug));

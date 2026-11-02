@@ -1,5 +1,5 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import type { ServerBindings } from "@dropway/server";
+import type { ServerBindings } from "@kofra/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { freshInstance, ORIGIN, type Instance } from "./helpers";
 import { attempt, formSubmission, freezePasswordClock, lockedSite, passwordForm, postForm, SITE_PASSWORD, WINDOW_MS, type PasswordForm } from "./site-password-fixtures";
@@ -23,7 +23,7 @@ async function submittedBody(dw: Instance, url: string, init: RequestInit & { bo
   const req = new Request(url, { ...init, headers, body, redirect: "manual" });
   const ctx = createExecutionContext();
   try {
-    const res = await dw.dropway.fetch(req, env as unknown as ServerBindings, ctx);
+    const res = await dw.kofra.fetch(req, env as unknown as ServerBindings, ctx);
     await waitOnExecutionContext(ctx);
     return { res, pulls, bodyUsed: req.bodyUsed };
   } finally {

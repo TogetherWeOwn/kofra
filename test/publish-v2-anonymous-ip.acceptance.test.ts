@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
-import { bearerToken, defaultIdentity } from "@dropway/core";
+import { bearerToken, defaultIdentity } from "@kofra/core";
 import { freshInstance, jsonBody, type Instance } from "./helpers";
 
 // Review-round guard pin: without a real client IP there is no safe anonymous

@@ -50,7 +50,7 @@ import { EXIT } from "../src/client.ts";
 import { run, type Io } from "../src/main.ts";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
-const cliEntry = fileURLToPath(new URL("../bin/dropway.mjs", import.meta.url));
+const cliEntry = fileURLToPath(new URL("../bin/kofra.mjs", import.meta.url));
 const BOOTSTRAP = "stdin-publish-acceptance-0123456789abcdef";
 
 let worker: Awaited<ReturnType<typeof unstable_startWorker>> | undefined;

@@ -6,7 +6,7 @@ Cloudflare: one Worker, D1 for metadata, R2 for file bytes, KV for the hot
 
 This repository is the **complete single-tenant product** (MIT). It has no
 plans, prices, billing, payment code or public signup. A hosted, multi-tenant
-service can be built *on top* of it by calling `createDropway()` with its own
+service can be built *on top* of it by calling `createKofra()` with its own
 adapters, routes and UI. The extension points below exist for that. Nothing
 here imports such a layer, and such a layer never copies files from here.
 
@@ -15,18 +15,18 @@ here imports such a layer, and such a layer never copies files from here.
 ```
 wrangler.jsonc            Self-host deploy config (repo root on purpose: the Deploy to
                           Cloudflare button treats the chosen folder as the whole repo)
-apps/worker/src/index.ts  The single-tenant Worker: createDropway() with defaults
-packages/core             @dropway/core: service layer (no HTTP framework)
+apps/worker/src/index.ts  The single-tenant Worker: createKofra() with defaults
+packages/core             @kofra/core: service layer (no HTTP framework)
   migrations/             D1 schema (applied by `npm run deploy`)
-  src/config.ts           Vars/secrets -> DropwayConfig
-  src/context.ts          DropwayContext (what every service takes) + URL helpers
+  src/config.ts           Vars/secrets -> KofraConfig
+  src/context.ts          KofraContext (what every service takes) + URL helpers
   src/principal.ts        Principal (who is calling), roles, scopes
   src/adapters.ts         Extension interfaces: identity, policy, metering, hooks
   src/errors.ts           ApiError (status, code, message, hint, details)
   src/lib/                crypto, mime, paths, slugs, file-type detection
   src/services/           ALL business logic (see below)
-packages/server           @dropway/server: createDropway() Hono app factory
-  src/create.ts           createDropway(): wiring, dispatch, cron
+packages/server           @kofra/server: createKofra() Hono app factory
+  src/create.ts           createKofra(): wiring, dispatch, cron
   src/route-sites.ts      Decides "site request" vs "app request" (modes, Referer)
   src/serve.ts            Serves site files (index resolution, ranges, ETags, password, headers)
   src/path-rewrite.ts     Path mode: prefixes root-relative URLs in HTML/CSS
@@ -39,7 +39,7 @@ packages/server           @dropway/server: createDropway() Hono app factory
   src/app.ts              App-origin routes: home (./ui), /openapi.json, discovery routes, /claim, /mcp
   src/openapi.ts          OpenAPI 3.1 document for every route (operationId = MCP tool name)
   src/discovery.ts        /llms.txt, /llms-full.txt, /skill.md, /connect(.md), /.well-known/*, /robots.txt (generated)
-  src/extensions.ts       Types for routes, MCP tools, UI slots, createDropway options
+  src/extensions.ts       Types for routes, MCP tools, UI slots, createKofra options
 packages/cli              `kofra` CLI (npm package "kofra", Node 20+, zero runtime dependencies)
 skills/kofra/SKILL.md   Agent Skill (`npx skills add TogetherWeOwn/kofra`); generated, `npm run skill:sync`
 scripts/guard-open-core.mjs  CI guard: no billing, pricing, payment or hosted-service code in this repo
@@ -49,7 +49,7 @@ test/                     vitest + @cloudflare/vitest-plugin (runs inside worker
 ## Rule: logic lives in services, every surface is thin
 
 All behaviour lives in `packages/core/src/services/*.ts`. A service takes a
-`DropwayContext` (`dw`) and a `Principal`, enforces permissions itself, and
+`KofraContext` (`dw`) and a `Principal`, enforces permissions itself, and
 throws `ApiError` with a stable `code` and a `hint` for the caller.
 
 | Service | What it does |
@@ -83,7 +83,7 @@ errors are identical everywhere.
 
 ```
 fetch(request)
-  -> createDropway builds dw (config cached per env, adapters, hooks, waitUntil)
+  -> createKofra builds dw (config cached per env, adapters, hooks, waitUntil)
   -> routeSiteRequest(dw, request)
        site      -> serveSite()       (packages/server/src/serve.ts)
        redirect  -> 301/307           (trailing slash, other origin, Referer fallback)
@@ -236,10 +236,10 @@ Raw/download and sub-resource requests still serve the original complete bytes.
 
 **To add a viewer:** create `packages/server/src/viewers/<name>.ts` exporting a
 `Viewer` (`id`, `version`, `maxBytes`, `matches(file, live, mode)`, `render(vc)`),
-match on `file.kind` (from `detectFileKind` in `@dropway/core`) and the mode,
+match on `file.kind` (from `detectFileKind` in `@kofra/core`) and the mode,
 wrap the body with `viewerPage()` from `viewers/chrome.ts`, and add it to
 `VIEWERS` in `viewers/index.ts` before the code/binary fallbacks. Embedding apps
-pass extra viewers in `createDropway({ viewers })`; they run first.
+pass extra viewers in `createKofra({ viewers })`; they run first.
 
 Exact caps, read budgets, rendered-output limits and fallbacks for the JSON,
 CSV and notebook viewers (and the Source/Raw/Download byte contract) are in
@@ -378,17 +378,17 @@ through the list refresh after a successful publish.
 Never edit an applied migration; add `000N_*.sql`. Extensions keep their own
 tables in their own migrations or their own D1 database.
 
-## Extension points: `createDropway(options)`
+## Extension points: `createKofra(options)`
 
-`@dropway/server` exports `EXTENSION_API_VERSION = 6` for this public embedding
+`@kofra/server` exports `EXTENSION_API_VERSION = 7` for this public embedding
 contract. Update it and the Extension API section in `CHANGELOG.md` when changing
 the contract. `test/extension-contract.test.ts` exercises every existing extension
 point with fake adapters and real emulated D1/R2/KV bindings; it runs in public CI.
 
 ```ts
-import { createDropway } from "@dropway/server";
+import { createKofra } from "@kofra/server";
 
-export default createDropway({
+export default createKofra({
   config: { multiTenant: true },               // or (env) => ({ ... }); overrides vars
   adapters: {
     identity,   // resolve(request, dw) -> Principal (sessions, OAuth, tenant selection...)
@@ -407,7 +407,7 @@ export default createDropway({
 });
 ```
 
-`dropway.context(env, ctx)` builds a `DropwayContext` outside a request (queue
+`kofra.context(env, ctx)` builds a `KofraContext` outside a request (queue
 consumers, scripts, tests). Inside routes, use `c.get("dw")` and
 `c.get("principal")`.
 
@@ -420,7 +420,7 @@ identity adapter accepts dwu_ credentials only on blob and multipart upload URLs
 the services independently check pending state, deletion, expiry and exact
 manifest membership on every upload operation, and a capability-created
 multipart session keeps the capability's earlier expiry even for an owner.
-`DropwayConfig.urlFetchMaxBytes` (or `URL_FETCH_MAX_BYTES`) limits URL sources;
+`KofraConfig.urlFetchMaxBytes` (or `URL_FETCH_MAX_BYTES`) limits URL sources;
 per-file and one-shot limits still apply. Concurrent URL bodies debit one shared
 one-shot budget as each chunk arrives, before buffering it; a refusal cancels all
 sibling fetches and readers. Embedding Workers must retain
@@ -430,7 +430,7 @@ fetchers are trusted deployment code and must enforce the same network boundary.
 
 ### Atomic mutation extensions (version 2)
 
-`@dropway/core` exports `AtomicWriteExtension` (`statements: readonly
+`@kofra/core` exports `AtomicWriteExtension` (`statements: readonly
 D1PreparedStatement[]`, optional `mapError(error): ApiError | undefined`) and
 `SiteNameMutation` (`operation: "create" | "rename"`, `siteId`, `tenantId`,
 `slug`, `previousSlug`). The optional
@@ -496,7 +496,7 @@ END;
 ```
 
 ```ts
-import { ApiError, defaultPolicy, type PolicyAdapter } from "@dropway/core";
+import { ApiError, defaultPolicy, type PolicyAdapter } from "@kofra/core";
 
 const policy: PolicyAdapter = {
   ...defaultPolicy,
@@ -573,15 +573,15 @@ No public registration route or core migration is added.
   Tests in `test/` enforce registration, metadata and stable tool ordering.
   `npm run openapi:lint` independently validates the generated document in CI.
 - **An API operation (extension):** pass `defineOperation()` results through
-  `createDropway({ operations })`. Definitions replace by id without reordering;
+  `createKofra({ operations })`. Definitions replace by id without reordering;
   each app gets its own registry and generated discovery. See `docs/OPERATIONS.md`.
-- **An MCP-only tool (compatibility):** `createDropway({ mcpTools })` remains an
+- **An MCP-only tool (compatibility):** `createKofra({ mcpTools })` remains an
   escape hatch; tools replace by name. Prefer operations for new capabilities.
   The MCP endpoint still resolves identity, enforces scope checks and applies
   idempotency, toolset/read-only filtering and ApiError shaping. See `docs/MCP.md`.
 - **Dashboard pages:** register through `uiSlots.pages` (with `nav: true` for a
   navigation link) and render them with `renderAppPage(c, { title, page, body })`
-  from `@dropway/server`, which adds the dashboard frame, navigation, banner and
+  from `@kofra/server`, which adds the dashboard frame, navigation, banner and
   CSP. `uiSlots.banner` shows a notice above every app page;
   `uiSlots.settingsSections` adds sections to `/dashboard/settings`.
   `uiSlots.session = { signInPath, signOutPath }` tells the dashboard that the

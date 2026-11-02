@@ -12,8 +12,8 @@
  */
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { sha256Hex } from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+import { sha256Hex } from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { csvViewer, detectDelimiter, parseCsv } from "../packages/server/src/viewers/csv";
 import { cachedRender, clearRenderMemoryCache } from "../packages/server/src/viewers/cache";
 import { form, freshInstance, ORIGIN, type Instance } from "./helpers";
@@ -253,7 +253,7 @@ describe("CSV viewer rendered/raw compatibility in workerd", () => {
     await caches.default.delete(new Request(`${ORIGIN}/__dropway/render/csv@${csvViewer.version}/csv/${hash}`));
     if (tier === "memory") {
       const ctx = createExecutionContext();
-      const dc = dw.dropway.context(env as unknown as ServerBindings, ctx, new URL(url));
+      const dc = dw.kofra.context(env as unknown as ServerBindings, ctx, new URL(url));
       await cachedRender(dc, key, async () => oldHtml);
       await waitOnExecutionContext(ctx);
     } else {

@@ -5,8 +5,8 @@
  * companion; these tests pin serving, safety, validators and byte identity.
  */
 import { beforeAll, describe, expect, it } from "vitest";
-import { sha256Hex, type LiveSite } from "@dropway/core";
-import { VIEWERS, type ViewerContext } from "@dropway/server";
+import { sha256Hex, type LiveSite } from "@kofra/core";
+import { VIEWERS, type ViewerContext } from "@kofra/server";
 import { viewerBar } from "../packages/server/src/viewers/chrome";
 import { viewerPhone } from "../packages/server/src/viewers/phone";
 import { form, freshInstance, jsonBody, ORIGIN, type Instance } from "./helpers";

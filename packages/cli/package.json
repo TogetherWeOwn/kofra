@@ -6,7 +6,6 @@
   "type": "module",
   "keywords": [
     "kofra",
-    "dropway",
     "hosting",
     "static-site",
     "publish",
@@ -24,8 +23,7 @@
     "directory": "packages/cli"
   },
   "bin": {
-    "kofra": "bin/dropway.mjs",
-    "dropway": "bin/dropway.mjs"
+    "kofra": "bin/kofra.mjs"
   },
   "files": [
     "bin",
@@ -37,13 +35,13 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/dropway.mjs --legal-comments=none",
+    "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/kofra.mjs --legal-comments=none",
     "prepack": "npm run build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "npm run build && vitest run -c vitest.config.ts"
   },
   "devDependencies": {
-    "@dropway/client": "^0.1.0",
+    "@kofra/client": "^0.1.0",
     "@types/node": "^22.20.5",
     "esbuild": "^0.28.2",
     "fflate": "^0.8.3"

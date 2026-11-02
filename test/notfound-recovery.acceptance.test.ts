@@ -46,7 +46,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
-import { sha256Hex } from "@dropway/core";
+import { sha256Hex } from "@kofra/core";
 import { freshInstance, jsonBody, ORIGIN, type Instance } from "./helpers";
 
 const NAV = { Accept: "text/html,*/*;q=0.8", "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "none" };

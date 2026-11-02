@@ -4,8 +4,8 @@ import {
   ApiError, clearLiveMemoryCache, createDeploy, defaultIdentity, deleteVersion, dropLive,
   finalizeDeploy, getSiteFor, refreshLive, restoreVersion,
   type PublishEvent, type SiteRow, type UsageEvent, type VersionRow,
-} from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+} from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { freshInstance, jsonBody, manifestEntry, ORIGIN, type Instance } from "./helpers";
 
 /** Independent acceptance: real disposable D1 transactions, never fabricated write results. */
@@ -42,7 +42,7 @@ async function fixture() {
   await publish(dw, SLUG, "initial live", 200);
   await publish(dw, OTHER, "unrelated site");
   const ctx = createExecutionContext();
-  const dc = dw.dropway.context(env as unknown as ServerBindings, ctx);
+  const dc = dw.kofra.context(env as unknown as ServerBindings, ctx);
   const principal = await defaultIdentity.resolve(new Request(`${ORIGIN}/api/v1/me`, {
     headers: { Authorization: `Bearer ${dw.ownerKey}` },
   }), dc);

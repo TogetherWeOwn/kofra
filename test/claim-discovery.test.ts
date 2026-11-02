@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import type { ConfigOverrides } from "@dropway/core";
-import { createDropway, type ServerBindings } from "@dropway/server";
+import type { ConfigOverrides } from "@kofra/core";
+import { createKofra, type ServerBindings } from "@kofra/server";
 import { BOOTSTRAP, freshInstance, jsonBody, ORIGIN, type Instance } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
 
@@ -23,19 +23,19 @@ function section(text: string, heading: string): string {
 
 /** A new app over the same D1/R2/KV bindings: deliberately no reset, migration or setup. */
 function withStoredData(previous: Instance, config: ConfigOverrides): Instance {
-  const dropway = createDropway({ config });
+  const kofra = createKofra({ config });
   const call: Instance["call"] = async (path, init = {}) => {
     const { key, origin, ...rest } = init;
     const headers = new Headers(rest.headers);
     if (key) headers.set("Authorization", `Bearer ${key}`);
     const url = path.startsWith("http") ? path : `${origin ?? ORIGIN}${path}`;
     const ctx = createExecutionContext();
-    const res = await dropway.fetch(new Request(url, { ...rest, headers, redirect: "manual" }), env as unknown as ServerBindings, ctx);
+    const res = await kofra.fetch(new Request(url, { ...rest, headers, redirect: "manual" }), env as unknown as ServerBindings, ctx);
     await waitOnExecutionContext(ctx);
     return res;
   };
   return {
-    dropway,
+    kofra,
     ownerKey: previous.ownerKey,
     call,
     async json(path, init) {

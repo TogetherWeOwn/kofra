@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
-  DropwayClient as SdkClient,
-  DropwayError as SdkError,
+  KofraClient as SdkClient,
+  KofraError as SdkError,
   movedTo as sdkMovedTo,
   normaliseApi as sdkNormaliseApi,
-} from "@dropway/client";
-import { CliError, DropwayClient, EXIT, errorFromResponse, movedTo, normaliseApi } from "../src/client.ts";
+} from "@kofra/client";
+import { CliError, KofraClient, EXIT, errorFromResponse, movedTo, normaliseApi } from "../src/client.ts";
 
-/** R-45: the CLI's transport is @dropway/client, with CLI exit codes layered on top. */
-describe("CLI client uses @dropway/client", () => {
+/** R-45: the CLI's transport is @kofra/client, with CLI exit codes layered on top. */
+describe("CLI client uses @kofra/client", () => {
   it("shares the transport implementation", () => {
-    const client = new DropwayClient({ api: "https://kofra.test", token: null });
+    const client = new KofraClient({ api: "https://kofra.test", token: null });
     expect(client).toBeInstanceOf(SdkClient);
     expect(new CliError({ code: "x", message: "y", exitCode: EXIT.error })).toBeInstanceOf(SdkError);
   });
@@ -52,7 +52,7 @@ describe("CLI client uses @dropway/client", () => {
   });
 
   it("throws CliError from typed methods too", async () => {
-    const client = new DropwayClient({ api: "https://kofra.test", token: null });
+    const client = new KofraClient({ api: "https://kofra.test", token: null });
     const err = await client.getSite({} as unknown as { slug: string }).then(
       () => expect.unreachable("expected the call to throw"),
       (e: unknown) => e as CliError,

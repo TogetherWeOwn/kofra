@@ -1,5 +1,5 @@
 /** Schemas for pre-registry HTTP wire shapes, shared by their compatibility adapters. */
-import { ALL_SCOPES } from "@dropway/core";
+import { ALL_SCOPES } from "@kofra/core";
 export const HTTP_VERSION: Record<string, any> = {
   type: "object",
   properties: {

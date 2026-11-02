@@ -206,7 +206,7 @@ illustrative but bound by the same redaction rules.
   "status": "ready",                  // ready | needs_key | unconfigured
   "exitCode": 0,
   "api": {
-    "origin": "https://dropway.example.workers.dev",  // normalized origin, or null
+    "origin": "https://kofra.example.workers.dev",  // normalized origin, or null
     "source": { "kind": "env", "detail": "KOFRA_API", "viaLegacyName": false }  // or null
   },
   "key": {
@@ -472,7 +472,7 @@ is echoed in JSON so piped output stays interpretable.
 ## Human output (illustrative)
 
 ```
-Instance: https://dropway.example.workers.dev (from KOFRA_API)
+Instance: https://kofra.example.workers.dev (from KOFRA_API)
 Key: saved api_key
 Config: ~/.config/dropway/credentials.json ok; ./dropway.json ok (1 mapping)
 ```

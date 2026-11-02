@@ -1,7 +1,7 @@
 {
   // The CLI runs on Node (users' machines and CI), so it gets Node types instead of
   // Workers types. erasableSyntaxOnly keeps src/ runnable by Node's built-in type
-  // stripping, which bin/dropway.mjs uses in a working copy that has no dist/ build.
+  // stripping, which bin/kofra.mjs uses in a working copy that has no dist/ build.
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",

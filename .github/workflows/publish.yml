@@ -1,8 +1,10 @@
-# Publish @dropway/core, @dropway/server, @dropway/client and kofra to npm.
+# Publish @kofra/core, @kofra/server, @kofra/client and kofra to npm.
 #
-# Trusted publishing (OIDC): no tokens stored. Operator to-do, once per package
-# name on npmjs.com: Settings > Trusted publisher > GitHub Actions, with
-# organization TogetherWeOwn, repository kofra, workflow publish.yml.
+# Trusted publishing (OIDC): no tokens stored. Pre-publish owner actions (only
+# when the owner says Kofra goes public): create the `kofra` npm organization
+# (for the @kofra scope) and the unscoped `kofra` package ownership, then once
+# per package name on npmjs.com: Settings > Trusted publisher > GitHub Actions,
+# with organization TogetherWeOwn, repository kofra, workflow publish.yml.
 # The four packages version in lockstep; push tag vX.Y.Z to release.
 name: publish
 on:
@@ -34,7 +36,7 @@ jobs:
             test "v$v" = "$RELEASE_TAG" || { echo "tag $RELEASE_TAG does not match $p ($v)"; exit 1; }
           done
       - run: npm run build -w kofra
-      - run: npm publish --provenance --access public -w @dropway/core
-      - run: npm publish --provenance --access public -w @dropway/server
-      - run: npm publish --provenance --access public -w @dropway/client
+      - run: npm publish --provenance --access public -w @kofra/core
+      - run: npm publish --provenance --access public -w @kofra/server
+      - run: npm publish --provenance --access public -w @kofra/client
       - run: npm publish --provenance -w kofra

@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { sha256Hex } from "@dropway/core";
-import { VIEWERS } from "@dropway/server";
+import { sha256Hex } from "@kofra/core";
+import { VIEWERS } from "@kofra/server";
 import { freshInstance, form, type Instance } from "./helpers";
 import { imageBackgroundFiles } from "./fixtures/image-backgrounds";
 

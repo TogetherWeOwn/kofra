@@ -446,7 +446,7 @@ smoke command. `kofra whoami --api "$DISPOSABLE_API" --json` exposes its safe
 restriction metadata for setup diagnosis:
 
 ```sh
-node packages/cli/bin/dropway.mjs watch ./watch-fixture \
+node packages/cli/bin/kofra.mjs watch ./watch-fixture \
   --api "$DISPOSABLE_API" --site "$DISPOSABLE_SITE" --base "$DISPOSABLE_BASE" \
   --mode publish --initial publish --max-duration 10 --max-publishes 1 --json
 ```

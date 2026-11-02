@@ -1,5 +1,5 @@
 import { strToU8 } from "fflate";
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import { ApiError, conflict, forbidden, tooLarge } from "../errors";
 import type { Principal } from "../principal";
 import { blobScope, readBlob } from "./blobs";
@@ -125,7 +125,7 @@ function endRecord(count: number, dirSize: number, dirOffset: number): Uint8Arra
   return out;
 }
 
-async function readExportBytes(dc: DropwayContext, file: ExportFile): Promise<Uint8Array> {
+async function readExportBytes(dc: KofraContext, file: ExportFile): Promise<Uint8Array> {
   const blob = await readBlob(dc, file.sha256, file.size);
   if (!blob) {
     throw new ApiError(502, "blob_missing", `The file "${file.path}" is listed but its contents could not be read.`, "Retry shortly.", {
@@ -147,7 +147,7 @@ interface ZipEntry extends ExportFile {
  * at most one blob and emits that entry, so the first ZIP bytes flow before
  * later blobs are read and each blob is read exactly once.
  */
-function zipStream(dc: DropwayContext, entries: ZipEntry[]): ReadableStream<Uint8Array> {
+function zipStream(dc: KofraContext, entries: ZipEntry[]): ReadableStream<Uint8Array> {
   const central: CentralEntry[] = [];
   let index = 0;
   let offset = 0;
@@ -188,7 +188,7 @@ const fileByFileHint = (slug: string, versionId: string) =>
  * D1-only missing check finalize uses (no blob reads, so streaming is
  * unaffected). Without it the export would start with 200 and die mid-stream.
  */
-async function refusePendingWithMissingBytes(dc: DropwayContext, site: SiteRow, version: VersionRow): Promise<void> {
+async function refusePendingWithMissingBytes(dc: KofraContext, site: SiteRow, version: VersionRow): Promise<void> {
   const scope = blobScope({ siteId: site.id, tenantId: site.tenant_id });
   const { results: missingRows } = await dc.env.DB.prepare(
     `SELECT DISTINCT vf.sha256 FROM version_files vf
@@ -214,7 +214,7 @@ async function refusePendingWithMissingBytes(dc: DropwayContext, site: SiteRow, 
  * refused (versions only, never transfers). Over-cap versions answer 413
  * naming their counts; the caps are the effective policy limits.
  */
-export async function exportVersionZip(dc: DropwayContext, p: Principal, siteRef: unknown, versionRef: unknown): Promise<VersionExport> {
+export async function exportVersionZip(dc: KofraContext, p: Principal, siteRef: unknown, versionRef: unknown): Promise<VersionExport> {
   const site = await getSiteByRef(dc, p, siteRef, "sites:read");
   if (site.mode === "transfer") {
     throw forbidden("Transfer files are only available as sites-host downloads.", "Use the transfer page's download links.", "transfer_download_required");

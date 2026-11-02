@@ -1,4 +1,4 @@
-import { siteUrl, type DropwayContext } from "../context";
+import { siteUrl, type KofraContext } from "../context";
 import type { Principal } from "../principal";
 import { badRequest } from "../errors";
 import type { SiteRow } from "./sites";
@@ -12,7 +12,7 @@ interface VersionActionOptions {
 }
 
 async function replayVersionAction<T>(
-  dc: DropwayContext, p: Principal, action: "restore" | "delete", siteRef: unknown,
+  dc: KofraContext, p: Principal, action: "restore" | "delete", siteRef: unknown,
   versionRef: unknown, confirm: unknown, opts: VersionActionOptions, run: (site: SiteRow) => Promise<T>,
 ) {
   // Re-authorize even a completed key, but do not require a deleted target to exist.
@@ -31,7 +31,7 @@ async function replayVersionAction<T>(
 }
 
 /** Replay the first restore receipt, never a fresh interpretation of a version reference. */
-export async function restoreVersionByRef(dc: DropwayContext, p: Principal, siteRef: unknown, versionRef: unknown, opts: VersionActionOptions) {
+export async function restoreVersionByRef(dc: KofraContext, p: Principal, siteRef: unknown, versionRef: unknown, opts: VersionActionOptions) {
   return replayVersionAction(dc, p, "restore", siteRef, versionRef, undefined, opts, async site => {
     const symbolicLive = isLiveVersionRef(versionRef);
     const versionId = symbolicLive ? "live" : (await resolveVersionRef(dc, site, versionRef)).id;
@@ -41,7 +41,7 @@ export async function restoreVersionByRef(dc: DropwayContext, p: Principal, site
 }
 
 /** Confirm and authorize before replay; resolve the target only for the claim's owner. */
-export async function deleteVersionByRef(dc: DropwayContext, p: Principal, siteRef: unknown, versionRef: unknown, confirm: unknown, opts: VersionActionOptions) {
+export async function deleteVersionByRef(dc: KofraContext, p: Principal, siteRef: unknown, versionRef: unknown, confirm: unknown, opts: VersionActionOptions) {
   return replayVersionAction(dc, p, "delete", siteRef, versionRef, confirm, opts, async site => {
     const version = await resolveVersionRef(dc, site, versionRef);
     return deleteVersion(dc, p, site, version.id);

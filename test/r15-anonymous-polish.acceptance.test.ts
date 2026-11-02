@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { clearLiveMemoryCache, type ConfigOverrides } from "@dropway/core";
-import { createDropway, type ServerBindings } from "@dropway/server";
+import { clearLiveMemoryCache, type ConfigOverrides } from "@kofra/core";
+import { createKofra, type ServerBindings } from "@kofra/server";
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { form, freshInstance, jsonBody, ORIGIN, type Instance } from "./helpers";
 
@@ -147,7 +147,7 @@ describe("R-15 generated and existing slugs", () => {
     const legacy = await publish(dw, HTML, false, "bright-otter-x7k2");
     expect(legacy.slug).toBe("bright-otter-x7k2");
     clearLiveMemoryCache();
-    const nextWorker = createDropway({ config });
+    const nextWorker = createKofra({ config });
     const ctx = createExecutionContext();
     const response = await nextWorker.fetch(new Request(legacy.url, { headers: NAV }), env as unknown as ServerBindings, ctx);
     await waitOnExecutionContext(ctx);
