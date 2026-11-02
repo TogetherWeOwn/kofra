@@ -21,6 +21,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p packages/cli/tsconfig.json && tsc --noEmit -p packages/server/test/tsconfig.json && tsc --noEmit -p packages/client/tsconfig.json",
     "client:generate": "node scripts/generate-client.mjs",
     "guard": "node scripts/guard-open-core.mjs --self-test && node scripts/guard-open-core.mjs",
+    "ensure:encrypted-deps": "node scripts/ensure-encrypted-test-deps.mjs",
+    "precheck": "npm run ensure:encrypted-deps",
     "check": "npm run guard && npm run errors:check && npm run typecheck && npm test",
     "errors:sync": "node scripts/errors.mjs",
     "errors:check": "node scripts/errors.mjs --check",

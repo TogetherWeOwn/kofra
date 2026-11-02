@@ -200,9 +200,8 @@ Node.js 22 or newer.
 
 ```sh
 npm install
-npm ci --prefix packages/cli/test/encrypted       # Playwright for the browser tests (typecheck needs it too)
-packages/cli/test/encrypted/node_modules/.bin/playwright install chromium
 npm run check      # open-core guard, error catalog, typecheck, all tests
+                   # (first run installs the Playwright browser-test deps + Chromium itself)
 npm test           # Workers-runtime tests (D1, R2, KV emulated) + CLI tests against a local Worker
 npm run dev        # wrangler dev; put ADMIN_BOOTSTRAP_KEY in .dev.vars
 ```
