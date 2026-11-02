@@ -99,11 +99,15 @@ export async function visit(fixture: Fixture, path = "index.html", width = 1100,
   try {
     // Navigate on shell parse, not network quiet: background subresource timing
     // flakes a short `networkidle` goto under CI load. Readiness is the
-    // asserted View-mode tablist plus its preview iframe, awaited below.
+    // asserted View-mode tablist plus its preview iframe, awaited below, and
+    // the end of viewer init: modes resolve from the manifest after first
+    // render (dropping Source for binary, recording history state), and only
+    // then is a tabs/history snapshot stable.
     const response = await page.goto(`${fixture.origin}${viewerPath(path)}${mode ? `?mode=${mode}` : ""}`, { waitUntil: "domcontentloaded" });
     expect(response?.status(), "real app-origin viewer shell").toBe(200);
     await page.getByRole("tablist", { name: "View mode", exact: true }).getByRole("tab").first().waitFor();
     await page.locator("iframe").waitFor();
+    await page.waitForFunction(() => (globalThis as any).history.state !== null);
     return { context, page, calls, errors, shellCsp: response!.headers()["content-security-policy"] ?? "" };
   } catch (error) {
     const diagnostic = await page.locator("body").innerText();
