@@ -1,0 +1,38 @@
+{
+  "about": "Which design/css files make each bundle (in order). app: one cached stylesheet for every app-origin page (/__dropway/ui/kofra-<hash>.css). site: inlined in every site-origin page, so it stays under 24 KiB (24,576 bytes) minified (about 5 KB brotli). raw: files shipped without the k- class prefix (their class names come from third-party output).",
+  "app": [
+    "00-base.css",
+    "10-top.css",
+    "11-foot.css",
+    "12-mode-switch.css",
+    "13-app-shell.css",
+    "20-controls.css",
+    "21-app-controls.css",
+    "30-content.css",
+    "32-app-content.css",
+    "31-files.css",
+    "35-files-shared.css",
+    "40-motifs.css",
+    "41-plate.css",
+    "50-hero.css",
+    "60-viewer-app.css",
+    "80-syntax.css",
+    "90-a11y.css",
+    "91-a11y-app.css"
+  ],
+  "site": [
+    "00-base.css",
+    "11-foot.css",
+    "20-controls.css",
+    "30-content.css",
+    "35-files-shared.css",
+    "40-motifs.css",
+    "70-site.css",
+    "80-syntax.css",
+    "90-a11y.css"
+  ],
+  "raw": [
+    "80-syntax.css"
+  ],
+  "siteBudgetBytes": 24576
+}

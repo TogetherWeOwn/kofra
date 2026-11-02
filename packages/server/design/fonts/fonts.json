@@ -1,0 +1,169 @@
+{
+  "about": "Self-hosted fonts: unmodified woff2 files from @fontsource-variable/*@5.3.0, SIL OFL 1.1 (no Reserved Font Name; licences in OFL-*.txt). Fallback metric overrides were computed once with @capsizecss/unpack 4.0.1 and @capsizecss/metrics (xWidthAvg ratio for size-adjust) and are committed here, so the build needs no font tooling.",
+  "source": "@fontsource-variable/public-sans@5.3.0, @fontsource-variable/newsreader@5.3.0, @fontsource-variable/martian-mono@5.3.0",
+  "files": [
+    {
+      "file": "public-sans-latin-wght-normal.woff2",
+      "family": "Public Sans",
+      "style": "normal",
+      "weight": "100 900",
+      "subset": "latin",
+      "unicodeRange": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+      "preload": true
+    },
+    {
+      "file": "public-sans-latin-ext-wght-normal.woff2",
+      "family": "Public Sans",
+      "style": "normal",
+      "weight": "100 900",
+      "subset": "latin-ext",
+      "unicodeRange": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+      "preload": false
+    },
+    {
+      "file": "public-sans-latin-wght-italic.woff2",
+      "family": "Public Sans",
+      "style": "italic",
+      "weight": "100 900",
+      "subset": "latin",
+      "unicodeRange": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+      "preload": false
+    },
+    {
+      "file": "newsreader-latin-opsz-normal.woff2",
+      "family": "Newsreader",
+      "style": "normal",
+      "weight": "200 800",
+      "subset": "latin",
+      "unicodeRange": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+      "preload": true
+    },
+    {
+      "file": "newsreader-latin-opsz-italic.woff2",
+      "family": "Newsreader",
+      "style": "italic",
+      "weight": "200 800",
+      "subset": "latin",
+      "unicodeRange": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+      "preload": false
+    },
+    {
+      "file": "newsreader-latin-ext-opsz-normal.woff2",
+      "family": "Newsreader",
+      "style": "normal",
+      "weight": "200 800",
+      "subset": "latin-ext",
+      "unicodeRange": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+      "preload": false
+    },
+    {
+      "file": "martian-mono-latin-wght-normal.woff2",
+      "family": "Martian Mono",
+      "style": "normal",
+      "weight": "100 800",
+      "subset": "latin",
+      "unicodeRange": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+      "preload": false
+    },
+    {
+      "file": "martian-mono-latin-ext-wght-normal.woff2",
+      "family": "Martian Mono",
+      "style": "normal",
+      "weight": "100 800",
+      "subset": "latin-ext",
+      "unicodeRange": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+      "preload": false
+    }
+  ],
+  "fallbacks": {
+    "Public Sans": [
+      {
+        "local": [
+          "Arial",
+          "Arimo",
+          "Liberation Sans"
+        ],
+        "sizeAdjust": "102.18%",
+        "ascentOverride": "92.98%",
+        "descentOverride": "22.02%",
+        "lineGapOverride": "0%"
+      },
+      {
+        "local": [
+          "DejaVu Sans"
+        ],
+        "sizeAdjust": "90.89%",
+        "ascentOverride": "104.52%",
+        "descentOverride": "24.76%",
+        "lineGapOverride": "0%"
+      },
+      {
+        "local": [
+          "DejaVu Serif"
+        ],
+        "sizeAdjust": "89.23%",
+        "ascentOverride": "106.47%",
+        "descentOverride": "25.22%",
+        "lineGapOverride": "0%"
+      }
+    ],
+    "Newsreader": [
+      {
+        "local": [
+          "Georgia",
+          "Gelasio"
+        ],
+        "sizeAdjust": "91.75%",
+        "ascentOverride": "80.11%",
+        "descentOverride": "28.88%",
+        "lineGapOverride": "0%"
+      },
+      {
+        "local": [
+          "DejaVu Serif"
+        ],
+        "sizeAdjust": "88.44%",
+        "ascentOverride": "83.11%",
+        "descentOverride": "29.96%",
+        "lineGapOverride": "0%"
+      }
+    ],
+    "Martian Mono": [
+      {
+        "local": [
+          "Courier New",
+          "Cousine",
+          "Liberation Mono"
+        ],
+        "sizeAdjust": "116.65%",
+        "ascentOverride": "85.73%",
+        "descentOverride": "17.15%",
+        "lineGapOverride": "0%"
+      },
+      {
+        "local": [
+          "DejaVu Sans Mono"
+        ],
+        "sizeAdjust": "116.27%",
+        "ascentOverride": "86.01%",
+        "descentOverride": "17.21%",
+        "lineGapOverride": "0%"
+      }
+    ]
+  },
+  "licences": [
+    {
+      "family": "Public Sans",
+      "file": "OFL-public-sans.txt"
+    },
+    {
+      "family": "Newsreader",
+      "file": "OFL-newsreader.txt"
+    },
+    {
+      "family": "Martian Mono",
+      "file": "OFL-martian-mono.txt"
+    }
+  ],
+  "fallbacksAbout": "Metric-matched fallback faces, in order: each is the family name '<Family> Fallback' (then ' B', ' C') over local() fonts with the same metrics (Arimo and Liberation Sans match Arial, Gelasio matches Georgia, Cousine and Liberation Mono match Courier New). The B and C faces cover systems with only DejaVu (Linux containers, headless browsers): size-adjust is the ratio of the web font's to the local font's average advance on English text, measured in Chromium; ascent and descent are the web font's (Public Sans 0.950/0.225 em, Newsreader 0.735/0.265 em, Martian Mono 1.000/0.200 em) divided by size-adjust. Public Sans C (DejaVu Serif) is for systems with no sans-serif font at all, where the browser would fall back to a serif anyway."
+}
