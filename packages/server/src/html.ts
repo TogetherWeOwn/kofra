@@ -4,7 +4,7 @@ export function escapeHtml(s: string): string {
 
 /** Shared CSS for Kofra-generated pages (system pages, viewers, landing). Viewers can append their own. */
 export const BASE_CSS = `
-:root{color-scheme:light dark;--bg:#fbfaf8;--fg:#1d1b19;--muted:#6b665f;--line:#e6e1da;--card:#fff;--accent:#d9480f;--code:#f3f0eb}
+:root{color-scheme:light dark;--bg:#fbfaf8;--fg:#1d1b19;--muted:#6b665f;--line:#e6e1da;--card:#fff;--accent:#c7430c;--code:#f3f0eb}
 @media (prefers-color-scheme:dark){:root{--bg:#141312;--fg:#ece8e2;--muted:#a19a90;--line:#2c2a27;--card:#1b1a18;--accent:#ff8a4c;--code:#22201d}}
 *{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
