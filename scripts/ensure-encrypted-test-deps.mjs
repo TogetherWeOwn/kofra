@@ -129,17 +129,22 @@ const wanted = fingerprint();
 const stamp = existsSync(STAMP) ? readFileSync(STAMP, "utf8") : "";
 function runNpm(args) {
   // Windows ships npm as a .cmd batch file, which execFileSync cannot launch
-  // without a shell, so route it through cmd.exe there. Other platforms run
-  // npm directly. Either way argv stays separated and stdio is inherited.
+  // without a shell, so route it through cmd.exe there. Run from ENCRYPTED_DIR
+  // instead of passing --prefix: the absolute clone path would cross the
+  // cmd.exe command line, where an & in the path (e.g. C:\R&D\kofra, no spaces
+  // so libuv passes it unquoted) splits the command. Other platforms run npm
+  // directly. Either way argv stays separated and stdio is inherited, and the
+  // only arguments crossing cmd.exe are static flags.
+  const options = { stdio: "inherit", cwd: ENCRYPTED_DIR };
   if (process.platform === "win32") {
-    execFileSync("cmd.exe", ["/d", "/s", "/c", "npm", ...args], { stdio: "inherit" });
+    execFileSync("cmd.exe", ["/d", "/s", "/c", "npm", ...args], options);
   } else {
-    execFileSync("npm", args, { stdio: "inherit" });
+    execFileSync("npm", args, options);
   }
 }
 if (stamp !== wanted || !installedPackagesComplete()) {
   console.log("encrypted test deps: installing packages/cli/test/encrypted (not covered by root npm ci) ...");
-  runNpm(["ci", "--prefix", ENCRYPTED_DIR, "--no-audit", "--no-fund"]);
+  runNpm(["ci", "--no-audit", "--no-fund"]);
   writeFileSync(STAMP, wanted);
 } else {
   console.log("encrypted test deps: up to date, skipping install.");
