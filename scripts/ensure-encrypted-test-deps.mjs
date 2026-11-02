@@ -102,9 +102,11 @@ function dirIsPopulated(dir) {
 
 const wanted = fingerprint();
 const stamp = existsSync(STAMP) ? readFileSync(STAMP, "utf8") : "";
+// Windows ships npm as npm.cmd, which execFileSync cannot launch directly.
+const NPM = process.platform === "win32" ? "npm.cmd" : "npm";
 if (stamp !== wanted || !installedPackagesComplete()) {
   console.log("encrypted test deps: installing packages/cli/test/encrypted (not covered by root npm ci) ...");
-  execFileSync("npm", ["ci", "--prefix", ENCRYPTED_DIR, "--no-audit", "--no-fund"], { stdio: "inherit" });
+  execFileSync(NPM, ["ci", "--prefix", ENCRYPTED_DIR, "--no-audit", "--no-fund"], { stdio: "inherit" });
   writeFileSync(STAMP, wanted);
 } else {
   console.log("encrypted test deps: up to date, skipping install.");
