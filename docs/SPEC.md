@@ -94,8 +94,8 @@ What Kofra is not:
 |---|---|---|---|
 | PUB-01 | One-call publish `POST /api/v1/publish`: multipart (`-F path=@file`), a `.zip` body, one raw file, or JSON with inline files. Creates a site or, with `?slug=`/`site`, replaces all files of an existing one | P0 | Done |
 | PUB-02 | Manifest publish: send `{path, size, sha256, contentType?}` for every file; the server answers with only the hashes it still needs; upload those; finalize atomically | P0 | Done (`/versions`; `/deploys` kept as an alias) |
-| PUB-03 | File sources in JSON and MCP, one per file: `content` (utf8), `content`+`encoding:"base64"` (small binaries), `url` (server fetches it, SSRF-guarded), `sha256`+`size` (already stored), `copyFrom` (another site, version or path) | P0 | Implemented (R-04); deployment verification pending |
-| PUB-04 | Upload links: the response lists `PUT <app>/api/v1/blobs/<sha256>` targets with a ready `curl` line and a short-lived upload token scoped to the pending version. One egress host; no R2 credentials needed | P0 | Implemented for JSON/MCP file sources (R-04); deployment verification pending |
+| PUB-03 | File sources in JSON and MCP, one per file: `content` (utf8), `content`+`encoding:"base64"` (small binaries), `url` (server fetches it, SSRF-guarded), `sha256`+`size` (already stored), `copyFrom` (another site, version or path) | P0 | Implemented (R-04); verified on a deployed instance 2026-11-02 (`docs/RELEASE_CHECKLIST.md` B10) |
+| PUB-04 | Upload links: the response lists `PUT <app>/api/v1/blobs/<sha256>` targets with a ready `curl` line and a short-lived upload token scoped to the pending version. One egress host; no R2 credentials needed | P0 | Implemented for JSON/MCP file sources (R-04); verified on a deployed instance 2026-11-02 (`docs/RELEASE_CHECKLIST.md` B1) |
 | PUB-05 | Byte-identical republish returns `status: "unchanged"` and mints no version; settings in the same call still apply | P0 | Done |
 | PUB-06 | Stale-write protection: `baseVersionId` returns `409 version_conflict` naming the live version, who published it and when | P0 | Done |
 | PUB-07 | Partial update `PATCH /api/v1/sites/{site}/files` (`update_site_files`): write, delete and move paths relative to a base version; everything else carries over by hash | P0 | Done |
@@ -104,8 +104,8 @@ What Kofra is not:
 | PUB-10 | Version message (like a commit message, up to 200 chars) | P0 | Done |
 | PUB-11 | Pending versions expire after 1 hour; finalizing with missing bytes returns `409 missing_blobs` with fresh upload links | P0 | Done |
 | PUB-12 | Publish warnings: root-absolute paths in path mode, SPA without a base path, browser storage on a sandboxed origin, `.wasm` without cross-origin isolation, possible secrets, invalid config files | P0 | Done (R-12) |
-| PUB-13 | Files larger than one request (above about 95 MB): multipart upload through the Worker, resumable | P1 | Implemented (R-35); workers.dev boundary measurement pending |
-| PUB-14 | `archiveUrl` (publish a zip from a URL) and chat-client attachments (`{download_url, file_name}`) as sources | P1 | Implemented (R-35); deployment verification pending |
+| PUB-13 | Files larger than one request (above about 95 MB): multipart upload through the Worker, resumable | P1 | Implemented (R-35); verified on workers.dev 2026-11-02: 98 MiB file round-trips byte-identical (`docs/RELEASE_CHECKLIST.md` B2) |
+| PUB-14 | `archiveUrl` (publish a zip from a URL) and chat-client attachments (`{download_url, file_name}`) as sources | P1 | Implemented (R-35); verified on a deployed instance 2026-11-02 (`docs/RELEASE_CHECKLIST.md` B9) |
 | PUB-15 | Duplicate a site server-side (immediately live) | P1 | Done |
 | PUB-16 | TTL for keyed sites (`ttlSeconds`, `null` clears) | P1 | Done |
 | PUB-17 | Dry run: `dryRun: true` returns added, changed, removed and skipped files and the resulting size without creating a version | P1 | R-20 |
@@ -174,7 +174,7 @@ the local filter.
 | ID-02 | Members with roles `owner`, `admin`, `member` | P1 | Done (REST); tools R-25; dashboard R-22 |
 | ID-03 | Scoped API keys: named, scopes, optional single-site restriction, optional path prefix, optional expiry, last-used time; shown once, stored as SHA-256; 50 per member | P0 | Done (new scopes R-17; path prefix R-32) |
 | ID-04 | Claim tokens (`dwc_`) for anonymous sites | P0 | Done |
-| ID-05 | Upload tokens (`dwu_`) scoped to one pending version | P0 | Implemented (R-04), HMAC and live manifest/expiry checks; deployment verification pending |
+| ID-05 | Upload tokens (`dwu_`) scoped to one pending version | P0 | Implemented (R-04), HMAC and live manifest/expiry checks; verified on a deployed instance 2026-11-02 (`docs/RELEASE_CHECKLIST.md` B1) |
 | ID-06 | Dashboard sign-in: one-time login links minted by the owner, an agent or the CLI; email codes when an email binding exists; optional Cloudflare Access identity; revocable sessions | P1 | R-21 |
 | ID-07 | OAuth 2.1 for MCP and the CLI (Client ID Metadata Documents, Dynamic Client Registration for older clients, PKCE loopback, device code for headless machines), step-up scopes | P1 | R-24 |
 | ID-08 | Audit log of every write (who, what, when, from which client) | P2 | R-38 |
