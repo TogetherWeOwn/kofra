@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { DropwayClient, DropwayError, type FetchLike } from "@dropway/client";
-import { clearLiveMemoryCache, type PublishEvent, type UsageEvent } from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+import { KofraClient, KofraError, type FetchLike } from "@kofra/client";
+import { clearLiveMemoryCache, type PublishEvent, type UsageEvent } from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { freshInstance, ORIGIN, type Instance } from "./helpers";
 import { effectSpies, worldState } from "./interleave-harness";
 import { ACTIONS, claims, fixture, observe, snapshot } from "./version-mutation-replay.helpers";
@@ -25,11 +25,11 @@ function sdkFor(dw: Instance, token = dw.ownerKey) {
   const fetch: FetchLike = async request => {
     requests.push({ method: request.method, path: new URL(request.url).pathname, key: request.headers.get("Idempotency-Key") });
     const ctx = createExecutionContext();
-    const response = await dw.dropway.fetch(request, env as unknown as ServerBindings, ctx);
+    const response = await dw.kofra.fetch(request, env as unknown as ServerBindings, ctx);
     await waitOnExecutionContext(ctx);
     return response;
   };
-  return { requests, client: new DropwayClient({ api: ORIGIN, token, fetch, attempts: 3, backoffMs: 1 }) };
+  return { requests, client: new KofraClient({ api: ORIGIN, token, fetch, attempts: 3, backoffMs: 1 }) };
 }
 
 async function publishingFixture() {
@@ -63,7 +63,7 @@ describe("SDK generic publish with caller-retained replay headers", () => {
     for (let attempt = 0; attempt < 2; attempt++) {
       const error: unknown = await h.client.post("/publish", BODY, { headers, idempotencyKey: "" })
         .then(() => null, error => error);
-      expect.soft(error, "an invalid supplied option must reject, not execute or replay the retained header").toBeInstanceOf(DropwayError);
+      expect.soft(error, "an invalid supplied option must reject, not execute or replay the retained header").toBeInstanceOf(KofraError);
       expect.soft(error).toMatchObject({ code: "invalid_idempotency_key", hint: expect.stringMatching(/\S/) });
     }
     expect.soft(h.requests.length, "reject before fetch, header replacement, or automatic retry").toBe(0);
@@ -155,7 +155,7 @@ for (const action of ACTIONS) it(`SDK ${action} cannot fall back to a valid reta
     ? client.restoreVersion({ slug: h.site.id, id: h.target }, options)
     : client.deleteVersion({ slug: h.site.id, id: h.target, confirm: h.site.slug }, options);
   const error: unknown = await call.then(() => null, error => error);
-  expect.soft(error).toBeInstanceOf(DropwayError);
+  expect.soft(error).toBeInstanceOf(KofraError);
   expect.soft(error).toMatchObject({ code: "invalid_idempotency_key", hint: expect.stringMatching(/\S/) });
   expect.soft(requests.length, "local rejection is valid; a server refusal must never retry").toBeLessThanOrEqual(1);
   if (requests.length > 0) {

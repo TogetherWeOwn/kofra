@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
-import { idempotencyScope, type MemberPrincipal } from "@dropway/core";
+import { idempotencyScope, type MemberPrincipal } from "@kofra/core";
 import { freshInstance, jsonBody, type Instance } from "./helpers";
 import { connectLegacyMcp, connectMcp } from "./mcp-helpers";
 

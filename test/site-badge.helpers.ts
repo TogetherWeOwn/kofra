@@ -10,7 +10,7 @@
  */
 import { env } from "cloudflare:test";
 import { expect } from "vitest";
-import { clearLiveMemoryCache } from "@dropway/core";
+import { clearLiveMemoryCache } from "@kofra/core";
 import { form, type Instance } from "./helpers";
 
 export interface PublishedSite {

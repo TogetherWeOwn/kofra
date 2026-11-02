@@ -12,7 +12,7 @@ Prefer not to self-host? A hosted version is coming.
 
 > Status: early MVP. The REST API, the remote MCP server, the CLI, the dashboard and the file viewers work today.
 
-> Kofra was called Dropway. The old names keep working: the `dropway` command, `DROPWAY_*` variables and `X-Dropway-*` headers (sent and accepted alongside `X-Kofra-*`). <!-- rebrand:keep -->
+> Kofra was called Dropway. Instances and clients from before the rename keep working: `DROPWAY_*` variables and `X-Dropway-*` headers are still accepted alongside the `KOFRA_*` / `X-Kofra-*` names. <!-- rebrand:keep -->
 
 ## What you get
 
@@ -56,7 +56,7 @@ npx kofra versions docs                  # every version; restore with: npx kofr
 Only changed files are uploaded, the command exits non-zero with a machine-readable error when
 something is wrong, and `--wait` returns only once the URL serves the new version. Full reference:
 [packages/cli/README.md](packages/cli/README.md). (The npm package is being prepared; until it is
-published, run `node packages/cli/bin/dropway.mjs` from a clone after `npm install`.)
+published, run `node packages/cli/bin/kofra.mjs` from a clone after `npm install`.)
 
 ### GitHub pull-request previews
 

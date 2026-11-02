@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { zipSync, strToU8 } from "fflate";
-import { ApiError, unzipFiles } from "@dropway/core";
+import { ApiError, unzipFiles } from "@kofra/core";
 import { freshInstance } from "./helpers";
 
 // One-shot publish parsing: the zip extractor's budgets and length checks for

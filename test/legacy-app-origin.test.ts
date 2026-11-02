@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { resolveConfig } from "@dropway/core";
-import { mcpInstructions } from "@dropway/server";
+import { resolveConfig } from "@kofra/core";
+import { mcpInstructions } from "@kofra/server";
 import { form, freshInstance, ORIGIN, type Instance } from "./helpers";
 
 // The instance moved from ORIGIN (https://dropway.test, the legacy host) to NEW.
@@ -221,7 +221,7 @@ describe("legacy app origin: agents keep working, pages move", () => {
 
   it("does nothing without APP_ORIGIN", async () => {
     const plain = await freshInstance({ legacyAppOrigins: [ORIGIN] });
-    expect(plain.dropway.context({} as never, { waitUntil() {} }).config.legacyAppOrigins).toEqual([]);
+    expect(plain.kofra.context({} as never, { waitUntil() {} }).config.legacyAppOrigins).toEqual([]);
     const res = await plain.call("/", { headers: BROWSER_NAV });
     expect(res.status).toBe(200);
   });

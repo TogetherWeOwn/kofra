@@ -1,5 +1,5 @@
 import { HTTP_SCOPES } from "./http-schemas";
-import { ALL_SCOPES, createApiKey, listApiKeys, resolveSiteSlug, revokeApiKey } from "@dropway/core";
+import { ALL_SCOPES, createApiKey, listApiKeys, resolveSiteSlug, revokeApiKey } from "@kofra/core";
 import { obj } from "../mcp/schemas";
 import { readJson } from "../routes/api";
 import { defineOperation } from "../operations";

@@ -1,8 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
-  DropwayClient,
-  DropwayError,
+  KofraClient,
+  KofraError,
   movedTo,
   normaliseApi,
   VERSION,
@@ -22,13 +22,13 @@ function stubFetch(handler: (req: Request) => Response | Promise<Response>): Fet
   return fetch;
 }
 
-async function caught(promise: Promise<unknown>): Promise<DropwayError> {
+async function caught(promise: Promise<unknown>): Promise<KofraError> {
   try {
     await promise;
     expect.unreachable("expected the call to throw");
   } catch (e) {
-    expect(e).toBeInstanceOf(DropwayError);
-    return e as DropwayError;
+    expect(e).toBeInstanceOf(KofraError);
+    return e as KofraError;
   }
 }
 
@@ -48,13 +48,13 @@ describe("normaliseApi", () => {
   });
 
   it("refuses empty and non-http(s) input", () => {
-    expect(() => normaliseApi("  ")).toThrowError(DropwayError);
-    expect(() => normaliseApi("ftp://kofra.test")).toThrowError(DropwayError);
+    expect(() => normaliseApi("  ")).toThrowError(KofraError);
+    expect(() => normaliseApi("ftp://kofra.test")).toThrowError(KofraError);
     try {
       normaliseApi("  ");
       expect.unreachable();
     } catch (e) {
-      expect((e as DropwayError).code).toBe("invalid_api_url");
+      expect((e as KofraError).code).toBe("invalid_api_url");
     }
   });
 });
@@ -68,9 +68,9 @@ describe("movedTo", () => {
   });
 });
 
-describe("DropwayError", () => {
+describe("KofraError", () => {
   it("carries code, hint, details, status and request id", () => {
-    const e = new DropwayError({ code: "version_conflict", message: "moved", hint: "refetch", status: 409, requestId: "r1", details: { a: 1 }, retryable: false });
+    const e = new KofraError({ code: "version_conflict", message: "moved", hint: "refetch", status: 409, requestId: "r1", details: { a: 1 }, retryable: false });
     expect(e.toJSON()).toEqual({
       code: "version_conflict",
       message: "moved",
@@ -83,7 +83,7 @@ describe("DropwayError", () => {
   });
 
   it("omits recovery metadata it was not constructed with", () => {
-    const e = new DropwayError({ code: "site_not_found", message: "gone", status: 404, retryable: false });
+    const e = new KofraError({ code: "site_not_found", message: "gone", status: 404, retryable: false });
     expect(e.retryAfterSeconds).toBeUndefined();
     expect(e.docs).toBeUndefined();
     expect(e.next).toBeUndefined();
@@ -92,14 +92,14 @@ describe("DropwayError", () => {
 
   it("keeps explicit recovery metadata in toJSON, including null delay, zero and an empty next array", () => {
     const next = [{ tool: "get_version", args: { site: "s" }, why: "inspect" }];
-    const full = new DropwayError({ code: "c", message: "m", status: 409, retryable: false, retryAfterSeconds: 0, docs: "/docs/errors#c", next });
+    const full = new KofraError({ code: "c", message: "m", status: 409, retryable: false, retryAfterSeconds: 0, docs: "/docs/errors#c", next });
     expect(full.toJSON()).toEqual({ code: "c", message: "m", status: 409, retryable: false, retryAfterSeconds: 0, docs: "/docs/errors#c", next });
-    const empty = new DropwayError({ code: "c", message: "m", status: 404, retryable: false, retryAfterSeconds: null, docs: "/docs/errors", next: [] });
+    const empty = new KofraError({ code: "c", message: "m", status: 404, retryable: false, retryAfterSeconds: null, docs: "/docs/errors", next: [] });
     expect(JSON.parse(JSON.stringify(empty))).toEqual({ code: "c", message: "m", status: 404, retryable: false, retryAfterSeconds: null, docs: "/docs/errors", next: [] });
   });
 });
 
-describe("DropwayClient transport", () => {
+describe("KofraClient transport", () => {
   it("keeps VERSION in sync with package.json", async () => {
     const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
     expect(VERSION).toBe(pkg.version);
@@ -107,7 +107,7 @@ describe("DropwayClient transport", () => {
 
   it("builds API urls and sends attribution plus auth headers", async () => {
     const fetch = stubFetch(() => json({ ok: true }));
-    const client = new DropwayClient({ api: "https://kofra.test", token: "dw_x", fetch, client: "probe/1" });
+    const client = new KofraClient({ api: "https://kofra.test", token: "dw_x", fetch, client: "probe/1" });
     expect(client.url("/sites")).toBe("https://kofra.test/api/v1/sites");
     expect(client.url("https://other.test/x")).toBe("https://other.test/x");
     await client.get("/sites");
@@ -119,17 +119,17 @@ describe("DropwayClient transport", () => {
 
   it("defaults the client name to the package version", async () => {
     const fetch = stubFetch(() => json({}));
-    await new DropwayClient({ api: "https://kofra.test", token: null, fetch }).get("/sites");
-    expect(fetch.requests[0]!.headers.get("X-Kofra-Client")).toBe(`dropway-client/${VERSION}`);
+    await new KofraClient({ api: "https://kofra.test", token: null, fetch }).get("/sites");
+    expect(fetch.requests[0]!.headers.get("X-Kofra-Client")).toBe(`kofra-client/${VERSION}`);
   });
 
-  it("maps the error envelope to a DropwayError", async () => {
+  it("maps the error envelope to a KofraError", async () => {
     const fetch = stubFetch(() =>
       json({ error: { code: "slug_taken", message: "taken", hint: "pick another" }, requestId: "r1" }, 409),
     );
-    const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch });
+    const client = new KofraClient({ api: "https://kofra.test", token: null, fetch });
     const e = await caught(client.get("/sites"));
-    expect(e).toBeInstanceOf(DropwayError);
+    expect(e).toBeInstanceOf(KofraError);
     expect(e.code).toBe("slug_taken");
     expect(e.hint).toBe("pick another");
     expect(e.status).toBe(409);
@@ -139,7 +139,7 @@ describe("DropwayClient transport", () => {
 
   it("maps non-JSON failures to http_* errors", async () => {
     const fetch = stubFetch(() => new Response("<html>nope</html>", { status: 404 }));
-    const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch });
+    const client = new KofraClient({ api: "https://kofra.test", token: null, fetch });
     const e = await caught(client.get("/sites"));
     expect(e.code).toBe("http_404");
     expect(e.status).toBe(404);
@@ -153,13 +153,13 @@ describe("DropwayClient transport", () => {
         ? json({ error: { code: "rate_limited", message: "slow down" } }, 429, { "Retry-After": "0" })
         : json({ ok: true });
     });
-    const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch, backoffMs: 1 });
+    const client = new KofraClient({ api: "https://kofra.test", token: null, fetch, backoffMs: 1 });
     await expect(client.get("/sites")).resolves.toMatchObject({ status: 200 });
     expect(calls).toBe(3);
 
     const capped = stubFetch(() => json({ error: { code: "rate_limited", message: "slow" } }, 429, { "Retry-After": "9999" }));
     const e = await caught(
-      new DropwayClient({ api: "https://kofra.test", token: null, fetch: capped, backoffMs: 1 }).get("/sites"),
+      new KofraClient({ api: "https://kofra.test", token: null, fetch: capped, backoffMs: 1 }).get("/sites"),
     );
     expect(e.code).toBe("rate_limited");
     expect(capped.requests.length).toBe(1);
@@ -171,7 +171,7 @@ describe("DropwayClient transport", () => {
       const fetch = stubFetch(() =>
         json({ error: { code: "rate_limited", message: "slow down" } }, 429, { "Retry-After": "10" }),
       );
-      const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch, backoffMs: 1 });
+      const client = new KofraClient({ api: "https://kofra.test", token: null, fetch, backoffMs: 1 });
       const controller = new AbortController();
       const reason = new Error("first Ctrl-C");
       const pending = client.get("/sites", { signal: controller.signal });
@@ -191,7 +191,7 @@ describe("DropwayClient transport", () => {
       const fetch = stubFetch(() =>
         json({ error: { code: "rate_limited", message: "slow down" } }, 429, { "Retry-After": "10" }),
       );
-      const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch, backoffMs: 1 });
+      const client = new KofraClient({ api: "https://kofra.test", token: null, fetch, backoffMs: 1 });
       const controller = new AbortController();
       controller.abort();
       const reason = controller.signal.reason;
@@ -208,7 +208,7 @@ describe("DropwayClient transport", () => {
       const fetch = stubFetch(() =>
         json({ error: { code: "rate_limited", message: "slow down" } }, 429, { "Retry-After": "10" }),
       );
-      const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch, backoffMs: 1 });
+      const client = new KofraClient({ api: "https://kofra.test", token: null, fetch, backoffMs: 1 });
       const controller = new AbortController();
       const reason = new Error("stop");
       const pending = client.getSite({ slug: "s" }, { signal: controller.signal });
@@ -229,7 +229,7 @@ describe("DropwayClient transport", () => {
         ? json({ error: { code: "rate_limited", message: "slow down" } }, 429, { "Retry-After": "0" })
         : json({ ok: true });
     });
-    const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch, attempts: 3, backoffMs: 1 });
+    const client = new KofraClient({ api: "https://kofra.test", token: null, fetch, attempts: 3, backoffMs: 1 });
     await expect(client.post("/sites", {})).resolves.toMatchObject({ status: 200 });
     expect(posts).toBe(2);
 
@@ -238,7 +238,7 @@ describe("DropwayClient transport", () => {
       unsafe++;
       return json({ error: { code: "internal_error", message: "boom" } }, 503);
     });
-    await new DropwayClient({ api: "https://kofra.test", token: null, fetch: failing, attempts: 3, backoffMs: 1 }).post("/sites", {}).catch(() => {});
+    await new KofraClient({ api: "https://kofra.test", token: null, fetch: failing, attempts: 3, backoffMs: 1 }).post("/sites", {}).catch(() => {});
     expect(unsafe).toBe(1);
   });
 
@@ -246,7 +246,7 @@ describe("DropwayClient transport", () => {
     const getFetch = stubFetch(() => {
       throw new Error("boom");
     });
-    const getClient = new DropwayClient({ api: "https://kofra.test", token: null, fetch: getFetch, attempts: 2, backoffMs: 1 });
+    const getClient = new KofraClient({ api: "https://kofra.test", token: null, fetch: getFetch, attempts: 2, backoffMs: 1 });
     const e = await caught(getClient.get("/sites"));
     expect(e.code).toBe("network_error");
     expect(e.retryable).toBe(true);
@@ -257,7 +257,7 @@ describe("DropwayClient transport", () => {
       posts++;
       throw new Error("boom");
     });
-    const postClient = new DropwayClient({ api: "https://kofra.test", token: null, fetch: postFetch, attempts: 3, backoffMs: 1 });
+    const postClient = new KofraClient({ api: "https://kofra.test", token: null, fetch: postFetch, attempts: 3, backoffMs: 1 });
     await postClient.post("/sites", {}).catch(() => {});
     expect(posts).toBe(1);
   });
@@ -267,7 +267,7 @@ describe("DropwayClient transport", () => {
       json({}, 200, { Link: '<https://new.test/x>; rel="successor-version"' }),
     );
     const onMoved = vi.fn();
-    const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch, onMoved });
+    const client = new KofraClient({ api: "https://kofra.test", token: null, fetch, onMoved });
     await client.get("/a");
     await client.get("/b");
     expect(onMoved).toHaveBeenCalledTimes(1);
@@ -278,7 +278,7 @@ describe("DropwayClient transport", () => {
     // The stub transport returns the redirect answer untouched: no redirect
     // override of its own. The client must refuse rather than follow.
     const fetch = stubFetch(() => new Response(null, { status: 307, headers: { Location: "https://other.test/api/v1/sites" } }));
-    const client = new DropwayClient({ api: "https://kofra.test", token: "dw_x", fetch });
+    const client = new KofraClient({ api: "https://kofra.test", token: "dw_x", fetch });
     const e = await caught(client.get("/sites", { redirect: "error" }));
     expect(e.code).toBe("redirect_refused");
     expect(e.status).toBe(307);
@@ -292,31 +292,31 @@ describe("DropwayClient transport", () => {
         ? new Response(null, { status: 307, headers: { Location: "/api/v1/sites-followed" } })
         : json({ ok: true }),
     );
-    const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch });
+    const client = new KofraClient({ api: "https://kofra.test", token: null, fetch });
     await expect(client.get("/sites")).resolves.toMatchObject({ status: 200 });
     expect(fetch.requests).toHaveLength(2);
   });
 
   it("sends the idempotency key when given", async () => {
     const fetch = stubFetch(() => json({}));
-    const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch });
+    const client = new KofraClient({ api: "https://kofra.test", token: null, fetch });
     await client.post("/sites", {}, { idempotencyKey: "k1" });
     expect(fetch.requests[0]!.headers.get("Idempotency-Key")).toBe("k1");
   });
 
   it("sends a JSON body on byte reads that take one", async () => {
     const fetch = stubFetch(async (req) => new Response(await req.text(), { headers: { "Content-Type": "text/plain" } }));
-    const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch });
+    const client = new KofraClient({ api: "https://kofra.test", token: null, fetch });
     const res = await client.requestBytes("POST", "/bytes", { json: { a: 1 } });
     expect(fetch.requests[0]!.headers.get("Content-Type")).toBe("application/json");
     expect(new TextDecoder().decode(res.data)).toBe('{"a":1}');
   });
 });
 
-describe("DropwayClient typed calls", () => {
+describe("KofraClient typed calls", () => {
   it("substitutes and encodes path parameters on GET without a body", async () => {
     const fetch = stubFetch(() => json({ slug: "a/b" }));
-    const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch });
+    const client = new KofraClient({ api: "https://kofra.test", token: null, fetch });
     const out = await client.getSite({ slug: "a/b" });
     expect(out.slug).toBe("a/b");
     const req = fetch.requests[0]!;
@@ -326,14 +326,14 @@ describe("DropwayClient typed calls", () => {
 
   it("sends non-path GET input as a query string", async () => {
     const fetch = stubFetch(() => json({}));
-    const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch });
+    const client = new KofraClient({ api: "https://kofra.test", token: null, fetch });
     await client.listSites({ limit: 5 });
     expect(fetch.requests[0]!.url).toBe("https://kofra.test/api/v1/sites?limit=5");
   });
 
   it("posts JSON bodies without path parameters", async () => {
     const fetch = stubFetch(async (req) => json({ seen: await req.json(), url: req.url }));
-    const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch });
+    const client = new KofraClient({ api: "https://kofra.test", token: null, fetch });
     const out = (await client.updateSiteFiles({ slug: "s", files: [] })) as unknown as { seen: unknown; url: string };
     expect(out.url).toBe("https://kofra.test/api/v1/sites/s/files");
     expect(out.seen).toEqual({ files: [] });
@@ -341,16 +341,16 @@ describe("DropwayClient typed calls", () => {
 
   it("refuses to call with a missing path parameter before any fetch", async () => {
     const fetch = stubFetch(() => json({}));
-    const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch });
+    const client = new KofraClient({ api: "https://kofra.test", token: null, fetch });
     const e = await caught(client.getSite({} as unknown as { slug: string }));
-    expect(e).toBeInstanceOf(DropwayError);
+    expect(e).toBeInstanceOf(KofraError);
     expect(e.code).toBe("invalid_input");
     expect(fetch.requests.length).toBe(0);
   });
 
   it("uploads raw bytes and reads them back", async () => {
     const put = stubFetch(async (req) => json({ stored: (await req.arrayBuffer()).byteLength }));
-    const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch: put });
+    const client = new KofraClient({ api: "https://kofra.test", token: null, fetch: put });
     const sha = "a".repeat(64);
     const stored = (await client.uploadBlob({ sha256: sha }, new TextEncoder().encode("hello"))) as unknown as { stored: number };
     expect(stored.stored).toBe(5);
@@ -358,7 +358,7 @@ describe("DropwayClient typed calls", () => {
     expect(put.requests[0]!.url).toBe(`https://kofra.test/api/v1/blobs/${sha}`);
 
     const get = stubFetch(() => new Response("hello", { headers: { "Content-Type": "text/plain" } }));
-    const bytes = await new DropwayClient({ api: "https://kofra.test", token: null, fetch: get }).getFileBytes({
+    const bytes = await new KofraClient({ api: "https://kofra.test", token: null, fetch: get }).getFileBytes({
       slug: "s",
       path: "a.txt",
     });

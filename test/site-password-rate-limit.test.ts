@@ -1,5 +1,5 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import type { ServerBindings } from "@dropway/server";
+import type { ServerBindings } from "@kofra/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { databaseBoundary } from "./delivery-review-fixtures";
 import { freshInstance, type Instance } from "./helpers";
@@ -18,7 +18,7 @@ async function bodyProbe(dw: Instance, url: string, ip: string, password = SITE_
   });
   const ctx = createExecutionContext();
   try {
-    const res = await dw.dropway.fetch(req, { ...env, ...(db ? { DB: db } : {}) } as unknown as ServerBindings, ctx);
+    const res = await dw.kofra.fetch(req, { ...env, ...(db ? { DB: db } : {}) } as unknown as ServerBindings, ctx);
     await waitOnExecutionContext(ctx);
     return { res, pulls, bodyUsed: req.bodyUsed };
   } finally {

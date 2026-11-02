@@ -1,4 +1,4 @@
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import { ApiError, badRequest } from "../errors";
 import { sha256Hex } from "../lib/crypto";
 import type { Principal } from "../principal";
@@ -87,7 +87,7 @@ export interface IdempotencyOptions<T> {
 }
 
 /** Run `run` at most once per (scope, operation, key) within 24 hours. */
-export async function withIdempotency<T>(dc: DropwayContext, opts: IdempotencyOptions<T>, run: () => Promise<T>): Promise<{ result: T; replayed: boolean }> {
+export async function withIdempotency<T>(dc: KofraContext, opts: IdempotencyOptions<T>, run: () => Promise<T>): Promise<{ result: T; replayed: boolean }> {
   if (!opts.key || !opts.scope) return { result: await run(), replayed: false };
   const keyHash = await sha256Hex(`${opts.scope}\u0000${opts.operation}\u0000${opts.key}`);
   const inputHash = await sha256Hex(stableStringify(opts.input));

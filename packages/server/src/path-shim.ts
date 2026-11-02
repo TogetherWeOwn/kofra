@@ -103,5 +103,5 @@ export function pathShimScript(rw: PathRewrite): string {
   const table = attributeTable();
   const selector = URL_ATTRS.map(([sel]) => sel).join(",");
   const args = [rw.base, rw.keep, table, PROPS, selector].map(inlineJson).join(",");
-  return `<script data-dropway="path-shim">${SOURCE}(${args});</script>`;
+  return `<script data-kofra="path-shim">${SOURCE}(${args});</script>`;
 }

@@ -1,4 +1,4 @@
-import { detectFileKind, type DropwayContext, type FileKind, type LiveSite } from "@dropway/core";
+import { detectFileKind, type KofraContext, type FileKind, type LiveSite } from "@kofra/core";
 import { archiveViewer } from "./archive";
 import { binaryViewer } from "./binary";
 import { codeViewer, sourceViewer } from "./code";
@@ -18,8 +18,8 @@ import { notebookViewer } from "./notebook";
  * viewer bar (the app-origin viewer page frames views and has its own toolbar).
  *
  * To add a viewer: create a file in this folder exporting a Viewer, then add it
- * to VIEWERS below (or pass it in createDropway({ viewers }), which runs before
- * these). Match on file.kind (from @dropway/core detectFileKind) and the view
+ * to VIEWERS below (or pass it in createKofra({ viewers }), which runs before
+ * these). Match on file.kind (from @kofra/core detectFileKind) and the view
  * mode. The first match wins. Wrap output with viewerPage() from ./chrome so
  * every viewer shares the same bar.
  */
@@ -41,7 +41,7 @@ export interface ViewerFile {
 export type ViewMode = "document" | "frame" | "view" | "source";
 
 export interface ViewerContext {
-  dw: DropwayContext;
+  dw: KofraContext;
   request: Request;
   url: URL;
   live: LiveSite;

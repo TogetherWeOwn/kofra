@@ -19,7 +19,7 @@ let entry = "";
 
 beforeAll(async () => {
   root = await mkdtemp(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(), "settings-offline-guard-"));
-  entry = join(root, "bundle/dropway.mjs");
+  entry = join(root, "bundle/kofra.mjs");
   await build({ entryPoints: [join(repoRoot, "packages/cli/src/cli.ts")], bundle: true, platform: "node",
     format: "esm", target: "node20", outfile: entry, logLevel: "silent" });
 }, 120_000);

@@ -2,7 +2,7 @@
 import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { compareManifests, type CompareFile } from "../../core/src/services/compare.ts";
-import { CliError, EXIT, type DropwayClient } from "./client.ts";
+import { CliError, EXIT, type KofraClient } from "./client.ts";
 import { linkPath } from "./config.ts";
 import { collectFiles } from "./files.ts";
 import { escapeControl as text, formatBytes, plural } from "./output.ts";
@@ -50,7 +50,7 @@ interface DirectVersion {
  * refs are refused locally: URL normalization would otherwise collapse them
  * onto a different endpoint.
  */
-async function getVersionDirect(client: DropwayClient, slug: string, ref: string, signal: AbortSignal): Promise<DirectVersion> {
+async function getVersionDirect(client: KofraClient, slug: string, ref: string, signal: AbortSignal): Promise<DirectVersion> {
   if (ref === "" || ref === "." || ref === "..") {
     throw new CliError({
       code: "invalid_version_ref",
@@ -68,7 +68,7 @@ function invalidResponse(message: string): CliError {
     hint: "Retry against an instance that returns complete version metadata.", exitCode: EXIT.error });
 }
 
-export async function compareDirectory(client: DropwayClient, opts: CompareOptions) {
+export async function compareDirectory(client: KofraClient, opts: CompareOptions) {
   const root = resolve(opts.cwd, opts.path);
   const st = await stat(root).catch(() => null);
   opts.signal.throwIfAborted();

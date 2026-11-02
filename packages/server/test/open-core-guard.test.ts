@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
 // Assemble forbidden fixtures at runtime so the test itself remains open-core.
 const sdk = ["str", "ipe"].join("");
-const marker = ["LicenseRef", "Dropway", "Proprietary"].join("-");
+const marker = ["LicenseRef", "Dropway", "Proprietary"].join("-"); // rebrand:keep (the private layer's SPDX marker)
 const excludedDirectory = ["bill", "ing"].join("");
 const declaration = (specifier: string) => ["im", "port"].join("") + ` value from ${JSON.stringify(specifier)};\n`;
 let root: string;
@@ -29,8 +29,8 @@ beforeEach(() => {
   mkdirSync(join(root, "scripts"));
   copyFileSync(join(repo, "scripts/guard-open-core.mjs"), join(root, "scripts/guard-open-core.mjs"));
   put("package.json", JSON.stringify({ name: "guard-fixture", private: true, workspaces: ["packages/*"], devDependencies: { vitest: "^4.1.0" } }));
-  put("packages/core/package.json", JSON.stringify({ name: "@dropway/core", type: "module" }));
-  put("packages/server/package.json", JSON.stringify({ name: "@dropway/server", type: "module", dependencies: { "@dropway/core": "^0.1.0", hono: "^4.13.13" } }));
+  put("packages/core/package.json", JSON.stringify({ name: "@kofra/core", type: "module" }));
+  put("packages/server/package.json", JSON.stringify({ name: "@kofra/server", type: "module", dependencies: { "@kofra/core": "^0.1.0", hono: "^4.13.13" } }));
   execFileSync("git", ["init", "--quiet"], { cwd: root });
 });
 
@@ -102,7 +102,7 @@ describe("open-core guard executable contract", () => {
     expect(result.output).toContain(path);
   });
 
-  it.each(["hono", "hono/utils/http-status", "@dropway/core", "node:crypto", "./local", "../local"])("allows the declared, workspace, built-in or relative import %s", (specifier) => {
+  it.each(["hono", "hono/utils/http-status", "@kofra/core", "node:crypto", "./local", "../local"])("allows the declared, workspace, built-in or relative import %s", (specifier) => {
     put("packages/server/src/fixture.ts", declaration(specifier));
     const result = scan();
     expect(result.status, result.output).toBe(0);

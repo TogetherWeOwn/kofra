@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { deleteFolder } from "@dropway/core";
+import { deleteFolder } from "@kofra/core";
 import { defineOperation } from "../operations";
 import { DESTROY } from "./shared";
 

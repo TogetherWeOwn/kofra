@@ -1,6 +1,6 @@
 import { applyD1Migrations, createExecutionContext, env, reset, waitOnExecutionContext } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { createDropway, renderAppPage, type ServerBindings } from "@dropway/server";
+import { createKofra, renderAppPage, type ServerBindings } from "@kofra/server";
 import { CLIENT_SCRIPT, CLIENT_HASH, fnv1a } from "../packages/server/src/ui/assets";
 import { jsonForScript, navItems } from "../packages/server/src/ui/shell";
 import { form, freshInstance } from "./helpers";
@@ -34,10 +34,10 @@ describe("app pages", () => {
   it("a new instance shows the setup path on the home page and a setup form on /login", async () => {
     await reset();
     await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
-    const dropway = createDropway();
+    const kofra = createKofra();
     const get = async (path: string) => {
       const ctx = createExecutionContext();
-      const res = await dropway.fetch(new Request(`https://dropway.test${path}`), env as unknown as ServerBindings, ctx);
+      const res = await kofra.fetch(new Request(`https://dropway.test${path}`), env as unknown as ServerBindings, ctx);
       await waitOnExecutionContext(ctx);
       return res.text();
     };

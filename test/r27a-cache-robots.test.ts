@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { LiveSite } from "@dropway/core";
+import type { LiveSite } from "@kofra/core";
 import { cacheControlFor, isNoindex } from "../packages/server/src/serve";
 import { form, freshInstance, type Instance } from "./helpers";
 

@@ -3,9 +3,9 @@ import { env } from "cloudflare:test";
 import {
   ApiError, claimSite, clearLiveMemoryCache, createSite, createTenant, createTenantWithOwner,
   defaultPolicy, deleteSite, insertMember, refreshLive, renameSite, setupInstance, sha256Hex,
-  type CreateTenantWithOwnerInput, type CreateTenantWithOwnerOptions, type DropwayContext, type MemberRow,
+  type CreateTenantWithOwnerInput, type CreateTenantWithOwnerOptions, type KofraContext, type MemberRow,
   type Principal, type SiteNameMutation, type TenantRow,
-} from "@dropway/core";
+} from "@kofra/core";
 import { BOOTSTRAP, ORIGIN, form, freshInstance, jsonBody } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
 import {
@@ -473,7 +473,7 @@ describe("generated concrete candidates and retry classification", () => {
   it.each([false, true])("anonymous=%s SQL candidate conflicts roll back twice, then only one winner/event survives", async (anonymous) => {
     const candidates: SiteNameMutation[] = [];
     const preflight: Array<string | null> = [];
-    const events: import("@dropway/core").UsageEvent[] = [];
+    const events: import("@kofra/core").UsageEvent[] = [];
     const dw = await freshInstance({ anonymous: { enabled: true, ttlMs: 3600_000 } }, { adapters: {
       policy: {
         ...policy((_p, input, dc) => {
@@ -832,7 +832,7 @@ describe("public createTenantWithOwner atomic composition", () => {
     const batch = vi.spyOn(h.dc.env.DB, "batch");
     let prepared: { tenant: Readonly<TenantRow>; owner: Readonly<MemberRow> } | undefined;
     const options: CreateTenantWithOwnerOptions = {
-      async extend(rows: OwnerRows, dc: DropwayContext) {
+      async extend(rows: OwnerRows, dc: KofraContext) {
         expect(dc).toBe(h.dc);
         expect(await env.DB.prepare("SELECT id FROM tenants WHERE id = ?").bind(rows.tenant.id).first()).toBeNull();
         expect(await env.DB.prepare("SELECT id FROM members WHERE id = ?").bind(rows.owner.id).first()).toBeNull();
@@ -896,7 +896,7 @@ describe("public createTenantWithOwner atomic composition", () => {
     const h = await tenantFixture();
     await env.DB.prepare(`CREATE TRIGGER fixture_owner_failure BEFORE INSERT ON members
       WHEN NEW.email = 'owner-failure' BEGIN SELECT RAISE(ABORT, 'fixture_owner_insert_failed'); END`).run();
-    const extend = vi.fn<NonNullable<CreateTenantWithOwnerOptions["extend"]>>((rows: OwnerRows, dc: DropwayContext) => ({
+    const extend = vi.fn<NonNullable<CreateTenantWithOwnerOptions["extend"]>>((rows: OwnerRows, dc: KofraContext) => ({
       statements: [audit(dc, "owner-failure"), dc.env.DB.prepare(
         "INSERT INTO fixture_profiles (tenant_id, owner_id, label) VALUES (?, ?, 'never')",
       ).bind(rows.tenant.id, rows.owner.id)],
@@ -917,7 +917,7 @@ describe("public createTenantWithOwner atomic composition", () => {
     const mapped: unknown[] = [];
     const batch = vi.spyOn(h.dc.env.DB, "batch");
     const result = await outcome(createTenantWithOwner(h.dc, { tenant: { name: "rolled back" }, owner: { email: "new@example.test" } }, {
-      extend(rows: OwnerRows, dc: DropwayContext) {
+      extend(rows: OwnerRows, dc: KofraContext) {
         return { statements: [audit(dc, "tenant-rollback"), dc.env.DB.prepare(
           "INSERT INTO fixture_profiles (tenant_id, owner_id, label) VALUES (?, ?, 'rollback')",
         ).bind(rows.tenant.id, rows.owner.id), dc.env.DB.prepare("INSERT INTO fixture_refusal VALUES (0)")],
@@ -936,7 +936,7 @@ describe("public createTenantWithOwner atomic composition", () => {
     const h = await tenantFixture();
     const errors: unknown[] = [];
     const result = await outcome(createTenantWithOwner(h.dc, { owner: {} }, {
-      extend(_rows: OwnerRows, dc: DropwayContext) { return { statements: [audit(dc, "unmapped"), dc.env.DB.prepare("INSERT INTO fixture_unique VALUES ('sentinel')")],
+      extend(_rows: OwnerRows, dc: KofraContext) { return { statements: [audit(dc, "unmapped"), dc.env.DB.prepare("INSERT INTO fixture_unique VALUES ('sentinel')")],
         mapError(error: unknown) { errors.push(error); return undefined; } }; },
     }));
     expect(result.ok).toBe(false);

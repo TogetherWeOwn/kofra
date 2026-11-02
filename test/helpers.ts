@@ -1,12 +1,12 @@
 import { applyD1Migrations, createExecutionContext, env, reset, waitOnExecutionContext } from "cloudflare:test";
-import { clearLiveMemoryCache, sha256Hex, type ConfigOverrides } from "@dropway/core";
-import { createDropway, type CreateDropwayOptions, type Dropway, type ServerBindings } from "@dropway/server";
+import { clearLiveMemoryCache, sha256Hex, type ConfigOverrides } from "@kofra/core";
+import { createKofra, type CreateKofraOptions, type Kofra, type ServerBindings } from "@kofra/server";
 
 export const ORIGIN = "https://dropway.test";
 export const BOOTSTRAP = "test-bootstrap-secret-0123456789";
 
 export interface Instance {
-  dropway: Dropway;
+  kofra: Kofra;
   /** Owner API key (all scopes). */
   ownerKey: string;
   call(path: string, init?: RequestInit & { key?: string | null; origin?: string }): Promise<Response>;
@@ -14,7 +14,7 @@ export interface Instance {
 }
 
 /** Wipe storage, apply migrations, build a Kofra and create its owner. */
-export async function freshInstance(config: ConfigOverrides = {}, extra: Omit<CreateDropwayOptions, "config"> = {}): Promise<Instance> {
+export async function freshInstance(config: ConfigOverrides = {}, extra: Omit<CreateKofraOptions, "config"> = {}): Promise<Instance> {
   // The pinned runtime can retain stopped SQLite-backed stores on reset.
   // Wake every fixture store first with bounded calls, even before migrations.
   await env.DB.prepare("SELECT 1").first();
@@ -32,7 +32,7 @@ export async function freshInstance(config: ConfigOverrides = {}, extra: Omit<Cr
     throw new Error(`freshInstance: ${tenantsAfterReset} tenant(s) present immediately after reset/migrations, before setup`);
   }
   clearLiveMemoryCache();
-  const dropway = createDropway({ config, ...extra });
+  const kofra = createKofra({ config, ...extra });
 
   const call: Instance["call"] = async (path, init = {}) => {
     const { key, origin, ...rest } = init;
@@ -40,7 +40,7 @@ export async function freshInstance(config: ConfigOverrides = {}, extra: Omit<Cr
     if (key) headers.set("Authorization", `Bearer ${key}`);
     const url = path.startsWith("http") ? path : `${origin ?? ORIGIN}${path}`;
     const ctx = createExecutionContext();
-    const res = await dropway.fetch(new Request(url, { ...rest, headers, redirect: "manual" }), env as unknown as ServerBindings, ctx);
+    const res = await kofra.fetch(new Request(url, { ...rest, headers, redirect: "manual" }), env as unknown as ServerBindings, ctx);
     await waitOnExecutionContext(ctx);
     return res;
   };
@@ -58,7 +58,7 @@ export async function freshInstance(config: ConfigOverrides = {}, extra: Omit<Cr
 
   const setup = await json("/api/v1/setup", { method: "POST", key: BOOTSTRAP, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "owner@example.com" }) });
   if (setup.status !== 201) throw new Error(`setup failed: ${setup.status} ${JSON.stringify(setup.body)} (tenants immediately after reset/migrations: ${tenantsAfterReset})`);
-  return { dropway, ownerKey: setup.body.apiKey.key, call, json };
+  return { kofra, ownerKey: setup.body.apiKey.key, call, json };
 }
 
 export function form(files: Record<string, string | Uint8Array>, fields: Record<string, string> = {}): FormData {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
-import { clearLiveMemoryCache, type PublishEvent, type UsageEvent } from "@dropway/core";
+import { clearLiveMemoryCache, type PublishEvent, type UsageEvent } from "@kofra/core";
 import { freshInstance, jsonBody, manifestEntry } from "./helpers";
 
 /**

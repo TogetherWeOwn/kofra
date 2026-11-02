@@ -60,7 +60,7 @@ beforeAll(async () => {
   expect(setup.status).toBe(201);
   key = (await setup.json() as any).apiKey.key;
   expect(typeof key).toBe("string");
-  cliBundle = join(work, "dropway.mjs");
+  cliBundle = join(work, "kofra.mjs");
   await build({ entryPoints: [join(root, "packages/cli/src/cli.ts")], bundle: true, platform: "node", format: "esm", target: "node20", outfile: cliBundle, logLevel: "silent" });
   bin = join(work, "bin");
   await mkdir(bin);

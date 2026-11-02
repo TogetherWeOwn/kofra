@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
-import { mcpInstructions } from "@dropway/server";
-import { sha256Hex } from "@dropway/core";
+import { mcpInstructions } from "@kofra/server";
+import { sha256Hex } from "@kofra/core";
 import { BOOTSTRAP, form, freshInstance, jsonBody, type Instance } from "./helpers";
 import { b64, connectLegacyMcp, connectMcp, type McpTestClient } from "./mcp-helpers";
 
@@ -86,7 +86,7 @@ describe("MCP endpoint: transport and auth", () => {
   });
 
   it("server instructions stay under 4,096 characters", () => {
-    const text = mcpInstructions(dw.dropway.context(env as never, { waitUntil() {} }, new URL("https://dropway.test/mcp")));
+    const text = mcpInstructions(dw.kofra.context(env as never, { waitUntil() {} }, new URL("https://dropway.test/mcp")));
     expect(text.length).toBeLessThan(4096);
     expect(text).toContain("publish_site");
   });
@@ -573,7 +573,7 @@ describe("MCP tools: keys, members, scopes, idempotency", () => {
     expect((await mcp.call("remove_member", { id, confirm: "agent@example.com" })).data.removed).toBe(true);
   });
 
-  it("extensions add tools through createDropway({ mcpTools }) and can replace a core tool", async () => {
+  it("extensions add tools through createKofra({ mcpTools }) and can replace a core tool", async () => {
     const ext = await freshInstance(
       {},
       {

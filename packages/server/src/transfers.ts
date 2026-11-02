@@ -1,10 +1,10 @@
 import {
   ApiError, appOrigin, checkTransferGate, describeTransfer, makeTransferGrant, openTransferDownload,
   publicTransfer, transferCookieName, transferFileUrl, transferMissing, transferPageUrl, transferRecipients,
-  transferUnlocked, unlockTransfer, type DropwayContext,
-} from "@dropway/core";
+  transferUnlocked, unlockTransfer, type KofraContext,
+} from "@kofra/core";
 import type { Hono } from "hono";
-import type { DropwayEnv } from "./env";
+import type { KofraEnv } from "./env";
 import { APP_PAGE_CSP, escapeHtml, htmlPage, retryWaitPhrase } from "./html";
 import { attachmentDisposition } from "./content-disposition";
 
@@ -17,7 +17,7 @@ function page(body: string, status = 200, extraHeaders: Record<string, string> =
     status, headers: { ...headers, "Content-Type": "text/html; charset=utf-8", ...extraHeaders },
   });
 }
-function passwordPage(dc: DropwayContext, slug: string, recipient?: string, error?: { status: number; message: string }) {
+function passwordPage(dc: KofraContext, slug: string, recipient?: string, error?: { status: number; message: string }) {
   const alert = error ? `<p role="alert">${escapeHtml(error.message)}</p>` : "";
   return page(`<p>This delivery is password protected.</p>${alert}<form method="post" action="${escapeHtml(transferPageUrl(dc, slug, recipient))}"><label>Password <input type="password" name="password" minlength="8" maxlength="1024" required autocomplete="current-password"></label><button type="submit">Unlock delivery</button></form>`, error?.status ?? 403);
 }
@@ -30,7 +30,7 @@ function terminalPage(title: string, message: string, status: number) {
   });
 }
 /** Browser page for a terminal delivery state. Null when the error stays JSON. */
-async function transferTerminalPage(dc: DropwayContext, slug: string, error: ApiError): Promise<Response | null> {
+async function transferTerminalPage(dc: KofraContext, slug: string, error: ApiError): Promise<Response | null> {
   switch (error.code) {
     case "transfer_gone": {
       // The 410 code covers expiry, revocation and the download limit alike,
@@ -54,7 +54,7 @@ async function transferTerminalPage(dc: DropwayContext, slug: string, error: Api
       return null;
   }
 }
-export async function transferPageError(dc: DropwayContext, request: Request, slug: string, recipient: string | undefined, error: unknown): Promise<Response> {
+export async function transferPageError(dc: KofraContext, request: Request, slug: string, recipient: string | undefined, error: unknown): Promise<Response> {
   if ((request.headers.get("Accept") ?? "").includes("text/html") && error instanceof ApiError) {
     if (request.method === "POST") {
       if (error.code === "rate_limited") {
@@ -107,7 +107,7 @@ async function readPasswordForm(request: Request): Promise<string> {
     return new TextDecoder().decode(buffer.subarray(0, bytes));
   } finally { reader.releaseLock(); }
 }
-export function installTransferPages(app: Hono<DropwayEnv>) {
+export function installTransferPages(app: Hono<KofraEnv>) {
   app.on(["GET", "HEAD", "POST"], "/t/:slug", async (c) => {
     const dc = c.get("dw");
     const slug = c.req.param("slug");
@@ -141,7 +141,7 @@ export function installTransferPages(app: Hono<DropwayEnv>) {
   });
 }
 
-export async function serveTransfer(request: Request, dc: DropwayContext, slug: string, path: string): Promise<Response> {
+export async function serveTransfer(request: Request, dc: KofraContext, slug: string, path: string): Promise<Response> {
   try {
     if (!["GET", "HEAD"].includes(request.method)) return new Response("Method not allowed", { status: 405, headers: { ...headers, Allow: "GET, HEAD" } });
     const out = await openTransferDownload(dc, request, slug, path);

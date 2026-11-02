@@ -12,17 +12,17 @@ import {
   idempotencyScope,
   validateIdempotencyKey,
   withIdempotency,
-  type DropwayContext,
+  type KofraContext,
   type Principal,
   type Scope,
-} from "@dropway/core";
-import type { DropwayEnv } from "./env";
+} from "@kofra/core";
+import type { KofraEnv } from "./env";
 import type { McpToolDefinition } from "./extensions";
 import { readJson } from "./routes/api";
 import { isReplayReceipt, markReplayReceipt } from "./replay-receipt";
 
 export interface OperationContext {
-  dw: DropwayContext;
+  dw: KofraContext;
   principal: Principal;
   request: Request;
   client: string | null;
@@ -66,9 +66,9 @@ export interface OperationDefinition<I extends z.ZodType = z.ZodType, O extends 
   http?: {
     input?: z.ZodType;
     output?: z.ZodType;
-    handler?: (c: Context<DropwayEnv>, input: any) => Response | Promise<Response>;
+    handler?: (c: Context<KofraEnv>, input: any) => Response | Promise<Response>;
     /** Parse a raw transport once, before policy; the handler receives this validated input. */
-    parseInput?: (c: Context<DropwayEnv>) => unknown | Promise<unknown>;
+    parseInput?: (c: Context<KofraEnv>) => unknown | Promise<unknown>;
     /** A REST-only transport may share its logical operation's policy identity. */
     policyId?: string;
     status?: number;
@@ -278,7 +278,7 @@ function decodeUrlInput(values: Record<string, string>, schema: Record<string, a
   }));
 }
 
-async function requestInput(c: Context<DropwayEnv>, op: OperationDefinition, inputSchema = op.input) {
+async function requestInput(c: Context<KofraEnv>, op: OperationDefinition, inputSchema = op.input) {
   const schema = schemaJson(inputSchema);
   const query = decodeUrlInput(c.req.query(), schema);
   const path = decodeUrlInput(c.req.param(), schema);
@@ -290,20 +290,20 @@ async function requestInput(c: Context<DropwayEnv>, op: OperationDefinition, inp
 /** Merged query/body/path input without schema validation, for `http.parseInput`
  * endpoints whose handlers parse the wire format themselves (field collectors,
  * legacy coercions). Policy checks still run on the returned input. */
-export async function rawRequestInput(c: Context<DropwayEnv>): Promise<Record<string, unknown>> {
+export async function rawRequestInput(c: Context<KofraEnv>): Promise<Record<string, unknown>> {
   const body = ["GET", "HEAD"].includes(c.req.method) ? {} : await readJson(c);
   // The URL names the resource; a body cannot select a different one.
   return { ...c.req.query(), ...body, ...c.req.param() };
 }
 
-export function installOperationRoutes(api: Hono<DropwayEnv>, operations: readonly OperationDefinition[]) {
+export function installOperationRoutes(api: Hono<KofraEnv>, operations: readonly OperationDefinition[]) {
   const routes = new Set<string>();
   for (const op of operations) {
     for (const route of [{ method: op.method, path: op.path }, ...(op.aliases ?? [])]) {
       const key = `${route.method.toUpperCase()} ${route.path.replace(/\{[^}]+\}/g, "{}")}`;
       if (routes.has(key)) throw new Error(`Duplicate operation route: ${key}`);
       routes.add(key);
-      const handler = async (c: Context<DropwayEnv>) => {
+      const handler = async (c: Context<KofraEnv>) => {
         const ctx: OperationContext = {
           dw: c.get("dw"),
           principal: c.get("principal"),

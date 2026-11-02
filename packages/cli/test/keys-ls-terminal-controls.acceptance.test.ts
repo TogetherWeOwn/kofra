@@ -95,7 +95,7 @@ async function cli(flags: string[], bundled: boolean) {
   if (bundled) env.KOFRA_API_KEY = credential;
   const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
     const child = spawn(process.execPath, ["--import", preload,
-      bundled ? bundle : join(root, "packages/cli/bin/dropway.mjs"), "keys", "ls", ...flags], {
+      bundled ? bundle : join(root, "packages/cli/bin/kofra.mjs"), "keys", "ls", ...flags], {
       cwd: sandbox, env, stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, defaultIdentity, type ConfigOverrides, type PolicyAdapter } from "@dropway/core";
+import { ApiError, defaultIdentity, type ConfigOverrides, type PolicyAdapter } from "@kofra/core";
 import { freshInstance, jsonBody, manifestEntry, ORIGIN, type Instance } from "./helpers";
 import { create as createTransfer, op } from "./transfer-fixtures";
 import { request } from "./delivery-review-fixtures";
@@ -580,7 +580,7 @@ for (const topology of topologies) {
         expect(page.headers.get("content-security-policy") ?? "").not.toMatch(/\bsandbox\b/i);
         expect(page.headers.get("referrer-policy")).toBe("no-referrer");
         const html = await page.text();
-        expect(html.split('<script data-dropway="path-shim">')).toHaveLength(2);
+        expect(html.split('<script data-kofra="path-shim">')).toHaveLength(2);
         expect(html).toContain('("/preview-boundary--v1/",');
       });
     }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { createDropway, defineOperation } from "@dropway/server";
+import { createKofra, defineOperation } from "@kofra/server";
 import { freshInstance } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
 
@@ -70,6 +70,6 @@ describe("raw-body extension operation contract", () => {
 
   it("rejects raw-body registration without explicit MCP exclusion", () => {
     const operation = rawOperation();
-    expect(() => createDropway({ operations: [{ ...operation, mcp: undefined }] })).toThrow(/raw.*MCP|MCP.*raw/i);
+    expect(() => createKofra({ operations: [{ ...operation, mcp: undefined }] })).toThrow(/raw.*MCP|MCP.*raw/i);
   });
 });

@@ -3,8 +3,8 @@ import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:
 import {
   ApiError, clearLiveMemoryCache, defaultIdentity, getSiteFor, refreshLive, restoreVersion,
   type PublishEvent, type SiteRow, type UsageEvent, type VersionRow,
-} from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+} from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { form, freshInstance, jsonBody, ORIGIN } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
 import { effectSpies, interleave, isMutation, worldState } from "./interleave-harness";
@@ -67,7 +67,7 @@ async function fixture(kind: Kind) {
   await publish("Initial live", null, 200);
   const bearer = kind === "member" ? dw.ownerKey : claimToken;
   const ctx = createExecutionContext();
-  const dc = dw.dropway.context(env as unknown as ServerBindings, ctx);
+  const dc = dw.kofra.context(env as unknown as ServerBindings, ctx);
   const principal = await defaultIdentity.resolve(new Request(`${ORIGIN}/api/v1/me`, {
     headers: { Authorization: `Bearer ${bearer}` },
   }), dc);

@@ -1,6 +1,6 @@
 import { createExecutionContext, env } from "cloudflare:test";
-import { clearLiveMemoryCache, getLiveReadFenceCountForTests, getLiveSite, liveKey } from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+import { clearLiveMemoryCache, getLiveReadFenceCountForTests, getLiveSite, liveKey } from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { afterEach, describe, expect, it } from "vitest";
 import { form, freshInstance, type Instance } from "./helpers";
 
@@ -8,7 +8,7 @@ import { form, freshInstance, type Instance } from "./helpers";
  * Acceptance contract for the live-read fence lifetime.
  *
  * `getLiveReadFenceCountForTests()` is a read-only test helper exported from
- * `@dropway/core`. It must return the number of distinct slugs that currently
+ * `@kofra/core`. It must return the number of distinct slugs that currently
  * hold a live-read fence (at least one in-flight `getLiveSite` read). Two
  * overlapping readers of the same slug share one fence, so they count once;
  * readers of different slugs count independently.
@@ -28,7 +28,7 @@ async function publish(dw: Instance, slug: string, body = "hello") {
 }
 
 function baseContext(dw: Instance) {
-  return dw.dropway.context(env as unknown as ServerBindings, createExecutionContext());
+  return dw.kofra.context(env as unknown as ServerBindings, createExecutionContext());
 }
 
 /** A CACHE proxy whose get() calls each block on their own gate, in entry order. */

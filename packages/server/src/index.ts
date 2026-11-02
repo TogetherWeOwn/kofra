@@ -1,14 +1,14 @@
 /**
- * @dropway/server: the Hono app factory. createDropway() returns a Worker
+ * @kofra/server: the Hono app factory. createKofra() returns a Worker
  * handler that serves the app, the REST API, the MCP slot and every published site.
  */
 /** Version of the public embedding contract; changes are recorded in CHANGELOG.md. */
-export const EXTENSION_API_VERSION = 6;
+export const EXTENSION_API_VERSION = 7;
 
-export { createDropway, CORE_MCP_TOOLS, type Dropway } from "./create";
+export { createKofra, CORE_MCP_TOOLS, type Kofra } from "./create";
 export { defineOperation, type OperationDefinition, type OperationContext } from "./operations";
 export type {
-  CreateDropwayOptions,
+  CreateKofraOptions,
   McpHandlerFactory,
   McpToolContext,
   McpToolDefinition,
@@ -19,7 +19,7 @@ export type {
   UiSlots,
   UiSession,
 } from "./extensions";
-export type { DropwayEnv, ServerBindings } from "./env";
+export type { KofraEnv, ServerBindings } from "./env";
 export { readJson, apiErrorResponse } from "./routes/api";
 export { routeSiteRequest, type SiteRoute } from "./route-sites";
 export { serveSite, resolvePath, isNavigation, requestedViewMode, securityHeaders, systemResponse, SITE_SANDBOX, type ServeMode } from "./serve";

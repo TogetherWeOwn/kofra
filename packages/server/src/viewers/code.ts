@@ -1,4 +1,4 @@
-import { TEXT_KINDS, languageFor, type FileKind } from "@dropway/core";
+import { TEXT_KINDS, languageFor, type FileKind } from "@kofra/core";
 import { escapeHtml } from "../html";
 import { cachedRender } from "./cache";
 import { decodeText, scriptHash, standardTabs, truncatedNote, viewerCsp, viewerPage } from "./chrome";

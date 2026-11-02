@@ -23,9 +23,9 @@ import {
   siteUrl,
   timingSafeEqualStr,
   verifyPassword,
-  type DropwayContext,
+  type KofraContext,
   type LiveSite,
-} from "@dropway/core";
+} from "@kofra/core";
 import { escapeHtml, retryWaitPhrase, systemPage } from "./html";
 import { findViewer, toViewerFile, VIEWER_CHROME_VERSION, VIEWER_CSP, VIEWERS, type ViewMode, type Viewer } from "./viewers";
 import { renderListing } from "./viewers/listing";
@@ -212,7 +212,7 @@ export function securityHeaders(h: Headers, live: LiveSite | null, mode: ServeMo
 }
 
 export function systemResponse(
-  dw: DropwayContext,
+  dw: KofraContext,
   req: Request,
   mode: ServeMode,
   live: LiveSite | null,
@@ -246,11 +246,11 @@ export function systemResponse(
 const SITE_PASSWORD_COOKIE_TTL = 7 * 24 * 60 * 60_000;
 const SITE_PASSWORD_COOKIE_MAX_LENGTH = 100;
 
-async function passwordCookieValue(dw: DropwayContext, live: LiveSite, until: number): Promise<string> {
+async function passwordCookieValue(dw: KofraContext, live: LiveSite, until: number): Promise<string> {
   return `${until}.${await hmacHex(await effectiveSigningSecret(dw), `site-pw:${live.siteId}:${live.passwordHash}:${until}`)}`;
 }
 
-async function passwordCookieValid(dw: DropwayContext, live: LiveSite, cookie: string | null): Promise<boolean> {
+async function passwordCookieValid(dw: KofraContext, live: LiveSite, cookie: string | null): Promise<boolean> {
   if (!cookie || cookie.length > SITE_PASSWORD_COOKIE_MAX_LENGTH) return false;
   const [until, signature] = cookie.split(".");
   if (!until || !signature || !/^\d+$/.test(until)) return false;
@@ -287,14 +287,14 @@ function passwordVisitor(req: Request): string {
   return zone && ip.toLowerCase() === CROSS_ZONE_WORKER_IP ? `${ip}|worker:${zone}` : ip;
 }
 
-async function passwordFormSignature(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, until: number): Promise<string> {
+async function passwordFormSignature(dw: KofraContext, req: Request, live: LiveSite, mode: ServeMode, until: number): Promise<string> {
   return hmacHex(await effectiveSigningSecret(dw), JSON.stringify([
     "site-password-form", new URL(req.url).origin, mode.base, live.siteId, live.passwordHash,
     passwordVisitor(req), until,
   ]));
 }
 
-async function passwordSubmissionAllowed(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode): Promise<boolean> {
+async function passwordSubmissionAllowed(dw: KofraContext, req: Request, live: LiveSite, mode: ServeMode): Promise<boolean> {
   const origin = req.headers.get("Origin");
   const site = req.headers.get("Sec-Fetch-Site");
   if (origin && origin !== "null") return origin === new URL(req.url).origin && site !== "cross-site" && site !== "same-site";
@@ -310,7 +310,7 @@ async function passwordSubmissionAllowed(dw: DropwayContext, req: Request, live:
   return timingSafeEqualStr(match[2]!, await passwordFormSignature(dw, req, live, mode, until));
 }
 
-async function handlePassword(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, filePath: string): Promise<Response | null> {
+async function handlePassword(dw: KofraContext, req: Request, live: LiveSite, mode: ServeMode, filePath: string): Promise<Response | null> {
   if (!live.passwordHash) return null;
   if (await passwordCookieValid(dw, live, readCookie(req, cookieName(live, mode)))) return null;
   if (await passwordCookieValid(dw, live, readCookie(req, cookieName(live, mode, true)))) return null;
@@ -359,7 +359,7 @@ async function handlePassword(dw: DropwayContext, req: Request, live: LiveSite, 
   return passwordForm(dw, req, live, mode, u.pathname + u.search, false);
 }
 
-async function passwordForm(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, next: string, failed: boolean): Promise<Response> {
+async function passwordForm(dw: KofraContext, req: Request, live: LiveSite, mode: ServeMode, next: string, failed: boolean): Promise<Response> {
   const until = Date.now() + PASSWORD_FORM_TTL;
   const action = `${mode.base}${PASSWORD_PATH}?dw_form=${until}.${await passwordFormSignature(dw, req, live, mode, until)}`;
   const extra = `<form method="post" action="${escapeHtml(action)}" style="display:flex;gap:.5rem">
@@ -432,7 +432,7 @@ export function requestedViewMode(req: Request, sp: URLSearchParams): ViewMode |
  */
 export async function serveSite(
   req: Request,
-  dw: DropwayContext,
+  dw: KofraContext,
   slug: string,
   pathname: string,
   mode: ServeMode,
@@ -487,7 +487,7 @@ export async function serveSite(
 /** Serve an already resolved manifest. Preview callers authorize and load their version in D1 first. */
 export async function serveSiteContent(
   req: Request,
-  dw: DropwayContext,
+  dw: KofraContext,
   live: LiveSite,
   pathname: string,
   mode: ServeMode,
@@ -599,7 +599,7 @@ export async function serveSiteContent(
 
 async function serveFile(
   req: Request,
-  dw: DropwayContext,
+  dw: KofraContext,
   url: URL,
   live: LiveSite,
   mode: ServeMode,
@@ -771,7 +771,7 @@ async function serveFile(
   return new Response(blob.body, init);
 }
 
-function blobMissing(dw: DropwayContext, req: Request, mode: ServeMode, live: LiveSite, path: string): Response {
+function blobMissing(dw: KofraContext, req: Request, mode: ServeMode, live: LiveSite, path: string): Response {
   console.error(JSON.stringify({ event: "blob_missing", slug: live.slug, version: live.versionId, url: req.url }));
   // Rebuild the retry href from the serving base and the manifest path only:
   // never copy the raw request URL or its query into the page.
@@ -779,7 +779,7 @@ function blobMissing(dw: DropwayContext, req: Request, mode: ServeMode, live: Li
   return systemResponse(dw, req, mode, live, 502, "502", "File unavailable", "This file is listed in the site but its contents could not be read. Try again shortly.", retry);
 }
 
-function recordHit(dw: DropwayContext, req: Request, live: LiveSite, path: string, status: number, bytes: number, ms: number) {
+function recordHit(dw: KofraContext, req: Request, live: LiveSite, path: string, status: number, bytes: number, ms: number) {
   try {
     const cf = (req as Request & { cf?: { country?: string } }).cf;
     let ref = "";

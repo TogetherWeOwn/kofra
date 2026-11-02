@@ -215,7 +215,7 @@ bumping it.
   "ok": true,
   "schemaVersion": 1,
   "command": "compare",
-  "api": "https://dropway.example.workers.dev",
+  "api": "https://kofra.example.workers.dev",
   "site": "team-report",
   "local": { "root": "/home/you/team-report", "kind": "dir" },
   "pinned": {

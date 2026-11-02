@@ -21,8 +21,8 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  DropwayClient,
-  DropwayError,
+  KofraClient,
+  KofraError,
   type CallOptions,
   type FetchLike,
   type RequestOptions,
@@ -61,7 +61,7 @@ function stubReplies(replies: Reply[]) {
   return { fetch, requests, calls: () => calls };
 }
 
-async function threw(p: Promise<unknown>): Promise<DropwayError> {
+async function threw(p: Promise<unknown>): Promise<KofraError> {
   try {
     const value = await p;
     expect(
@@ -70,9 +70,9 @@ async function threw(p: Promise<unknown>): Promise<DropwayError> {
     ).toBeUndefined();
     throw new Error("expected the call to throw after exactly one fetch");
   } catch (e) {
-    if (e instanceof DropwayError) return e;
+    if (e instanceof KofraError) return e;
     // A success value above fails the expect with a clear retry message; do
-    // not mask it as a DropwayError assertion.
+    // not mask it as a KofraError assertion.
     throw e;
   }
 }
@@ -87,7 +87,7 @@ describe("restoreVersion never automatically retries", () => {
       { status: 429, headers: { "Retry-After": "0" }, body: RATE },
       { status: 200, body: { restored: true } },
     ]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     const e = await threw(c.restoreVersion({ slug: "s", id: "ver_1" }));
     expect(e.code).toBe("rate_limited");
     expect(s.calls()).toBe(1);
@@ -99,7 +99,7 @@ describe("restoreVersion never automatically retries", () => {
       { status: 429, body: RATE },
       { status: 200, body: { restored: true } },
     ]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     await threw(c.restoreVersion({ slug: "s", id: "ver_1" }));
     expect(s.calls()).toBe(1);
   });
@@ -109,7 +109,7 @@ describe("restoreVersion never automatically retries", () => {
       { status: 429, headers: { "Retry-After": "0" }, body: RATE },
       { status: 200, body: { restored: true } },
     ]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     await threw(c.restoreVersion({ slug: "s", id: "ver_1" }, { idempotencyKey: "explicit-restore-01" }));
     expect(s.calls()).toBe(1);
     expect(s.requests[0]!.headers.get("Idempotency-Key")).toBe("explicit-restore-01");
@@ -120,7 +120,7 @@ describe("restoreVersion never automatically retries", () => {
       { status: 429, headers: { "Retry-After": "0" }, body: RATE },
       { status: 200, body: { restored: true } },
     ]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     await threw(c.restoreVersion({ slug: "s", id: "ver_1" }, noneCallWithKey("k-restore-none-01")));
     expect(s.calls()).toBe(1);
     expect(s.requests[0]!.headers.get("Idempotency-Key")).toBe("k-restore-none-01");
@@ -131,14 +131,14 @@ describe("restoreVersion never automatically retries", () => {
       { status: 500, body: BOOM },
       { status: 200, body: { restored: true } },
     ]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     await threw(c.restoreVersion({ slug: "s", id: "ver_1" }));
     expect(s.calls()).toBe(1);
   });
 
   it("network loss: one fetch", async () => {
     const s = stubReplies([{ network: true }, { status: 200, body: { restored: true } }]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     const e = await threw(c.restoreVersion({ slug: "s", id: "ver_1" }));
     expect(e.code).toBe("network_error");
     expect(s.calls()).toBe(1);
@@ -149,7 +149,7 @@ describe("restoreVersion never automatically retries", () => {
       { status: 409, body: CONFLICT },
       { status: 200, body: { restored: true } },
     ]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     const e = await threw(c.restoreVersion({ slug: "s", id: "ver_1" }));
     expect(e.code).toBe("version_conflict");
     expect(s.calls()).toBe(1);
@@ -157,7 +157,7 @@ describe("restoreVersion never automatically retries", () => {
 
   it("sends an explicit idempotencyKey on success", async () => {
     const s = stubReplies([{ status: 200, body: { restored: true } }]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch });
     await c.restoreVersion({ slug: "s", id: "ver_1" }, { idempotencyKey: "k-restore-ok-01" });
     expect(s.calls()).toBe(1);
     expect(s.requests[0]!.headers.get("Idempotency-Key")).toBe("k-restore-ok-01");
@@ -170,7 +170,7 @@ describe("deleteVersion never automatically retries", () => {
       { status: 429, headers: { "Retry-After": "0" }, body: RATE },
       { status: 200, body: { deleted: true } },
     ]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     const e = await threw(c.deleteVersion({ slug: "s", id: "ver_1", confirm: "s" }));
     expect(e.code).toBe("rate_limited");
     expect(s.calls()).toBe(1);
@@ -181,7 +181,7 @@ describe("deleteVersion never automatically retries", () => {
       { status: 429, headers: { "Retry-After": "0" }, body: RATE },
       { status: 200, body: { deleted: true } },
     ]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     await threw(c.deleteVersion({ slug: "s", id: "ver_1", confirm: "s" }, { idempotencyKey: "explicit-delete-01" }));
     expect(s.calls()).toBe(1);
     expect(s.requests[0]!.headers.get("Idempotency-Key")).toBe("explicit-delete-01");
@@ -192,14 +192,14 @@ describe("deleteVersion never automatically retries", () => {
       { status: 503, body: BOOM },
       { status: 200, body: { deleted: true } },
     ]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     await threw(c.deleteVersion({ slug: "s", id: "ver_1", confirm: "s" }));
     expect(s.calls()).toBe(1);
   });
 
   it("network loss: one fetch", async () => {
     const s = stubReplies([{ network: true }, { status: 200, body: { deleted: true } }]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     await threw(c.deleteVersion({ slug: "s", id: "ver_1", confirm: "s" }));
     expect(s.calls()).toBe(1);
   });
@@ -209,14 +209,14 @@ describe("deleteVersion never automatically retries", () => {
       { status: 409, body: CONFLICT },
       { status: 200, body: { deleted: true } },
     ]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     await threw(c.deleteVersion({ slug: "s", id: "ver_1", confirm: "s" }));
     expect(s.calls()).toBe(1);
   });
 
   it("sends an explicit idempotencyKey on success", async () => {
     const s = stubReplies([{ status: 200, body: { deleted: true } }]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch });
     await c.deleteVersion({ slug: "s", id: "ver_1", confirm: "s" }, { idempotencyKey: "k-delete-ok-01" });
     expect(s.calls()).toBe(1);
     expect(s.requests[0]!.headers.get("Idempotency-Key")).toBe("k-delete-ok-01");
@@ -234,7 +234,7 @@ describe.each(["restoreVersion", "deleteVersion"] as const)("%s overrides caller
 
   it.each(cases)("$retry cannot resubmit after $label even when a second fetch would succeed", async ({ label, retry, first, code }) => {
     const s = stubReplies([first, { status: 200, body: { restored: true, deleted: true } }]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     const key = `caller-${method}-${retry}-${label.replaceAll(" ", "-")}`;
     const opts: CallOptions = { retry, idempotencyKey: key };
     const call = method === "restoreVersion"
@@ -252,7 +252,7 @@ describe.each(["restoreVersion", "deleteVersion"] as const)("%s overrides caller
 
 describe.each(["restoreVersion", "deleteVersion"] as const)("%s distinguishes empty and omitted replay keys", method => {
   const success = method === "restoreVersion" ? { restored: true } : { deleted: true };
-  const invoke = (client: DropwayClient, opts?: CallOptions) => method === "restoreVersion"
+  const invoke = (client: KofraClient, opts?: CallOptions) => method === "restoreVersion"
     ? client.restoreVersion({ slug: "s", id: "ver_1" }, opts)
     : client.deleteVersion({ slug: "s", id: "ver_1", confirm: "s" }, opts);
 
@@ -279,7 +279,7 @@ describe.each(["restoreVersion", "deleteVersion"] as const)("%s distinguishes em
     { label: "valid", key: "explicit-version-intent-01" },
   ])("preserves $label-key success with the same header-aware server", async ({ key }) => {
     const s = requestAwareMutation();
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch });
     await expect(invoke(c, key === undefined ? undefined : { idempotencyKey: key }))
       .resolves.toEqual(success);
     expect(s.requests).toHaveLength(1);
@@ -293,11 +293,11 @@ describe.each(["restoreVersion", "deleteVersion"] as const)("%s distinguishes em
     { label: "rate-limit", retry: "rate-limit" },
   ] as const)("rejects an explicit empty key without unkeyed execution or retry ($label)", async ({ retry }) => {
     const s = requestAwareMutation();
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, attempts: 3, backoffMs: 1 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, attempts: 3, backoffMs: 1 });
     const error: unknown = await invoke(c, { idempotencyKey: "", retry }).then(() => null, error => error);
     expect(s.requests.length, "validation may be local, but it must never retry").toBeLessThanOrEqual(1);
     expect(s.mutations(), "an explicit empty key must not silently execute as an omitted key").toBe(0);
-    expect(error, "an explicit empty key must reject, not succeed unkeyed").toBeInstanceOf(DropwayError);
+    expect(error, "an explicit empty key must reject, not succeed unkeyed").toBeInstanceOf(KofraError);
     expect(error).toMatchObject({ code: "invalid_idempotency_key" });
     if (s.requests.length > 0) {
       expect(s.requests[0]!.headers.get("Idempotency-Key"), "a supplied empty key is not omission").toBe("");
@@ -314,7 +314,7 @@ describe("transport retry:'none' means one fetch including 429", () => {
       { status: 429, headers: { "Retry-After": "0" }, body: RATE },
       { status: 200, body: { ok: true } },
     ]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     const e = await threw(c.post("/sites", {}, noneRetry()));
     expect(e.code).toBe("rate_limited");
     expect(s.calls()).toBe(1);
@@ -325,14 +325,14 @@ describe("transport retry:'none' means one fetch including 429", () => {
       { status: 429, headers: { "Retry-After": "0" }, body: RATE },
       { status: 200, body: { ok: true } },
     ]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     await threw(c.get("/sites", noneRetry()));
     expect(s.calls()).toBe(1);
   });
 
   it("GET with retry none and network then success stops at one fetch", async () => {
     const s = stubReplies([{ network: true }, { status: 200, body: { ok: true } }]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     const e = await threw(c.get("/sites", noneRetry()));
     expect(e.code).toBe("network_error");
     expect(s.calls()).toBe(1);
@@ -343,7 +343,7 @@ describe("transport retry:'none' means one fetch including 429", () => {
       { status: 500, body: BOOM },
       { status: 200, body: { ok: true } },
     ]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     await threw(c.request("GET", "/sites", noneRetry()));
     expect(s.calls()).toBe(1);
   });
@@ -353,7 +353,7 @@ describe("transport retry:'none' means one fetch including 429", () => {
       { status: 429, headers: { "Retry-After": "0" }, body: RATE },
       { status: 200, body: { restored: true } },
     ]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     await threw(c.restoreVersion({ slug: "s", id: "ver_1" }, noneCall()));
     expect(s.calls()).toBe(1);
   });
@@ -363,7 +363,7 @@ describe("transport retry:'none' means one fetch including 429", () => {
       { status: 429, headers: { "Retry-After": "0" }, body: RATE },
       { status: 200, body: { deleted: true } },
     ]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     await threw(c.deleteVersion({ slug: "s", id: "ver_1", confirm: "s" }, noneCall()));
     expect(s.calls()).toBe(1);
   });
@@ -375,7 +375,7 @@ describe("safe/rate-limit and GET defaults are preserved", () => {
       { status: 429, headers: { "Retry-After": "0" }, body: RATE },
       { status: 200, body: { ok: true } },
     ]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     await expect(c.get("/sites")).resolves.toMatchObject({ status: 200 });
     expect(s.calls()).toBe(2);
   });
@@ -385,7 +385,7 @@ describe("safe/rate-limit and GET defaults are preserved", () => {
       { status: 429, headers: { "Retry-After": "0" }, body: RATE },
       { status: 200, body: { ok: true } },
     ]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     await expect(c.post("/sites", {})).resolves.toMatchObject({ status: 200 });
     expect(s.calls()).toBe(2);
   });
@@ -395,7 +395,7 @@ describe("safe/rate-limit and GET defaults are preserved", () => {
       { status: 500, body: BOOM },
       { status: 200, body: { ok: true } },
     ]);
-    const c = new DropwayClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
+    const c = new KofraClient({ api: "https://sdk.test", token: null, fetch: s.fetch, backoffMs: 1, attempts: 3 });
     await threw(c.post("/sites", {}));
     expect(s.calls()).toBe(1);
   });

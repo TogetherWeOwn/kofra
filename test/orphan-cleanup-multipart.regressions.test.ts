@@ -1,8 +1,8 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { sha256Hex } from "@dropway/core";
+import { sha256Hex } from "@kofra/core";
 import { cleanupBlobs } from "../packages/core/src/services/blob-cleanup";
-import type { ServerBindings } from "@dropway/server";
+import type { ServerBindings } from "@kofra/server";
 import { freshInstance, type Instance } from "./helpers";
 import { accepted, complete, DAY, finalize, pending, putPart, session } from "./resumable-upload.helpers";
 
@@ -19,7 +19,7 @@ async function storedKey(sha: string) {
 }
 
 function context(dw: Instance, files: R2Bucket = env.FILES) {
-  return dw.dropway.context({ ...env, FILES: files } as unknown as ServerBindings, createExecutionContext());
+  return dw.kofra.context({ ...env, FILES: files } as unknown as ServerBindings, createExecutionContext());
 }
 
 async function served(dw: Instance, site: string) {

@@ -22,7 +22,16 @@ under `%APPDATA%\dropway` and the mode-0600 check in step 5 does not apply.
 - Git SHA (tag candidate):
 - Date:
 - Run by:
-- CLI form used (`npx kofra` post-tag, or from-source `node packages/cli/bin/dropway.mjs` after `npm install`) and Node version:
+- CLI form used (`npx kofra` post-tag, or from-source `node packages/cli/bin/kofra.mjs` after `npm install`) and Node version:
+
+## Pre-publish npm setup (owner, once, only when Kofra goes public)
+
+Nothing is published yet and no step below runs before the owner says Kofra goes public.
+When that happens, before pushing the first `v*` tag the owner creates the `kofra` npm
+organization (for the `@kofra/core`, `@kofra/server`, `@kofra/client` scope; the CLI is the
+unscoped `kofra` package) and registers each of the four package names as a trusted
+publisher for this repository's `publish.yml` (see the header of
+`.github/workflows/publish.yml`). Agent runs never publish, tag or announce.
 
 ## Prerequisites
 
@@ -32,7 +41,7 @@ under `%APPDATA%\dropway` and the mode-0600 check in step 5 does not apply.
 - [ ] **P2** — GitHub (or GitLab) account available for the button to copy the repo into. Expected: —.
   - Result:
   - Evidence:
-- [ ] **P3** — Local machine: POSIX shell, `curl`, `openssl`, Node.js (version per path). Expected: the published CLI (`npx kofra`) needs **Node 20+**; **Node 22+ is the recommended single prerequisite** and is what the self-host guide requires for the command-line deploy path. **Until v0.1.0 is on npm**, `npx kofra` below means: clone the repo, `npm install`, then `node packages/cli/bin/dropway.mjs` — that from-source path needs **Node 22.18+**, or on older Node run `npm run build -w kofra` first. Run the script with `npx kofra` only after the tag publishes, and record which form (and Node version) was used.
+- [ ] **P3** — Local machine: POSIX shell, `curl`, `openssl`, Node.js (version per path). Expected: the published CLI (`npx kofra`) needs **Node 20+**; **Node 22+ is the recommended single prerequisite** and is what the self-host guide requires for the command-line deploy path. **Until v0.1.0 is on npm**, `npx kofra` below means: clone the repo, `npm install`, then `node packages/cli/bin/kofra.mjs` — that from-source path needs **Node 22.18+**, or on older Node run `npm run build -w kofra` first. Run the script with `npx kofra` only after the tag publishes, and record which form (and Node version) was used.
   - Result:
   - Evidence:
 

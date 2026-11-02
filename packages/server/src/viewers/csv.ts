@@ -1,4 +1,4 @@
-import { extname } from "@dropway/core";
+import { extname } from "@kofra/core";
 import { escapeHtml, formatBytes } from "../html";
 import { cachedRender } from "./cache";
 import { decodeText, standardTabs, viewerPage } from "./chrome";

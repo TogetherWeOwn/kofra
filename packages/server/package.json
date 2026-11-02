@@ -1,7 +1,7 @@
 {
-  "name": "@dropway/server",
+  "name": "@kofra/server",
   "version": "0.1.0",
-  "description": "Kofra HTTP layer: createDropway() Hono app factory with extension points (adapters, hooks, routes, MCP tools, UI slots), site serving and viewers.",
+  "description": "Kofra HTTP layer: createKofra() Hono app factory with extension points (adapters, hooks, routes, MCP tools, UI slots), site serving and viewers.",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@cfworker/json-schema": "4.1.1",
-    "@dropway/core": "^0.1.0",
+    "@kofra/core": "^0.1.0",
     "@modelcontextprotocol/server": "2.3.1",
     "agents": "0.30.0",
     "highlight.js": "^11.12.0",

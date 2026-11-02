@@ -1,9 +1,9 @@
-// The product's former name (Dropway) keeps working for clients built before the rename.
+// The product's former name (Dropway) keeps working for clients built before the rename. // rebrand:keep
 // rebrand:keep-file (scripts/rebrand.mjs never edits this file.)
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { ServerBindings } from "@dropway/server";
+import type { ServerBindings } from "@kofra/server";
 import { legacyBrandHeaders } from "../packages/server/src/legacy-brand";
 import { form, freshInstance, ORIGIN, type Instance } from "./helpers";
 
@@ -54,9 +54,9 @@ describe("former name compatibility", () => {
 
   it("applies to the exported app too, called directly or mounted by a layer on top", async () => {
     const parent = new Hono();
-    parent.route("/", dw.dropway.app);
+    parent.route("/", dw.kofra.app);
     const fetchers: Record<string, (req: Request, ctx: ExecutionContext) => Response | Promise<Response>> = {
-      "app.fetch": (req, ctx) => dw.dropway.app.fetch(req, env as unknown as ServerBindings, ctx),
+      "app.fetch": (req, ctx) => dw.kofra.app.fetch(req, env as unknown as ServerBindings, ctx),
       mounted: (req, ctx) => parent.fetch(req, env as unknown as ServerBindings, ctx),
     };
     for (const [how, fetcher] of Object.entries(fetchers)) {

@@ -16,7 +16,7 @@ import { promisify } from "node:util";
 import { unstable_startWorker } from "wrangler";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { run, type Io } from "../src/main.ts";
-import { DropwayClient } from "../src/client.ts";
+import { KofraClient } from "../src/client.ts";
 import { publish, type ProgressEvent } from "../src/publish.ts";
 
 const MiB = 1024 * 1024;
@@ -165,7 +165,7 @@ describe("CLI large-file upload through the actual Worker", () => {
     const events: ProgressEvent[] = [];
     let attempts = 0;
     let bodyCalls = 0;
-    const client = new DropwayClient({ api, token: key, backoffMs: 1, fetch: async (req) => {
+    const client = new KofraClient({ api, token: key, backoffMs: 1, fetch: async (req) => {
       expect(new URL(req.url).origin).toBe(api);
       if (req.method === "PUT" && new URL(req.url).pathname.includes("/parts/") && attempts++ === 0) {
         await req.body?.cancel();

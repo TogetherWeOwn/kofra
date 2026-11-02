@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
-import { ApiError, defaultIdentity } from "@dropway/core";
+import { ApiError, defaultIdentity } from "@kofra/core";
 import { freshInstance, jsonBody, type Instance } from "./helpers";
 import { connectMcp, type McpTestClient } from "./mcp-helpers";
 

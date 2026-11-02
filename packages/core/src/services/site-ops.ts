@@ -1,4 +1,4 @@
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import { appOrigin, siteFileUrl, siteUrl } from "../context";
 import { ApiError, badRequest, conflict, forbidden, notFound, unauthorized } from "../errors";
 import { detectFileKind } from "../lib/filetypes";
@@ -29,7 +29,7 @@ import { checkNameAvailable, collapseOwnRedirect, insertRedirect, reclaimTombsto
  * ("site_..."), or any URL of the site (its live URL, a file URL, or its API URL).
  * Does not check access; use getSiteByRef for that.
  */
-export async function resolveSiteSlug(dc: DropwayContext, ref: unknown): Promise<string> {
+export async function resolveSiteSlug(dc: KofraContext, ref: unknown): Promise<string> {
   if (typeof ref !== "string" || !ref.trim()) {
     throw badRequest("invalid_site", "site must be a slug, a site id or a URL of the site.", "Example: \"bright-otter-x7k2\". List your sites with list_sites (GET /api/v1/sites).");
   }
@@ -63,7 +63,7 @@ export async function resolveSiteSlug(dc: DropwayContext, ref: unknown): Promise
 }
 
 /** Load a site the caller may access, from any site reference. */
-export async function getSiteByRef(dc: DropwayContext, p: Principal, ref: unknown, scope: Scope = "sites:read"): Promise<SiteRow> {
+export async function getSiteByRef(dc: KofraContext, p: Principal, ref: unknown, scope: Scope = "sites:read"): Promise<SiteRow> {
   return getSiteFor(dc, p, await resolveSiteSlug(dc, ref), scope);
 }
 
@@ -83,7 +83,7 @@ export function isLiveVersionRef(ref: unknown): boolean {
  * Resolve a version reference on a site: "live" (or empty) for the live version,
  * "v12" or "12" for version number 12, otherwise a version id.
  */
-export async function resolveVersionRef(dc: DropwayContext, site: SiteRow, ref: unknown): Promise<VersionRow> {
+export async function resolveVersionRef(dc: KofraContext, site: SiteRow, ref: unknown): Promise<VersionRow> {
   const raw = ref === undefined || ref === null ? "live" : String(ref).trim();
   const listHint = "List versions with list_versions (GET /api/v1/sites/{site}/versions).";
   if (isLiveVersionRef(ref)) {
@@ -113,7 +113,7 @@ export function requireConfirm(confirm: unknown, expected: string, what = "the s
  * Give a site a new slug. Its live URL changes at once; the old URL 308s to
  * the new one (path and query kept) until the rename hold ends.
  */
-export async function renameSite(dc: DropwayContext, p: Principal, ref: unknown, newSlug: unknown) {
+export async function renameSite(dc: KofraContext, p: Principal, ref: unknown, newSlug: unknown) {
   if (p.kind !== "member") throw unauthorized("Renaming a site needs an API key.");
   const site = await getSiteByRef(dc, p, ref, "sites:write");
   if (typeof newSlug !== "string") throw badRequest("invalid_slug", "newSlug must be a string.");
@@ -175,7 +175,7 @@ export interface DuplicateSiteInput {
  * refusal happens before the new site row exists, or removes it again, so a
  * refused duplicate leaves no orphan site, version or taken slug.
  */
-export async function duplicateSite(dc: DropwayContext, p: Principal, ref: unknown, input: DuplicateSiteInput) {
+export async function duplicateSite(dc: KofraContext, p: Principal, ref: unknown, input: DuplicateSiteInput) {
   if (typeof input.newSlug !== "string") throw badRequest("invalid_slug", "newSlug must be a string.");
   const wanted = validateSlug(input.newSlug);
   const source = await getSiteByRef(dc, p, ref, "sites:write");
@@ -309,7 +309,7 @@ export function accessModeOf(site: Pick<SiteRow, "password_hash">): AccessMode {
  * enter a password (stored hashed; changing it signs everyone out).
  * "restricted" and "private" are planned and answer feature_unavailable.
  */
-export async function setSiteAccess(dc: DropwayContext, p: Principal, ref: unknown, input: { mode?: unknown; password?: unknown }) {
+export async function setSiteAccess(dc: KofraContext, p: Principal, ref: unknown, input: { mode?: unknown; password?: unknown }) {
   const mode = String(input.mode ?? "") as AccessMode;
   if (!ACCESS_MODES.includes(mode)) {
     throw badRequest("invalid_access_mode", `mode must be one of ${ACCESS_MODES.join(", ")}.`, 'Use "public" or "password" (with a password).');
@@ -337,7 +337,7 @@ export const READ_FILE_MAX_BYTES = 1024 * 1024;
  * in pages: pass `nextOffset` back as `offset`.
  */
 export async function readFileSlice(
-  dc: DropwayContext,
+  dc: KofraContext,
   site: SiteRow,
   rawPath: unknown,
   opts: { version?: VersionRow | null; offset?: unknown; length?: unknown; encoding?: unknown } = {},

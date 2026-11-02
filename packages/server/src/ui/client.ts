@@ -3529,7 +3529,7 @@ export function dropwayClient() {
     var smallSite = manifest.files.length <= 40;
     var filter = h("input", { class: "dw-input", type: "search", placeholder: "Filter files", "aria-label": "Filter files" });
     // Display names for the manifest's server-derived kinds (mirrors KIND_LABELS
-    // in @dropway/core). This labels values; it never classifies files itself.
+    // in @kofra/core). This labels values; it never classifies files itself.
     var KIND_LABELS = {
       html: "HTML page", markdown: "Markdown", image: "Image", svg: "SVG image", pdf: "PDF document",
       video: "Video", audio: "Audio", json: "JSON", csv: "Table", code: "Code", text: "Text",

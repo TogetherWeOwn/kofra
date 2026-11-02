@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { applyD1Migrations, createExecutionContext, env, reset, waitOnExecutionContext } from "cloudflare:test";
-import { deleteSite, sha256Hex } from "@dropway/core";
-import { type ServerBindings } from "@dropway/server";
+import { deleteSite, sha256Hex } from "@kofra/core";
+import { type ServerBindings } from "@kofra/server";
 import { freshInstance, jsonBody, ORIGIN, type Instance } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
 import { commandRows, registry } from "./operation-fixtures";
@@ -79,7 +79,7 @@ describe("R-17 deletion authorization", () => {
     await publish(dw, "service-delete", "unchanged");
     const key = await keyWith(dw, ["sites:read", "sites:write"]);
     const ctx = createExecutionContext();
-    const dc = dw.dropway.context(env as unknown as ServerBindings, ctx);
+    const dc = dw.kofra.context(env as unknown as ServerBindings, ctx);
     const principal = await dc.adapters.identity.resolve(new Request(`${ORIGIN}/api/v1/me`, { headers: { Authorization: `Bearer ${key}` } }), dc);
     try {
       await expect(deleteSite(dc, principal, "service-delete")).rejects.toMatchObject({ status: 403, code: "insufficient_scope" });
@@ -231,8 +231,8 @@ describe("R-17 migration compatibility on real D1", () => {
       .bind(await sha256Hex("dw_legacy_acceptance_only"), Date.now()).run();
     await applyD1Migrations(env.DB, env.TEST_MIGRATIONS.filter((m) => !/^0001/.test(m.name)));
     // Use the app without resetting or minting a replacement key after migration.
-    const { createDropway } = await import("@dropway/server");
-    const app = createDropway();
+    const { createKofra } = await import("@kofra/server");
+    const app = createKofra();
     const request = async (path: string, method: string, input?: unknown) => {
       const ctx = createExecutionContext();
       const res = await app.fetch(new Request(`${ORIGIN}${path}`, {

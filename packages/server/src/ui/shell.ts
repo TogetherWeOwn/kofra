@@ -1,6 +1,6 @@
 import type { Context } from "hono";
-import { appOrigin, type DropwayContext } from "@dropway/core";
-import type { DropwayEnv } from "../env";
+import { appOrigin, type KofraContext } from "@kofra/core";
+import type { KofraEnv } from "../env";
 import type { NavItem, UiSlots } from "../extensions";
 import { BASE_CSS, escapeHtml } from "../html";
 import { clientScriptUrl } from "./assets";
@@ -19,18 +19,18 @@ import { clientScriptUrl } from "./assets";
 
 const slotsByRequest = new WeakMap<Request, UiSlots>();
 
-/** Called by createDropway for every app request so renderAppPage can find the instance's UI slots. */
-export function bindUiSlots(c: Context<DropwayEnv>, slots: UiSlots) {
+/** Called by createKofra for every app request so renderAppPage can find the instance's UI slots. */
+export function bindUiSlots(c: Context<KofraEnv>, slots: UiSlots) {
   slotsByRequest.set(c.req.raw, slots);
 }
 
-/** The UI slots bound to this request (empty slots outside createDropway). */
-export function uiSlotsOf(c: Context<DropwayEnv>): UiSlots {
+/** The UI slots bound to this request (empty slots outside createKofra). */
+export function uiSlotsOf(c: Context<KofraEnv>): UiSlots {
   return slotsByRequest.get(c.req.raw) ?? { navItems: [], pages: [] };
 }
 
 /** CSP source for wherever sites are served, for frame-src/img-src/connect-src. */
-export function sitesCspSource(dw: DropwayContext): string {
+export function sitesCspSource(dw: KofraContext): string {
   const c = dw.config;
   if (c.sitesMode === "subdomain" && c.sitesDomain) return `https://*.${c.sitesDomain}`;
   if (c.sitesOrigin) return c.sitesOrigin;
@@ -38,7 +38,7 @@ export function sitesCspSource(dw: DropwayContext): string {
 }
 
 /** CSP for app pages that run the dashboard script. */
-export function appScriptCsp(dw: DropwayContext): string {
+export function appScriptCsp(dw: KofraContext): string {
   const s = sitesCspSource(dw);
   const sites = s === "'self'" ? "" : ` ${s}`;
   return [
@@ -56,7 +56,7 @@ export function appScriptCsp(dw: DropwayContext): string {
   ].join("; ");
 }
 
-export function appPageHeaders(dw: DropwayContext): Record<string, string> {
+export function appPageHeaders(dw: KofraContext): Record<string, string> {
   return {
     "Content-Type": "text/html; charset=utf-8",
     "Content-Security-Policy": appScriptCsp(dw),
@@ -110,7 +110,7 @@ export interface AppPageOptions {
  * uiSlots.pages handlers so their pages (billing, organisations, ...) share
  * the navigation, banner, theme and CSP of the dashboard.
  */
-export async function renderAppPage(c: Context<DropwayEnv>, opts: AppPageOptions): Promise<Response> {
+export async function renderAppPage(c: Context<KofraEnv>, opts: AppPageOptions): Promise<Response> {
   const dw = c.get("dw");
   const slots = uiSlotsOf(c);
   const name = dw.config.instanceName;

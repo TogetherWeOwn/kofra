@@ -1,4 +1,4 @@
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import type { QuotaKey } from "../policy";
 import { meter } from "./events";
 
@@ -36,7 +36,7 @@ SELECT COALESCE(SUM(size), 0) FROM (
 )`;
 
 /** Append to the lifecycle transaction, never do a read/modify/write counter increment. */
-export function usageStatements(dc: DropwayContext, tenantId: string | null): D1PreparedStatement[] {
+export function usageStatements(dc: KofraContext, tenantId: string | null): D1PreparedStatement[] {
   if (tenantId === null) return [];
   const now = Date.now();
   return [
@@ -49,7 +49,7 @@ export function usageStatements(dc: DropwayContext, tenantId: string | null): D1
   ];
 }
 
-export async function getUsage(dc: DropwayContext, tenantId: string | null): Promise<UsageCounters> {
+export async function getUsage(dc: KofraContext, tenantId: string | null): Promise<UsageCounters> {
   const usage: UsageCounters = { sites: 0, storage_bytes: 0 };
   if (tenantId === null) return usage;
   const { results } = await dc.env.DB.prepare("SELECT key, value FROM usage_counters WHERE tenant_id = ?").bind(tenantId).all<{ key: QuotaKey; value: number }>();
@@ -57,13 +57,13 @@ export async function getUsage(dc: DropwayContext, tenantId: string | null): Pro
   return usage;
 }
 
-export async function recomputeUsage(dc: DropwayContext, tenantId: string): Promise<UsageCounters> {
+export async function recomputeUsage(dc: KofraContext, tenantId: string): Promise<UsageCounters> {
   await dc.env.DB.batch(usageStatements(dc, tenantId));
   return getUsage(dc, tenantId);
 }
 
 /** Bytes absent from ready, active manifests, not from the upload-proof blob_scopes table. */
-export async function incrementalBytes(dc: DropwayContext, tenantId: string | null, siteId: string | null, entries: readonly { sha256: string; size: number }[]): Promise<number> {
+export async function incrementalBytes(dc: KofraContext, tenantId: string | null, siteId: string | null, entries: readonly { sha256: string; size: number }[]): Promise<number> {
   const unique = [...new Map(entries.map((entry) => [entry.sha256, entry])).values()];
   let bytes = 0;
   for (let offset = 0; offset < unique.length; offset += 1000) {
@@ -81,7 +81,7 @@ export async function incrementalBytes(dc: DropwayContext, tenantId: string | nu
   return bytes;
 }
 
-export async function snapshotUsage(dc: DropwayContext): Promise<void> {
+export async function snapshotUsage(dc: KofraContext): Promise<void> {
   // Keyset pages keep the nightly job bounded in memory for embedding applications.
   let cursor = "";
   for (;;) {

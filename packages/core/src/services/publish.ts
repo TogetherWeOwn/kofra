@@ -1,6 +1,6 @@
 import { Inflate, unzipSync } from "fflate";
 import type { Limits } from "../config";
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import { appOrigin, siteUrl } from "../context";
 import { ApiError, badRequest, forbidden, tooLarge } from "../errors";
 import { sha256Hex } from "../lib/crypto";
@@ -43,7 +43,7 @@ function isZip(bytes: Uint8Array): boolean {
  * - one raw file body, named by ?path=, X-Kofra-Path or Content-Disposition (default index.html / index.md).
  * Metadata may also come as query parameters.
  */
-export async function parsePublishRequest(dc: DropwayContext, req: Request, maxBytes: number): Promise<PublishInput> {
+export async function parsePublishRequest(dc: KofraContext, req: Request, maxBytes: number): Promise<PublishInput> {
   const url = new URL(req.url);
   const len = Number(req.headers.get("content-length") ?? "0");
   const hint = "Use the manifest flow for bigger sites: POST /api/v1/sites/:slug/versions, PUT /api/v1/blobs/:sha256, POST .../finalize.";
@@ -297,7 +297,7 @@ export function validateInlineFiles(files: InlineFile[], lim: Limits): void {
  * Which site a one-shot publish targets: the claim token's site, an existing site by slug, or a new one.
  * `manifest` (when known) is checked before a new site is created, so a refused publish creates nothing.
  */
-export async function resolvePublishTarget(dc: DropwayContext, p: Principal, fields: Record<string, unknown>, manifest?: unknown) {
+export async function resolvePublishTarget(dc: KofraContext, p: Principal, fields: Record<string, unknown>, manifest?: unknown) {
   const settings = parseSettings(fields);
   const slug = fields.slug ? stringField(fields.slug, "slug").trim().toLowerCase() : null;
   if (p.kind === "claim") {
@@ -326,7 +326,7 @@ export async function resolvePublishTarget(dc: DropwayContext, p: Principal, fie
  * One call to a live URL: resolve or create the site, store new blobs
  * (deduplicated), record a version and make it live.
  */
-export async function publishFiles(dc: DropwayContext, p: Principal, input: PublishInput, opts: { client?: string | null } = {}) {
+export async function publishFiles(dc: KofraContext, p: Principal, input: PublishInput, opts: { client?: string | null } = {}) {
   const metadata = parseDeployOptions({ message: input.fields.message, baseVersionId: input.fields.baseVersionId });
   input = { ...input, fields: { ...input.fields, ...metadata } };
   const slug = input.fields.slug ? stringField(input.fields.slug, "slug").trim().toLowerCase() : null;
@@ -349,7 +349,7 @@ export async function publishFiles(dc: DropwayContext, p: Principal, input: Publ
 }
 
 async function publishToTarget(
-  dc: DropwayContext,
+  dc: KofraContext,
   p: Principal,
   input: PublishInput,
   target: Awaited<ReturnType<typeof resolvePublishTarget>>,

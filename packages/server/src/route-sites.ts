@@ -8,8 +8,8 @@ import {
   resolveSlugRedirect,
   resolveVersionAddress,
   siteUrl,
-  type DropwayContext,
-} from "@dropway/core";
+  type KofraContext,
+} from "@kofra/core";
 import { isNavigation, resolvePath, type ServeMode } from "./serve";
 import { previewResponse } from "./previews";
 
@@ -58,7 +58,7 @@ function parseVersionAddress(segment: string | undefined): { base: string; num: 
  * name. Ready previews are authorized and loaded separately from the live pointer.
  */
 async function versionAddressRoute(
-  dw: DropwayContext,
+  dw: KofraContext,
   parsed: { base: string; num: number },
   locationFor: (current: string) => string,
   mode: ServeMode,
@@ -87,7 +87,7 @@ function refererSlug(req: Request, url: URL, prefix: string): string | null {
 }
 
 /** Does site `slug` have something to serve at this absolute path (no SPA/404 fallbacks)? */
-async function siteHasPath(dw: DropwayContext, slug: string, pathname: string, req: Request, base: string): Promise<boolean> {
+async function siteHasPath(dw: KofraContext, slug: string, pathname: string, req: Request, base: string): Promise<boolean> {
   const live = await getLiveSite(dw, slug);
   if (!live || !live.versionId || (live.expiresAt && live.expiresAt < Date.now())) return false;
   const p = requestPathToFilePath(pathname);
@@ -109,7 +109,7 @@ const APP_NAV_PREFIXES = ["dashboard", "v", "view", "api", "mcp", "docs", ".well
  * (not a sub-resource) from inside X to a path X itself lacks. The redirect target is then
  * served by the SPA fallback of X, so root-relative client routes keep working in path mode.
  */
-async function spaNavigationRedirect(dw: DropwayContext, slug: string, req: Request, pathname: string): Promise<boolean> {
+async function spaNavigationRedirect(dw: KofraContext, slug: string, req: Request, pathname: string): Promise<boolean> {
   if (!isNavigation(req) || extname(pathname) || pathname.includes("//")) return false;
   if (APP_NAV_EXACT.has(pathname) || APP_NAV_PREFIXES.includes(pathname.split("/")[1] ?? "")) return false;
   const p = requestPathToFilePath(pathname);
@@ -124,7 +124,7 @@ async function spaNavigationRedirect(dw: DropwayContext, slug: string, req: Requ
  * 308 to <current site URL><rest>?q, so old links, embeds and bookmarks keep working. An absolute
  * path from a page of site X there (Referer) goes to X. Never cached: a rollback works at once.
  */
-function legacySitesRoute(dw: DropwayContext, req: Request, url: URL): SiteRoute {
+function legacySitesRoute(dw: KofraContext, req: Request, url: URL): SiteRoute {
   if (url.pathname === "/") return dw.config.appOrigin ? { kind: "redirect", location: dw.config.appOrigin, status: 308, byReferer: false } : { kind: "sites_not_found" };
   const first = url.pathname.split("/")[1];
   if (isSiteSlug(first)) return { kind: "redirect", location: siteUrl(dw, first) + url.pathname.slice(first.length + 2) + url.search, status: 308, byReferer: false };
@@ -133,7 +133,7 @@ function legacySitesRoute(dw: DropwayContext, req: Request, url: URL): SiteRoute
   return { kind: "sites_not_found" };
 }
 
-export async function routeSiteRequest(dw: DropwayContext, req: Request): Promise<SiteRoute> {
+export async function routeSiteRequest(dw: KofraContext, req: Request): Promise<SiteRoute> {
   const c = dw.config;
   const url = new URL(req.url);
   const method = req.method.toUpperCase();

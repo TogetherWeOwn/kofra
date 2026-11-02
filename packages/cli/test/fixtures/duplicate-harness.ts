@@ -130,7 +130,7 @@ if (setup.forbidReads) {
       if (key !== null && !opts.offline) env.KOFRA_API_KEY = key;
       const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
         const child = spawn(process.execPath, ["--import", preload,
-          opts.repositoryBin ? join(root, "packages/cli/bin/dropway.mjs") : bundle, ...args],
+          opts.repositoryBin ? join(root, "packages/cli/bin/kofra.mjs") : bundle, ...args],
         { cwd: home, env, stdio: ["ignore", "pipe", "pipe"] });
         let stdout = "";
         let stderr = "";

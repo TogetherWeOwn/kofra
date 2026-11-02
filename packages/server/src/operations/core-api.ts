@@ -29,7 +29,7 @@ import {
   idempotencyScope,
   validateIdempotencyKey,
   withIdempotency,
-} from "@dropway/core";
+} from "@kofra/core";
 import { CONFIRM_SLUG, FILE_INPUT, PUBLISH_OUT, SETTINGS_INPUT, SITE_OUT, SITE_REF, VERSION_OUT, VERSION_REF, obj } from "../mcp/schemas";
 import { readJson } from "../routes/api";
 import { defineOperation, rawRequestInput } from "../operations";
@@ -239,7 +239,7 @@ export const CORE_API_OPERATIONS = [
         input: { files: [{ path: "index.html", content: "Hello" }] },
         output: {
           status: "live",
-          url: "https://dropway.example/s/bright-otter-x7k2/",
+          url: "https://kofra.example/s/bright-otter-x7k2/",
           slug: "bright-otter-x7k2",
         },
       },
@@ -369,7 +369,7 @@ export const CORE_API_OPERATIONS = [
         },
         output: {
           status: "live",
-          url: "https://dropway.example/s/bright-otter-x7k2/",
+          url: "https://kofra.example/s/bright-otter-x7k2/",
           slug: "bright-otter-x7k2",
         },
       },
@@ -428,12 +428,12 @@ export const CORE_API_OPERATIONS = [
       {
         input: { site: "bright-otter-x7k2", versionId: "ver_example" },
         output: {
-          url: "https://dropway.example/s/bright-otter-x7k2/",
+          url: "https://kofra.example/s/bright-otter-x7k2/",
           live: true,
           replayed: false,
           site: {
             slug: "bright-otter-x7k2",
-            url: "https://dropway.example/s/bright-otter-x7k2/",
+            url: "https://kofra.example/s/bright-otter-x7k2/",
             currentVersionId: "ver_example",
           },
           warnings: [],
@@ -486,7 +486,7 @@ export const CORE_API_OPERATIONS = [
         output: {
           site: {
             slug: "bright-otter-x7k2",
-            url: "https://dropway.example/s/bright-otter-x7k2/",
+            url: "https://kofra.example/s/bright-otter-x7k2/",
             currentVersionId: "ver_example",
           },
         },
@@ -564,7 +564,7 @@ export const CORE_API_OPERATIONS = [
           sites: [
             {
               slug: "bright-otter-x7k2",
-              url: "https://dropway.example/s/bright-otter-x7k2/",
+              url: "https://kofra.example/s/bright-otter-x7k2/",
               currentVersionId: "ver_example",
             },
           ],
@@ -893,7 +893,7 @@ export const CORE_API_OPERATIONS = [
             status: "ready",
             live: true,
           },
-          url: "https://dropway.example/s/bright-otter-x7k2/",
+          url: "https://kofra.example/s/bright-otter-x7k2/",
         },
       },
     ],
@@ -976,7 +976,7 @@ export const CORE_API_OPERATIONS = [
         output: {
           site: {
             slug: "bright-otter-x7k2",
-            url: "https://dropway.example/s/bright-otter-x7k2/",
+            url: "https://kofra.example/s/bright-otter-x7k2/",
             currentVersionId: "ver_example",
           },
         },
@@ -1060,7 +1060,7 @@ export const CORE_API_OPERATIONS = [
         output: {
           site: {
             slug: "bright-otter-x7k2",
-            url: "https://dropway.example/s/bright-otter-x7k2/",
+            url: "https://kofra.example/s/bright-otter-x7k2/",
             currentVersionId: "ver_example",
           },
           access: { mode: "public" },
@@ -1159,7 +1159,7 @@ export const CORE_API_OPERATIONS = [
           claimed: true,
           site: {
             slug: "bright-otter-x7k2",
-            url: "https://dropway.example/s/bright-otter-x7k2/",
+            url: "https://kofra.example/s/bright-otter-x7k2/",
             currentVersionId: "ver_example",
           },
         },

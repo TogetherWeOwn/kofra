@@ -1,4 +1,4 @@
-import type { DropwayContext } from "@dropway/core";
+import type { KofraContext } from "@kofra/core";
 
 /**
  * Former app origins (config.legacyAppOrigins), for example the workers.dev hostname an
@@ -28,7 +28,7 @@ export function servedOnLegacyOrigin(pathname: string): boolean {
 }
 
 /** The same URL on the current app origin, or null when `url` is not on a legacy app origin. */
-export function legacyAppSuccessor(dw: DropwayContext, url: URL): string | null {
+export function legacyAppSuccessor(dw: KofraContext, url: URL): string | null {
   const { appOrigin, legacyAppOrigins } = dw.config;
   if (!appOrigin || !legacyAppOrigins.includes(url.origin)) return null;
   return `${appOrigin}${url.pathname}${url.search}`;
@@ -53,7 +53,7 @@ export function legacyAppRedirect(req: Request, url: URL, successor: string): Re
 }
 
 /** Copy of `res` with the successor URL, plus `Deprecation` (RFC 9745) when LEGACY_DEPRECATED_AT is set. */
-export function withDeprecationHeaders(res: Response, dw: DropwayContext, successor: string): Response {
+export function withDeprecationHeaders(res: Response, dw: KofraContext, successor: string): Response {
   const out = new Response(res.body, res);
   if (dw.config.legacyDeprecatedAt > 0) out.headers.set("Deprecation", `@${dw.config.legacyDeprecatedAt}`);
   out.headers.append("Link", `<${successor}>; rel="successor-version"`);

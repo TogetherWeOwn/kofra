@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ApiError } from "@dropway/core";
+import { ApiError } from "@kofra/core";
 import { freshInstance, form, jsonBody, manifestEntry, ORIGIN, type Instance } from "./helpers";
 import { connectMcp, connectLegacyMcp } from "./mcp-helpers";
 

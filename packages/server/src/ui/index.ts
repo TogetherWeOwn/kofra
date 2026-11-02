@@ -1,5 +1,5 @@
 import type { Hono } from "hono";
-import type { DropwayEnv } from "../env";
+import type { KofraEnv } from "../env";
 import type { UiSlots } from "../extensions";
 import { clientScriptResponse } from "./assets";
 import { keysPage, loginPage, publishPage, settingsPage, sitePage, sitesPage, viewerPage } from "./pages";
@@ -10,7 +10,7 @@ import { keysPage, loginPage, publishPage, settingsPage, sitePage, sitesPage, vi
  * of these paths with its own page. The home page (GET /) is wired in app.ts
  * (uiSlots.landing replaces it).
  */
-export function installUi(app: Hono<DropwayEnv>, slots: UiSlots) {
+export function installUi(app: Hono<KofraEnv>, slots: UiSlots) {
   app.get("/__dropway/ui/:file", (c) => clientScriptResponse(c.req.param("file")) ?? c.notFound());
   app.get("/login", (c) => loginPage(c));
   // The sign-in forms post here only if the dashboard script has not loaded yet: never echo or

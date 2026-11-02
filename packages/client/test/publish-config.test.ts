@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 const root = join(__dirname, "..", "..", "..");
 const pkg = (dir: string) => JSON.parse(readFileSync(join(root, dir, "package.json"), "utf8"));
 
-/** R-45: @dropway/core, @dropway/server, @dropway/client and kofra publish from CI with npm trusted publishing. */
+/** R-45: @kofra/core, @kofra/server, @kofra/client and kofra publish from CI with npm trusted publishing. */
 describe("npm publish configuration", () => {
   const packages = ["packages/core", "packages/server", "packages/client", "packages/cli"];
 
@@ -25,7 +25,7 @@ describe("npm publish configuration", () => {
     expect(workflow).toContain("id-token: write");
     expect(workflow).toContain("--provenance");
     expect(workflow).not.toMatch(/NPM_TOKEN|NODE_AUTH_TOKEN/);
-    for (const name of ["@dropway/core", "@dropway/server", "@dropway/client", "kofra"]) {
+    for (const name of ["@kofra/core", "@kofra/server", "@kofra/client", "kofra"]) {
       expect(workflow, name).toContain(name);
     }
   });

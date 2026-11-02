@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bearerToken, defaultIdentity, principalFromToken, requestIp } from "@dropway/core";
+import { bearerToken, defaultIdentity, principalFromToken, requestIp } from "@kofra/core";
 import { freshInstance, jsonBody, manifestEntry } from "./helpers";
 
 // Review-round guard pin: operation-level authorization is the last line of

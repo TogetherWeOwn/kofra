@@ -1,7 +1,7 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { detectFileKind, languageFor, contentTypeFor, sha256Hex, type LiveSite } from "@dropway/core";
-import { findViewer, toViewerFile, VIEWERS, type ServerBindings, type ViewMode } from "@dropway/server";
+import { detectFileKind, languageFor, contentTypeFor, sha256Hex, type LiveSite } from "@kofra/core";
+import { findViewer, toViewerFile, VIEWERS, type ServerBindings, type ViewMode } from "@kofra/server";
 import { sanitizeHtml, isSafeUrl } from "../packages/server/src/viewers/sanitize";
 import { splitHighlightedLines, highlight } from "../packages/server/src/viewers/highlight";
 import { imageSize } from "../packages/server/src/viewers/media";
@@ -723,7 +723,7 @@ describe("notebook output folding", () => {
     await caches.default.delete(new Request(`${ORIGIN}/__dropway/render/notebook@${notebookViewer.version}/${hash}`));
     if (tier === "memory") {
       const ctx = createExecutionContext();
-      const dc = dw.dropway.context(env as unknown as ServerBindings, ctx, new URL(url));
+      const dc = dw.kofra.context(env as unknown as ServerBindings, ctx, new URL(url));
       await cachedRender(dc, legacyKey, async () => oldHtml);
       await waitOnExecutionContext(ctx);
     } else {

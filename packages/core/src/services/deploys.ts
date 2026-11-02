@@ -1,5 +1,5 @@
 import type { Limits } from "../config";
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import { appOrigin, siteFileUrl, siteUrl } from "../context";
 import { ApiError, badRequest, conflict, notFound, tooLarge, unauthorized, forbidden } from "../errors";
 import { PENDING_VERSION_TTL_MS, uploadExpired } from "./upload-tokens";
@@ -169,7 +169,7 @@ function jsonChunks<T>(items: T[], maxBytes = 800_000): string[] {
 }
 
 /** sha256 values from `shas` that the given scope has not yet proven it holds. */
-export async function missingForScope(dc: DropwayContext, scope: string, shas: string[]): Promise<string[]> {
+export async function missingForScope(dc: KofraContext, scope: string, shas: string[]): Promise<string[]> {
   const unique = [...new Set(shas)];
   if (!unique.length) return [];
   const present = new Set<string>();
@@ -185,7 +185,7 @@ export async function missingForScope(dc: DropwayContext, scope: string, shas: s
 }
 
 /** Only compare verified bytes this owner has proven it holds; never reveal another tenant's blob. */
-async function validateStoredSizes(dc: DropwayContext, site: SiteRow, entries: NormalisedEntry[]): Promise<void> {
+async function validateStoredSizes(dc: KofraContext, site: SiteRow, entries: NormalisedEntry[]): Promise<void> {
   const scope = blobScope(siteOwner(site));
   for (const json of jsonChunks(entries.map((e) => [e.path, e.sha256, e.size]))) {
     const mismatch = await dc.env.DB.prepare(`SELECT json_extract(j.value, '$[0]') AS path, b.size AS expected,
@@ -206,7 +206,7 @@ function siteOwner(site: SiteRow) {
  * which files still need uploading. Files this owner already stored are reused.
  * A byte-identical manifest returns { unchanged: true } and records nothing.
  */
-export async function createDeploy(dc: DropwayContext, p: Principal, site: SiteRow, files: unknown, opts: DeployOptions = {}) {
+export async function createDeploy(dc: KofraContext, p: Principal, site: SiteRow, files: unknown, opts: DeployOptions = {}) {
   site = await getSiteFor(dc, p, site.slug, "sites:write");
   if (site.mode === "transfer" && !opts.transferCreate) throw conflict("transfer_immutable", "Transfer files cannot be replaced.", "Create a new transfer instead.");
   const owner = siteOwner(site);
@@ -358,7 +358,7 @@ export async function createDeploy(dc: DropwayContext, p: Principal, site: SiteR
 }
 
 /** Check a manifest against the caps for a site that does not exist yet (throws the same errors as createDeploy). */
-export async function precheckManifest(dc: DropwayContext, p: Principal, tenantId: string | null, files: unknown): Promise<void> {
+export async function precheckManifest(dc: KofraContext, p: Principal, tenantId: string | null, files: unknown): Promise<void> {
   validateManifest(files, await dc.adapters.policy.limits(p, { siteId: null, tenantId }, dc));
 }
 
@@ -369,7 +369,7 @@ export async function precheckManifest(dc: DropwayContext, p: Principal, tenantI
  * failed call never leaves an empty site, a taken slug or a used rate-limit slot.
  */
 export async function createSiteWithDeploy(
-  dc: DropwayContext,
+  dc: KofraContext,
   p: Principal,
   input: { slug?: string | null } & SiteSettingsInput,
   files: unknown,
@@ -392,7 +392,7 @@ export async function createSiteWithDeploy(
 }
 
 /** Read live metadata together, still bound to the authorized site's ownership snapshot. */
-export async function versionConflict(dc: DropwayContext, site: SiteRow, base?: VersionRow, hint?: string): Promise<ApiError> {
+export async function versionConflict(dc: KofraContext, site: SiteRow, base?: VersionRow, hint?: string): Promise<ApiError> {
   const live = await dc.env.DB.prepare(
     `SELECT s.current_version_id AS id, v.number, v.client, v.finalized_at
        FROM sites s LEFT JOIN versions v ON v.id = s.current_version_id AND v.site_id = s.id
@@ -419,7 +419,7 @@ export async function versionConflict(dc: DropwayContext, site: SiteRow, base?: 
 
 /** Store a blob uploaded by a client. R2 verifies the SHA-256 while it streams in. */
 export async function uploadBlob(
-  dc: DropwayContext,
+  dc: KofraContext,
   p: Principal,
   shaInput: string,
   body: ReadableStream | null,
@@ -500,7 +500,7 @@ export async function uploadBlob(
  * cannot produce fails the finalize rather than silently dropping the rules.
  */
 async function loadVersionSiteConfig(
-  dc: DropwayContext,
+  dc: KofraContext,
   files: NormalisedEntry[],
 ): Promise<{ configJson: string | null; warnings: Warning[] }> {
   const texts: { redirects?: string | null; headers?: string | null } = {};
@@ -528,7 +528,7 @@ async function loadVersionSiteConfig(
 }
 
 /** Atomically make a pending version live. Retrying a finished finalize is safe. */
-export async function finalizeDeploy(dc: DropwayContext, p: Principal, site: SiteRow, versionId: string, transferCreate = false) {
+export async function finalizeDeploy(dc: KofraContext, p: Principal, site: SiteRow, versionId: string, transferCreate = false) {
   site = await getSiteFor(dc, p, site.slug, "sites:write");
   if (site.mode === "transfer" && !transferCreate) throw conflict("transfer_immutable", "Transfer files cannot be replaced.", "Create a new transfer instead.");
   const version = await getVersion(dc, site.id, versionId);
@@ -603,7 +603,7 @@ export async function finalizeDeploy(dc: DropwayContext, p: Principal, site: Sit
 }
 
 /** Publish warnings for a ready version: the stored-bytes scan plus the hosting-rule warnings kept in its `config_json`. */
-export async function versionWarnings(dc: DropwayContext, site: SiteRow, version: Pick<VersionRow, "id" | "config_json">): Promise<Warning[]> {
+export async function versionWarnings(dc: KofraContext, site: SiteRow, version: Pick<VersionRow, "id" | "config_json">): Promise<Warning[]> {
   return [...(await deployWarnings(dc, site, version.id)), ...parseSiteConfigJson(version.config_json).warnings];
 }
 
@@ -629,7 +629,7 @@ const BROWSER_STORAGE_RE = /\b(?:localStorage|sessionStorage|indexedDB)\b|docume
  * {@link WARN_SCAN_MAX_BYTES}, at most {@link WARN_SCAN_MAX_FILES} files read, per-code caps),
  * so a huge version pays a constant, small extra cost at finalize.
  */
-export async function deployWarnings(dc: DropwayContext, site: SiteRow, versionId: string): Promise<Warning[]> {
+export async function deployWarnings(dc: KofraContext, site: SiteRow, versionId: string): Promise<Warning[]> {
   const warnings: Warning[] = [];
   // Advisory reads must not turn an already-published version into an API failure.
   // Keep this guard local to the scan: authorization and finalization still fail normally.
@@ -795,7 +795,7 @@ export async function deployWarnings(dc: DropwayContext, site: SiteRow, versionI
   return warnings;
 }
 
-export async function getDeployStatus(dc: DropwayContext, site: SiteRow, versionId: string) {
+export async function getDeployStatus(dc: KofraContext, site: SiteRow, versionId: string) {
   const version = await getVersion(dc, site.id, versionId);
   if (!version) throw notFound("deploy_not_found", `No version ${versionId} on site ${site.slug}.`);
   let missing: string[] = [];
@@ -806,7 +806,7 @@ export async function getDeployStatus(dc: DropwayContext, site: SiteRow, version
   return { deploy: serializeVersion(version, site.current_version_id), missing };
 }
 
-export async function listVersions(dc: DropwayContext, site: SiteRow, opts: { limit?: number } = {}) {
+export async function listVersions(dc: KofraContext, site: SiteRow, opts: { limit?: number } = {}) {
   const limit = Math.min(Math.max(Number(opts.limit) || 50, 1), 500);
   const { results } = await dc.env.DB.prepare("SELECT * FROM versions WHERE site_id = ? AND status = 'ready' ORDER BY number DESC LIMIT ?")
     .bind(site.id, limit)
@@ -819,7 +819,7 @@ const RESTORE_CONFLICT_HINT =
   "Call get_site to inspect the current live version, then decide on a fresh intentional restore invocation. Do not automatically retry this restore.";
 
 /** Make an older finalized version live again (a pointer flip; no files are copied). */
-export async function restoreVersion(dc: DropwayContext, p: Principal, site: SiteRow, versionId: string, opts?: { symbolicLive?: boolean }) {
+export async function restoreVersion(dc: KofraContext, p: Principal, site: SiteRow, versionId: string, opts?: { symbolicLive?: boolean }) {
   const originalSiteId = site.id;
   site = await getSiteFor(dc, p, site.slug, "sites:write");
   if (site.id !== originalSiteId) {
@@ -873,7 +873,7 @@ export async function restoreVersion(dc: DropwayContext, p: Principal, site: Sit
 }
 
 /** Permanently delete one non-live version (for example one that leaked a secret). */
-export async function deleteVersion(dc: DropwayContext, p: Principal, site: SiteRow, versionId: string) {
+export async function deleteVersion(dc: KofraContext, p: Principal, site: SiteRow, versionId: string) {
   const originalSiteId = site.id;
   site = await getSiteFor(dc, p, site.slug, "sites:delete");
   if (site.id !== originalSiteId) {
@@ -929,7 +929,7 @@ export interface FileRow {
 }
 
 /** The file manifest of the live version (or of `versionId`), with public and raw URLs. */
-export async function listFiles(dc: DropwayContext, site: SiteRow, versionId: string | null) {
+export async function listFiles(dc: KofraContext, site: SiteRow, versionId: string | null) {
   const vid = versionId ?? site.current_version_id;
   if (!vid) return { version: null, files: [] };
   // One batch is one consistent snapshot: a concurrent deleteVersion batch commits
@@ -964,7 +964,7 @@ export async function listFiles(dc: DropwayContext, site: SiteRow, versionId: st
   };
 }
 
-export async function getFile(dc: DropwayContext, site: SiteRow, path: string, versionId?: string | null): Promise<FileRow | null> {
+export async function getFile(dc: KofraContext, site: SiteRow, path: string, versionId?: string | null): Promise<FileRow | null> {
   if (site.mode === "transfer") throw forbidden("Transfer bytes are only available as sites-host downloads.", "Use the transfer page's download links.", "transfer_download_required");
   const vid = versionId ?? site.current_version_id;
   if (!vid) return null;

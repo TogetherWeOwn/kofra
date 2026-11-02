@@ -1,5 +1,5 @@
 import { HTTP_UPLOAD, HTTP_UPLOAD_ITEM, HTTP_VERSION } from "./http-schemas";
-import { deleteVersionByRef, exportVersionZip, getVersionStatus, getSiteByRef, resolveVersionRef } from "@dropway/core";
+import { deleteVersionByRef, exportVersionZip, getVersionStatus, getSiteByRef, resolveVersionRef } from "@kofra/core";
 import { CONFIRM_SLUG, SITE_REF, VERSION_OUT, VERSION_REF, obj } from "../mcp/schemas";
 import { defineOperation } from "../operations";
 import { markReplayReceipt } from "../replay-receipt";

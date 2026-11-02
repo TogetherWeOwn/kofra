@@ -435,7 +435,7 @@ const MAX_SITE_PATH = 1024;
  * Validate the site path of piped bytes before any stdin read or network call.
  * Mirrors the server's `normaliseFilePath` and its `__dropway/` reservation
  * (packages/core/src/lib/paths.ts, services/deploys.ts); the CLI cannot import
- * @dropway/core, so keep the two in sync. Returns the normalised path.
+ * @kofra/core, so keep the two in sync. Returns the normalised path.
  */
 export function normaliseStdinPath(input: string): string {
   const segments = input.replace(/\\/g, "/").trim().replace(/^(?:\.\/)+/, "").replace(/^\/+/, "").split("/").filter((s) => s !== "" && s !== ".");

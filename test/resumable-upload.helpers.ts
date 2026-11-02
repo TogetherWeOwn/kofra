@@ -1,7 +1,7 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { expect } from "vitest";
-import { createTenantWithOwner, mintApiKey, type DropwayContext } from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+import { createTenantWithOwner, mintApiKey, type KofraContext } from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { jsonBody, type Instance } from "./helpers";
 
 export const MiB = 1024 * 1024;
@@ -66,9 +66,9 @@ export function finalize(dw: Instance, p: Pending, key = p.key) {
   return dw.json(`/api/v1/sites/${p.site}/deploys/${p.versionId}/finalize`, { method: "POST", key });
 }
 
-export async function context<T>(dw: Instance, fn: (dc: DropwayContext) => Promise<T>): Promise<T> {
+export async function context<T>(dw: Instance, fn: (dc: KofraContext) => Promise<T>): Promise<T> {
   const ctx = createExecutionContext();
-  try { return await fn(dw.dropway.context(env as unknown as ServerBindings, ctx)); }
+  try { return await fn(dw.kofra.context(env as unknown as ServerBindings, ctx)); }
   finally { await waitOnExecutionContext(ctx); }
 }
 

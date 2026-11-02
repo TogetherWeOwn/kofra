@@ -14,7 +14,7 @@
 // implementation, fixture, account, host or test literal was copied.
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sha256Hex } from "@dropway/core";
+import { sha256Hex } from "@kofra/core";
 import { ORIGIN, type Instance } from "./helpers";
 import { request } from "./delivery-review-fixtures";
 import { create, FILES, instance, siteFile, unlock } from "./transfer-fixtures";

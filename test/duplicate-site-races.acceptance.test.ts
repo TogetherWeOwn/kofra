@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
-import { clearLiveMemoryCache, defaultPolicy } from "@dropway/core";
+import { clearLiveMemoryCache, defaultPolicy } from "@kofra/core";
 import { freshInstance, jsonBody, ORIGIN, type Instance } from "./helpers";
 
 /**

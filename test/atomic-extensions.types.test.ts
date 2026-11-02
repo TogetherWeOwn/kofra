@@ -1,10 +1,10 @@
 import { expectTypeOf, it } from "vitest";
 import {
   type ApiError, type AtomicWriteExtension, type CreateTenantWithOwnerInput,
-  type CreateTenantWithOwnerOptions, type DropwayContext, type MemberRow,
+  type CreateTenantWithOwnerOptions, type KofraContext, type MemberRow,
   type PolicyAdapter, type Principal, type SiteNameMutation, type TenantRow,
   createTenantWithOwner,
-} from "@dropway/core";
+} from "@kofra/core";
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
 
@@ -22,7 +22,7 @@ it("pins the frozen additive public API, including readonly preparation inputs",
     slug: string; previousSlug: string | null;
   }>();
   expectTypeOf<Prepare>().toEqualTypeOf<(
-    principal: Principal, input: Readonly<SiteNameMutation>, dc: DropwayContext,
+    principal: Principal, input: Readonly<SiteNameMutation>, dc: KofraContext,
   ) => AtomicWriteExtension | Promise<AtomicWriteExtension>>();
   expectTypeOf<Equal<Parameters<Prepare>[1], Readonly<SiteNameMutation>>>().toEqualTypeOf<true>();
   expectTypeOf<CreateTenantWithOwnerInput>().toEqualTypeOf<{
@@ -30,11 +30,11 @@ it("pins the frozen additive public API, including readonly preparation inputs",
     owner: { email?: string | null; name?: string | null; externalRef?: string | null };
   }>();
   expectTypeOf<Extend>().toEqualTypeOf<(
-    rows: { tenant: Readonly<TenantRow>; owner: Readonly<MemberRow> }, dc: DropwayContext,
+    rows: { tenant: Readonly<TenantRow>; owner: Readonly<MemberRow> }, dc: KofraContext,
   ) => AtomicWriteExtension | Promise<AtomicWriteExtension>>();
   expectTypeOf<Equal<Parameters<Extend>[0]["tenant"], Readonly<TenantRow>>>().toEqualTypeOf<true>();
   expectTypeOf<Equal<Parameters<Extend>[0]["owner"], Readonly<MemberRow>>>().toEqualTypeOf<true>();
   expectTypeOf<typeof createTenantWithOwner>().toEqualTypeOf<(
-    dc: DropwayContext, input: CreateTenantWithOwnerInput, options?: CreateTenantWithOwnerOptions,
+    dc: KofraContext, input: CreateTenantWithOwnerInput, options?: CreateTenantWithOwnerOptions,
   ) => Promise<{ tenant: TenantRow; owner: MemberRow }>>();
 });

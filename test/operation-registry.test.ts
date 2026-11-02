@@ -15,7 +15,7 @@ describe("operation registry: existing REST contracts", () => {
       `${op.method} ${pathShape(op.path)}`,
       ...(op.aliases ?? []).map((alias) => `${alias.method.toUpperCase()} ${pathShape(alias.path)}`),
     ]));
-    const routes = dw.dropway.app.routes.filter((route) => route.path.startsWith("/api/v1") && route.method !== "ALL" && route.method !== "OPTIONS");
+    const routes = dw.kofra.app.routes.filter((route) => route.path.startsWith("/api/v1") && route.method !== "ALL" && route.method !== "OPTIONS");
     expect(routes.length).toBeGreaterThan(20);
     for (const route of routes) {
       // Hono can implement HEAD implicitly through GET; SPEC 6.5 has no HEAD method.

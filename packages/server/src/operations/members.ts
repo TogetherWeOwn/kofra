@@ -1,5 +1,5 @@
 import { HTTP_SCOPES } from "./http-schemas";
-import { ALL_SCOPES, createMember, listMembers, removeMember, requireConfirm, updateMember } from "@dropway/core";
+import { ALL_SCOPES, createMember, listMembers, removeMember, requireConfirm, updateMember } from "@kofra/core";
 import { obj } from "../mcp/schemas";
 import { readJson } from "../routes/api";
 import { defineOperation } from "../operations";

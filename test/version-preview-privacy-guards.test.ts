@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { defaultIdentity, type ConfigOverrides } from "@dropway/core";
+import { defaultIdentity, type ConfigOverrides } from "@kofra/core";
 import { freshInstance, jsonBody, ORIGIN, type Instance } from "./helpers";
 
 // R-13: preview privacy guards, exercised through the public Worker with real publish tokens.

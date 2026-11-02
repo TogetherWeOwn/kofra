@@ -1,5 +1,5 @@
 {
-  "name": "@dropway/core",
+  "name": "@kofra/core",
   "version": "0.1.0",
   "description": "Kofra service layer: storage, publish protocol, versions, manifests, file-type detection, auth interfaces. Runs on Cloudflare Workers (D1, R2, KV).",
   "license": "MIT",

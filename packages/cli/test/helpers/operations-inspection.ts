@@ -65,7 +65,7 @@ export async function runCli(box: Sandbox, origin: string, args: string[], optio
   const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
     // Run the same black-box contract against a test bundle (including mutation checks).
     const child = spawn(process.execPath, ["--import", guard,
-      options.entry ?? process.env.OPERATIONS_TEST_CLI_ENTRY ?? join(cliRoot, "bin/dropway.mjs"), ...args],
+      options.entry ?? process.env.OPERATIONS_TEST_CLI_ENTRY ?? join(cliRoot, "bin/kofra.mjs"), ...args],
       { cwd: box.cwd, env, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = ""; let stderr = "";
     const timeout = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("CLI timed out; non-TTY discovery must never prompt")); }, 12_000);

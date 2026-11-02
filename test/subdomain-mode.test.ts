@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { MAX_SLUG_LENGTH, RESERVED_SLUGS, resolveConfig, validateSlug } from "@dropway/core";
+import { MAX_SLUG_LENGTH, RESERVED_SLUGS, resolveConfig, validateSlug } from "@kofra/core";
 import { form, freshInstance, type Instance } from "./helpers";
 
 // Subdomain mode after a move from a path-mode sites origin (OLD) and a workers.dev app.

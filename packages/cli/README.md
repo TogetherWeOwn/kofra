@@ -5,7 +5,7 @@ instance. Built for AI agents and scripts: one command, one JSON object on stdou
 and only the bytes the instance does not already have are uploaded.
 
 ```sh
-npx kofra login --api https://dropway.example.workers.dev   # paste an API key once
+npx kofra login --api https://kofra.example.workers.dev   # paste an API key once
 npx kofra publish ./dist                                     # prints the live URL
 npx kofra publish ./dist --json                              # one JSON object for agents
 ```
@@ -13,7 +13,7 @@ npx kofra publish ./dist --json                              # one JSON object f
 Zero runtime dependencies. Node.js 20 or newer.
 
 > The npm package is prepared but not published yet. Until it is, run the CLI from a clone of the
-> repository: `npm install`, then `node packages/cli/bin/dropway.mjs <command>` (Node 22.18+ runs the
+> repository: `npm install`, then `node packages/cli/bin/kofra.mjs <command>` (Node 22.18+ runs the
 > TypeScript source directly; on older Node run `npm run build -w kofra` first).
 
 ## Commands
@@ -149,7 +149,7 @@ feature or implementation approval; omitted restore keeps its current rule.
 Runnable local check (from a repo clone, against your own instance):
 
 ```sh
-node packages/cli/bin/dropway.mjs versions team-report v1 --api https://<your-instance> --json
+node packages/cli/bin/kofra.mjs versions team-report v1 --api https://<your-instance> --json
 ```
 
 ## Comparing a local directory with a pinned version
@@ -334,7 +334,7 @@ Local check (from the repository root, with a dev instance running):
 
 ```sh
 npm run dev &>/tmp/kofra-dev.log &   # serves http://127.0.0.1:8787
-node packages/cli/bin/dropway.mjs operations --api http://127.0.0.1:8787 --json
+node packages/cli/bin/kofra.mjs operations --api http://127.0.0.1:8787 --json
 kill %1
 ```
 
@@ -516,7 +516,7 @@ version id; see [Recovery metadata](#recovery-metadata).
 Local check:
 
 ```sh
-node packages/cli/bin/dropway.mjs read-file --help   # no instance needed
+node packages/cli/bin/kofra.mjs read-file --help   # no instance needed
 npm run test:cli                                      # full CLI suite against a local Worker
 ```
 
@@ -587,7 +587,7 @@ With `--json`, stdout carries exactly one JSON object; progress and notes go to 
 ```json
 {
   "ok": true,
-  "url": "https://dropway.example.workers.dev/s/bright-otter-x7k2/",
+  "url": "https://kofra.example.workers.dev/s/bright-otter-x7k2/",
   "slug": "bright-otter-x7k2",
   "created": false,
   "unchanged": false,
@@ -597,7 +597,7 @@ With `--json`, stdout carries exactly one JSON object; progress and notes go to 
   "reused": 10,
   "bytesUploaded": 5120,
   "warnings": [],
-  "api": "https://dropway.example.workers.dev"
+  "api": "https://kofra.example.workers.dev"
 }
 ```
 
@@ -681,7 +681,7 @@ or run `kofra login` once instead. The CLI never prompts when stdin is not a ter
 ```sh
 npm install                 # at the repository root
 npm run test:cli            # unit tests + end-to-end tests against a local Worker
-npm run build -w kofra    # bundle to packages/cli/dist/dropway.mjs
+npm run build -w kofra    # bundle to packages/cli/dist/kofra.mjs
 ```
 
 Source layout: `src/client.ts` (HTTP + errors), `src/publish.ts` (the upload protocol; runtime-neutral and

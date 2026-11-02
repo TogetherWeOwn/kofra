@@ -1,7 +1,7 @@
 import { applyD1Migrations, createExecutionContext, env, reset, waitOnExecutionContext } from "cloudflare:test";
-import { putVerifiedBlob, readBlobRange, runCleanup } from "@dropway/core";
+import { putVerifiedBlob, readBlobRange, runCleanup } from "@kofra/core";
 import { cleanupBlobs } from "../packages/core/src/services/blob-cleanup";
-import type { ServerBindings } from "@dropway/server";
+import type { ServerBindings } from "@kofra/server";
 import { describe, expect, it } from "vitest";
 import { freshInstance, jsonBody, manifestEntry, type Instance } from "./helpers";
 
@@ -12,7 +12,7 @@ async function storedKey(sha: string) {
 }
 
 function context(dw: Instance, files = env.FILES) {
-  return dw.dropway.context({ ...env, FILES: files } as unknown as ServerBindings, createExecutionContext());
+  return dw.kofra.context({ ...env, FILES: files } as unknown as ServerBindings, createExecutionContext());
 }
 
 // Keep real R2 pagination/bytes, but make its upload timestamps old enough to sweep.
@@ -66,7 +66,7 @@ describe("orphan cleanup and concurrent publication", () => {
       },
     });
     const ctx = createExecutionContext();
-    await runCleanup(dw.dropway.context({ ...env, FILES: files } as unknown as ServerBindings, ctx));
+    await runCleanup(dw.kofra.context({ ...env, FILES: files } as unknown as ServerBindings, ctx));
     await waitOnExecutionContext(ctx);
     expect(injected).toBe(true);
     if (!finalizeBeforeDelete) expect((await finalize()).status).toBe(200);

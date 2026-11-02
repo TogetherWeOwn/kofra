@@ -6,11 +6,11 @@ import {
   getLiveSite,
   loadLiveSiteFromD1,
   liveKey,
-  type DropwayContext,
-} from "@dropway/core";
+  type KofraContext,
+} from "@kofra/core";
 import { freshInstance, jsonBody, type Instance } from "./helpers";
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
-import type { ServerBindings } from "@dropway/server";
+import type { ServerBindings } from "@kofra/server";
 
 /**
  * Extract the real buildTree(files) from the shipped dashboard script source.
@@ -39,9 +39,9 @@ function realBuildTree(): (files: { path: string }[]) => any {
   throw new Error("unbalanced braces in buildTree extraction");
 }
 
-async function withDc<T>(dw: Instance, fn: (dc: DropwayContext) => Promise<T>): Promise<T> {
+async function withDc<T>(dw: Instance, fn: (dc: KofraContext) => Promise<T>): Promise<T> {
   const ctx = createExecutionContext();
-  const dc = dw.dropway.context(env as unknown as ServerBindings, ctx);
+  const dc = dw.kofra.context(env as unknown as ServerBindings, ctx);
   try {
     return await fn(dc);
   } finally {

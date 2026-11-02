@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { createDropway, defineOperation, type OperationDefinition } from "@dropway/server";
+import { createKofra, defineOperation, type OperationDefinition } from "@kofra/server";
 
 // Both public entry points must reject unusable byte budgets. In particular,
 // registration cannot trust that an embedding app called defineOperation first.
@@ -34,11 +34,11 @@ describe("JSON byte budget validation", () => {
     expect(() => defineOperation(definition)).toThrow(/JSON.*byte.*limit/i);
   });
 
-  it.each(invalid)("createDropway registration rejects $label without defineOperation", ({ value }) => {
+  it.each(invalid)("createKofra registration rejects $label without defineOperation", ({ value }) => {
     // Deliberately override AFTER valid definition: this bypasses the definition
     // guard so only factory registration validation can reject the bad value.
     const unchecked = { ...validOperation(), jsonBodyMaxBytes: value };
-    expect(() => createDropway({ operations: [unchecked] })).toThrow(/JSON.*byte.*limit/i);
+    expect(() => createKofra({ operations: [unchecked] })).toThrow(/JSON.*byte.*limit/i);
   });
 
   it.each([
@@ -51,7 +51,7 @@ describe("JSON byte budget validation", () => {
   it.each([
     { label: "one byte", budget: { jsonBodyMaxBytes: 1 } },
     { label: "omitted default", budget: {} },
-  ])("createDropway registration accepts $label", ({ budget }) => {
-    expect(() => createDropway({ operations: [{ ...validOperation(), ...budget }] })).not.toThrow();
+  ])("createKofra registration accepts $label", ({ budget }) => {
+    expect(() => createKofra({ operations: [{ ...validOperation(), ...budget }] })).not.toThrow();
   });
 });

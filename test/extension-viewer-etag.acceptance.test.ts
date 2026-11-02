@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { VIEWERS, type Viewer } from "@dropway/server";
+import { VIEWERS, type Viewer } from "@kofra/server";
 import { form, freshInstance } from "./helpers";
 
 // RFC 9110 entity-tag: quotes delimit the opaque tag; embedded quotes, controls

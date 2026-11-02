@@ -4,7 +4,7 @@
 
 ## 0.1.0 — first release
 
-First public release of Kofra: single-tenant, self-hosted instant web hosting on Cloudflare (one Worker + D1 + R2 + KV), published from the CLI, REST API, MCP server or dashboard. Content-addressed deploys with immutable versions and restore; a browser viewer for every file type; scoped API keys; password-protected sites; file deliveries; encrypted CLI publishing; resumable large uploads. Packages: `kofra`, `@dropway/core`, `@dropway/server`, `@dropway/client`. Includes pre-release security hardening of operator secrets and site-password cookies — see the upgrade notes in the GitHub Release. Detailed changes since the start of the project are listed below under this version.
+First public release of Kofra: single-tenant, self-hosted instant web hosting on Cloudflare (one Worker + D1 + R2 + KV), published from the CLI, REST API, MCP server or dashboard. Content-addressed deploys with immutable versions and restore; a browser viewer for every file type; scoped API keys; password-protected sites; file deliveries; encrypted CLI publishing; resumable large uploads. Packages: `kofra`, `@kofra/core`, `@kofra/server`, `@kofra/client`. Includes pre-release security hardening of operator secrets and site-password cookies — see the upgrade notes in the GitHub Release. Detailed changes since the start of the project are listed below under this version.
 
 ### CLI
 
@@ -21,7 +21,7 @@ First public release of Kofra: single-tenant, self-hosted instant web hosting on
   salted IP hashes now answer `503 signing_secret_missing` instead of using a
   built-in key. Health, setup and API-key routes keep working. Local development
   may opt back in with `ALLOW_INSECURE_DEV_SECRET=true`.
-- `DropwayConfig.signingSecret` is `string | null`; read it with `signingSecret(config)`.
+- `KofraConfig.signingSecret` is `string | null`; read it with `signingSecret(config)`.
 - Set `SIGNING_SECRET` to its own value; the Deploy button now asks for it.
 
 ### Viewer phone handoff
@@ -185,16 +185,16 @@ First public release of Kofra: single-tenant, self-hosted instant web hosting on
 
 ### Typed client and npm packages
 
-- New `@dropway/client`: a zero-dependency typed REST client generated from the
+- New `@kofra/client`: a zero-dependency typed REST client generated from the
   operation registry (`npm run client:generate`; CI fails when it is stale).
   Every operation gets an input/output interface and a method; raw-byte
-  operations upload and download bytes. Failures throw `DropwayError` with the
+  operations upload and download bytes. Failures throw `KofraError` with the
   server's stable code, hint, details, status and retryability.
-- The `kofra` CLI's transport builds on `@dropway/client` (bundled into `dist/`,
+- The `kofra` CLI's transport builds on `@kofra/client` (bundled into `dist/`,
   so the installed CLI still has no runtime dependencies); exit codes and error
   output are unchanged.
-- `.github/workflows/publish.yml` publishes `@dropway/core`, `@dropway/server`,
-  `@dropway/client` and `kofra` with npm trusted publishing (OIDC, no tokens)
+- `.github/workflows/publish.yml` publishes `@kofra/core`, `@kofra/server`,
+  `@kofra/client` and `kofra` with npm trusted publishing (OIDC, no tokens)
   on `v*` tags. Operator to-do: register each package name as a trusted
   publisher on npmjs.com first.
 
@@ -216,13 +216,19 @@ First public release of Kofra: single-tenant, self-hosted instant web hosting on
 ### Renamed: Dropway is now Kofra
 
 - User-visible names: product name, docs, UI copy, the default `INSTANCE_NAME` (`Kofra`), the CLI
-  command `kofra` (the `dropway` command stays as an alias), environment variables `KOFRA_*`,
-  response and request headers `X-Kofra-*`, the Agent Skill and MCP server name `kofra`.
+  command `kofra`, environment variables `KOFRA_*`, response and request headers `X-Kofra-*`, the
+  Agent Skill and MCP server name `kofra`.
+- Public packages and API (renamed before the first publish, so nothing on npm ever carried the old
+  name): `@kofra/core`, `@kofra/server`, `@kofra/client` and `kofra`; `createKofra()`, `Kofra`,
+  `KofraContext`, `KofraClient`, `KofraError` and the other exported `Kofra*` types.
+  `EXTENSION_API_VERSION` is 7 for the renamed embedding API. The CLI package ships only the
+  `kofra` bin (`bin/kofra.mjs`, bundle `dist/kofra.mjs`).
 - Still accepted: `DROPWAY_*` variables (a `KOFRA_*` variable wins), `X-Dropway-*` request headers,
   and the skill URLs under `dropway`. Responses send every `X-Kofra-*` header as `X-Dropway-*` too.
-- Unchanged on purpose: Worker, D1, R2, KV and Analytics names, database tables, cookie and storage
-  names, reserved paths (`/__dropway/`), CLI files (`dropway.json`, `.dropwayignore`,
-  `~/.config/dropway`), the `@dropway/*` workspace packages and `createDropway()`.
+- Unchanged on purpose (live deployments and stored data use them): Worker, D1, R2, KV and Analytics
+  names, database tables, cookie and storage names, reserved paths (`/__dropway/`), CLI files
+  (`dropway.json`, `.dropwayignore`, `~/.config/dropway`), the `dw_` API-key prefix and the
+  encrypted-bundle format markers.
 - `scripts/rebrand.mjs` applies the rename and can be re-run after a rebase.
 
 ### Moving the app to a new origin
@@ -241,7 +247,7 @@ First public release of Kofra: single-tenant, self-hosted instant web hosting on
 ### File deliveries
 
 - Add `create_transfer`, `get_transfer`, `update_transfer` and `revoke_transfers` to
-  the operation registry. `dropway api <operationId> --data ...` now uses the
+  the operation registry. `kofra api <operationId> --data ...` now uses the
   advertised operation instead of treating its name as a URL.
 - Transfer messages and password forms stay on the app origin; immutable files
   download from a separate sites host, with attachment, nosniff and no-store headers.
@@ -287,7 +293,7 @@ First public release of Kofra: single-tenant, self-hosted instant web hosting on
   and this value in the ETag, so any string is safe; built-in viewers' ETags are unchanged.
 
 - Bump `EXTENSION_API_VERSION` to 4: Principal adds an upload-only variant
-  (versionId, expiresAt in epoch milliseconds, ip), and DropwayConfig adds
+  (versionId, expiresAt in epoch milliseconds, ip), and KofraConfig adds
   urlFetchMaxBytes. Custom identity/policy adapters must keep upload principals
   restricted to blob uploads. Existing member/claim permissions are unchanged.
 
@@ -298,7 +304,7 @@ First public release of Kofra: single-tenant, self-hosted instant web hosting on
   uses `publish_site` for policy on both transports, after parsing and before writes.
   Generated MCP tools also recheck authorization/capability/policy before exposing
   cached results via the optional `beforeReplay` tool guard; no handler is rerun.
-- Add optional `Limits.transferMaxExpiryDays`, `DropwayHooks.onEvent` for transfer
+- Add optional `Limits.transferMaxExpiryDays`, `KofraHooks.onEvent` for transfer
   lifecycle events, public transfer services and transfer expiry/purge counts in
   `CleanupReport`. Existing adapters keep working; omitted delivery limits use
   the instance ceiling.
@@ -318,7 +324,7 @@ First public release of Kofra: single-tenant, self-hosted instant web hosting on
   and version in independent disposable workerd/D1 acceptance tests. No core
   schema changes or additional public routes.
 - Bump `EXTENSION_API_VERSION` to 2: add `defineOperation()`, typed operation
-  definitions/contexts, `createDropway({ operations })` and `dropway.operations`.
+  definitions/contexts, `createKofra({ operations })` and `kofra.operations`.
   Operation input/output schemas drive REST validation, OpenAPI 3.1, MCP tools,
   CLI command metadata and instance-local discovery documents. Existing route
   and MCP-tool extension escape hatches remain available.
@@ -338,7 +344,7 @@ First public release of Kofra: single-tenant, self-hosted instant web hosting on
   including tenant/site restrictions, role and scopes. Older member records
   expire unused; retries spanning the upgrade may execute again.
 
-- Introduced `EXTENSION_API_VERSION` in `@dropway/server` at version 1.
+- Introduced `EXTENSION_API_VERSION` in `@kofra/server` at version 1.
   Extension API changes must update this version and this section.
 - Cover existing identity, policy limits and refusals, all five metering events,
   all three hooks, API middleware, route overrides and app routes, contexts,

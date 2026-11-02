@@ -1,5 +1,5 @@
 import type { IdentityAdapter } from "../adapters";
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import { sha256Hex, timingSafeEqualStr } from "../lib/crypto";
 import { forbidden, unauthorized } from "../errors";
 import { authenticateUploadToken, UPLOAD_TOKEN_PREFIX } from "./upload-tokens";
@@ -23,7 +23,7 @@ export function bearerToken(request: Request): string | null {
 }
 
 /** Resolve a bearer token: claim token (dwc_), the bootstrap secret, or an API key (dw_). */
-export async function principalFromToken(dc: DropwayContext, token: string, ip: string): Promise<Principal> {
+export async function principalFromToken(dc: KofraContext, token: string, ip: string): Promise<Principal> {
   if (token.startsWith(UPLOAD_TOKEN_PREFIX)) return authenticateUploadToken(dc, token, ip);
   if (token.startsWith(CLAIM_TOKEN_PREFIX)) {
     const row = await dc.env.DB.prepare("SELECT id FROM sites WHERE claim_token_hash = ? AND deleted_at IS NULL")

@@ -3,7 +3,7 @@
 //
 // This repository is the complete single-tenant product (MIT). Plans, prices,
 // billing, payment SDKs, public signup and multi-tenant operations belong to a
-// separate hosted layer built on createDropway() extension points. This script
+// separate hosted layer built on createKofra() extension points. This script
 // fails (exit 1) when it finds signs of that layer:
 //
 //   1. a proprietary SPDX marker (every hosted-layer source file carries one)
@@ -329,7 +329,7 @@ const SELF_TESTS = [
   {
     name: "ordinary code passes",
     files: [
-      { path: "packages/cli/package.json", content: JSON.stringify({ name: "dropway", devDependencies: { esbuild: "1" } }) },
+      { path: "packages/cli/package.json", content: JSON.stringify({ name: "kofra", devDependencies: { esbuild: "1" } }) },
       { path: "packages/cli/src/main.ts", content: 'import { readFile } from "node:fs/promises";\nimport { build } from "esbuild";\nimport { env } from "cloudflare:test";\nimport x from "./x.ts";\nconst plan = makePlan();\n' },
     ],
     rules: [],
@@ -343,8 +343,8 @@ const SELF_TESTS = [
     name: "undeclared import",
     files: [
       { path: "package.json", content: JSON.stringify({ devDependencies: { vitest: "1" } }) },
-      { path: "packages/core/package.json", content: JSON.stringify({ name: "@dropway/core" }) },
-      { path: "packages/core/src/a.ts", content: 'import { x } from "left-pad";\nimport { it } from "vitest";\nimport { y } from "@dropway/core";\n' },
+      { path: "packages/core/package.json", content: JSON.stringify({ name: "@kofra/core" }) },
+      { path: "packages/core/src/a.ts", content: 'import { x } from "left-pad";\nimport { it } from "vitest";\nimport { y } from "@kofra/core";\n' },
     ],
     rules: ["undeclared-import"],
   },

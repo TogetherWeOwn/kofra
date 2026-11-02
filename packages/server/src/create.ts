@@ -11,14 +11,14 @@ import {
   resolveConfig,
   runCleanup,
   snapshotUsage,
-  type DropwayAdapters,
-  type DropwayConfig,
-  type DropwayContext,
-  type DropwayHooks,
-} from "@dropway/core";
+  type KofraAdapters,
+  type KofraConfig,
+  type KofraContext,
+  type KofraHooks,
+} from "@kofra/core";
 import { createAppRouter } from "./app";
-import type { DropwayEnv, ServerBindings } from "./env";
-import type { CreateDropwayOptions, McpToolDefinition, UiSlots } from "./extensions";
+import type { KofraEnv, ServerBindings } from "./env";
+import type { CreateKofraOptions, McpToolDefinition, UiSlots } from "./extensions";
 import { escapeHtml, htmlPage } from "./html";
 import { apiErrorResponse, installApiMiddleware } from "./routes/api";
 import { legacyAppRedirect, legacyAppSuccessor, withDeprecationHeaders } from "./legacy";
@@ -31,28 +31,28 @@ import { createMcpEndpoint } from "./mcp";
 import { CORE_MCP_TOOLS } from "./mcp/tools";
 import { acceptLegacyRequestHeaders, addLegacyResponseHeaders, legacyBrandHeaders } from "./legacy-brand";
 
-export interface Dropway {
-  /** Worker fetch handler: export default { fetch: dropway.fetch, scheduled: dropway.scheduled }. */
+export interface Kofra {
+  /** Worker fetch handler: export default { fetch: kofra.fetch, scheduled: kofra.scheduled }. */
   fetch(request: Request, env: ServerBindings, ctx: ExecutionContext): Promise<Response>;
   /** Worker cron handler: core cleanup, then options.scheduled. */
   scheduled(controller: ScheduledController, env: ServerBindings, ctx: ExecutionContext): Promise<void>;
   /** App-origin router (REST API mounted at /api/v1). Useful for tests and composition. */
-  app: Hono<DropwayEnv>;
+  app: Hono<KofraEnv>;
   /** Instance-local source for REST routes, documentation, MCP and CLI commands. */
   operations: OperationDefinition[];
   /** MCP tools exposed by this instance (core + extensions). */
   mcpTools: readonly McpToolDefinition[];
   uiSlots: UiSlots;
   viewers: readonly Viewer[];
-  adapters: DropwayAdapters;
+  adapters: KofraAdapters;
   /** Build a service context outside a request (cron, queue consumers, scripts, tests). */
-  context(env: ServerBindings, ctx: Pick<ExecutionContext, "waitUntil">, requestUrl?: URL | null): DropwayContext;
+  context(env: ServerBindings, ctx: Pick<ExecutionContext, "waitUntil">, requestUrl?: URL | null): KofraContext;
 }
 
 /** Core MCP tools (packages/server/src/mcp/tools.ts); extensions append theirs or replace one by name. */
 export { CORE_MCP_TOOLS };
 
-const contexts = new WeakMap<Request, DropwayContext>();
+const contexts = new WeakMap<Request, KofraContext>();
 
 /** Download grants and recipient links are credentials, including in upstream errors. */
 function requestErrorDetails(request: Request, error: unknown) {
@@ -70,9 +70,9 @@ function requestErrorDetails(request: Request, error: unknown) {
  * Build a Kofra Worker. The open-source entry (apps/worker) calls this with no
  * options; a hosted layer passes adapters, hooks, routes, MCP tools and UI slots.
  */
-export function createDropway(opts: CreateDropwayOptions = {}): Dropway {
-  const hooks: readonly DropwayHooks[] = opts.hooks ? (Array.isArray(opts.hooks) ? opts.hooks : [opts.hooks]) : [];
-  const adapters: DropwayAdapters = {
+export function createKofra(opts: CreateKofraOptions = {}): Kofra {
+  const hooks: readonly KofraHooks[] = opts.hooks ? (Array.isArray(opts.hooks) ? opts.hooks : [opts.hooks]) : [];
+  const adapters: KofraAdapters = {
     identity: opts.adapters?.identity ?? defaultIdentity,
     policy: opts.adapters?.policy ?? defaultPolicy,
     metering: opts.adapters?.metering ?? noopMetering,
@@ -82,8 +82,8 @@ export function createDropway(opts: CreateDropwayOptions = {}): Dropway {
   const mcpTools: readonly McpToolDefinition[] = [...new Map([...operationTools(operations), ...(opts.mcpTools ?? [])].map((t) => [t.name, t] as const)).values()];
   const viewers: readonly Viewer[] = [...(opts.viewers ?? []), ...VIEWERS];
 
-  const configs = new WeakMap<object, DropwayConfig>();
-  const configFor = (env: ServerBindings): DropwayConfig => {
+  const configs = new WeakMap<object, KofraConfig>();
+  const configFor = (env: ServerBindings): KofraConfig => {
     let c = configs.get(env);
     if (!c) {
       const overrides = typeof opts.config === "function" ? opts.config(env) : (opts.config ?? {});
@@ -92,7 +92,7 @@ export function createDropway(opts: CreateDropwayOptions = {}): Dropway {
     }
     return c;
   };
-  const context = (env: ServerBindings, ctx: Pick<ExecutionContext, "waitUntil">, requestUrl: URL | null = null): DropwayContext => ({
+  const context = (env: ServerBindings, ctx: Pick<ExecutionContext, "waitUntil">, requestUrl: URL | null = null): KofraContext => ({
     env,
     config: configFor(env),
     adapters,
@@ -103,12 +103,12 @@ export function createDropway(opts: CreateDropwayOptions = {}): Dropway {
 
   // Order matters: API middleware, then extension routes, then core routes,
   // so extensions see the resolved principal and can override core routes.
-  const api = new Hono<DropwayEnv>();
+  const api = new Hono<KofraEnv>();
   installApiMiddleware(api, opts.apiMiddleware ?? []);
-  const appRoutes = new Hono<DropwayEnv>();
+  const appRoutes = new Hono<KofraEnv>();
   for (const extend of opts.routes ?? []) extend({ api, app: appRoutes });
   installOperationRoutes(api, operations);
-  const app = new Hono<DropwayEnv>();
+  const app = new Hono<KofraEnv>();
   // Former-name headers (legacy-brand.ts) here too, so the exported app matches fetch.
   app.use("*", legacyBrandHeaders);
   app.use("*", async (c, next) => {
@@ -204,7 +204,7 @@ export function createDropway(opts: CreateDropwayOptions = {}): Dropway {
   return { fetch, scheduled, app, operations, mcpTools, uiSlots, viewers, adapters, context };
 }
 
-function sitesHome(dw: DropwayContext): Response {
+function sitesHome(dw: KofraContext): Response {
   const o = appOrigin(dw);
   const page = htmlPage({
     title: dw.config.instanceName,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { ApiError } from "@dropway/core";
+import { ApiError } from "@kofra/core";
 import { freshInstance, jsonBody } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
 import { commandRows, defineOperation, echoOperation, hasExample, operationInstance, resolveRef } from "./operation-fixtures";
@@ -194,7 +194,7 @@ describe("operation extension contract (SPEC 6.5)", () => {
     const dw = await operationInstance([echoOperation()]);
     expect((await dw.json("/openapi.json")).body.paths["/api/v1/acceptance/echo"]).toBeDefined();
     const plain = await freshInstance();
-    expect(plain.dropway.mcpTools.map((tool) => tool.name)).not.toContain("acceptance_echo");
+    expect(plain.kofra.mcpTools.map((tool) => tool.name)).not.toContain("acceptance_echo");
     const doc = await plain.json("/openapi.json");
     expect(doc.status).toBe(200);
     expect(doc.body.paths["/api/v1/acceptance/echo"]).toBeUndefined();

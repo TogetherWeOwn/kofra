@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createTransfer, getTransfer, updateTransfer, revokeTransfers } from "@dropway/core";
+import { createTransfer, getTransfer, updateTransfer, revokeTransfers } from "@kofra/core";
 import { defineOperation } from "../operations";
 import { CREATE, RO, WRITE } from "./shared";
 
@@ -12,7 +12,7 @@ const fields = {
 };
 // Keep discovery compact; the result also carries message, limits, state and counters.
 const result = z.looseObject({ id: z.string(), slug: z.string(), mode: z.literal("transfer"), url: z.string(), expiresAt: z.number() });
-const sample = { id: "site_delivery", slug: "delivery-sample", mode: "transfer", url: "https://dropway.example/t/delivery-sample", message: null, expiresAt: 1988150400000, downloadLimit: null, downloads: 0, revision: 0, revokedAt: null, expiredAt: null, purgedAt: null, recipients: [], files: [] };
+const sample = { id: "site_delivery", slug: "delivery-sample", mode: "transfer", url: "https://kofra.example/t/delivery-sample", message: null, expiresAt: 1988150400000, downloadLimit: null, downloads: 0, revision: 0, revokedAt: null, expiredAt: null, purgedAt: null, recipients: [], files: [] };
 
 export const TRANSFER_OPERATIONS = [
   defineOperation({

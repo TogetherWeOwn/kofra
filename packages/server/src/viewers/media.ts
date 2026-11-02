@@ -1,4 +1,4 @@
-import { detectFileKind, encodePath, extname, type LiveSite } from "@dropway/core";
+import { detectFileKind, encodePath, extname, type LiveSite } from "@kofra/core";
 import { escapeHtml, formatBytes } from "../html";
 import { standardTabs, viewerCsp, viewerPage, type ViewerTab } from "./chrome";
 import type { ViewMode, Viewer, ViewerContext, ViewerFile } from "./index";

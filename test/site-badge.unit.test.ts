@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { LiveSite } from "@dropway/core";
+import type { LiveSite } from "@kofra/core";
 import { badgeAge, badgeFor } from "../packages/server/src/site-badge";
 
 const NOW = 1_800_000_000_000;

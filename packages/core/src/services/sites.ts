@@ -1,5 +1,5 @@
 import { effectiveSigningSecret } from "../config";
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import { appOrigin, siteUrl } from "../context";
 import { ApiError, badRequest, conflict, forbidden, notFound, rateLimited, unauthorized } from "../errors";
 import { hashPassword, hmacHex, newId, newSecret, sha256Hex } from "../lib/crypto";
@@ -92,12 +92,12 @@ export function canAccess(p: Principal, site: Pick<SiteRow, "id" | "tenant_id"> 
   return false;
 }
 
-export async function findSite(dc: DropwayContext, slug: string): Promise<SiteRow | null> {
+export async function findSite(dc: KofraContext, slug: string): Promise<SiteRow | null> {
   return dc.env.DB.prepare("SELECT * FROM sites WHERE slug = ? AND deleted_at IS NULL").bind(slug.toLowerCase()).first<SiteRow>();
 }
 
 /** Load a site the caller may access. Unknown and foreign sites both 404, so existence never leaks. */
-export async function getSiteFor(dc: DropwayContext, p: Principal, slug: string, scope: Scope = "sites:read"): Promise<SiteRow> {
+export async function getSiteFor(dc: KofraContext, p: Principal, slug: string, scope: Scope = "sites:read"): Promise<SiteRow> {
   if (p.kind === "anonymous") throw unauthorized("This needs the site owner's API key, or the claim token of an anonymous site.");
   if (p.kind === "bootstrap") throw forbidden("The bootstrap key can only set up the instance.", "Use the owner API key from POST /api/v1/setup.");
   const site = await findSite(dc, slug);
@@ -110,7 +110,7 @@ export async function getSiteFor(dc: DropwayContext, p: Principal, slug: string,
   return site;
 }
 
-export async function getVersion(dc: DropwayContext, siteId: string, versionId: string): Promise<VersionRow | null> {
+export async function getVersion(dc: KofraContext, siteId: string, versionId: string): Promise<VersionRow | null> {
   return dc.env.DB.prepare("SELECT * FROM versions WHERE id = ? AND site_id = ?").bind(versionId, siteId).first<VersionRow>();
 }
 
@@ -130,7 +130,7 @@ export function serializeVersion(v: VersionRow, liveVersionId: string | null) {
   };
 }
 
-export function serializeSite(dc: DropwayContext, site: SiteRow, current?: VersionRow | null) {
+export function serializeSite(dc: KofraContext, site: SiteRow, current?: VersionRow | null) {
   const api = `${appOrigin(dc)}/api/v1/sites/${site.slug}`;
   return {
     id: site.id,
@@ -158,7 +158,7 @@ export function serializeSite(dc: DropwayContext, site: SiteRow, current?: Versi
 }
 
 /** serializeSite, loading the current version row. */
-export async function describeSite(dc: DropwayContext, site: SiteRow) {
+export async function describeSite(dc: KofraContext, site: SiteRow) {
   const current = site.current_version_id ? await getVersion(dc, site.id, site.current_version_id) : null;
   return serializeSite(dc, site, current);
 }
@@ -213,7 +213,7 @@ export function parseSettings(body: Record<string, unknown>): SiteSettingsInput 
 }
 
 /** Keyed hash of the caller IP, for anonymous rate limits without storing raw IPs. */
-export async function ipHash(dc: DropwayContext, ip: string): Promise<string> {
+export async function ipHash(dc: KofraContext, ip: string): Promise<string> {
   return (await hmacHex(await effectiveSigningSecret(dc), `ip:${ip}`)).slice(0, 32);
 }
 
@@ -237,7 +237,7 @@ export interface CreateSiteOptions {
 }
 
 export async function createSite(
-  dc: DropwayContext,
+  dc: KofraContext,
   p: Principal,
   input: { slug?: string | null } & SiteSettingsInput,
   opts: CreateSiteOptions = {},
@@ -347,7 +347,7 @@ export async function createSite(
   throw new ApiError(503, "slug_generation_failed", "Could not generate a free site name.", "Retry the request.");
 }
 
-export async function listSites(dc: DropwayContext, p: Principal, opts: { limit?: number; cursor?: string | null } = {}) {
+export async function listSites(dc: KofraContext, p: Principal, opts: { limit?: number; cursor?: string | null } = {}) {
   if (p.kind !== "member") throw unauthorized("Listing sites needs an API key.");
   if (!hasScope(p, "sites:read")) throw forbidden('This key lacks the "sites:read" scope.', undefined, "insufficient_scope");
   const limit = Math.min(Math.max(Number(opts.limit) || 50, 1), 200);
@@ -404,7 +404,7 @@ export async function listSites(dc: DropwayContext, p: Principal, opts: { limit?
   };
 }
 
-export async function updateSite(dc: DropwayContext, p: Principal, slug: string, input: SiteSettingsInput): Promise<SiteRow> {
+export async function updateSite(dc: KofraContext, p: Principal, slug: string, input: SiteSettingsInput): Promise<SiteRow> {
   const site = await getSiteFor(dc, p, slug, "sites:write");
   if (site.mode === "transfer") throw conflict("transfer_immutable", "Use update_transfer to change delivery settings.", "Transfer passwords need current-password proof in the same call.");
   if (input.password && site.tenant_id === null) throw forbidden("Password protection needs an account. Claim the site first.");
@@ -440,7 +440,7 @@ export async function updateSite(dc: DropwayContext, p: Principal, slug: string,
 }
 
 /** Soft-delete: the name is tombstoned for its previous tenant (R-59); rows and unreferenced files are removed by the hourly cleanup. */
-export async function deleteSite(dc: DropwayContext, p: Principal, slug: string): Promise<{ deleted: true; slug: string }> {
+export async function deleteSite(dc: KofraContext, p: Principal, slug: string): Promise<{ deleted: true; slug: string }> {
   const site = await getSiteFor(dc, p, slug, "sites:delete");
   const now = Date.now();
   const holdUntil = now + (site.slug_chosen === 1 ? dc.config.slugHolds.chosenMs : dc.config.slugHolds.generatedMs);
@@ -481,7 +481,7 @@ export async function deleteSite(dc: DropwayContext, p: Principal, slug: string)
  * live is removed (the guard makes a concurrent successful finalize win).
  * Uploaded blobs stay until the hourly cleanup collects unreferenced ones.
  */
-export async function discardNewSite(dc: DropwayContext, site: Pick<SiteRow, "id" | "slug" | "tenant_id">): Promise<boolean> {
+export async function discardNewSite(dc: KofraContext, site: Pick<SiteRow, "id" | "slug" | "tenant_id">): Promise<boolean> {
   const db = dc.env.DB;
   const neverLive = `EXISTS (SELECT 1 FROM sites s WHERE s.id = ? AND s.current_version_id IS NULL
     AND NOT EXISTS (SELECT 1 FROM transfers t WHERE t.site_id = s.id AND (t.legal_hold <> 0 OR t.takedown_at IS NOT NULL)))`;
@@ -507,7 +507,7 @@ export async function discardNewSite(dc: DropwayContext, site: Pick<SiteRow, "id
 }
 
 /** Move an anonymous site into the caller's tenant: it stops expiring and the claim token stops working. */
-export async function claimSite(dc: DropwayContext, p: Principal, slug: string, claimToken: unknown): Promise<SiteRow> {
+export async function claimSite(dc: KofraContext, p: Principal, slug: string, claimToken: unknown): Promise<SiteRow> {
   if (p.kind !== "member") throw unauthorized("Claiming a site needs an API key of the tenant that should own it.");
   if (!hasScope(p, "sites:write") || p.siteId) throw forbidden("This key cannot claim sites.", "Use a key with the sites:write scope.", "insufficient_scope");
   if (typeof claimToken !== "string" || !claimToken.startsWith(CLAIM_TOKEN_PREFIX)) {

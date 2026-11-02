@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { defineOperation, readJson, type CreateDropwayOptions, type OperationDefinition } from "@dropway/server";
+import { defineOperation, readJson, type CreateKofraOptions, type OperationDefinition } from "@kofra/server";
 import { freshInstance } from "./helpers";
 
 // Regression: removing readJson's cache population must break post-dispatch
@@ -17,7 +17,7 @@ async function fixture(reader: Reader, transport: Transport) {
   const observed: unknown[] = [];
   const calls: unknown[] = [];
   const order: string[] = [];
-  const apiMiddleware: NonNullable<CreateDropwayOptions["apiMiddleware"]> = [async (c, next) => {
+  const apiMiddleware: NonNullable<CreateKofraOptions["apiMiddleware"]> = [async (c, next) => {
     // Intentionally no body read, clone or cache priming before dispatch.
     await next();
     if (c.req.header("X-Inspect-Body") === "after-next" && reader !== "none") {

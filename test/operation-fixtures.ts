@@ -1,7 +1,7 @@
 import { expect } from "vitest";
 import { z } from "zod";
-import type { DropwayContext, Principal, Scope } from "@dropway/core";
-import * as server from "@dropway/server";
+import type { KofraContext, Principal, Scope } from "@kofra/core";
+import * as server from "@kofra/server";
 import { freshInstance, type Instance } from "./helpers";
 
 // SPEC 6.5's public contract, kept local until the implementation exports its types.
@@ -23,7 +23,7 @@ export interface OperationFixture {
   rawBody?: boolean;
   examples?: { input: unknown; output: unknown }[];
   handler(input: any, ctx: {
-    dw: DropwayContext;
+    dw: KofraContext;
     principal: Principal;
     request: Request;
     client: string | null;
@@ -54,7 +54,7 @@ export function echoOperation(overrides: Partial<OperationFixture> = {}): Operat
 
 export function defineOperation(definition: OperationFixture): OperationFixture {
   const define = Reflect.get(server, "defineOperation");
-  expect(define, "@dropway/server must export defineOperation() (SPEC 6.5)").toBeTypeOf("function");
+  expect(define, "@kofra/server must export defineOperation() (SPEC 6.5)").toBeTypeOf("function");
   return define(definition);
 }
 
@@ -65,8 +65,8 @@ export function operationInstance(operations: OperationFixture[]): Promise<Insta
 }
 
 export function registry(instance: Instance): OperationFixture[] {
-  const operations = Reflect.get(instance.dropway, "operations");
-  expect(Array.isArray(operations), "createDropway().operations must expose the registry").toBe(true);
+  const operations = Reflect.get(instance.kofra, "operations");
+  expect(Array.isArray(operations), "createKofra().operations must expose the registry").toBe(true);
   expect(operations.length, "the registry must include core operations").toBeGreaterThan(0);
   return operations;
 }

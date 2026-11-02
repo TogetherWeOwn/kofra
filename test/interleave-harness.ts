@@ -1,6 +1,6 @@
 import { expect, vi } from "vitest";
 import { env } from "cloudflare:test";
-import type { SiteRow } from "@dropway/core";
+import type { SiteRow } from "@kofra/core";
 
 /**
  * Deterministic interleaving over real disposable D1/R2/KV, shared by the

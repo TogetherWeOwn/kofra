@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { resolveConfig } from "@dropway/core";
+import { resolveConfig } from "@kofra/core";
 import { form, freshInstance, ORIGIN, type Instance } from "./helpers";
 
 const BROWSER_NAV = { Accept: "text/html,application/xhtml+xml,*/*;q=0.8", "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate" };
@@ -149,7 +149,7 @@ describe("path mode: root-relative URLs", () => {
 });
 
 describe("path mode: run-time shim for sandboxed pages (no Referer from an opaque origin)", () => {
-  const SHIM = '<script data-dropway="path-shim">';
+  const SHIM = '<script data-kofra="path-shim">';
   const publish = (inst: Instance, files: Record<string, string>, fields: Record<string, string> = {}) =>
     inst.json("/api/v1/publish", { method: "POST", key: inst.ownerKey, body: form(files, fields) });
 

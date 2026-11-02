@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { dropwayClient } from "../packages/server/src/ui/client";
-import { clearLiveMemoryCache, getLiveSite, liveKey, loadLiveSiteFromD1, refreshLive, type DropwayContext, type LiveSite } from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+import { clearLiveMemoryCache, getLiveSite, liveKey, loadLiveSiteFromD1, refreshLive, type KofraContext, type LiveSite } from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { freshInstance, jsonBody, type Instance } from "./helpers";
 
 const ORIGIN = "https://dash.example.test";
@@ -48,9 +48,9 @@ describe("login next redirect stays on this origin", () => {
 describe("live manifest read-path fill cannot stick", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  async function withDc<T>(dw: Instance, fn: (dc: DropwayContext) => Promise<T>): Promise<T> {
+  async function withDc<T>(dw: Instance, fn: (dc: KofraContext) => Promise<T>): Promise<T> {
     const ctx = createExecutionContext();
-    const dc = dw.dropway.context(env as unknown as ServerBindings, ctx);
+    const dc = dw.kofra.context(env as unknown as ServerBindings, ctx);
     try {
       return await fn(dc);
     } finally {

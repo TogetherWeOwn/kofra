@@ -1,4 +1,4 @@
-import type { DropwayContext } from "../context";
+import type { KofraContext } from "../context";
 import { ApiError, badRequest, forbidden, notFound, unauthorized } from "../errors";
 import { newId, newSecret, sha256Hex } from "../lib/crypto";
 import {
@@ -52,7 +52,7 @@ export function serializeKey(k: ApiKeyRow, currentKeyId?: string | null) {
 
 /** Low-level: create a key row and return the plaintext once. No permission checks (for setup and extensions). */
 export async function mintApiKey(
-  dc: DropwayContext,
+  dc: KofraContext,
   input: { tenantId: string; memberId: string; name?: string | null; scopes: readonly Scope[]; siteId?: string | null; expiresAt?: number | null },
 ) {
   const count = await dc.env.DB.prepare("SELECT COUNT(*) AS n FROM api_keys WHERE member_id = ? AND revoked_at IS NULL")
@@ -85,7 +85,7 @@ export async function mintApiKey(
 
 /** Create a key for yourself, or (with members:write) for another member of your tenant. */
 export async function createApiKey(
-  dc: DropwayContext,
+  dc: KofraContext,
   p: Principal,
   input: { name?: unknown; scopes?: unknown; expiresInDays?: unknown; memberId?: unknown; site?: unknown },
 ) {
@@ -134,7 +134,7 @@ export async function createApiKey(
 }
 
 /** Your own keys; with members:write and all=true, every key in the tenant. */
-export async function listApiKeys(dc: DropwayContext, p: Principal, opts: { all?: boolean } = {}) {
+export async function listApiKeys(dc: KofraContext, p: Principal, opts: { all?: boolean } = {}) {
   const caller = requireMember(p, "keys:write");
   const all = opts.all && hasScope(caller, "members:write");
   const { results } = await dc.env.DB.prepare(
@@ -146,7 +146,7 @@ export async function listApiKeys(dc: DropwayContext, p: Principal, opts: { all?
   return results.map((k) => serializeKey(k, caller.keyId));
 }
 
-export async function revokeApiKey(dc: DropwayContext, p: Principal, keyId: string) {
+export async function revokeApiKey(dc: KofraContext, p: Principal, keyId: string) {
   const caller = requireMember(p, "keys:write");
   const key = await dc.env.DB.prepare("SELECT id, member_id FROM api_keys WHERE id = ? AND tenant_id = ? AND revoked_at IS NULL")
     .bind(keyId, caller.tenantId)
@@ -159,7 +159,7 @@ export async function revokeApiKey(dc: DropwayContext, p: Principal, keyId: stri
 }
 
 /** Turn a dw_ API key into a member principal, or throw 401. */
-export async function authenticateApiKey(dc: DropwayContext, token: string, ip: string): Promise<MemberPrincipal> {
+export async function authenticateApiKey(dc: KofraContext, token: string, ip: string): Promise<MemberPrincipal> {
   const hash = await sha256Hex(token);
   const row = await dc.env.DB.prepare(
     `SELECT k.id, k.tenant_id, k.member_id, k.scopes, k.site_id, k.expires_at, k.revoked_at, k.last_used_at,

@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { zipSync, strToU8, Zip, ZipPassThrough } from "fflate";
-import { ApiError, unzipFiles } from "@dropway/core";
+import { ApiError, unzipFiles } from "@kofra/core";
 import { freshInstance, jsonBody, type Instance } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
 

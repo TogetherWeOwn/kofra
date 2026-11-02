@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
-import { clearLiveMemoryCache } from "@dropway/core";
+import { clearLiveMemoryCache } from "@kofra/core";
 import { freshInstance, jsonBody, ORIGIN } from "./helpers";
 import { worldState } from "./interleave-harness";
 import { connectMcp, type ToolCall } from "./mcp-helpers";

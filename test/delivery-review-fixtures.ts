@@ -1,5 +1,5 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import type { ServerBindings } from "@dropway/server";
+import type { ServerBindings } from "@kofra/server";
 import { expect } from "vitest";
 import { ORIGIN, type Instance } from "./helpers";
 import { attributeUrl, cookies, create, DAY, operations, unlock, type Transfer } from "./transfer-fixtures";
@@ -23,7 +23,7 @@ export const delivery = (dw: Instance, extra: Record<string, unknown> = {}) => c
 
 export async function request(dw: Instance, url: string, init: RequestInit = {}, bindings: Partial<ServerBindings> = {}) {
   const ctx = createExecutionContext();
-  const response = await dw.dropway.fetch(new Request(url, { ...init, redirect: "manual" }),
+  const response = await dw.kofra.fetch(new Request(url, { ...init, redirect: "manual" }),
     { ...env, ...bindings } as unknown as ServerBindings, ctx);
   await waitOnExecutionContext(ctx);
   return response;

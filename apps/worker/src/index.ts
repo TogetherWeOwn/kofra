@@ -3,14 +3,14 @@
  *
  * One tenant (an owner plus optional members and scoped API keys), no signup,
  * no plans or billing. Configuration comes from wrangler.jsonc vars and secrets.
- * To build on top of Kofra, call createDropway() with your own adapters,
+ * To build on top of Kofra, call createKofra() with your own adapters,
  * hooks, routes, MCP tools and UI slots instead of editing the packages.
  */
-import { createDropway, type ServerBindings } from "@dropway/server";
+import { createKofra, type ServerBindings } from "@kofra/server";
 
-const dropway = createDropway();
+const kofra = createKofra();
 
 export default {
-  fetch: dropway.fetch,
-  scheduled: dropway.scheduled,
+  fetch: kofra.fetch,
+  scheduled: kofra.scheduled,
 } satisfies ExportedHandler<ServerBindings>;

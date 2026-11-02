@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { runCleanup, sha256Hex } from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+import { runCleanup, sha256Hex } from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { freshInstance, jsonBody, type Instance } from "./helpers";
 
 const D1_LIMIT = 2_000_000;
@@ -100,7 +100,7 @@ describe("chunked keyed-publish replay lifecycle", () => {
       .bind(now - 1, parent.key_hash).run();
     const ctx = createExecutionContext();
     try {
-      await runCleanup(dw.dropway.context(env as unknown as ServerBindings, ctx), now);
+      await runCleanup(dw.kofra.context(env as unknown as ServerBindings, ctx), now);
     } finally {
       await waitOnExecutionContext(ctx);
     }

@@ -1,6 +1,6 @@
 import { createExecutionContext, env } from "cloudflare:test";
-import { clearLiveMemoryCache, getLiveSite, liveKey, type LiveSite } from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+import { clearLiveMemoryCache, getLiveSite, liveKey, type LiveSite } from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { afterEach, describe, expect, it } from "vitest";
 import { form, freshInstance } from "./helpers";
 
@@ -29,7 +29,7 @@ describe("live cache miss races", () => {
           return typeof value === "function" ? value.bind(target) : value;
         },
       });
-      const base = dw.dropway.context(env as unknown as ServerBindings, createExecutionContext());
+      const base = dw.kofra.context(env as unknown as ServerBindings, createExecutionContext());
       const dc = { ...base, env: { ...base.env, CACHE: cache }, waitUntil: (p: Promise<unknown>) => { pending.push(p); } };
       const old = await getLiveSite(dc, slug);
       expect(old?.versionId).toBeTruthy();
@@ -103,7 +103,7 @@ describe("live cache miss races", () => {
         },
       });
       const pending: Promise<unknown>[] = [];
-      const base = dw.dropway.context(env as unknown as ServerBindings, createExecutionContext());
+      const base = dw.kofra.context(env as unknown as ServerBindings, createExecutionContext());
       const dc = { ...base, env: { ...base.env, DB: db }, waitUntil: (p: Promise<unknown>) => { pending.push(p); } };
       const read = getLiveSite(dc, slug);
       try {
@@ -194,7 +194,7 @@ describe("live cache miss races", () => {
       },
     });
     const pending: Promise<unknown>[] = [];
-    const base = dw.dropway.context(env as unknown as ServerBindings, createExecutionContext());
+    const base = dw.kofra.context(env as unknown as ServerBindings, createExecutionContext());
     const read = getLiveSite({ ...base, env: { ...base.env, DB: db, CACHE: cache }, waitUntil: (p: Promise<unknown>) => { pending.push(p); } }, slug);
     try {
       await snapshotRead;
@@ -235,7 +235,7 @@ describe("live cache miss races", () => {
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
-    const base = dw.dropway.context(env as unknown as ServerBindings, createExecutionContext());
+    const base = dw.kofra.context(env as unknown as ServerBindings, createExecutionContext());
     const read = getLiveSite({ ...base, env: { ...base.env, CACHE: cache } }, slug);
     try {
       await snapshotRead;
@@ -314,7 +314,7 @@ describe("live cache miss races", () => {
       },
     });
     const pending: Promise<unknown>[] = [];
-    const base = dw.dropway.context(env as unknown as ServerBindings, createExecutionContext());
+    const base = dw.kofra.context(env as unknown as ServerBindings, createExecutionContext());
     const read = getLiveSite({ ...base, env: { ...base.env, DB: db }, waitUntil: (p: Promise<unknown>) => { pending.push(p); } }, slug);
     try {
       await siteRead;

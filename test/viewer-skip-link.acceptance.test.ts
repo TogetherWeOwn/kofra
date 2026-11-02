@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { zipSync, strToU8 } from "fflate";
-import { viewerPage, type Viewer } from "@dropway/server";
+import { viewerPage, type Viewer } from "@kofra/server";
 import { clearRenderMemoryCache } from "../packages/server/src/viewers/cache";
 import { form, freshInstance, ORIGIN, type Instance } from "./helpers";
 

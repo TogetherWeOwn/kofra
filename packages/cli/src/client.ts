@@ -1,11 +1,11 @@
 /**
- * HTTP client for the Kofra REST API (v1). The transport is @dropway/client
+ * HTTP client for the Kofra REST API (v1). The transport is @kofra/client
  * (fetch-only, so the same code runs in Node and inside the Workers runtime);
  * this module layers the CLI's process exit codes on top of it.
  */
 import {
-  DropwayClient as SdkDropwayClient,
-  DropwayError,
+  KofraClient as SdkKofraClient,
+  KofraError,
   errorFromResponse as sdkErrorFromResponse,
   movedTo,
   normaliseApi as sdkNormaliseApi,
@@ -13,10 +13,10 @@ import {
   type BytesResult,
   type CallOptions,
   type ClientOptions,
-  type DropwayNextCall,
+  type KofraNextCall,
   type OperationMeta,
   type RequestOptions,
-} from "@dropway/client";
+} from "@kofra/client";
 import { VERSION } from "./version.ts";
 
 /** Process exit codes. Stable: agents branch on them. */
@@ -52,7 +52,7 @@ export function exitCodeForStatus(status: number): ExitCode {
 }
 
 /** An error with a stable code, a hint for the caller and the exit code to use. */
-export class CliError extends DropwayError {
+export class CliError extends KofraError {
   readonly exitCode: ExitCode;
 
   constructor(opts: {
@@ -67,7 +67,7 @@ export class CliError extends DropwayError {
     retryable?: boolean;
     retryAfterSeconds?: number | null;
     docs?: string;
-    next?: DropwayNextCall[];
+    next?: KofraNextCall[];
   }) {
     super({ ...opts, retryable: opts.retryable ?? opts.exitCode === EXIT.unavailable });
     this.name = "CliError";
@@ -78,27 +78,27 @@ export class CliError extends DropwayError {
 export type {
   ApiResponse,
   ClientOptions,
-  DropwayNextCall,
+  KofraNextCall,
   FetchLike,
   OperationMeta,
   RequestOptions,
-} from "@dropway/client";
+} from "@kofra/client";
 export type { BytesResult, CallOptions };
 
 export { movedTo };
-export { isCredentialSafeUrl, isLoopbackHostname } from "@dropway/client";
+export { isCredentialSafeUrl, isLoopbackHostname } from "@kofra/client";
 
 /** Normalise an instance URL, throwing a CliError (exit 2) for bad input. */
 export function normaliseApi(input: string): string {
   try {
     return sdkNormaliseApi(input);
   } catch (e) {
-    if (e instanceof DropwayError) throw toCliError(e, EXIT.usage);
+    if (e instanceof KofraError) throw toCliError(e, EXIT.usage);
     throw e;
   }
 }
 
-function exitCodeFor(error: DropwayError, fallback: ExitCode): ExitCode {
+function exitCodeFor(error: KofraError, fallback: ExitCode): ExitCode {
   if (error.status !== undefined) return exitCodeForStatus(error.status);
   // The same refusal normaliseApi raises at construction: a configuration
   // error the caller fixes by changing the URL, not an unexpected failure.
@@ -107,7 +107,7 @@ function exitCodeFor(error: DropwayError, fallback: ExitCode): ExitCode {
   return fallback;
 }
 
-function toCliError(error: DropwayError, fallback: ExitCode = EXIT.error): CliError {
+function toCliError(error: KofraError, fallback: ExitCode = EXIT.error): CliError {
   if (error instanceof CliError) return error;
   return new CliError({
     code: error.code,
@@ -129,7 +129,7 @@ export async function errorFromResponse(res: Response): Promise<CliError> {
   return toCliError(await sdkErrorFromResponse(res));
 }
 
-export class DropwayClient extends SdkDropwayClient {
+export class KofraClient extends SdkKofraClient {
   constructor(opts: ClientOptions) {
     super({ ...opts, api: normaliseApi(opts.api), client: opts.client ?? `kofra-cli/${VERSION}` });
   }
@@ -142,7 +142,7 @@ export class DropwayClient extends SdkDropwayClient {
     try {
       return await super.request<T>(method, path, opts);
     } catch (e) {
-      if (e instanceof DropwayError) throw toCliError(e);
+      if (e instanceof KofraError) throw toCliError(e);
       throw e;
     }
   }
@@ -151,7 +151,7 @@ export class DropwayClient extends SdkDropwayClient {
     try {
       return await super.requestBytes(method, path, opts);
     } catch (e) {
-      if (e instanceof DropwayError) throw toCliError(e);
+      if (e instanceof KofraError) throw toCliError(e);
       throw e;
     }
   }
@@ -166,7 +166,7 @@ export class DropwayClient extends SdkDropwayClient {
     try {
       return await super.call<I, O>(op, input, opts);
     } catch (e) {
-      if (e instanceof DropwayError) throw toCliError(e);
+      if (e instanceof KofraError) throw toCliError(e);
       throw e;
     }
   }
@@ -179,7 +179,7 @@ export class DropwayClient extends SdkDropwayClient {
     try {
       return await super.callBytes(op, input, opts);
     } catch (e) {
-      if (e instanceof DropwayError) throw toCliError(e);
+      if (e instanceof KofraError) throw toCliError(e);
       throw e;
     }
   }
@@ -193,7 +193,7 @@ export class DropwayClient extends SdkDropwayClient {
     try {
       return await super.callRaw<I, O>(op, input, body, opts);
     } catch (e) {
-      if (e instanceof DropwayError) throw toCliError(e);
+      if (e instanceof KofraError) throw toCliError(e);
       throw e;
     }
   }

@@ -1,12 +1,12 @@
 {
-  "name": "@dropway/worker",
+  "name": "@kofra/worker",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "The single-tenant Kofra Worker entry: createDropway() with the open-source defaults. Deployed from the repository root (see /wrangler.jsonc).",
+  "description": "The single-tenant Kofra Worker entry: createKofra() with the open-source defaults. Deployed from the repository root (see /wrangler.jsonc).",
   "main": "src/index.ts",
   "dependencies": {
-    "@dropway/server": "^0.1.0"
+    "@kofra/server": "^0.1.0"
   }
 }

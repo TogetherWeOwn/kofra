@@ -401,7 +401,7 @@ describe("native operations inspection: controlled catalog", () => {
   });
 
   it("ships native discovery through the bundled CLI, not only the source launcher", async () => {
-    const outfile = join(root, "bundle/dropway.mjs");
+    const outfile = join(root, "bundle/kofra.mjs");
     await mkdir(join(root, "bundle"), { recursive: true });
     await build({ entryPoints: [join(cliRoot, "src/cli.ts")], bundle: true, platform: "node", format: "esm",
       target: "node20", outfile, logLevel: "silent" });

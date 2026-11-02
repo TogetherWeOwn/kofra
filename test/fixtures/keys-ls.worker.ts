@@ -3,10 +3,10 @@
  * and the serializer's omitted `current` marker without minting credentials.
  * No product endpoint, service, authorization check or serializer is replaced.
  */
-import { defaultIdentity } from "@dropway/core";
-import { createDropway } from "@dropway/server";
+import { defaultIdentity } from "@kofra/core";
+import { createKofra } from "@kofra/server";
 
-export default createDropway({
+export default createKofra({
   adapters: {
     identity: {
       async resolve(request, dc) {

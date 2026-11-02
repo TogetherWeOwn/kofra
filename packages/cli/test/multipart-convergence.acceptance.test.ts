@@ -21,7 +21,7 @@
  *   part_conflict are never retried.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DropwayClient } from "../src/client.ts";
+import { KofraClient } from "../src/client.ts";
 import { publish, type PublishResult, type SourceFile } from "../src/publish.ts";
 
 const MiB = 1024 * 1024;
@@ -227,7 +227,7 @@ function source(path: string, shaChar: string, size = LARGE): SourceFile {
 }
 
 function clientFor(fake: FakeInstance) {
-  return new DropwayClient({ api: "https://fake.test", token: "dw_fixture", fetch: fake.fetch, backoffMs: 1 });
+  return new KofraClient({ api: "https://fake.test", token: "dw_fixture", fetch: fake.fetch, backoffMs: 1 });
 }
 
 function track(promise: Promise<PublishResult>): Promise<Outcome> {
@@ -359,7 +359,7 @@ describe("CLI part_busy convergence (actual CLI + SDK, fake transport)", () => {
 
 describe("CLI upload_busy beyond the SDK retry window (actual CLI + SDK, fake transport)", () => {
   const sdkAttempts = 4;
-  const retryClient = (fake: FakeInstance) => new DropwayClient({
+  const retryClient = (fake: FakeInstance) => new KofraClient({
     api: "https://fake.test", token: "dw_fixture", fetch: fake.fetch,
     attempts: sdkAttempts, backoffMs: 1,
   });

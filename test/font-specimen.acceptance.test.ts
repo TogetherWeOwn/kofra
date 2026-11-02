@@ -5,7 +5,7 @@
  */
 import { env } from "cloudflare:test";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { VIEWERS } from "@dropway/server";
+import { VIEWERS } from "@kofra/server";
 import { form, freshInstance, type Instance } from "./helpers";
 import { fontSpecimenBytes, FONT_SPECIMEN_PATH, FONT_SPECIMEN_SHA256 } from "./fixtures/font-specimen";
 

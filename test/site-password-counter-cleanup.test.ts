@@ -1,6 +1,6 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { runCleanup } from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+import { runCleanup } from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Instance } from "./helpers";
 import { attempt, lockedSite, SITE_PASSWORD } from "./site-password-fixtures";
@@ -42,7 +42,7 @@ async function stored(): Promise<Bucket[]> {
 async function cleanupAt(dw: Instance): Promise<Record<string, number>> {
   const ctx = createExecutionContext();
   try {
-    return await runCleanup(dw.dropway.context(env as unknown as ServerBindings, ctx), NOW) as unknown as Record<string, number>;
+    return await runCleanup(dw.kofra.context(env as unknown as ServerBindings, ctx), NOW) as unknown as Record<string, number>;
   } finally {
     await waitOnExecutionContext(ctx);
   }

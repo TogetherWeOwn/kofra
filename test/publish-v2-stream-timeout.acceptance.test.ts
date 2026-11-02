@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { ApiError } from "@dropway/core";
+import { ApiError } from "@kofra/core";
 import { fetchUrlSource } from "../packages/core/src/services/sources";
 
 // Catches a timeout that is translated during fetch(), but leaks a DOMException

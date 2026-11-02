@@ -1,8 +1,8 @@
 /**
- * @dropway/core: the service layer. No HTTP framework, no UI.
+ * @kofra/core: the service layer. No HTTP framework, no UI.
  *
  * The REST API, the MCP server, the CLI's server side and any embedding app all
- * call these functions with a DropwayContext and a Principal, so behaviour and
+ * call these functions with a KofraContext and a Principal, so behaviour and
  * permissions are identical on every surface.
  */
 export * from "./errors";

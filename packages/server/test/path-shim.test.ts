@@ -92,7 +92,7 @@ function browser(base: string, keep: string[]) {
   g.window = g;
   vm.createContext(g);
   const script = pathShimScript({ base, keep });
-  expect(script.startsWith('<script data-dropway="path-shim">')).toBe(true);
+  expect(script.startsWith('<script data-kofra="path-shim">')).toBe(true);
   vm.runInContext(script.replace(/^<script[^>]*>/, "").replace(/<\/script>$/, ""), g);
   return {
     g: g as any,

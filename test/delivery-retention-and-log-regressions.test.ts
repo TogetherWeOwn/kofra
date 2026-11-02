@@ -1,6 +1,6 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { runCleanup, sha256Hex } from "@dropway/core";
-import type { ServerBindings } from "@dropway/server";
+import { runCleanup, sha256Hex } from "@kofra/core";
+import type { ServerBindings } from "@kofra/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonBody, manifestEntry, type Instance } from "./helpers";
 import { DAY, instance, storageUsage } from "./transfer-fixtures";
@@ -40,7 +40,7 @@ async function protectionState(siteId: string) {
 
 async function cleanup(bindings: Partial<ServerBindings> = {}) {
   const ctx = createExecutionContext();
-  const result = await runCleanup(dw.dropway.context({ ...env, ...bindings } as unknown as ServerBindings, ctx));
+  const result = await runCleanup(dw.kofra.context({ ...env, ...bindings } as unknown as ServerBindings, ctx));
   await waitOnExecutionContext(ctx);
   return result;
 }

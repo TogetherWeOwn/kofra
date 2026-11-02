@@ -42,8 +42,8 @@
  */
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { gzipSync, strToU8, zipSync } from "fflate";
-import { contentTypeFor, sha256Hex, type LiveSite } from "@dropway/core";
-import { findViewer, formatBytes, toViewerFile, VIEWERS, VIEWER_CSP, type ViewMode } from "@dropway/server";
+import { contentTypeFor, sha256Hex, type LiveSite } from "@kofra/core";
+import { findViewer, formatBytes, toViewerFile, VIEWERS, VIEWER_CSP, type ViewMode } from "@kofra/server";
 import { clearRenderMemoryCache } from "../packages/server/src/viewers/cache";
 import { form, freshInstance, ORIGIN, type Instance } from "./helpers";
 

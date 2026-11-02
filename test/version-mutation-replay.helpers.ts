@@ -1,7 +1,7 @@
 import { expect } from "vitest";
 import { env } from "cloudflare:test";
-import { type PublishEvent, type SiteRow, type UsageEvent } from "@dropway/core";
-import type { CreateDropwayOptions } from "@dropway/server";
+import { type PublishEvent, type SiteRow, type UsageEvent } from "@kofra/core";
+import type { CreateKofraOptions } from "@kofra/server";
 import { freshInstance, jsonBody, type Instance } from "./helpers";
 import { connectMcp, type McpTestClient } from "./mcp-helpers";
 import { effectSpies, isMutation, readsVersions, recordStatements, worldState } from "./interleave-harness";
@@ -26,7 +26,7 @@ export async function publish(dw: Instance, content: string, slug = SLUG) {
   return r.body.version.id as string;
 }
 
-export async function fixture(extra: Omit<CreateDropwayOptions, "config"> = {}) {
+export async function fixture(extra: Omit<CreateKofraOptions, "config"> = {}) {
   const published: PublishEvent[] = [];
   const deleted: unknown[] = [];
   const metered: UsageEvent[] = [];
@@ -64,9 +64,9 @@ export function input(h: Harness, action: Action, version = h.target, site = h.s
 /** The same public action through independent HTTP or MCP requests, never a service stub. */
 export async function transport(h: Harness, surface: Surface, credential = h.actor.key) {
   let wireRefusal: Outcome | undefined;
-  const boundary: Instance = { ...h.dw, dropway: { ...h.dw.dropway,
+  const boundary: Instance = { ...h.dw, kofra: { ...h.dw.kofra,
     async fetch(request, bindings, ctx) {
-      const response = await h.dw.dropway.fetch(request, bindings, ctx);
+      const response = await h.dw.kofra.fetch(request, bindings, ctx);
       // Revocation is an HTTP 401 before the MCP tool layer. Preserve the real
       // wire refusal if the SDK throws it, rather than inventing a tool result.
       if (response.status === 401) wireRefusal = { status: 401, isError: true, body: await response.clone().json() as Record<string, any> };

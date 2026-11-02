@@ -1,4 +1,4 @@
-import { ERROR_CODES, appOrigin, sha256Hex, siteUrl, type DropwayConfig, type DropwayContext } from "@dropway/core";
+import { ERROR_CODES, appOrigin, sha256Hex, siteUrl, type KofraConfig, type KofraContext } from "@kofra/core";
 import type { McpToolDefinition } from "./extensions";
 import { buildOpenApi } from "./openapi";
 import type { OperationDefinition } from "./operations";
@@ -98,12 +98,12 @@ Publish to the same site again with \`-F slug=<slug>\` (REST) or \`site: "<slug>
 `;
 }
 
-export function skillInstance(dw: DropwayContext): SkillInstance {
+export function skillInstance(dw: KofraContext): SkillInstance {
   return { origin: appOrigin(dw), instanceName: dw.config.instanceName, anonymousPublish: dw.config.anonymous.enabled, exampleSiteUrl: siteUrl(dw, "bright-otter-x7k2") };
 }
 
 /** /.well-known/agent-skills/index.json (Agent Skills discovery v0.2.0). */
-export async function agentSkillsIndex(dw: DropwayContext) {
+export async function agentSkillsIndex(dw: KofraContext) {
   const md = skillMarkdown(skillInstance(dw));
   return {
     $schema: "https://schemas.agentskills.io/discovery/0.2.0/schema.json",
@@ -128,7 +128,7 @@ export function legacySkillsIndex(product = "Kofra") {
 
 type OpenApiOp = { operationId?: string; summary?: string; description?: string; deprecated?: boolean; parameters?: Array<Record<string, unknown>>; requestBody?: Record<string, any>; "x-mcp-tool"?: string; "x-mcp-exclude"?: string };
 
-function operations(origin: string, config: DropwayConfig, registry?: readonly OperationDefinition[], availableTools?: ReadonlySet<string>) {
+function operations(origin: string, config: KofraConfig, registry?: readonly OperationDefinition[], availableTools?: ReadonlySet<string>) {
   const doc = buildOpenApi(origin, config.instanceName, config.anonymous.enabled, registry, availableTools) as { paths: Record<string, Record<string, OpenApiOp>> };
   const out: Array<{ method: string; path: string; op: OpenApiOp }> = [];
   for (const [path, item] of Object.entries(doc.paths)) {
@@ -138,10 +138,10 @@ function operations(origin: string, config: DropwayConfig, registry?: readonly O
 }
 
 /** Is a tool listed on this instance? (Evaluated with the instance config only.) */
-function toolEnabled(t: McpToolDefinition, config: DropwayConfig): boolean {
+function toolEnabled(t: McpToolDefinition, config: KofraConfig): boolean {
   if (!t.enabled) return true;
   try {
-    return t.enabled({ config } as DropwayContext);
+    return t.enabled({ config } as KofraContext);
   } catch {
     return true;
   }
@@ -161,7 +161,7 @@ function mcpLines(origin: string): string {
 }
 
 /** /llms.txt: what this is, how to connect, every endpoint and tool in one line each. */
-export function llmsTxt(origin: string, config: DropwayConfig, tools: readonly McpToolDefinition[] = [], registry?: readonly OperationDefinition[], availableTools?: ReadonlySet<string>): string {
+export function llmsTxt(origin: string, config: KofraConfig, tools: readonly McpToolDefinition[] = [], registry?: readonly OperationDefinition[], availableTools?: ReadonlySet<string>): string {
   const visibleTools = tools.filter((tool) => availableTools ? availableTools.has(tool.name) : toolEnabled(tool, config));
   const available = availableTools ?? (tools.length ? new Set(visibleTools.map((tool) => tool.name)) : undefined);
   const ops = operations(origin, config, registry, available).filter((o) => o.path.startsWith("/api/") && !o.op.deprecated);
@@ -206,7 +206,7 @@ ${visibleTools.map((t) => `- \`${t.name}\`: ${firstSentence(t.description)}`).jo
 }
 
 /** /llms-full.txt: the complete agent reference. */
-export function llmsFullTxt(origin: string, config: DropwayConfig, tools: readonly McpToolDefinition[], registry?: readonly OperationDefinition[], availableTools?: ReadonlySet<string>): string {
+export function llmsFullTxt(origin: string, config: KofraConfig, tools: readonly McpToolDefinition[], registry?: readonly OperationDefinition[], availableTools?: ReadonlySet<string>): string {
   const visibleTools = tools.filter((tool) => availableTools ? availableTools.has(tool.name) : toolEnabled(tool, config));
   const available = availableTools ?? (tools.length ? new Set(visibleTools.map((tool) => tool.name)) : undefined);
   const ops = operations(origin, config, registry, available);

@@ -1,19 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import * as core from "@dropway/core";
-import { ApiError, setSiteAccess, type DropwayContext, type PolicyAdapter, type Principal, type SiteOwner } from "@dropway/core";
-import { type ServerBindings } from "@dropway/server";
+import * as core from "@kofra/core";
+import { ApiError, setSiteAccess, type KofraContext, type PolicyAdapter, type Principal, type SiteOwner } from "@kofra/core";
+import { type ServerBindings } from "@kofra/server";
 import { form, freshInstance, jsonBody, manifestEntry, ORIGIN, type Instance } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
 import { echoOperation, type OperationFixture } from "./operation-fixtures";
 
 // SPEC 6.3's new optional members remain local so the RED branch still typechecks.
 type PolicyContract = PolicyAdapter & {
-  capability?(p: Principal, capability: string, owner: SiteOwner | null, dc: DropwayContext):
+  capability?(p: Principal, capability: string, owner: SiteOwner | null, dc: KofraContext):
     { allowed: true } | { allowed: false; error: ApiError } | Promise<{ allowed: true } | { allowed: false; error: ApiError }>;
-  quota?(p: Principal, key: string, owner: SiteOwner | null, dc: DropwayContext): number | null | Promise<number | null>;
-  beforeOperation?(p: Principal, op: { id: string }, input: unknown, dc: DropwayContext): void | Promise<void>;
+  quota?(p: Principal, key: string, owner: SiteOwner | null, dc: KofraContext): number | null | Promise<number | null>;
+  beforeOperation?(p: Principal, op: { id: string }, input: unknown, dc: KofraContext): void | Promise<void>;
 };
 const limits: PolicyAdapter["limits"] = (_p, _owner, dc) => dc.config.limits;
 const CAPABILITIES = [
@@ -30,7 +30,7 @@ async function boundJson(dw: Instance, bindings: ServerBindings, path: string, i
   const ctx = createExecutionContext();
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${dw.ownerKey}`);
-  const response = await dw.dropway.fetch(new Request(`${ORIGIN}${path}`, { ...init, headers }), bindings, ctx);
+  const response = await dw.kofra.fetch(new Request(`${ORIGIN}${path}`, { ...init, headers }), bindings, ctx);
   await waitOnExecutionContext(ctx);
   return { status: response.status, body: await response.json() as Record<string, any> };
 }
@@ -112,7 +112,7 @@ describe("R-17 capability policy", () => {
     const dw = await freshInstance({}, { adapters: { policy: passwordPolicy() } });
     await site(dw);
     const ctx = createExecutionContext();
-    const dc = dw.dropway.context(env as unknown as ServerBindings, ctx);
+    const dc = dw.kofra.context(env as unknown as ServerBindings, ctx);
     const p = await dc.adapters.identity.resolve(new Request(`${ORIGIN}/api/v1/me`, { headers: { Authorization: `Bearer ${dw.ownerKey}` } }), dc);
     try {
       await expect(setSiteAccess(dc, p, "policy-site", { mode: "password", password: "acceptance-password" }))
@@ -401,8 +401,8 @@ describe("R-17 beforeOperation", () => {
     const dw = await freshInstance({}, { operations: [op], adapters: { policy } });
     // Binding-presence sentinel only: echo never calls the browser or any external service.
     let bindings = { ...env, BROWSER: { fetch: async () => new Response("unused") } } as unknown as ServerBindings & Record<string, unknown>;
-    const bound: Instance = { ...dw, dropway: { ...dw.dropway,
-      fetch: (request, _env, ctx) => dw.dropway.fetch(request, bindings, ctx),
+    const bound: Instance = { ...dw, kofra: { ...dw.kofra,
+      fetch: (request, _env, ctx) => dw.kofra.fetch(request, bindings, ctx),
     } };
     const mcp = await connectMcp(bound, dw.ownerKey);
     try {

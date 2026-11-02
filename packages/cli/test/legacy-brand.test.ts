@@ -1,7 +1,7 @@
-// The product's former name (Dropway) keeps working in the CLI.
+// The product's former name (Dropway) keeps working in the CLI. // rebrand:keep
 // rebrand:keep-file (scripts/rebrand.mjs never edits this file.)
 import { describe, expect, it } from "vitest";
-import { DropwayClient } from "../src/client.ts";
+import { KofraClient } from "../src/client.ts";
 import { withLegacyEnv } from "../src/legacy-brand.ts";
 import { waitForVersion } from "../src/publish.ts";
 
@@ -16,7 +16,7 @@ describe("former name compatibility", () => {
 
   it("sends the client header under both names (instances from before the rename read X-Dropway-*)", async () => {
     let seen: Headers | null = null;
-    const client = new DropwayClient({
+    const client = new KofraClient({
       api: "https://instance.example",
       token: null,
       client: "test/1",

@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
-import { ApiError, ERROR_CODES, errorCatalogMarkdown, appOrigin, type DropwayContext } from "@dropway/core";
-import type { DropwayEnv } from "./env";
+import { ApiError, ERROR_CODES, errorCatalogMarkdown, appOrigin, type KofraContext } from "@kofra/core";
+import type { KofraEnv } from "./env";
 import type { McpHandlerFactory, McpToolDefinition, UiSlots } from "./extensions";
 import { APP_PAGE_CSP, escapeHtml, htmlPage } from "./html";
 import { buildOpenApi } from "./openapi";
@@ -16,7 +16,7 @@ import { LEGACY_SKILL_NAME } from "./legacy-brand";
  * /robots.txt, the well-known discovery indexes, /health, /claim, /mcp,
  * plus the dashboard and file viewer (./ui). Embedding apps replace the home
  * page with uiSlots.landing and add pages with uiSlots.pages; the MCP server
- * plugs in through createDropway({ mcp }).
+ * plugs in through createKofra({ mcp }).
  */
 
 function pageHeaders(): Record<string, string> {
@@ -48,9 +48,9 @@ function connectHtml(origin: string, instanceName: string): string {
 }
 
 /** Install the core app-origin routes on `app` (which may already hold extension routes). */
-export function createAppRouter(opts: { app: Hono<DropwayEnv>; uiSlots: UiSlots; mcp?: McpHandlerFactory | undefined; mcpTools: readonly McpToolDefinition[]; operations: readonly OperationDefinition[] }) {
+export function createAppRouter(opts: { app: Hono<KofraEnv>; uiSlots: UiSlots; mcp?: McpHandlerFactory | undefined; mcpTools: readonly McpToolDefinition[]; operations: readonly OperationDefinition[] }) {
   const app = opts.app;
-  const availableToolNames = (dw: DropwayContext) => new Set(opts.mcpTools.filter((tool) => !tool.enabled || tool.enabled(dw)).map((tool) => tool.name));
+  const availableToolNames = (dw: KofraContext) => new Set(opts.mcpTools.filter((tool) => !tool.enabled || tool.enabled(dw)).map((tool) => tool.name));
 
   for (const page of opts.uiSlots.pages) app.get(page.path, (c) => page.handler(c));
   installUi(app, opts.uiSlots);
@@ -58,7 +58,7 @@ export function createAppRouter(opts: { app: Hono<DropwayEnv>; uiSlots: UiSlots;
   installEncrypted(app);
 
   app.get("/", (c) => (opts.uiSlots.landing ? opts.uiSlots.landing(c) : homePage(c)));
-  app.get("/health", (c) => c.json({ ok: true, service: "dropway" }));
+  app.get("/health", (c) => c.json({ ok: true, service: "kofra" }));
   app.get("/openapi.json", (c) => {
     const dw = c.get("dw");
     const available = availableToolNames(dw);
@@ -82,7 +82,7 @@ export function createAppRouter(opts: { app: Hono<DropwayEnv>; uiSlots: UiSlots;
     const dw = c.get("dw");
     return c.body(llmsFullTxt(appOrigin(dw), dw.config, opts.mcpTools, opts.operations, availableToolNames(dw)), 200, markdown);
   });
-  const skill = (c: Context<DropwayEnv>) => {
+  const skill = (c: Context<KofraEnv>) => {
     const name = c.req.param("name");
     if (name !== undefined && name !== SKILL_NAME && name !== LEGACY_SKILL_NAME) return c.notFound();
     return c.body(skillMarkdown(skillInstance(c.get("dw"))), 200, { ...markdown, ...describedBy(appOrigin(c.get("dw"))) });

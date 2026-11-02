@@ -1,9 +1,9 @@
-import { ApiError, defaultPolicy } from "@dropway/core";
-import { createDropway } from "@dropway/server";
+import { ApiError, defaultPolicy } from "@kofra/core";
+import { createKofra } from "@kofra/server";
 
 // Disposable local-only embedding policy. Refuse at the real extension boundary;
 // do not reimplement duplicate, authorization, idempotency or quota algorithms.
-export default createDropway({
+export default createKofra({
   adapters: {
     policy: {
       ...defaultPolicy,

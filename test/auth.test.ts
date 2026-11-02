@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
-import { ALL_SCOPES, hasScope, requireMember, type MemberPrincipal } from "@dropway/core";
+import { ALL_SCOPES, hasScope, requireMember, type MemberPrincipal } from "@kofra/core";
 import { BOOTSTRAP, form, freshInstance, jsonBody, type Instance } from "./helpers";
 
 let dw: Instance;

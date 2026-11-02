@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { defineOperation, readJson, type CreateDropwayOptions, type OperationDefinition } from "@dropway/server";
+import { defineOperation, readJson, type CreateKofraOptions, type OperationDefinition } from "@kofra/server";
 import { freshInstance } from "./helpers";
 
 // Real public factory/workerd requests. A middleware read must not break a
@@ -13,7 +13,7 @@ type Reader = typeof readers[number];
 const transports = ["generated", "custom HTTP"] as const;
 type Transport = typeof transports[number];
 
-function inspection(reader: Reader, observed: unknown[]): NonNullable<CreateDropwayOptions["apiMiddleware"]> {
+function inspection(reader: Reader, observed: unknown[]): NonNullable<CreateKofraOptions["apiMiddleware"]> {
   return [async (c, next) => {
     // Do not consume the helper's setup request or unrelated core requests.
     if (reader !== "none" && c.req.header("X-Inspect-Body") === "yes") {

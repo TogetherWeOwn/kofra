@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { env } from "cloudflare:test";
-import type { DropwayConfig, DropwayVars, Principal } from "@dropway/core";
+import type { KofraConfig, KofraVars, Principal } from "@kofra/core";
 import { freshInstance, jsonBody, manifestEntry, type Instance } from "./helpers";
 
 // SPEC 9.2 / 11.4: an upload credential grants PUT authority for one pending
@@ -46,8 +46,8 @@ describe("Publish v2 extension API v4 additions", () => {
     expectTypeOf<Extract<Principal, { kind: "upload" }>>().toEqualTypeOf<{
       kind: "upload"; versionId: string; expiresAt: number; ip: string;
     }>();
-    expectTypeOf<DropwayConfig["urlFetchMaxBytes"]>().toEqualTypeOf<number>();
-    expectTypeOf<DropwayVars["URL_FETCH_MAX_BYTES"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<KofraConfig["urlFetchMaxBytes"]>().toEqualTypeOf<number>();
+    expectTypeOf<KofraVars["URL_FETCH_MAX_BYTES"]>().toEqualTypeOf<string | undefined>();
   });
 
   it("passes a real issued upload Principal to embedding middleware without member or claim authority", async () => {
@@ -66,7 +66,7 @@ describe("Publish v2 extension API v4 additions", () => {
   });
 
   it.each([false, true])("enforces URL_FETCH_MAX_BYTES with config override = %s", async (override) => {
-    const bindings = env as unknown as DropwayVars;
+    const bindings = env as unknown as KofraVars;
     const previous = bindings.URL_FETCH_MAX_BYTES;
     try {
       bindings.URL_FETCH_MAX_BYTES = "8";

@@ -1,7 +1,7 @@
-import type { DeleteEvent, DropwayHooks, PublishEvent, SiteRequestEvent, TransferEvent, UsageEvent } from "../adapters";
-import type { DropwayContext } from "../context";
+import type { DeleteEvent, KofraHooks, PublishEvent, SiteRequestEvent, TransferEvent, UsageEvent } from "../adapters";
+import type { KofraContext } from "../context";
 
-type HookName = keyof DropwayHooks;
+type HookName = keyof KofraHooks;
 type HookEvent<K extends HookName> = K extends "onPublish" ? PublishEvent : K extends "onDelete" ? DeleteEvent : K extends "onEvent" ? TransferEvent : SiteRequestEvent;
 
 function logFailure(what: string, e: unknown) {
@@ -9,9 +9,9 @@ function logFailure(what: string, e: unknown) {
 }
 
 /** Run every registered hook for an event after the response (never throws). */
-export function emit<K extends HookName>(dc: DropwayContext, name: K, event: HookEvent<K>): void {
+export function emit<K extends HookName>(dc: KofraContext, name: K, event: HookEvent<K>): void {
   for (const hooks of dc.hooks) {
-    const fn = hooks[name] as ((e: HookEvent<K>, dc: DropwayContext) => void | Promise<void>) | undefined;
+    const fn = hooks[name] as ((e: HookEvent<K>, dc: KofraContext) => void | Promise<void>) | undefined;
     if (!fn) continue;
     try {
       const r = fn(event, dc);
@@ -23,7 +23,7 @@ export function emit<K extends HookName>(dc: DropwayContext, name: K, event: Hoo
 }
 
 /** Record a usage event with the metering adapter after the response (never throws). */
-export function meter(dc: DropwayContext, event: UsageEvent): void {
+export function meter(dc: KofraContext, event: UsageEvent): void {
   try {
     const r = dc.adapters.metering.record(event, dc);
     if (r && typeof (r as Promise<void>).then === "function") dc.waitUntil((r as Promise<void>).catch((e) => logFailure("metering", e)));

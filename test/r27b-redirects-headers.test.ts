@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { clearLiveMemoryCache } from "@dropway/core";
+import { clearLiveMemoryCache } from "@kofra/core";
 import { beforeEach, describe, expect, it } from "vitest";
 import { form, freshInstance, jsonBody, manifestEntry, type Instance } from "./helpers";
 
@@ -277,7 +277,7 @@ describe("headers parsed at finalize (SRV-09)", () => {
     await env.DB.prepare("UPDATE versions SET config_json = NULL WHERE id = ?").bind(id).run();
     clearLiveMemoryCache();
     await env.CACHE.delete("live:config-backfill");
-    await caches.default.delete(new Request("https://dropway.invalid/__dropway/ptr/config-backfill"));
+    await caches.default.delete(new Request("https://kofra.invalid/__dropway/ptr/config-backfill"));
 
     const stale = await dw.call("/s/config-backfill/old");
     expect(stale.status).toBe(404);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { createDropway, defineOperation, type OperationDefinition } from "@dropway/server";
+import { createKofra, defineOperation, type OperationDefinition } from "@kofra/server";
 import { BOOTSTRAP, form, freshInstance, jsonBody } from "./helpers";
 
 // All requests enter the public factory and run inside workerd. These handlers
@@ -205,7 +205,7 @@ describe("raw body retry definition safety", () => {
       rawBody: true, tool: { idempotent: true }, mcp: { exclude: "Legacy raw HTTP adapter" },
       http: { async handler(c) { return c.json({ content: await c.req.text() }); } },
     });
-    expect(() => createDropway({ operations: [op] })).not.toThrow();
+    expect(() => createKofra({ operations: [op] })).not.toThrow();
     const dw = await freshInstance({}, { operations: [op] });
     const result = await dw.json("/api/v1/review-transport", { key: dw.ownerKey, method: "POST", body: "legacy bytes" });
     expect(result.status).toBe(200);

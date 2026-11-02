@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DropwayClient, DropwayError, type FetchLike } from "../src/index.ts";
+import { KofraClient, KofraError, type FetchLike } from "../src/index.ts";
 
 // These fixtures specify fidelity, not permission to execute suggested calls.
 const next = [{ tool: "get_version", args: { site: "sample", version: "ver_old" }, why: "Read the immutable base before retrying." }];
@@ -9,12 +9,12 @@ const json = (body: unknown, status = 409, headers: Record<string, string> = {})
 
 async function failure(body: unknown, status = 409, headers: Record<string, string> = {}) {
   const requests: Request[] = [];
-  const client = new DropwayClient({ api: "https://recovery.test", token: "dw_disposable_sentinel", attempts: 1,
+  const client = new KofraClient({ api: "https://recovery.test", token: "dw_disposable_sentinel", attempts: 1,
     fetch: (async request => { requests.push(request); return json(body, status, headers); }) as FetchLike });
   const error = await client.get("/sites/sample").then(() => { throw new Error("fixture must return an error"); }, e => e);
-  expect(error).toBeInstanceOf(DropwayError);
+  expect(error).toBeInstanceOf(KofraError);
   expect(requests).toHaveLength(1);
-  return error as DropwayError;
+  return error as KofraError;
 }
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
@@ -41,13 +41,13 @@ describe("server recovery metadata fidelity", () => {
   });
 
   it("preserves legacy construction/JSON without inventing optional metadata", () => {
-    const error = new DropwayError({ ...fields, status: 409, retryable: false });
+    const error = new KofraError({ ...fields, status: 409, retryable: false });
     expect(JSON.parse(JSON.stringify(error))).toEqual({ ...fields, status: 409, retryable: false });
   });
 
   it("serializes directly constructed recovery errors as well as HTTP errors", () => {
     const options = { ...fields, status: 409, retryable: false, retryAfterSeconds: 0, docs: "/docs/errors#version_conflict", next: [] };
-    expect(new DropwayError(options).toJSON()).toEqual(options);
+    expect(new KofraError(options).toJSON()).toEqual(options);
   });
 
   it.each([
@@ -90,10 +90,10 @@ describe("server recovery metadata fidelity", () => {
 
   it("keeps non-JSON failures bounded without serializing response bodies or headers", async () => {
     const sentinel = "disposable-html-secret";
-    const client = new DropwayClient({ api: "https://recovery.test", token: null, attempts: 1,
+    const client = new KofraClient({ api: "https://recovery.test", token: null, attempts: 1,
       fetch: async () => new Response(`<html>${"upstream unavailable ".repeat(2000)}${sentinel}</html>`, { status: 502, headers: { "X-Request-Id": "html-request", "Set-Cookie": sentinel } }) });
-    const error = await client.get("/sites").catch(e => e as DropwayError);
-    expect(error).toBeInstanceOf(DropwayError);
+    const error = await client.get("/sites").catch(e => e as KofraError);
+    expect(error).toBeInstanceOf(KofraError);
     expect(error).toMatchObject({ code: "http_502", status: 502, retryable: true, requestId: "html-request" });
     expect(JSON.stringify(error)).not.toContain(sentinel);
     expect(JSON.stringify(error).length).toBeLessThan(1500);
@@ -106,7 +106,7 @@ describe("recovery metadata does not change retry/execution policy", () => {
     vi.setSystemTime(0);
     vi.spyOn(Math, "random").mockReturnValue(0);
     const calls: { method: string; url: string; at: number; key: string | null; body: string }[] = [];
-    const client = new DropwayClient({ api: "https://recovery.test", token: null, attempts: 3, backoffMs: 10,
+    const client = new KofraClient({ api: "https://recovery.test", token: null, attempts: 3, backoffMs: 10,
       fetch: async request => {
         calls.push({ method: request.method, url: request.url, at: Date.now(), key: request.headers.get("Idempotency-Key"), body: await request.text() });
         return json({ error: { ...fields, retryable: false, retryAfterSeconds: 9000, docs: "https://never-follow.test/docs", next: [{ tool: "publish_site", args: { slug: "never-publish" }, why: "Data only." }] } }, 503);
@@ -118,7 +118,7 @@ describe("recovery metadata does not change retry/execution policy", () => {
     const safe = ["GET", "HEAD"].includes(method);
     expect(calls.map(c => c.at)).toEqual(safe ? [0, 10, 30] : [0]);
     expect(calls.every(c => c.url === "https://recovery.test/api/v1/sites/sample" && c.method === method && c.key === null)).toBe(true);
-    expect(error).toBeInstanceOf(DropwayError);
+    expect(error).toBeInstanceOf(KofraError);
     expect(error.retryable).toBe(false);
   });
 
@@ -126,7 +126,7 @@ describe("recovery metadata does not change retry/execution policy", () => {
     vi.useFakeTimers(); vi.setSystemTime(0);
     vi.spyOn(Math, "random").mockReturnValue(0);
     const times: number[] = [];
-    const client = new DropwayClient({ api: "https://recovery.test", token: null, attempts: 3, backoffMs: 10,
+    const client = new KofraClient({ api: "https://recovery.test", token: null, attempts: 3, backoffMs: 10,
       fetch: async () => { times.push(Date.now()); throw new Error("disposable network failure"); } });
     const result = client.request(method, "/sites/sample").catch(e => e);
     await vi.runAllTimersAsync();
@@ -138,7 +138,7 @@ describe("recovery metadata does not change retry/execution policy", () => {
   it("does not turn an idempotency key into permission to retry unsafe POST", async () => {
     const requests: Request[] = [];
     const bodies: string[] = [];
-    const client = new DropwayClient({ api: "https://recovery.test", token: null, attempts: 3, backoffMs: 1,
+    const client = new KofraClient({ api: "https://recovery.test", token: null, attempts: 3, backoffMs: 1,
       fetch: async request => { requests.push(request); bodies.push(await request.text()); return json({ error: { ...fields, retryable: true, next } }, 503); } });
     await client.post("/sites", { slug: "sample" }, { idempotencyKey: "disposable-recovery-key" }).catch(() => {});
     expect(requests).toHaveLength(1);
@@ -149,7 +149,7 @@ describe("recovery metadata does not change retry/execution policy", () => {
   it("uses Retry-After header seconds, not envelope delay, for 429 scheduling", async () => {
     vi.useFakeTimers(); vi.setSystemTime(0);
     const times: number[] = [];
-    const client = new DropwayClient({ api: "https://recovery.test", token: null, attempts: 3, backoffMs: 10,
+    const client = new KofraClient({ api: "https://recovery.test", token: null, attempts: 3, backoffMs: 10,
       fetch: async () => { times.push(Date.now()); return json({ error: { ...fields, retryable: false, retryAfterSeconds: 9999, next } }, 429, { "Retry-After": "2" }); } });
     const result = client.get("/sites").catch(e => e);
     await vi.runAllTimersAsync(); await result;
@@ -158,7 +158,7 @@ describe("recovery metadata does not change retry/execution policy", () => {
 
   it("does not retry a 409 merely because metadata says retryable:true", async () => {
     const calls: string[] = [];
-    const client = new DropwayClient({ api: "https://recovery.test", token: null, attempts: 3, backoffMs: 1,
+    const client = new KofraClient({ api: "https://recovery.test", token: null, attempts: 3, backoffMs: 1,
       fetch: async request => { calls.push(request.url); return json({ error: { ...fields, retryable: true, next, docs: "https://never-follow.test/docs" } }); } });
     await client.get("/sites/sample").catch(() => {});
     expect(calls).toEqual(["https://recovery.test/api/v1/sites/sample"]);

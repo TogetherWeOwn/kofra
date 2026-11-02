@@ -31,7 +31,7 @@ export async function testRoot() {
   return mkdtemp(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(), "site-settings-"));
 }
 export async function bundle(root: string) {
-  const entry = join(root, "bundle/dropway.mjs");
+  const entry = join(root, "bundle/kofra.mjs");
   await build({ entryPoints: [join(repoRoot, "packages/cli/src/cli.ts")], bundle: true, platform: "node",
     format: "esm", target: "node20", outfile: entry, logLevel: "silent" });
   return entry;

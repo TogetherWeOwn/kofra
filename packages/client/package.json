@@ -1,5 +1,5 @@
 {
-  "name": "@dropway/client",
+  "name": "@kofra/client",
   "version": "0.1.0",
   "description": "Typed REST client for Kofra, generated from the operation registry. Fetch-only TypeScript source for bundlers targeting Node, Workers and browsers.",
   "license": "MIT",

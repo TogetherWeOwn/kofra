@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { expect, it } from "vitest";
-import { DropwayClient, type DeleteVersionInput } from "../src/index.ts";
+import { KofraClient, type DeleteVersionInput } from "../src/index.ts";
 
 it("the published DeleteVersionInput requires a string confirmation", () => {
   // Compile a consumer in memory against the checked-in SDK, not a mocked schema
@@ -31,7 +31,7 @@ it("the published DeleteVersionInput requires a string confirmation", () => {
 
 it("deleteVersion serializes confirmation on the actual DELETE", async () => {
   const requests: Request[] = [];
-  const client = new DropwayClient({ api: "https://sdk-fixture.example", token: null, fetch: async request => {
+  const client = new KofraClient({ api: "https://sdk-fixture.example", token: null, fetch: async request => {
     requests.push(request);
     return new Response(JSON.stringify({ deleted: true, id: "ver_old" }), { headers: { "Content-Type": "application/json" } });
   } });

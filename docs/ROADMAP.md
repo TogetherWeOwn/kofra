@@ -70,7 +70,7 @@ conflicts; versions list/restore/delete; read-back of files; scoped API keys; me
 recovery; anonymous publish with claim tokens (off by default); password gates; SPA mode; cross-origin
 isolation; Markdown viewer and folder listings; `?raw=1` and `?download=1`; path and subdomain modes with
 HTML/CSS rewriting and `Referer` redirects; hourly cleanup cron; Analytics Engine writes; `/openapi.json`
-and `/llms.txt`; extension points `createDropway({ config, adapters, hooks, apiMiddleware, routes,
+and `/llms.txt`; extension points `createKofra({ config, adapters, hooks, apiMiddleware, routes,
 mcpTools, mcp, uiSlots, viewers, scheduled })`; 50 tests.
 
 ---
@@ -81,7 +81,7 @@ mcpTools, mcp, uiSlots, viewers, scheduled })`; 50 tests.
 Delivers: OPS-08 (part). Depends: none.
 - Done: `scripts/guard-open-core.mjs` (`npm run guard`) runs in CI and fails on: the private-code SPDX
   marker (the guard holds the exact string), payment SDK dependencies in any `package.json` or lockfile, a `.gitmodules`
-  file, or code that imports a package outside this repo's `@dropway/*` and declared dependencies.
+  file, or code that imports a package outside this repo's `@kofra/*` and declared dependencies.
 - `packages/server` exports `EXTENSION_API_VERSION`; `CHANGELOG.md` has an "Extension API" section.
 - `test/extension-contract.test.ts` exercises every existing extension point with fakes: identity,
   policy limits and refusals (`beforeCreateSite`, `beforeDeploy`), metering events (all 5 kinds), all 3
@@ -96,7 +96,7 @@ Delivers: AX-01. Depends: R-01.
 - `/openapi.json` validates as OpenAPI 3.1 (Spectral or Redocly lint in CI: operationId, summary,
   description, examples and error responses required).
 - `GET /api/v1/operations` returns the CLI command table (id, method, path, scopes, input schema, cli path).
-- `createDropway({ operations })` accepts extension operations; the contract test registers one and sees
+- `createKofra({ operations })` accepts extension operations; the contract test registers one and sees
   it in REST, OpenAPI and the MCP tool list.
 - CI test: every operation is an MCP tool or has `mcp.exclude` with a reason; descriptions under 4,096
   characters; stable tool order.
@@ -193,7 +193,7 @@ Delivers: AX-04 (part). Depends: R-04, R-05.
 - Writes `dropway.json` after the first publish so re-running updates the same site.
 - Exit codes 0-8 per the agent-experience contract; zero runtime dependencies, one bundled file.
 - Published to npm as `kofra` (name verified free on 2026-10-23) and served by each instance at
-  `<app>/cli/dropway.tgz`. If npm credentials are not available yet, the tarball path ships first and the
+  `<app>/cli/kofra.tgz`. If npm credentials are not available yet, the tarball path ships first and the
   npm publish is recorded as an operator to-do.
 
 ### R-10 CLI: management commands (2 days)
@@ -286,10 +286,10 @@ Delivers: OPS-08, SPEC 6.4-6.9. Depends: R-17.
 - `suspendTenant`, `resumeTenant`, `deleteTenant`, `addMember` exported; suspended tenants' sites answer
   503 "unavailable" unless `beforeServe` answers.
 - `ServingAdapter.resolveHost` and `.beforeServe` wired into routing and serving; zero extra I/O when unset (test).
-- `createDropway({ queues })` returns a `queue` handler dispatching by queue name; Durable Object classes
-  exported from `@dropway/server/durable-objects`; `hooks.onEvent` emits every `DropwayEvent`.
+- `createKofra({ queues })` returns a `queue` handler dispatching by queue name; Durable Object classes
+  exported from `@kofra/server/durable-objects`; `hooks.onEvent` emits every `KofraEvent`.
 - `RouteExtension` can contribute OpenAPI fragments, merged into `/openapi.json`.
-- `@dropway/server/testing` exports `createTestDropway`, `seedTenant`, `seedSite`, `publishFixture`; the
+- `@kofra/server/testing` exports `createTestKofra`, `seedTenant`, `seedSite`, `publishFixture`; the
   contract test uses it and covers every extension point in SPEC 6.
 
 ### R-19 Post-publish job pipeline and AI metadata (2 days)
@@ -490,8 +490,8 @@ Delivers: SPEC 7.5. Depends: R-14.
 
 ### R-45 Typed client and npm packages (2 days)
 Delivers: AX-13. Depends: R-02.
-- `@dropway/client` generated from the registry; the CLI uses it; `@dropway/core`, `@dropway/server`,
-  `@dropway/client` and `dropway` published with npm trusted publishing from CI.
+- `@kofra/client` generated from the registry; the CLI uses it; `@kofra/core`, `@kofra/server`,
+  `@kofra/client` and `kofra` published with npm trusted publishing from CI.
 
 ### R-46 GitHub Action and pull-request previews (2 days)
 Delivers: PUB-20. Depends: R-09.

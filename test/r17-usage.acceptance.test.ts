@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { createExecutionContext, createScheduledController, env, waitOnExecutionContext } from "cloudflare:test";
-import * as core from "@dropway/core";
-import { ApiError, type DropwayContext, type PolicyAdapter, type Principal, type SiteOwner } from "@dropway/core";
-import { type ServerBindings } from "@dropway/server";
+import * as core from "@kofra/core";
+import { ApiError, type KofraContext, type PolicyAdapter, type Principal, type SiteOwner } from "@kofra/core";
+import { type ServerBindings } from "@kofra/server";
 import { freshInstance, jsonBody, manifestEntry, type Instance } from "./helpers";
 import { connectMcp } from "./mcp-helpers";
 
 type QuotaPolicy = PolicyAdapter & {
-  quota?(p: Principal, key: string, owner: SiteOwner | null, dc: DropwayContext): number | null | Promise<number | null>;
+  quota?(p: Principal, key: string, owner: SiteOwner | null, dc: KofraContext): number | null | Promise<number | null>;
 };
 
 async function publish(dw: Instance, slug: string, files: { path: string; content: string }[], headers?: HeadersInit) {
@@ -292,13 +292,13 @@ describe("R-17 usage true-up", () => {
     await publish(dw, "trueup-deleted", [{ path: "gone.txt", content: "gone!" }]);
     expect((await dw.json("/api/v1/sites/trueup-deleted", { key: dw.ownerKey, method: "DELETE" })).status).toBe(200);
     await deploy(dw, "trueup-one", "pending does not count");
-    const recompute = Reflect.get(core, "recomputeUsage") as ((dc: DropwayContext, tenantId: string) => Promise<unknown>) | undefined;
-    expect(recompute, "@dropway/core must export recomputeUsage()").toBeTypeOf("function");
+    const recompute = Reflect.get(core, "recomputeUsage") as ((dc: KofraContext, tenantId: string) => Promise<unknown>) | undefined;
+    expect(recompute, "@kofra/core must export recomputeUsage()").toBeTypeOf("function");
     const id = await tenantId();
     await env.DB.prepare("UPDATE usage_counters SET value = 999 WHERE tenant_id = ?").bind(id).run();
     const ctx = createExecutionContext();
     try {
-      const dc = dw.dropway.context(env as unknown as ServerBindings, ctx);
+      const dc = dw.kofra.context(env as unknown as ServerBindings, ctx);
       await recompute!(dc, id);
       expect(await usage(id)).toMatchObject({ sites: 2, storage_bytes: 4 });
       await recompute!(dc, id);
@@ -316,7 +316,7 @@ describe("R-17 usage true-up", () => {
     if (table) await env.DB.prepare("UPDATE usage_counters SET value = 999 WHERE tenant_id = ?").bind(id).run();
     events.length = 0;
     const ctx = createExecutionContext();
-    await dw.dropway.scheduled(createScheduledController({ cron: "0 0 * * *", scheduledTime: Date.UTC(2026, 9, 23) }), env as unknown as ServerBindings, ctx);
+    await dw.kofra.scheduled(createScheduledController({ cron: "0 0 * * *", scheduledTime: Date.UTC(2026, 9, 23) }), env as unknown as ServerBindings, ctx);
     await waitOnExecutionContext(ctx);
     expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ type: "storage_snapshot", tenantId: id, bytes: 4, at: expect.any(Number) })]));
     expect(await usage(id)).toMatchObject({ sites: 1, storage_bytes: 4 });
