@@ -28,6 +28,12 @@
 #                          a public workers.dev URL. The checklist runner
 #                          receives the same value out of band (operator-
 #                          provisioned secret), never from this workflow.
+# Before creating those secrets, restrict the `verification` environment's
+# deployment branches to `main` (and add a required reviewer if available):
+# masking protects logs, not against a modified workflow dispatched from
+# another branch. Mint ADMIN_BOOTSTRAP_KEY randomly (e.g.
+# `openssl rand -hex 32`); the workflow's length check enforces the app's
+# 32-character minimum, not entropy.
 # The app's SIGNING_SECRET is generated per run inside the job, put on the
 # Worker as a secret, and never leaves the job. ADMIN_BOOTSTRAP_KEY is
 # read from the environment secret above and likewise only ever passed to
@@ -76,15 +82,28 @@ jobs:
             echo "::error::WRANGLER_CONFIG is '$WRANGLER_CONFIG', expected wrangler.verification.jsonc. Refusing to run."
             exit 1
           fi
-          name="$(grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "$WRANGLER_CONFIG" | head -n 1 | sed -E 's/.*"([^"]*)"$/\1/')"
-          if [ "$name" != "kofra-verification" ]; then
-            echo "::error::$WRANGLER_CONFIG declares Worker name '$name', expected exactly 'kofra-verification'. Refusing to run wrangler against any other name."
+          # Exactly-once checks: a first-match grep alone would let a comment
+          # or a second binding smuggle another resource name past the guard.
+          names="$(grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "$WRANGLER_CONFIG" | sed -E 's/.*"([^"]*)"$/\1/' || true)"
+          if [ "$names" != "kofra-verification" ]; then
+            echo "::error::$WRANGLER_CONFIG must declare Worker name 'kofra-verification' exactly once (found: $(echo "$names" | tr '\n' ' ')). Refusing to run wrangler against any other name."
             exit 1
           fi
-          grep -qE '"database_name"[[:space:]]*:[[:space:]]*"kofra-verification"' "$WRANGLER_CONFIG" \
-            || { echo "::error::$WRANGLER_CONFIG does not declare D1 database_name 'kofra-verification'. Refusing to run."; exit 1; }
-          grep -qE '"bucket_name"[[:space:]]*:[[:space:]]*"kofra-verification-files"' "$WRANGLER_CONFIG" \
-            || { echo "::error::$WRANGLER_CONFIG does not declare R2 bucket_name 'kofra-verification-files'. Refusing to run."; exit 1; }
+          dbs="$(grep -oE '"database_name"[[:space:]]*:[[:space:]]*"[^"]*"' "$WRANGLER_CONFIG" | sed -E 's/.*"([^"]*)"$/\1/' || true)"
+          if [ "$dbs" != "kofra-verification" ]; then
+            echo "::error::$WRANGLER_CONFIG must declare D1 database_name 'kofra-verification' exactly once (found: $(echo "$dbs" | tr '\n' ' ')). Refusing to run."
+            exit 1
+          fi
+          buckets="$(grep -oE '"bucket_name"[[:space:]]*:[[:space:]]*"[^"]*"' "$WRANGLER_CONFIG" | sed -E 's/.*"([^"]*)"$/\1/' || true)"
+          if [ "$buckets" != "kofra-verification-files" ]; then
+            echo "::error::$WRANGLER_CONFIG must declare R2 bucket_name 'kofra-verification-files' exactly once (found: $(echo "$buckets" | tr '\n' ' ')). Refusing to run."
+            exit 1
+          fi
+          # ID-addressed resources would bypass the name checks above.
+          if grep -qE '"(database_id|preview_database_id|id|preview_id)"[[:space:]]*:' "$WRANGLER_CONFIG"; then
+            echo "::error::$WRANGLER_CONFIG addresses a resource by ID (database_id / id / preview_id); verification resources must be addressed by the kofra-verification* names only. Refusing to run."
+            exit 1
+          fi
           echo "Guard ok: $WRANGLER_CONFIG targets kofra-verification (Worker, D1) and kofra-verification-files (R2)."
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -97,7 +116,9 @@ jobs:
           ACTION: ${{ inputs.action }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          ADMIN_BOOTSTRAP_KEY: ${{ secrets.ADMIN_BOOTSTRAP_KEY }}
+          # The bootstrap key is injected only on deploy; teardown never
+          # needs it, so no step in a teardown run holds the value.
+          ADMIN_BOOTSTRAP_KEY: ${{ inputs.action == 'deploy' && secrets.ADMIN_BOOTSTRAP_KEY || '' }}
         run: |
           # Mask the bootstrap key before anything could echo it, and never
           # print its value (only presence/length failures are reported).
@@ -121,6 +142,40 @@ jobs:
             missing=1
           fi
           exit "$missing"
+      # Same guard as after checkout, repeated inline on purpose: it re-runs
+      # after `npm ci`, so a config rewritten by a dependency install script
+      # is still refused before any wrangler call, and the check itself comes
+      # from the workflow definition, not from a workspace file an install
+      # script could tamper with. Keep the two copies in sync.
+      - name: Guard (re-check after npm ci) — config targets only kofra-verification resources
+        run: |
+          if [ "$WRANGLER_CONFIG" != "wrangler.verification.jsonc" ]; then
+            echo "::error::WRANGLER_CONFIG is '$WRANGLER_CONFIG', expected wrangler.verification.jsonc. Refusing to run."
+            exit 1
+          fi
+          # Exactly-once checks: a first-match grep alone would let a comment
+          # or a second binding smuggle another resource name past the guard.
+          names="$(grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "$WRANGLER_CONFIG" | sed -E 's/.*"([^"]*)"$/\1/' || true)"
+          if [ "$names" != "kofra-verification" ]; then
+            echo "::error::$WRANGLER_CONFIG must declare Worker name 'kofra-verification' exactly once (found: $(echo "$names" | tr '\n' ' ')). Refusing to run wrangler against any other name."
+            exit 1
+          fi
+          dbs="$(grep -oE '"database_name"[[:space:]]*:[[:space:]]*"[^"]*"' "$WRANGLER_CONFIG" | sed -E 's/.*"([^"]*)"$/\1/' || true)"
+          if [ "$dbs" != "kofra-verification" ]; then
+            echo "::error::$WRANGLER_CONFIG must declare D1 database_name 'kofra-verification' exactly once (found: $(echo "$dbs" | tr '\n' ' ')). Refusing to run."
+            exit 1
+          fi
+          buckets="$(grep -oE '"bucket_name"[[:space:]]*:[[:space:]]*"[^"]*"' "$WRANGLER_CONFIG" | sed -E 's/.*"([^"]*)"$/\1/' || true)"
+          if [ "$buckets" != "kofra-verification-files" ]; then
+            echo "::error::$WRANGLER_CONFIG must declare R2 bucket_name 'kofra-verification-files' exactly once (found: $(echo "$buckets" | tr '\n' ' ')). Refusing to run."
+            exit 1
+          fi
+          # ID-addressed resources would bypass the name checks above.
+          if grep -qE '"(database_id|preview_database_id|id|preview_id)"[[:space:]]*:' "$WRANGLER_CONFIG"; then
+            echo "::error::$WRANGLER_CONFIG addresses a resource by ID (database_id / id / preview_id); verification resources must be addressed by the kofra-verification* names only. Refusing to run."
+            exit 1
+          fi
+          echo "Guard ok: $WRANGLER_CONFIG targets kofra-verification (Worker, D1) and kofra-verification-files (R2)."
       - name: Generate per-run signing secret
         if: inputs.action == 'deploy'
         run: |
