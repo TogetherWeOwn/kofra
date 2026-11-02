@@ -1345,8 +1345,8 @@ App origin:
 | `/` | Landing (or `uiSlots.landing`); first-run setup form when not set up (R-16) | P0 | Done |
 | `/health` | `{ ok, service, version, build }` | P0 | Done |
 | `/openapi.json` | OpenAPI 3.1 for this instance (servers = its own origin) | P0 | Done |
-| `/llms.txt`, `/llms-full.txt`, `/docs/*.md` | Agent docs (llms.txt v2; `Link: rel="describedby"` headers) | P0 / P1 | Done (R-11) |
-| `/skill.md`, `/.well-known/agent-skills/index.json` (+ legacy `/.well-known/skills/index.json`) | Skill templated with this instance's URLs; `npx skills add <app>` works | P0 | Done (R-11) |
+| `/llms.txt`, `/llms-full.txt`, `/docs/errors.md` | Agent docs (llms.txt v2; the error catalog under `/docs/`) | P0 / P1 | Done (R-11) |
+| `/skill.md`, `/.well-known/agent-skills/index.json` (+ legacy `/.well-known/skills/index.json`) | Skill templated with this instance's URLs (skill responses carry `Link: rel="describedby"` headers); `npx skills add <app>` works | P0 | Done (R-11) |
 | `/.well-known/api-catalog` | RFC 9727 linkset to OpenAPI, docs, MCP | P0 | Done (R-11) |
 | `/connect`, `/connect.md` | Copy-paste setup per agent client | P0 | Done (R-11) |
 | `/robots.txt` | App crawler policy | P0 | Done (R-11) |
