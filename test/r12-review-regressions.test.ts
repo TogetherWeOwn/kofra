@@ -90,7 +90,7 @@ describe("a sole private configuration file", () => {
     const root = await dw.call(`/s/private-only/${query}`, { headers: NAV });
     expect.soft(root.status).toBe(404);
     expect.soft(new TextDecoder().decode(await root.arrayBuffer())).not.toContain(privateBytes);
-    const direct = await dw.call(`/s/private-only/.kofra${query}`, { headers: NAV });
+    const direct = await dw.call(`/s/private-only/.dropway${query}`, { headers: NAV });
     expect(direct.status).toBe(404);
     expect(await direct.text()).not.toContain(privateBytes);
     const ownerRead = await dw.call("/api/v1/sites/private-only/files/.dropway", { key: dw.ownerKey });

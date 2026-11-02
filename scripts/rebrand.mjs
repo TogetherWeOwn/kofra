@@ -212,7 +212,9 @@ if (!CHECK) {
   for (const [from] of RENAMES) if (existsSync(join(ROOT, from)) && !filesUnder(from).length) rmSync(join(ROOT, from), { recursive: true });
 }
 
-// 2. Text rules on tracked files.
+// 2. Text rules on tracked files. The text pass can rewrite a package.json too (the package-scope
+// rule fires on its dependencies), so a touched manifest also refreshes the lockfile in step 4.
+let manifestsChanged = false;
 const files = git("ls-files", "-z").split("\0").filter(Boolean);
 for (const rel of files) {
   if (!TEXT_EXT.test(rel) || EXCLUDE.some((re) => re.test(rel))) continue;
@@ -239,6 +241,7 @@ for (const rel of files) {
     .join("\n");
   if (after === before) continue;
   touched.add(rel);
+  if (rel.endsWith("/package.json") || rel === "package.json") manifestsChanged = true;
   if (!CHECK) writeFileSync(abs, after);
 }
 
@@ -256,7 +259,6 @@ function rewriteLine(line, keep) {
 }
 
 // 3. package.json edits (structured, so formatting stays npm's).
-let manifestsChanged = false;
 for (const [rel, edit] of Object.entries(JSON_EDITS)) {
   const abs = join(ROOT, rel);
   if (!existsSync(abs)) continue;
@@ -303,14 +305,17 @@ function selfTest() {
     execFileSync("git", ["-C", dir, "add", "-A"]);
     return dir;
   };
-  const runOn = (dir, ...extra) => {
+  const runOn = (dir, lock, ...extra) => {
     try {
-      const out = execFileSync(process.execPath, [self, "--root", dir, "--no-lock", ...extra], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      const argv = [self, "--root", dir, ...(lock ? [] : ["--no-lock"]), ...extra];
+      const out = execFileSync(process.execPath, argv, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
       return { code: 0, out };
     } catch (e) {
       return { code: e.status ?? 1, out: `${e.stdout ?? ""}${e.stderr ?? ""}` };
     }
   };
+  const runNoLock = (dir, ...extra) => runOn(dir, false, ...extra);
+  const runLock = (dir, ...extra) => runOn(dir, true, ...extra);
   const read = (dir, rel) => (existsSync(join(dir, rel)) ? readFileSync(join(dir, rel), "utf8") : null);
 
   // Renames what people see, keeps internal names and marked lines, and is idempotent.
@@ -328,8 +333,8 @@ function selfTest() {
     "skills/dropway/SKILL.md": "name: dropway\n",
     "package.json": '{\n  "name": "dropway-monorepo"\n}\n',
   });
-  expect("--check fails before the rename", runOn(a, "--check").code === 1);
-  expect("apply succeeds", runOn(a).code === 0);
+  expect("--check fails before the rename", runNoLock(a, "--check").code === 1);
+  expect("apply succeeds", runNoLock(a).code === 0);
   expect("prose, CLI, variable, header and repository URL renamed", read(a, "README.md") === `Kofra: run \`npx kofra publish ./dist\` with KOFRA_API_KEY, then read X-Kofra-Version.\n${keptLine}\n${newRepoLine}\n${markedLine}\n`);
   expect("identifiers and package scope renamed", read(a, "src/app.ts") === 'import { createKofra, type Kofra } from "@kofra/server";\nexport const app: Kofra = createKofra({ title: "Kofra" });\n');
   expect("Markdown: identifiers in TypeScript fences, prose and shell fences are renamed", read(a, "docs/api.md") === "Product: Kofra.\n\n```ts\nexport interface Kofra { fetch(): void }\nconst d: Kofra = createKofra();\n```\n\n```sh\nexport KOFRA_API=x\n```\n");
@@ -337,7 +342,7 @@ function selfTest() {
   expect("CHANGELOG untouched", read(a, "CHANGELOG.md") === "Dropway 0.1\n");
   expect("skill folder moved and renamed", read(a, "skills/kofra/SKILL.md") === "name: kofra\n" && !existsSync(join(a, "skills/dropway")));
   expect("root package renamed", JSON.parse(read(a, "package.json")).name === "kofra-monorepo");
-  expect("second run finds nothing (idempotent)", runOn(a, "--check").code === 0);
+  expect("second run finds nothing (idempotent)", runNoLock(a, "--check").code === 0);
 
   // After a rebase, files under the old folder next to the new one: move, drop or report.
   const b = repo({
@@ -347,18 +352,45 @@ function selfTest() {
     "skills/dropway/same.md": "same\n",
     "skills/dropway/extra.md": "extra\n",
   });
-  const checked = runOn(b, "--check");
+  const checked = runNoLock(b, "--check");
   expect("--check reports a collision", checked.code === 1 && checked.out.includes("collision: skills/dropway/SKILL.md"));
   expect("--check writes nothing", read(b, "skills/dropway/extra.md") === "extra\n" && read(b, "skills/kofra/extra.md") === null);
-  const applied = runOn(b);
+  const applied = runNoLock(b);
   expect("apply fails on a collision and writes nothing", applied.code === 1 && applied.out.includes("collision: skills/dropway/SKILL.md") && read(b, "skills/dropway/extra.md") === "extra\n" && read(b, "skills/dropway/same.md") === "same\n");
   rmSync(join(b, "skills/dropway/SKILL.md")); // a person merged the pair into skills/kofra/SKILL.md
-  expect("apply succeeds once the collision is merged", runOn(b).code === 0);
+  expect("apply succeeds once the collision is merged", runNoLock(b).code === 0);
   expect("new file moved across", read(b, "skills/kofra/extra.md") === "extra\n" && read(b, "skills/dropway/extra.md") === null);
   expect("identical copy dropped and the old folder removed", read(b, "skills/kofra/same.md") === "same\n" && !existsSync(join(b, "skills/dropway")));
-  expect("idempotent after the merge", runOn(b, "--check").code === 0);
+  expect("idempotent after the merge", runNoLock(b, "--check").code === 0);
 
-  for (const dir of [a, b]) rmSync(dir, { recursive: true, force: true });
+  // A rebased branch brings back an @dropway/* workspace dep: the text pass rewrites the
+  // manifests (no structured JSON edit fires), and apply must refresh the lockfile to match,
+  // or npm ci fails on the scope mismatch. This fixture runs the real npm refresh.
+  const pkg = (obj) => `${JSON.stringify(obj, null, 2)}\n`;
+  const c = repo({
+    "package.json": pkg({ name: "rebrand-self-test-root", private: true, workspaces: ["packages/*"] }),
+    "packages/core/package.json": pkg({ name: "@dropway/core", version: "1.0.0" }),
+    "packages/app/package.json": pkg({ name: "app", version: "1.0.0", dependencies: { "@dropway/core": "*" } }),
+    "package-lock.json": pkg({
+      name: "rebrand-self-test-root",
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        "": { name: "rebrand-self-test-root", workspaces: ["packages/*"] },
+        "node_modules/@dropway/core": { resolved: "packages/core", link: true },
+        "node_modules/app": { resolved: "packages/app", link: true },
+        "packages/app": { name: "app", version: "1.0.0", dependencies: { "@dropway/core": "*" } },
+        "packages/core": { name: "@dropway/core", version: "1.0.0" },
+      },
+    }),
+  });
+  expect("--check fails on the stale workspace scope", runNoLock(c, "--check").code === 1);
+  expect("apply succeeds with the lock refresh", runLock(c).code === 0);
+  expect("workspace manifest renamed by the text pass", JSON.parse(read(c, "packages/core/package.json")).name === "@kofra/core" && JSON.parse(read(c, "packages/app/package.json")).dependencies["@kofra/core"] === "*");
+  expect("lockfile refreshed to the new scope", !read(c, "package-lock.json").includes("@dropway/core") && read(c, "package-lock.json").includes("@kofra/core"));
+  expect("idempotent after the lock refresh", runLock(c, "--check").code === 0);
+
+  for (const dir of [a, b, c]) rmSync(dir, { recursive: true, force: true });
   for (const f of failures) console.error(`  FAIL ${f}`);
   console.log(`rebrand self-test: ${checks - failures.length}/${checks} checks passed`);
   return failures.length ? 1 : 0;
