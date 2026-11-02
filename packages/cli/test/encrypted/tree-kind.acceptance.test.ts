@@ -155,6 +155,11 @@ async function visit(options: Options = {}) {
     // A real navigation also exposes the actual shell's response headers.
     response = await page.goto(`${api}${target}`, { waitUntil: "domcontentloaded" });
     if (!options.state) {
+      // The kind selector is created only after the manifest renders — even for
+      // an empty inventory, where a zero row count is vacuously true before the
+      // file-list request finishes. Gate on it first: the /me cache write below
+      // rides an independent request and cannot synchronize the tree.
+      await page.getByRole("combobox", { name: /(?:file\s*)?kind|file type/i }).waitFor();
       await expect.poll(() => page.locator("a[data-kind]").count()).toBe((options.rows ?? mixed).length);
       // The viewer boots renderAccount() without awaiting it: /me resolves after
       // first paint and caches into sessionStorage (dropway.me). Snapshot tests
