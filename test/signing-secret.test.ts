@@ -1,8 +1,8 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { resolveConfig, signingSecret } from "@dropway/core";
+import { effectiveSigningSecret, hmacHex, ipHash, resolveConfig, sha256Hex, signingSecret, type DropwayContext } from "@dropway/core";
 import type { ServerBindings } from "@dropway/server";
 import { describe, expect, it } from "vitest";
-import { freshInstance, jsonBody, manifestEntry, ORIGIN, type Instance } from "./helpers";
+import { BOOTSTRAP, freshInstance, jsonBody, manifestEntry, ORIGIN, type Instance } from "./helpers";
 import { lockedSite, SITE_PASSWORD } from "./site-password-fixtures";
 import { instance as transferInstance, FILES as TRANSFER_FILES } from "./transfer-fixtures";
 
@@ -25,8 +25,107 @@ describe("signing secret", () => {
     expect(resolveConfig({}).signingSecret).toBeNull();
     expect(() => signingSecret(resolveConfig({}))).toThrow(expect.objectContaining({ status: 503, code: "signing_secret_missing", retryable: false }));
     expect(resolveConfig({ ALLOW_INSECURE_DEV_SECRET: "true" }).signingSecret).toBeTruthy();
-    expect(resolveConfig({ ADMIN_BOOTSTRAP_KEY: "bootstrap" }).signingSecret).toBe("bootstrap");
-    expect(resolveConfig({ ADMIN_BOOTSTRAP_KEY: "bootstrap", SIGNING_SECRET: " own " }).signingSecret).toBe("own");
+    expect(resolveConfig({ ADMIN_BOOTSTRAP_KEY: BOOTSTRAP }).signingSecret).toBe(BOOTSTRAP);
+    expect(resolveConfig({ ADMIN_BOOTSTRAP_KEY: BOOTSTRAP, SIGNING_SECRET: " own-strong-secret-0123456789abcdef " }).signingSecret)
+      .toBe("own-strong-secret-0123456789abcdef");
+  });
+
+  it("refuses short operator secrets at startup, from vars and overrides", () => {
+    for (const vars of [{ SIGNING_SECRET: "short" }, { SIGNING_SECRET: "s".repeat(31) }, { ADMIN_BOOTSTRAP_KEY: "short" }]) {
+      expect(() => resolveConfig(vars)).toThrow(/Invalid (SIGNING_SECRET|ADMIN_BOOTSTRAP_KEY): expected at least 32 characters\./);
+    }
+    expect(() => resolveConfig({}, { signingSecret: "s".repeat(31) })).toThrow(/Invalid SIGNING_SECRET: expected at least 32 characters\./);
+    expect(() => resolveConfig({}, { adminBootstrapKey: "short" })).toThrow(/Invalid ADMIN_BOOTSTRAP_KEY: expected at least 32 characters\./);
+    // The 32-character minimum itself passes, and unset stays unset.
+    expect(resolveConfig({ SIGNING_SECRET: "s".repeat(32) }).signingSecret).toBe("s".repeat(32));
+    expect(resolveConfig({ ADMIN_BOOTSTRAP_KEY: "b".repeat(32) }).signingSecret).toBe("b".repeat(32));
+    expect(resolveConfig({ SIGNING_SECRET: "   " }).signingSecret).toBeNull();
+  });
+
+  it("derives the signing key from the bootstrap key instead of reusing it", async () => {
+    const bootstrapOnly = { config: resolveConfig({ ADMIN_BOOTSTRAP_KEY: BOOTSTRAP }) };
+    expect(bootstrapOnly.config.signingSecretFromBootstrap).toBe(true);
+    const key = await effectiveSigningSecret(bootstrapOnly);
+    expect(key).toBe(await hmacHex(BOOTSTRAP, "dw-signing-v1"));
+    expect(key).not.toBe(BOOTSTRAP);
+    // The derivation is cached per config object.
+    expect(await effectiveSigningSecret(bootstrapOnly)).toBe(key);
+    // An explicit secret is single-purpose and used directly, unchanged.
+    const explicit = { config: resolveConfig({ ADMIN_BOOTSTRAP_KEY: BOOTSTRAP, SIGNING_SECRET: "explicit-strong-secret-0123456789" }) };
+    expect(explicit.config.signingSecretFromBootstrap).toBe(false);
+    expect(await effectiveSigningSecret(explicit)).toBe("explicit-strong-secret-0123456789");
+    // Unset still fails closed, like the sync accessor.
+    await expect(effectiveSigningSecret({ config: resolveConfig({}) }))
+      .rejects.toMatchObject({ status: 503, code: "signing_secret_missing" });
+  });
+
+  it("keys IP hashes instead of salting them", async () => {
+    const dc = { config: resolveConfig({ ADMIN_BOOTSTRAP_KEY: BOOTSTRAP }) } as unknown as DropwayContext;
+    const key = await effectiveSigningSecret(dc);
+    await expect(ipHash(dc, "192.0.2.1")).resolves.toBe((await hmacHex(key, "ip:192.0.2.1")).slice(0, 32));
+    // The old salted construction no longer matches.
+    await expect(ipHash(dc, "192.0.2.1")).resolves.not.toBe((await sha256Hex(`${BOOTSTRAP}:192.0.2.1`)).slice(0, 32));
+  });
+
+  it("refuses the insecure dev secret with any non-loopback configured origin", () => {
+    const dev = { ALLOW_INSECURE_DEV_SECRET: "true" };
+    // Loopback-only development keeps working.
+    expect(resolveConfig(dev).signingSecret).toBeTruthy();
+    expect(resolveConfig({ ...dev, APP_ORIGIN: "http://localhost:8787" }).signingSecret).toBeTruthy();
+    expect(resolveConfig({ ...dev, APP_ORIGIN: "http://127.0.0.1:8787", SITES_ORIGIN: "http://[::1]:8787" }).signingSecret).toBeTruthy();
+    expect(resolveConfig({ ...dev, APP_ORIGIN: "https://app.localhost" }).signingSecret).toBeTruthy();
+    // Any configured non-loopback origin refuses at startup.
+    for (const vars of [
+      { ...dev, APP_ORIGIN: "https://example.com" },
+      { ...dev, APP_ORIGIN: "http://192.0.2.1:8787" },
+      { ...dev, APP_ORIGIN: "http://localhost:8787", SITES_ORIGIN: "https://sites.example.com" },
+      { ...dev, APP_ORIGIN: "http://localhost:8787", LEGACY_APP_ORIGINS: "https://old.example.com" },
+      { ...dev, APP_ORIGIN: "http://localhost:8787", LEGACY_SITES_ORIGINS: "https://old-sites.example.com" },
+    ]) {
+      expect(() => resolveConfig(vars)).toThrow(/Invalid ALLOW_INSECURE_DEV_SECRET: configured origin \S+ is not loopback\./);
+    }
+    // A real secret takes precedence over the flag: no refusal.
+    expect(resolveConfig({ ...dev, APP_ORIGIN: "https://example.com", ADMIN_BOOTSTRAP_KEY: BOOTSTRAP }).signingSecret).toBe(BOOTSTRAP);
+    expect(resolveConfig({ ...dev, APP_ORIGIN: "https://example.com", SIGNING_SECRET: "explicit-strong-secret-0123456789" }).signingSecret)
+      .toBe("explicit-strong-secret-0123456789");
+  });
+
+  it("rejects upload tokens MACed with the raw bootstrap key on a bootstrap-only instance", async () => {
+    const dw = await freshInstance();
+    const entry = await manifestEntry("data.txt", "rotation bytes");
+    const { bytes: _bytes, ...manifest } = entry;
+    const pending = await dw.json("/api/v1/publish", { key: dw.ownerKey, ...jsonBody({ site: "rotation-site", files: [manifest] }) });
+    expect(pending.status).toBe(202);
+    expect(pending.body.status).toBe("awaiting_upload");
+    const item = pending.body.upload.items[0];
+    const auth: string = new Headers(item.headers).get("Authorization")!;
+    expect(auth).toMatch(/^Bearer dwu_\S+$/);
+    // A token MACed with the bearer value itself — valid before the derivation — no longer verifies.
+    const payload = auth.slice("Bearer ".length, auth.lastIndexOf("."));
+    const forged = new Headers({ Authorization: `Bearer ${payload}.${await hmacHex(BOOTSTRAP, payload)}` });
+    forged.set("Content-Length", String(entry.size));
+    expect((await dw.call(item.url, { method: "PUT", headers: forged, body: entry.bytes })).status).toBe(403);
+    // The derived token uploads fine, so bootstrap-only signing still works end to end.
+    const real = new Headers({ Authorization: auth });
+    real.set("Content-Length", String(entry.size));
+    expect((await dw.call(item.url, { method: "PUT", headers: real, body: entry.bytes })).status).toBe(201);
+  });
+
+  it("verifies explicit-secret test vectors unchanged", async () => {
+    const secret = "explicit-strong-secret-0123456789";
+    const dw = await freshInstance({ signingSecret: secret });
+    // The issued token is MACed with the explicit secret itself.
+    const entry = await manifestEntry("data.txt", "explicit bytes");
+    const { bytes: _bytes, ...manifest } = entry;
+    const pending = await dw.json("/api/v1/publish", { key: dw.ownerKey, ...jsonBody({ site: "explicit-site", files: [manifest] }) });
+    expect(pending.status).toBe(202);
+    const item = pending.body.upload.items[0];
+    const auth: string = new Headers(item.headers).get("Authorization")!;
+    const payload = auth.slice("Bearer ".length, auth.lastIndexOf("."));
+    expect(auth).toBe(`Bearer ${payload}.${await hmacHex(secret, payload)}`);
+    const headers = new Headers({ Authorization: auth });
+    headers.set("Content-Length", String(entry.size));
+    expect((await dw.call(item.url, { method: "PUT", headers, body: entry.bytes })).status).toBe(201);
   });
 
   it("refuses signed capabilities with 503 and keeps unsigned routes working", async () => {

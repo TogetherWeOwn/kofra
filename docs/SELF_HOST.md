@@ -167,7 +167,7 @@ Variables go in `vars` in `wrangler.jsonc`; secrets with `npx wrangler secret pu
 | Name | Default | Meaning |
 |---|---|---|
 | `ADMIN_BOOTSTRAP_KEY` (secret) | none | Creates the owner on first run; mints recovery owner keys |
-| `SIGNING_SECRET` (secret) | bootstrap key | HMAC secret for signed capabilities (site password cookies, upload and version preview tokens, delivery grants) and IP hashing. Independent of the bootstrap key: set its own value so rotating or removing `ADMIN_BOOTSTRAP_KEY` does not invalidate them. With neither set, those features answer `503 signing_secret_missing`; unsigned routes keep working |
+| `SIGNING_SECRET` (secret) | derived from bootstrap key | HMAC secret for signed capabilities (site password cookies, upload and version preview tokens, delivery grants) and IP hashing. When unset, the signing key is derived from `ADMIN_BOOTSTRAP_KEY` instead of reusing it: set its own value so rotating or removing `ADMIN_BOOTSTRAP_KEY` does not invalidate them. With neither set, those features answer `503 signing_secret_missing`; unsigned routes keep working |
 | `ALLOW_INSECURE_DEV_SECRET` | `false` | Local development only: with no secret set, sign with a fixed public value. Never set it on a reachable instance |
 | `INSTANCE_NAME` | `Kofra` | Shown in pages and API responses |
 | `APP_ORIGIN` | request origin | Public origin of the app and API |

@@ -1,4 +1,4 @@
-import { signingSecret, type Limits } from "../config";
+import { effectiveSigningSecret, type Limits } from "../config";
 import type { DropwayContext } from "../context";
 import { appOrigin, siteUrl } from "../context";
 import { ApiError, badRequest, forbidden, notFound, tooLarge } from "../errors";
@@ -525,7 +525,7 @@ async function completeVersion(
         dc.env.DB.prepare("DELETE FROM version_files WHERE version_id = ? AND EXISTS (SELECT 1 FROM versions WHERE id = ? AND status = 'pending')").bind(deploy.deploy.id, deploy.deploy.id),
         dc.env.DB.prepare("DELETE FROM versions WHERE id = ? AND status = 'pending'").bind(deploy.deploy.id),
       ]);
-      signingSecret(dc.config);
+      await effectiveSigningSecret(dc);
     }
     const queue = [...toStore.values()];
     await Promise.all(

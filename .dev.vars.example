@@ -4,7 +4,8 @@
 # Generate one with: openssl rand -hex 32
 ADMIN_BOOTSTRAP_KEY=
 
-# HMAC secret for signed links, password cookies and IP hashing. Falls back to
-# ADMIN_BOOTSTRAP_KEY; set its own value so rotating that key does not sign
-# everyone out. Generate one with: openssl rand -hex 32
+# HMAC secret for signed links, password cookies and IP hashing. When unset, the
+# signing key is derived from ADMIN_BOOTSTRAP_KEY instead of reusing it; set its
+# own value so rotating that key does not sign everyone out. Generate one with:
+# openssl rand -hex 32
 SIGNING_SECRET=

@@ -18,7 +18,7 @@ import {
   readBlobRange,
   requestPathToFilePath,
   resolveSlugRedirect,
-  signingSecret,
+  effectiveSigningSecret,
   siteHeadersFor,
   siteUrl,
   timingSafeEqualStr,
@@ -234,7 +234,7 @@ export function systemResponse(
 }
 
 async function passwordCookieValue(dw: DropwayContext, live: LiveSite): Promise<string> {
-  return (await hmacHex(signingSecret(dw.config), `${live.siteId}:${live.passwordHash}`)).slice(0, 40);
+  return (await hmacHex(await effectiveSigningSecret(dw), `${live.siteId}:${live.passwordHash}`)).slice(0, 40);
 }
 
 /**
@@ -264,7 +264,7 @@ function passwordVisitor(req: Request): string {
 }
 
 async function passwordFormSignature(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, until: number): Promise<string> {
-  return hmacHex(signingSecret(dw.config), JSON.stringify([
+  return hmacHex(await effectiveSigningSecret(dw), JSON.stringify([
     "site-password-form", new URL(req.url).origin, mode.base, live.siteId, live.passwordHash,
     passwordVisitor(req), until,
   ]));
