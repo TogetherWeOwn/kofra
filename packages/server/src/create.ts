@@ -23,7 +23,7 @@ import { escapeHtml, htmlPage } from "./html";
 import { apiErrorResponse, installApiMiddleware } from "./routes/api";
 import { legacyAppRedirect, legacyAppSuccessor, withDeprecationHeaders } from "./legacy";
 import { redirectResponse, routeSiteRequest } from "./route-sites";
-import { SITE_SANDBOX, isNavigation, serveSite, systemResponse, type ServeMode } from "./serve";
+import { SITE_SANDBOX, serveSite, systemResponse } from "./serve";
 import { previewResponse, serveVersionPreview } from "./previews";
 import { bindUiSlots } from "./ui/shell";
 import { VIEWERS, type Viewer } from "./viewers";
@@ -147,7 +147,6 @@ export function createDropway(opts: CreateDropwayOptions = {}): Dropway {
     const url = new URL(request.url);
     const dw = context(env, ctx, url);
     let preview = false;
-    let serveMode: ServeMode | null = null;
     try {
       // A former app origin (config.legacyAppOrigins): pages move, the API and MCP keep answering.
       const successor = legacyAppSuccessor(dw, url);
@@ -157,10 +156,8 @@ export function createDropway(opts: CreateDropwayOptions = {}): Dropway {
       preview = route.kind === "preview" || route.kind === "gone" || (route.kind === "redirect" && route.preview === true);
       switch (route.kind) {
         case "site":
-          serveMode = route.mode;
           return await serveSite(request, dw, route.slug, route.path, route.mode, viewers);
         case "preview":
-          serveMode = route.mode;
           return await serveVersionPreview(request, dw, route.slug, route.number, route.path, route.mode, viewers);
         case "redirect":
           return redirectResponse(route);
@@ -180,12 +177,6 @@ export function createDropway(opts: CreateDropwayOptions = {}): Dropway {
       console.error(JSON.stringify({ event: "serve_error", ...requestErrorDetails(request, e) }));
       // No signing secret: password and signed-link pages refuse rather than accept forgeable values.
       const missingSecret = isApiError(e) && e.code === "signing_secret_missing";
-      if (missingSecret && isNavigation(request)) {
-        const page = systemResponse(dw, request, serveMode ?? { kind: "path", base: "/", sandbox: true, rewrite: null },
-          null, 503, "503", "This site can't be opened right now",
-          "The site owner needs to finish configuring this instance. If you were sent this link, let them know.");
-        return preview ? previewResponse(page) : page;
-      }
       const response = new Response(missingSecret ? "Service unavailable" : "Internal error", {
         status: missingSecret ? 503 : 500,
         headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },

@@ -272,9 +272,6 @@ export async function createSite(
   if (wanted) await checkNameAvailable(dc, wanted, tenantId, null);
   const owner = { siteId: null, tenantId };
   if (input.password) await requireCapability(dc, p, "site_password", owner);
-  // A password gate is unenforceable without the signing secret (cookies and
-  // form proofs would be forgeable): refuse before creating a gate nobody can pass.
-  if (input.password) signingSecret(dc.config);
   const siteQuota = tenantId === null ? null : await requireQuota(dc, p, "sites", owner, (await getUsage(dc, tenantId)).sites, 1);
   await dc.adapters.policy.beforeCreateSite?.(p, { slug: wanted, tenantId }, dc);
   await opts.beforeInsert?.({ tenantId });
@@ -412,8 +409,6 @@ export async function updateSite(dc: DropwayContext, p: Principal, slug: string,
     throw forbidden("Anonymous sites already expire after 24 hours.", "Claim the site with an API key to set its own expiry.");
   }
   if (input.password) await requireCapability(dc, p, "site_password", { siteId: site.id, tenantId: site.tenant_id });
-  // Clearing a password needs no secret; setting one does (see createSite).
-  if (input.password) signingSecret(dc.config);
   const sets: string[] = [];
   const binds: unknown[] = [];
   const set = (col: string, val: unknown) => {

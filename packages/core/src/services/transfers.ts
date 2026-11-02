@@ -1,5 +1,4 @@
 import type { DropwayContext } from "../context";
-import { signingSecret } from "../config";
 import { appOrigin, siteFileUrl, siteUrl } from "../context";
 import { ApiError, badRequest, conflict, forbidden, notFound } from "../errors";
 import { hashPassword, newSecret, verifyPassword } from "../lib/crypto";
@@ -154,8 +153,6 @@ export async function updateTransfer(dc: DropwayContext, p: Principal, reference
       throw forbidden("Current password proof is required in this call.", "Send the currentPassword together with the new password.", "transfer_password_proof_required");
     }
     const password = validateTransferPassword(input.password);
-    // Clearing a password needs no secret; setting one does: unlock grants are HMAC-signed.
-    if (password) signingSecret(dc.config);
     if (password === null) digest = null;
     else if (!digest || !await verifyPassword(password, digest)) digest = await hashPassword(password);
   }
