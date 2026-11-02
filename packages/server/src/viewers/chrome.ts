@@ -1,4 +1,4 @@
-import { encodePath, KIND_LABELS } from "@dropway/core";
+import { encodePath, isSiteConfigPath, KIND_LABELS } from "@dropway/core";
 import { escapeHtml, formatBytes, htmlPage } from "../html";
 import type { ViewerContext } from "./index";
 import { viewerPhone } from "./phone";
@@ -94,7 +94,8 @@ function siblingLinks(vc: ViewerContext): string {
   const dir = vc.file.path.slice(0, slash + 1);
   const names = Object.keys(vc.live.files)
     // .dropway/* is stored but never served, so listings (and these links) do not name it.
-    .filter((path) => path !== ".dropway" && !path.startsWith(".dropway/"))
+    // _redirects/_headers are parsed at finalize and never served, so they are hidden too.
+    .filter((path) => path !== ".dropway" && !path.startsWith(".dropway/") && !isSiteConfigPath(path))
     .filter((path) => path.startsWith(dir) && !path.slice(dir.length).includes("/"))
     .map((path) => path.slice(dir.length))
     .sort(compareNames);

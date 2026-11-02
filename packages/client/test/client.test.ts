@@ -40,6 +40,13 @@ describe("normaliseApi", () => {
     expect(normaliseApi("localhost:8787")).toBe("http://localhost:8787");
   });
 
+  it("selects http for scheme-free loopback shorthands", () => {
+    // The URL parser canonicalises IPv4 shorthands only after scheme
+    // inference, so inference must canonicalise before classifying.
+    expect(normaliseApi("127.1:8787")).toBe("http://127.0.0.1:8787");
+    expect(normaliseApi("127.0.1:8787")).toBe("http://127.0.0.1:8787");
+  });
+
   it("refuses empty and non-http(s) input", () => {
     expect(() => normaliseApi("  ")).toThrowError(DropwayError);
     expect(() => normaliseApi("ftp://kofra.test")).toThrowError(DropwayError);
@@ -158,6 +165,62 @@ describe("DropwayClient transport", () => {
     expect(capped.requests.length).toBe(1);
   });
 
+  it("aborts the Retry-After sleep with the abort reason", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetch = stubFetch(() =>
+        json({ error: { code: "rate_limited", message: "slow down" } }, 429, { "Retry-After": "10" }),
+      );
+      const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch, backoffMs: 1 });
+      const controller = new AbortController();
+      const reason = new Error("first Ctrl-C");
+      const pending = client.get("/sites", { signal: controller.signal });
+      const assertion = expect(pending).rejects.toBe(reason);
+      // The 10s Retry-After timer never fires: the abort settles the call.
+      controller.abort(reason);
+      await assertion;
+      expect(fetch.requests.length).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects with the abort reason without sleeping when already aborted", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetch = stubFetch(() =>
+        json({ error: { code: "rate_limited", message: "slow down" } }, 429, { "Retry-After": "10" }),
+      );
+      const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch, backoffMs: 1 });
+      const controller = new AbortController();
+      controller.abort();
+      const reason = controller.signal.reason;
+      await expect(client.get("/sites", { signal: controller.signal })).rejects.toBe(reason);
+      expect(fetch.requests.length).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("threads the abort signal through typed calls", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetch = stubFetch(() =>
+        json({ error: { code: "rate_limited", message: "slow down" } }, 429, { "Retry-After": "10" }),
+      );
+      const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch, backoffMs: 1 });
+      const controller = new AbortController();
+      const reason = new Error("stop");
+      const pending = client.getSite({ slug: "s" }, { signal: controller.signal });
+      const assertion = expect(pending).rejects.toBe(reason);
+      controller.abort(reason);
+      await assertion;
+      expect(fetch.requests.length).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("retries 429s for unsafe methods too, within the cap (5xx/network stay safe-only)", async () => {
     let posts = 0;
     const fetch = stubFetch(() => {
@@ -209,6 +272,29 @@ describe("DropwayClient transport", () => {
     await client.get("/b");
     expect(onMoved).toHaveBeenCalledTimes(1);
     expect(onMoved).toHaveBeenCalledWith("https://new.test");
+  });
+
+  it("refuses redirects instead of following them when redirect is error", async () => {
+    // The stub transport returns the redirect answer untouched: no redirect
+    // override of its own. The client must refuse rather than follow.
+    const fetch = stubFetch(() => new Response(null, { status: 307, headers: { Location: "https://other.test/api/v1/sites" } }));
+    const client = new DropwayClient({ api: "https://kofra.test", token: "dw_x", fetch });
+    const e = await caught(client.get("/sites", { redirect: "error" }));
+    expect(e.code).toBe("redirect_refused");
+    expect(e.status).toBe(307);
+    expect(e.retryable).toBe(false);
+    expect(fetch.requests).toHaveLength(1);
+  });
+
+  it("follows redirects by default", async () => {
+    const fetch = stubFetch((req) =>
+      new URL(req.url).pathname === "/api/v1/sites"
+        ? new Response(null, { status: 307, headers: { Location: "/api/v1/sites-followed" } })
+        : json({ ok: true }),
+    );
+    const client = new DropwayClient({ api: "https://kofra.test", token: null, fetch });
+    await expect(client.get("/sites")).resolves.toMatchObject({ status: 200 });
+    expect(fetch.requests).toHaveLength(2);
   });
 
   it("sends the idempotency key when given", async () => {

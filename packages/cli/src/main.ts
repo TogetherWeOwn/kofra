@@ -4,18 +4,22 @@
  * - writes progress and prompts to stderr only;
  * - exits with a stable code (see EXIT in client.ts), so agents can branch on it.
  */
+import type { UpdateSiteSettingsInput } from "@dropway/client";
 import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { bool, int, parseArgs, str, UsageError, type FlagSpecs, type Parsed } from "./args.ts";
 import { CliError, DropwayClient, EXIT, normaliseApi, type FetchLike } from "./client.ts";
+import { compareCancelled, compareDirectory, compareHuman, settleBeforeOutput } from "./compare.ts";
 import { linkKey, linkPath, readCredentials, readLink, removeCredentials, saveCredentials, writeLink, type ProjectLink } from "./config.ts";
-import { collectFiles } from "./files.ts";
+import { collectFiles, collectStdinFile, normaliseStdinPath } from "./files.ts";
 import { encryptFiles } from "./encrypt.ts";
 import { explainConfig, explainConfigHuman } from "./explain-config.ts";
 import { withLegacyEnv } from "./legacy-brand.ts";
-import { formatBytes, plural, shellQuote, shortTime, table } from "./output.ts";
+import { escapeControl, formatBytes, plural, shellQuote, shortTime, table } from "./output.ts";
 import { publish, publishZip, waitForVersion, type ProgressEvent, type PublishResult, type VersionInfo } from "./publish.ts";
+import { checkPullDirectory, pullVersion } from "./pull.ts";
+import { readBounded, STDIN_FIRST_BYTE_MS, STDIN_MAX_BYTES, stdinTooLarge } from "./stdin.ts";
 import { VERSION } from "./version.ts";
 
 export interface Io {
@@ -24,6 +28,8 @@ export interface Io {
   stdinIsTTY: boolean;
   stderrIsTTY: boolean;
   readStdin(): Promise<string>;
+  /** Raw piped bytes, read once and bounded (`publish --stdin`). Tests may omit it: readStdin() is then encoded as UTF-8. Embedders piping more than STDIN_MAX_BYTES must supply this: the string fallback buffers the whole pipe before enforcing the bound. */
+  readStdinBytes?(maxBytes: number): Promise<Uint8Array>;
   prompt(question: string, opts?: { hidden?: boolean }): Promise<string>;
   env: NodeJS.ProcessEnv;
   cwd: string;
@@ -103,15 +109,28 @@ class Output {
 
   error(err: CliError) {
     this.progress(null);
-    if (this.json) {
+    // Cancellation reports on stderr even in JSON mode: stdout must stay
+    // empty (no partial result), and the shape matches human errors.
+    if (this.json && err.code !== "compare_cancelled") {
       this.io.stdout(`${JSON.stringify({ ok: false, exitCode: err.exitCode, error: err.toJSON() }, null, 2)}\n`);
       return;
     }
-    let text = `Error (${err.code}): ${err.message}`;
-    if (err.hint) text += `\n  Fix: ${err.hint}`;
-    const findings = err.details?.findings as Array<{ path: string; line: number; kind: string }> | undefined;
-    if (findings?.length) text += `\n${findings.map((f) => `  ${f.path}:${f.line}  ${f.kind}`).join("\n")}`;
-    if (err.requestId) text += `\n  Request id: ${err.requestId}`;
+    let text = `Error (${escapeControl(err.code)}): ${escapeControl(err.message)}`;
+    if (err.hint) text += `\n  Fix: ${escapeControl(err.hint)}`;
+    // details come from the server unchecked: tolerate non-array findings
+    // and malformed rows rather than crashing while reporting the real error.
+    const findings = Array.isArray(err.details?.findings) ? err.details.findings : undefined;
+    if (findings?.length)
+      text += `\n${findings
+        .map((f) => {
+          const row = f && typeof f === "object" ? (f as { path?: unknown; line?: unknown; kind?: unknown }) : {};
+          return `  ${escapeControl(row.path)}:${escapeControl(row.line)}  ${escapeControl(row.kind)}`;
+        })
+        .join("\n")}`;
+    if (err.requestId) text += `\n  Request id: ${escapeControl(err.requestId)}`;
+    // Human errors are the presentation boundary: control characters from
+    // untrusted input (paths, refs, server text) are escaped per field above,
+    // while the renderer's own separator newlines stay raw.
     this.io.stderr(`${text}\n`);
   }
 }
@@ -125,8 +144,8 @@ interface Instance {
   link: ProjectLink | null;
 }
 
-async function resolveInstance(p: Parsed, io: Io): Promise<Instance> {
-  const link = await readLink(io.cwd);
+async function resolveInstance(p: Parsed, io: Io, opts: { projectLink?: boolean } = {}): Promise<Instance> {
+  const link = opts.projectLink === false ? null : await readLink(io.cwd);
   const creds = await readCredentials(io.env);
   const raw = str(p, "api") ?? (io.env.KOFRA_API || io.env.KOFRA_URL || undefined) ?? link?.api ?? creds.default ?? undefined;
   if (!raw) {
@@ -179,6 +198,26 @@ function positional(p: Parsed, index: number, name: string, usage: string): stri
   const v = p.positionals[index];
   if (!v) throw new UsageError(`Missing <${name}>. Usage: ${usage}`);
   return v;
+}
+
+/** TTY diagnosis lives here (not only at the call site) so a future byte-reading caller cannot ship the wrong code. */
+function stdinTerminalError(): CliError {
+  return new CliError({ code: "stdin_is_terminal", message: "--stdin needs piped input, but stdin is a terminal: nothing piped.", hint: "Pipe the content in, e.g. `cat report.html | kofra publish --stdin report.html`, or pass a <path> instead.", exitCode: EXIT.usage });
+}
+
+/** Read piped bytes exactly once; refuse empty input unless allowed. */
+async function readPiped(io: Io, allowEmpty: boolean): Promise<Uint8Array> {
+  if (io.stdinIsTTY) throw stdinTerminalError();
+  let bytes: Uint8Array;
+  if (io.readStdinBytes) bytes = await io.readStdinBytes(STDIN_MAX_BYTES);
+  else {
+    bytes = new TextEncoder().encode(await io.readStdin());
+    if (bytes.byteLength > STDIN_MAX_BYTES) throw stdinTooLarge(STDIN_MAX_BYTES);
+  }
+  if (!bytes.byteLength && !allowEmpty) {
+    throw new CliError({ code: "empty_stdin", message: "Refusing to publish: stdin was empty.", hint: "Pipe the content in (nothing arrived, or the producer failed), or pass --allow-empty to publish a zero-byte file.", exitCode: EXIT.usage });
+  }
+  return bytes;
 }
 
 const enc = encodeURIComponent;
@@ -307,7 +346,7 @@ const versionLabel = (v: VersionInfo | null | undefined) => (v ? `v${v.number}` 
 
 const publishCmd: Command = {
   summary: "Publish a folder, a file or a .zip to a live URL",
-  usage: "kofra publish <path> [--site <name>] [--json]",
+  usage: "kofra publish <path> | --stdin <filename> [--site <name>] [--json]",
   maxPositionals: 1,
   flags: {
     site: { kind: "string", short: "s" },
@@ -324,8 +363,12 @@ const publishCmd: Command = {
     "allow-secrets": { kind: "boolean" },
     "dry-run": { kind: "boolean" },
     save: { kind: "boolean" },
+    stdin: { kind: "string" },
+    "allow-empty": { kind: "boolean" },
   },
   details: `Options:
+  --stdin <filename>    Publish the bytes piped on stdin as the one file <filename> (no <path>)
+  --allow-empty         With --stdin: publish a zero-byte file instead of refusing empty input
   -s, --site <name>     Update this site (created with that name if it does not exist)
   --new                 Always create a new site (ignore ./dropway.json)
   -m, --message <text>  Version message
@@ -355,9 +398,28 @@ by path. Nothing publishable is refused with no_files (exit 2) before anything
 is contacted. Fully offline agent check (no URL or key needed):
   kofra publish ./dist --dry-run --json | jq '{files: [.files[].path], omissions}'
 This is a local inventory of what the CLI would send. It does not validate
-server policy, quotas or limits, and it is not the server's dry run.`,
+server policy, quotas or limits, and it is not the server's dry run.
+
+Piped input (--stdin): stdin is read once, as raw bytes, up to 100 MiB (more is
+refused with file_too_large, exit 6). <filename> is the site path (assets/app.js
+is fine; __dropway/ and unsafe names are refused). It cannot be combined with
+<path>, and a terminal on stdin is refused (exit 2) instead of waiting. Empty
+input is refused (exit 2) unless --allow-empty. A pipe that stays silent past
+the 30 s first-byte deadline is refused (stdin_timeout, exit 2) even with
+--allow-empty: only a real EOF with zero bytes counts as empty. The same secret scan, --dry-run,
+--wait, --json, --encrypt and exit codes apply as for a path. A piped publish
+does not read or write ./dropway.json: pass --site to update the same site.
+A piped .zip is stored as one file named <filename>, not unpacked.
+  echo '<h1>Hello</h1>' | kofra publish --stdin index.html --site hello
+  some-report-tool | kofra publish --stdin report.md --site weekly --json --wait`,
   async run(p, io, out) {
-    const target = positional(p, 0, "path", this.usage);
+    const stdinName = str(p, "stdin");
+    if (stdinName !== undefined) {
+      if (p.positionals.length) throw new UsageError("--stdin and <path> are mutually exclusive: publish piped bytes or a path, not both. Drop the positional argument (including \"-\").");
+    } else if (bool(p, "allow-empty")) {
+      throw new UsageError("--allow-empty only applies with --stdin.");
+    }
+    const target = stdinName ?? positional(p, 0, "path", this.usage);
     const anonymous = bool(p, "anonymous") === true;
     const dryRun = bool(p, "dry-run") === true;
     if (anonymous && str(p, "site")) throw new UsageError("--anonymous sites get a generated name; drop --site (or use --key <claimToken> --site <name> to update an anonymous site).");
@@ -365,21 +427,26 @@ server policy, quotas or limits, and it is not the server's dry run.`,
     const concurrency = int(p, "concurrency", 1, 32);
     const waitTimeout = int(p, "wait-timeout", 1, 3600);
 
-    const st = await stat(resolve(io.cwd, target)).catch(() => null);
-    if (!st) throw new CliError({ code: "path_not_found", message: `No such file or directory: ${target}`, hint: "Choose an existing file or folder.", exitCode: EXIT.usage });
-    const isZip = st.isFile() && /\.zip$/i.test(target);
+    let stdinPath: string | undefined;
+    if (stdinName !== undefined) {
+      if (io.stdinIsTTY) throw stdinTerminalError();
+      stdinPath = normaliseStdinPath(stdinName);
+    }
+    const st = stdinPath === undefined ? await stat(resolve(io.cwd, target)).catch(() => null) : null;
+    if (stdinPath === undefined && !st) throw new CliError({ code: "path_not_found", message: `No such file or directory: ${target}`, hint: "Choose an existing file or folder.", exitCode: EXIT.usage });
+    const isZip = !!st?.isFile() && /\.zip$/i.test(target);
     const encrypt = bool(p, "encrypt") === true;
     if (encrypt && isZip) throw new CliError({ code: "encrypted_zip_unsupported", message: "Encrypted publishing does not support ZIP archives.", hint: "Extract the archive locally, then publish its folder with --encrypt.", exitCode: EXIT.usage });
     if (encrypt && bool(p, "spa")) throw new CliError({ code: "encrypted_spa_unsupported", message: "Encrypted publishing does not support SPA routing.", hint: "Publish a static entry document without --spa.", exitCode: EXIT.usage });
 
-    const inst = dryRun ? null : await resolveInstance(p, io);
+    const inst = dryRun ? null : await resolveInstance(p, io, { projectLink: stdinPath === undefined });
     const token = anonymous ? null : inst ? requireKey(inst, "Publishing") : null;
     const isClaim = token?.startsWith("dwc_") ?? false;
     if (isClaim && !str(p, "site")) throw new UsageError("A claim token publishes only to its own anonymous site: add --site <name>.");
     const key = linkKey(io.cwd, target);
     let site = str(p, "site");
     let linked = false;
-    if (inst && !site && !anonymous && !isClaim && bool(p, "new") !== true && inst.link?.api === inst.api) {
+    if (inst && stdinPath === undefined && !site && !anonymous && !isClaim && bool(p, "new") !== true && inst.link?.api === inst.api) {
       site = inst.link.sites?.[key];
       linked = !!site;
     }
@@ -389,24 +456,28 @@ server policy, quotas or limits, and it is not the server's dry run.`,
     let waitUrl: string | undefined;
     if (isZip) {
       if (dryRun) {
-        out.result({ dryRun: true, path: target, zip: true, bytes: st.size }, `Would upload ${target} (${formatBytes(st.size)}); the instance unpacks it.`);
+        out.result({ dryRun: true, path: target, zip: true, bytes: st!.size }, `Would upload ${target} (${formatBytes(st!.size)}); the instance unpacks it.`);
         return EXIT.ok;
       }
       const client = makeClient(io, inst!.api, token);
-      out.progress(`Uploading ${target} (${formatBytes(st.size)})...`);
+      out.progress(`Uploading ${target} (${formatBytes(st!.size)})...`);
       const bytes = new Uint8Array(await readFile(resolve(io.cwd, target)));
       result = await publishZip(client, bytes, { site, ...settings, baseVersionId: str(p, "base") });
       out.progress(null);
     } else {
-      out.progress("Reading files...");
-      const collected = await collectFiles(resolve(io.cwd, target), { exclude: [linkPath(io.cwd)], allowSecrets: bool(p, "allow-secrets") === true });
+      out.progress(stdinPath === undefined ? "Reading files..." : "Reading stdin...");
+      const allowSecrets = bool(p, "allow-secrets") === true;
+      const collected =
+        stdinPath === undefined
+          ? await collectFiles(resolve(io.cwd, target), { exclude: [linkPath(io.cwd)], allowSecrets })
+          : collectStdinFile(stdinPath, await readPiped(io, bool(p, "allow-empty") === true), { allowSecrets });
       out.progress(null);
       for (const l of collected.skippedLinks) out.note(`Skipped symlinked folder ${l}/`);
       if (collected.secrets.length) {
         throw new CliError({
           code: "possible_secrets",
           message: `Refusing to publish: ${plural(collected.secrets.length, "file location")} look like credentials. Published files are public.`,
-          hint: "Remove them or add the files to .dropwayignore. If they are not secrets, re-run with --allow-secrets.",
+          hint: stdinPath === undefined ? "Remove them or add the files to .dropwayignore. If they are not secrets, re-run with --allow-secrets." : "Remove the credentials from the piped content. If they are not secrets, re-run with --allow-secrets.",
           details: { findings: collected.secrets },
           exitCode: EXIT.usage,
         });
@@ -456,7 +527,7 @@ server policy, quotas or limits, and it is not the server's dry run.`,
     }
 
     let savedLink: string | null = null;
-    if (!anonymous && !isClaim && bool(p, "save") !== false && !result.claimToken) {
+    if (stdinPath === undefined && !anonymous && !isClaim && bool(p, "save") !== false && !result.claimToken) {
       const saved = await writeLink(io.cwd, inst!.api, key, result.slug).catch(() => null);
       if (saved?.created) savedLink = saved.path;
     }
@@ -622,6 +693,76 @@ Examples:
   },
 };
 
+const claimCmd: Command = {
+  summary: "Keep an anonymous site: claim <site> --token <claimToken>",
+  usage: "kofra claim <site> --token <claimToken> [--dry-run] [--json]",
+  maxPositionals: 1,
+  flags: { token: { kind: "string" }, "dry-run": { kind: "boolean" } },
+  details: `Moves an anonymous site (published without a key, so it expires) into the
+account of your API key. The site stops expiring and the claim token stops
+working. The site is always explicit; saved project mappings are never used.
+  --token     The dwc_ claim token from the anonymous publish. Required; this
+              command never prompts for it, and never prints it.
+  --dry-run   Offline plan (site and operation only); no key, token or request
+
+Calls claim_site once through POST /api/v1/sites/{site}/claim. An unknown site
+and a wrong token both answer 404 site_not_found (the server does not reveal
+which). A site you already own is reported as unchanged (exit 0) after reading
+it from the server; the claim token is then not used. Otherwise the server
+does not distinguish a new claim from a retry, so the result is neutral.
+
+Examples:
+  kofra claim bright-otter-x7k2 --token dwc_... --json
+  kofra claim bright-otter-x7k2 --dry-run`,
+  async run(p, io, out) {
+    const site = positional(p, 0, "site", this.usage);
+    if (!site.trim() || site === "." || site === "..") throw new UsageError("Use an explicit site slug.");
+    const dryRun = bool(p, "dry-run") === true;
+    const token = str(p, "token");
+    if (dryRun) {
+      const plan = { dryRun: true, site, operation: "claim_site" };
+      out.result(plan, `Dry run: would claim anonymous site ${site} (claim_site). No request made.`);
+      return EXIT.ok;
+    }
+    if (token === undefined || token === "") {
+      throw new CliError({
+        code: "claim_token_required",
+        message: "Claiming needs the claim token from the anonymous publish.",
+        hint: `Pass --token dwc_... (it is never prompted for). Usage: ${this.usage}`,
+        exitCode: EXIT.usage,
+      });
+    }
+    if (!token.startsWith("dwc_")) {
+      throw new CliError({ code: "claim_token_invalid", message: "The claim token must start with dwc_.", hint: "Use the claimToken returned when the site was published anonymously.", exitCode: EXIT.usage });
+    }
+    const inst = await resolveInstance(p, io);
+    const client = makeClient(io, inst.api, requireKey(inst, "Claiming", "Run `kofra login`, set KOFRA_API_KEY, or pass --key. The claim token goes in --token."));
+    const dashboard = (slug: string) => `${inst.api}/dashboard/sites/${enc(slug)}`;
+    // Only a server read can say the caller already owns the site: the claim
+    // endpoint answers a repeat claim exactly like a first one. A failed read
+    // is not an answer; the claim below reports the real error. Even a
+    // successful claim response cannot distinguish a mutation from a retry.
+    const existing = await client.getSite({ slug: site }).then(
+      (r) => (r as { site?: Record<string, any> }).site,
+      () => undefined,
+    );
+    if (existing && existing.anonymous === false) {
+      const slug = String(existing.slug ?? site);
+      out.result({ claimed: false, alreadyOwned: true, site: existing, url: existing.url }, () =>
+        [`${slug} is already yours (unchanged); the claim token was not used.`, `URL:       ${existing.url}`, `Dashboard: ${dashboard(slug)}`].join("\n"),
+      );
+      return EXIT.ok;
+    }
+    const result = (await client.claimSite({ slug: site, claimToken: token })) as { claimed?: boolean; site: Record<string, any> };
+    const kept = result.site;
+    const slug = String(kept.slug ?? site);
+    out.result({ claimed: null, alreadyOwned: null, site: kept, url: kept.url }, () =>
+      [`${slug} is yours and no longer expires (claim change status unknown).`, `URL:       ${kept.url}`, `Dashboard: ${dashboard(slug)}`].join("\n"),
+    );
+    return EXIT.ok;
+  },
+};
+
 const filesCmd: Command = {
   summary: "List the files of a site's live (or given) version",
   usage: "kofra files <name> [--version <v>]",
@@ -675,6 +816,98 @@ interface ReadFilePage {
   url: string;
   rawUrl: string;
 }
+
+const pullCmd: Command = {
+  summary: "Download a pinned site version and verify every file",
+  usage: "kofra pull <site> <dir> [--version <v>] [--force] [--json]",
+  maxPositionals: 2,
+  flags: { version: { kind: "string" }, force: { kind: "boolean" } },
+  details: `Resolves live (default), vN, N or an id before listing or downloading.
+Each file is read in bounded binary pages, verified against its size and SHA-256,
+then atomically replaces its local path. Failed downloads leave no partial file.
+
+A non-empty destination is refused unless --force is set. --force overwrites
+only pulled files; extra local files are preserved and reported on stderr.
+Symlink parents and unsafe server paths are refused. Do not modify the destination
+concurrently while pulling.
+
+--json prints exactly {site, versionId, dir, files: [{path, size, sha256}],
+failures: [{path, code, message}]}; progress stays on stderr. A failed file gives
+a nonzero exit using the existing exit-code table; other files still pull.
+No files are deleted, credentials saved, or project links changed.`,
+  async run(p, io, out) {
+    const slug = positional(p, 0, "site", this.usage);
+    const dir = resolve(io.cwd, positional(p, 1, "dir", this.usage));
+    await checkPullDirectory(dir, bool(p, "force") === true, io.cwd);
+    const inst = await resolveInstance(p, io);
+    const client = makeClient(io, inst.api, requireKey(inst));
+    const { version } = await getVersionDirect(client, slug, str(p, "version") ?? "live");
+    if (!isImmutableVersionId(version.id) || version.id !== version.id.trim()) {
+      throw new CliError({ code: "invalid_pull_version", message: "The instance did not resolve an immutable version id.", hint: "Retry against an instance that returns a pinned version id.", exitCode: EXIT.error });
+    }
+    const { receipt, exitCode } = await pullVersion(client, slug, version.id, dir, text => out.note(text));
+    // Pull has a fixed receipt schema, unlike commands using Output.result's ok wrapper.
+    if (out.json) io.stdout(`${JSON.stringify(receipt, null, 2)}\n`);
+    else io.stdout(`Pulled ${plural(receipt.files.length, "file")} from ${slug} (${version.id}) into ${dir}; ${receipt.failures.length} failed.\n`);
+    return exitCode;
+  },
+};
+
+const compareCmd: Command = {
+  summary: "Compare a directory's hashes against a pinned remote version (read-only)",
+  usage: "kofra compare <path> --site <name> [--version <ref>] [--json] [--quiet] [--include-unchanged] [--limit <n>] [--max-files <n>] [--max-bytes <n>]",
+  flags: { site: { kind: "string", short: "s" }, version: { kind: "string" }, "include-unchanged": { kind: "boolean" },
+    limit: { kind: "string" }, "max-files": { kind: "string" }, "max-bytes": { kind: "string" } },
+  maxPositionals: 1,
+  details: "Flags, limits, output schema and safety guarantees: docs/CLI_COMPARE.md",
+  async run(p, io, out) {
+    const path = positional(p, 0, "path", this.usage);
+    const site = str(p, "site");
+    if (!site?.trim() || site.startsWith("-")) throw new UsageError("An explicit --site <name> is required for compare.");
+    const bound = (name: string, max: number, fallback: number) => {
+      const raw = str(p, name);
+      if (raw !== undefined && !/^[0-9]+$/.test(raw)) throw new UsageError(`--${name} requires plain integer bytes/counts.`);
+      return int(p, name, 1, max) ?? fallback;
+    };
+    const limit = bound("limit", 100000, 500);
+    const maxFiles = bound("max-files", 500000, 50000);
+    const maxBytes = bound("max-bytes", 10737418240, 2147483648);
+    const controller = new AbortController();
+    const cancel = () => controller.abort(compareCancelled());
+    // Registered once: a second Ctrl-C during a non-abortable filesystem
+    // operation must still terminate with the default disposition.
+    process.once("SIGINT", cancel);
+    try {
+      const inst = await resolveInstance(p, io);
+      const key = requireKey(inst, "Comparing a directory");
+      controller.signal.throwIfAborted();
+      // Attach the abort signal to the SDK-built request: the SDK threads it
+      // through retry sleeps, and the transport aborts in-flight reads, so a
+      // cancelled fetch becomes a local error instead of another network read.
+      const client = makeClient({ ...io, fetch: async request => {
+        controller.signal.throwIfAborted();
+        try {
+          return await (io.fetch ?? globalThis.fetch)(new Request(request, { signal: controller.signal }));
+        } catch (error) {
+          controller.signal.throwIfAborted();
+          throw error;
+        }
+      } }, inst.api, key);
+      const result = await compareDirectory(client, { path, cwd: io.cwd, site, requestedRef: str(p, "version") ?? "live",
+        limit, maxFiles, maxBytes, includeUnchanged: bool(p, "include-unchanged") === true, signal: controller.signal });
+      // A SIGINT landing after the comparison but before stdout must cancel,
+      // never print success: yield first so the handler runs, then re-check.
+      await settleBeforeOutput(controller.signal);
+      out.result(result, () => compareHuman(result));
+      return EXIT.ok;
+    } catch (error) {
+      if (controller.signal.aborted) throw compareCancelled();
+      throw error;
+    } finally {
+      process.off("SIGINT", cancel);
+    }
+  },
+};
 
 const readFileCmd: Command = {
   summary: "Read one file's content (one bounded page)",
@@ -1382,14 +1615,109 @@ Contract: https://github.com/TogetherWeOwn/kofra/blob/main/docs/CLI_DIAGNOSTICS.
   },
 };
 
+const settingsCmd: Command = {
+  summary: "Inspect or change explicit non-secret site settings",
+  usage: "kofra settings <site> [--title <text>] [--description <text>] [--spa true|false] [--render-markdown true|false] [--cross-origin-isolation true|false] [--dry-run] [--json]",
+  flags: {
+    ...Object.fromEntries(Object.entries(GLOBAL).map(([name, spec]) => [name, { ...spec, once: true }])),
+    title: { kind: "string", once: true },
+    description: { kind: "string", once: true },
+    spa: { kind: "string", once: true },
+    "render-markdown": { kind: "string", once: true },
+    "cross-origin-isolation": { kind: "string", once: true },
+    "dry-run": { kind: "boolean", once: true },
+  },
+  maxPositionals: 1,
+  details: `With no mutation flags, inspect with one authenticated GET. With explicit fields,
+PATCH only those fields (sites:read + sites:write); omitted values stay untouched. Each flag may
+appear only once. Boolean values are the lower-case literals true or false, never
+implicit toggles. --title '' and --description '' clear the field to null.
+
+Always pass one explicit site slug; dropway.json never supplies the target.
+Passwords, access modes, keys, tenant/runtime settings and quotas are unsupported.
+--dry-run requires an explicit patch and prints its normalized target and fields
+entirely offline: no network, credential lookup, prompt or local/config write.
+--json emits one object: {ok:true,site:{id,slug,title,description,currentVersionId,settings}}
+or {ok:true,schemaVersion:1,dryRun:true,site,patch} for an offline plan.
+
+Examples (use a disposable site's slug for writes):
+  kofra settings disposable-report --json
+  kofra settings disposable-report --spa false --title '' --dry-run --json
+  kofra settings disposable-report --spa false --title '' --json`,
+  async run(p, io, out) {
+    const slug = positional(p, 0, "site", settingsCmd.usage);
+    if (p.positionals.length !== 1 || !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(slug) || slug.includes("--")) {
+      throw new UsageError("Pass exactly one explicit site slug: 3-63 lowercase letters, digits and single hyphens, starting and ending with a letter or digit.");
+    }
+    const patch: Pick<UpdateSiteSettingsInput,
+      "title" | "description" | "spa" | "renderMarkdown" | "crossOriginIsolation"> = {};
+    for (const field of ["title", "description"] as const) {
+      const value = str(p, field);
+      if (value !== undefined) patch[field] = value === "" ? null : value;
+    }
+    for (const [flag, field] of [
+      ["spa", "spa"], ["render-markdown", "renderMarkdown"], ["cross-origin-isolation", "crossOriginIsolation"],
+    ] as const) {
+      const value = str(p, flag);
+      if (value === undefined) continue;
+      if (value !== "true" && value !== "false") throw new UsageError(`--${flag} must be true or false.`);
+      patch[field] = value === "true";
+    }
+    const changes = Object.keys(patch).length > 0;
+    const escapeControl = (control: string) => `\\u${control.charCodeAt(0).toString(16).padStart(4, "0")}`;
+    const safeText = (value: string) => value.replace(/[\u0000-\u001f\u007f-\u009f]/g, escapeControl);
+    if (bool(p, "dry-run")) {
+      if (!changes) throw new UsageError("--dry-run requires at least one explicit settings field.");
+      // JSON.stringify already escapes C0 controls inside the plan's string
+      // values (the remaining newlines are its own formatting and stay);
+      // DEL and C1 controls pass through literally, so escape those for the
+      // human plan exactly as the online output does. --json is untouched.
+      const plan = JSON.stringify(patch, null, 2).replace(/[\u007f-\u009f]/g, escapeControl);
+      out.result({ schemaVersion: 1, dryRun: true, site: slug, patch },
+        `Offline settings plan for ${slug}:\n${plan}`);
+      return EXIT.ok;
+    }
+    const inst = await resolveInstance(p, io);
+    const client = makeClient(io, inst.api, requireKey(inst, "Inspecting or changing site settings"));
+    const result = changes
+      ? await client.updateSiteSettings({ slug, ...patch })
+      : await client.getSite({ slug });
+    const s = result.site;
+    const nullableString = (value: unknown): boolean => value == null || typeof value === "string";
+    if (!s || (s.id != null && typeof s.id !== "string") || typeof s.slug !== "string" || !s.settings
+      || !nullableString(s.title) || !nullableString(s.description) || !nullableString(s.currentVersionId)
+      || typeof s.settings.spa !== "boolean" || typeof s.settings.renderMarkdown !== "boolean"
+      || typeof s.settings.crossOriginIsolation !== "boolean") {
+      throw new CliError({ code: "invalid_response", message: "The instance returned no site identity or settings.",
+        hint: "Check the instance API version, then retry the same explicit settings command.", exitCode: EXIT.error });
+    }
+    // Allowlist both layers: a site response may also contain access or claim secrets.
+    const site = {
+      id: typeof s.id === "string" ? s.id : null, slug: s.slug, title: s.title ?? null, description: s.description ?? null, currentVersionId: s.currentVersionId ?? null,
+      settings: { spa: s.settings.spa, renderMarkdown: s.settings.renderMarkdown, crossOriginIsolation: s.settings.crossOriginIsolation },
+    };
+    out.result({ site }, () => [
+      `Settings for ${safeText(site.slug)}${site.id ? ` (${safeText(site.id)})` : ""}`,
+      `Title: ${safeText(site.title ?? "(none)")}`,
+      `Description: ${safeText(site.description ?? "(none)")}`,
+      `spa=${site.settings.spa} renderMarkdown=${site.settings.renderMarkdown} crossOriginIsolation=${site.settings.crossOriginIsolation}`,
+    ].join("\n"));
+    return EXIT.ok;
+  },
+};
+
 const COMMANDS: Record<string, Command> = {
   publish: publishCmd,
   "explain-config": explainConfigCmd,
   duplicate: duplicateCmd,
   list: listCmd,
   site: siteCmd,
+  settings: settingsCmd,
   rename: renameCmd,
+  claim: claimCmd,
   files: filesCmd,
+  pull: pullCmd,
+  compare: compareCmd,
   "read-file": readFileCmd,
   versions: versionsCmd,
   restore: restoreCmd,
@@ -1414,7 +1742,7 @@ const ALIASES: Record<string, string> = {
 };
 
 function mainHelp(): string {
-  const rows = Object.entries(COMMANDS).map(([name, c]) => [`  ${name}`, c.summary]);
+  const rows = Object.entries(COMMANDS).map(([name, c]) => [`  ${name === "settings" ? "settings <site>" : name}`, c.summary]);
   return `kofra ${VERSION}: publish files, folders and sites to a live URL on a Kofra instance.
 
 Usage: kofra <command> [options]
@@ -1440,6 +1768,58 @@ ${c.details ? `\n${c.details}\n` : ""}
 ${HELP_FOOTER}`;
 }
 
+/**
+ * Error-output mode before (or when) parsing fails: walk argv in parser
+ * order, stopping at `--` and skipping tokens a string flag consumes as its
+ * value, so a literal `--json=true` filename or a flag later overridden by
+ * `--json=false` chooses the same mode a successful parse would. Once
+ * parsing succeeds run() replaces this with the parsed flag; this fallback
+ * only decides how usage errors themselves are printed.
+ */
+function preParseWantsJson(args: string[], specs: FlagSpecs): boolean {
+  const byShort = new Map<string, string>();
+  for (const [name, spec] of Object.entries(specs)) if (spec.short) byShort.set(spec.short, name);
+  let json = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--") break;
+    if (arg.startsWith("--")) {
+      const eq = arg.indexOf("=");
+      const name = eq === -1 ? arg.slice(2) : arg.slice(2, eq);
+      const value = eq === -1 ? undefined : arg.slice(eq + 1);
+      if (name.startsWith("no-") && specs[name.slice(3)]?.kind === "boolean" && value === undefined) {
+        if (name.slice(3) === "json") json = false;
+        continue;
+      }
+      const spec = Object.hasOwn(specs, name) ? specs[name] : undefined;
+      if (name === "json" && spec?.kind === "boolean") {
+        if (value === undefined || value === "true" || value === "1") json = true;
+        else if (value === "false" || value === "0") json = false;
+        continue;
+      }
+      // Mirror parseArgs: a long string flag consumes the next token only
+      // when it is not flag-like, so `--spa --json` (a usage error) still
+      // sees --json as the flag the caller meant, not as --spa's value.
+      if (spec?.kind === "string" && value === undefined) {
+        const next = args[i + 1];
+        if (next !== undefined && !(next.startsWith("-") && next !== "-")) i++;
+      }
+      continue;
+    }
+    if (arg.startsWith("-") && arg.length > 1 && arg !== "-") {
+      const letters = arg.slice(1);
+      for (let j = 0; j < letters.length; j++) {
+        const name = byShort.get(letters[j]!);
+        if (!name) break;
+        if (specs[name]!.kind === "boolean") continue;
+        if (!letters.slice(j + 1)) i++;
+        break;
+      }
+    }
+  }
+  return json;
+}
+
 /** Run the CLI. Returns the exit code (never calls process.exit). */
 export async function run(argv: string[], io: Io): Promise<number> {
   // Diagnostics needs literal provenance; all existing commands keep legacy folding.
@@ -1458,14 +1838,17 @@ export async function run(argv: string[], io: Io): Promise<number> {
   }
   const name = ALIASES[first] ?? first;
   const command = COMMANDS[name];
-  const wantsJson = argv.includes("--json");
-  const out = new Output(io, wantsJson, argv.includes("--quiet") || argv.includes("-q"));
+  const specs = command ? { ...GLOBAL, ...command.flags } : GLOBAL;
+  let out = new Output(io, preParseWantsJson(argv.slice(1), specs), argv.includes("--quiet") || argv.includes("-q"));
   if (!command) {
     out.error(new CliError({ code: "unknown_command", message: `Unknown command "${first}".`, hint: "Run `kofra help` for the list of commands.", exitCode: EXIT.usage }));
     return EXIT.usage;
   }
   try {
-    const p = parseArgs(argv.slice(1), { ...GLOBAL, ...command.flags });
+    const p = parseArgs(argv.slice(1), specs);
+    // Parsing succeeded: errors from here on use the parsed flags, so the
+    // error envelope always matches the mode a success would have used.
+    out = new Output(io, bool(p, "json") === true, bool(p, "quiet") === true);
     // Refuse surplus positionals here, before the command body runs: no
     // filesystem stat/read, instance/key resolution, network call, stdin
     // read, prompt or write may precede this check.
@@ -1474,7 +1857,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
       io.stdout(`${commandHelp(name, command)}\n`);
       return EXIT.ok;
     }
-    return await command.run(p, io, new Output(io, bool(p, "json") === true, bool(p, "quiet") === true));
+    return await command.run(p, io, out);
   } catch (e) {
     const err =
       name === "explain-config" && !(e instanceof UsageError)
@@ -1498,6 +1881,7 @@ export function nodeIo(): Io {
     stderrIsTTY: !!process.stderr.isTTY,
     env: process.env,
     cwd: process.cwd(),
+    readStdinBytes: (maxBytes) => (process.stdin.isTTY ? Promise.resolve(new Uint8Array()) : readBounded(process.stdin, maxBytes, { firstByteTimeoutMs: STDIN_FIRST_BYTE_MS })),
     readStdin() {
       if (process.stdin.isTTY) return Promise.resolve("");
       // Some agent shells leave stdin open without ever writing to it: give up if nothing

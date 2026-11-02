@@ -7,6 +7,8 @@ export {
   DropwayError,
   DropwayHttpClient,
   errorFromResponse,
+  isCredentialSafeUrl,
+  isLoopbackHostname,
   movedTo,
   normaliseApi,
   type ApiResponse,

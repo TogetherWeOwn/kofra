@@ -20,12 +20,16 @@ Zero runtime dependencies. Node.js 20 or newer.
 
 | Command | What it does |
 |---|---|
-| `publish <path>` | Publish a folder, a single file or a `.zip`. Creates a site, or updates one with `--site <name>` |
+| `publish <path>` or `publish --stdin <filename>` | Publish a folder, a single file, a `.zip` or piped bytes (one file). Creates a site, or updates one with `--site <name>` |
 | `duplicate <source> <new-slug>` | Copy an explicit live site into a new slug (`--message`, `--idempotency-key`, offline `--dry-run`) |
 | `list` | Your sites (`--all` for every page) |
 | `site <name>` | One site: URL, live version, settings |
+| `settings <site>` | Inspect non-secret site settings, PATCH explicit fields, or plan a patch offline with `--dry-run` |
 | `rename <source> <new-slug> --yes` | Rename an explicit site; offline `--dry-run`; saved local project mappings remain unchanged |
+| `claim <site> --token <claimToken>` | Keep an anonymous site in your account; the site stops expiring (offline `--dry-run`) |
 | `files <name>` | Files of the live version (or `--version <ref>` with `live`, `v3`, `3` or a version id, read directly) with their URLs |
+| `pull <site> <dir>` | Download an immutable version with size/SHA-256 verification (`--version`, `--force`, `--json`) |
+| `compare <path> --site <name>` | Compare a local directory's hashes with a pinned remote version without downloading content (`--version`, `--json`) |
 | `read-file <site> <path>` | One file's content, one bounded page (`--version`, `--offset`, `--length`, `--encoding`) |
 | `versions <name>` | Newest 500 versions, newest first, live marked — or `versions <name> <ref>` to inspect one directly |
 | `restore <name> [v3]` | Make an older version live again. Without a version: the one before the live version. Alias `rollback` |
@@ -51,6 +55,77 @@ kofra keys ls --all --json  # every member's keys (needs members:write) as one J
 keeping each key on one row. `--json` preserves the original metadata values. Create and revoke
 keys with the generic command, e.g. `kofra api POST /keys --data '{"name":"ci"}'`.
 
+## Site settings
+
+Always supply one explicit site **slug**, even if `dropway.json` maps this folder to a site.
+`settings` never infers a target, creates a site, publishes, changes credentials or writes config.
+
+```sh
+kofra settings disposable-report --json                    # inspect: authenticated GET only
+kofra settings disposable-report --title 'Report' --json   # write: PATCH only this title
+kofra settings disposable-report --spa false --render-markdown false --cross-origin-isolation true --json
+kofra settings disposable-report --title '' --description '' --json  # clear both to null
+kofra settings disposable-report --spa false --dry-run --json       # offline; no credential needed
+```
+
+| Flag | Accepted value / PATCH field |
+|---|---|
+| `--title <text>` | Literal string, including spaces; `''` clears `title` to `null` |
+| `--description <text>` | Literal string; `''` clears `description` to `null` |
+| `--spa true\|false` | Lower-case literal boolean / `spa` |
+| `--render-markdown true\|false` | Lower-case literal boolean / `renderMarkdown` |
+| `--cross-origin-isolation true\|false` | Lower-case literal boolean / `crossOriginIsolation` |
+| `--dry-run` | Requires at least one explicit field; prints the exact normalized patch offline |
+
+Use each option only once. `--flag=value` also works; boolean field flags still require an explicit
+`true` or `false` (no `1`, `0`, `yes`, `--no-spa` or implicit toggle). Unknown options, extra/missing
+sites, repeated flags and unsupported controls fail with exit 2 **before any request**. Passwords,
+access modes, key management, tenant/runtime settings and instance limits are not supported by this
+command and are never forwarded. Omitted fields are not sent, so existing values survive. Empty
+strings are the only CLI clearing spelling; the literal string `null` is just text.
+
+Inspect needs an authenticated site read; member keys changing settings need both `sites:read`
+and `sites:write`. A write sends only the
+existing PATCH, with no preliminary GET. Reapplying the same patch preserves the settings and
+version history (server timestamps may change). Site bytes and version identity are not republished.
+`--dry-run` does not contact the instance, read credentials or write local state; it checks CLI syntax,
+not site existence, permission or server policy. No non-TTY prompt or fallback to another command
+occurs, including on errors.
+
+JSON success is exactly one object on stdout; progress goes to stderr. The response is allowlisted:
+
+```json
+{"ok":true,"site":{"id":"site_example","slug":"disposable-report","title":null,"description":null,"currentVersionId":"ver_example","settings":{"spa":false,"renderMarkdown":true,"crossOriginIsolation":false}}}
+```
+
+`site.id` is a stable string on current instances and `null` on older instances that omit it;
+human output omits a missing id. Existing site slugs up to 63 characters remain supported.
+Authenticated requests require HTTPS except for loopback HTTP development instances.
+
+No claim token, visitor password, key or other access data is included. Dry-run returns a versioned
+plan with the explicit slug, never an invented stable id:
+
+```json
+{"ok":true,"schemaVersion":1,"dryRun":true,"site":"disposable-report","patch":{"spa":false}}
+```
+
+Errors use the normal `{ok:false,exitCode,error}` envelope and preserve the server's code, hint,
+HTTP status, request id, retryability, next-call array and retry delay when present. See the exit-code
+table below; this command never changes the target or falls back to publish/setup after a refusal.
+
+Disposable, agent-runnable verification from the repository root (no remote account, deployment or
+production request; builds the CLI, starts a temporary local Worker, applies local migrations and
+checks inspect/PATCH/reapply against isolated D1/R2/KV):
+
+```sh
+npm ci --include=dev --no-audit --no-fund
+npm run build -w kofra
+npm run test:cli -- test/site-settings/
+```
+
+The suite also observes wire requests, checks exact offline plans without credentials, fingerprints
+local config before/after, and exercises invalid flags, explicit false, secret projection and errors.
+
 ## Versions
 
 A bare `kofra versions <name>` lists the newest 500 versions only, newest first; it has no
@@ -75,6 +150,40 @@ Runnable local check (from a repo clone, against your own instance):
 
 ```sh
 node packages/cli/bin/dropway.mjs versions team-report v1 --api https://<your-instance> --json
+```
+
+## Comparing a local directory with a pinned version
+
+```sh
+kofra compare ./dist --site team-report
+kofra compare ./dist --site team-report --version v6 --json
+kofra compare ./dist --site team-report --include-unchanged --limit 200
+```
+
+`compare` is read-only. It hashes the local directory, resolves the requested
+reference once (`live` by default, or `v3`, `3`, or a version id), pins that
+immutable version, then reads its complete raw manifest. It performs only two
+authenticated manifest `GET`s, downloads no file bytes, creates no versions,
+writes no local files or credentials, and ignores any stale `dropway.json`
+site mapping. Metadata must come from the configured origin: a redirect answer
+is refused rather than followed. The manifest is also checked before local
+hashing: if its row count disagrees with the pinned version's file count, the
+run is refused as an incomplete manifest instead of comparing a torn listing.
+
+Secrets never block or leak through this command. The collector still scans
+text and reports only `secretsFound` as a count; secret values, kinds, paths,
+and line numbers are omitted. Human output escapes terminal control characters
+in untrusted paths and references, while `--json` preserves the exact values.
+`--include-unchanged` adds unchanged records; counts always cover the complete
+comparison, and `--limit` only truncates the printed records. A local file that
+changes during hashing fails as `compare_source_changed`; Ctrl-C exits as
+`compare_cancelled` with empty stdout, even with `--json`, so callers never
+receive a partial comparison.
+
+Disposable local check (no deploy):
+
+```sh
+npm run test:cli -- test/compare.acceptance.test.ts test/compare-worker.acceptance.test.ts test/compare-process.acceptance.test.ts
 ```
 
 ## Duplicating a live site
@@ -132,6 +241,24 @@ Disposable local integration check (no deploy):
 npm run test:cli -- test/duplicate.acceptance.test.ts test/duplicate-worker.acceptance.test.ts
 ```
 
+
+## Claiming an anonymous site
+
+```sh
+kofra claim bright-otter-x7k2 --token dwc_... --json   # needs your API key
+kofra claim bright-otter-x7k2 --dry-run                # offline plan, no key or token
+```
+
+The site and `--token` (the `dwc_` claim token from the anonymous publish) are both required;
+claim never prompts for the token and never prints it. It calls `claim_site` once: the site moves
+into your account, stops expiring, and the claim token stops working. `--json` prints
+`{ "ok": true, "claimed": null, "alreadyOwned": null, "site": {...}, "url": "..." }` after
+a successful claim request: the server does not say whether it changed the site or merely retried
+an earlier claim. An unknown site and a wrong token both fail with the server's `site_not_found`
+(exit 4). If a server read shows you already own the site, it reports unchanged (`claimed: false`,
+`alreadyOwned: true`, exit 0) without using the token. Scoped keys without read access and other
+failed pre-reads fall through to the claim request and return the neutral result on success.
+The token is a command-line argument, so it can land in shell history; clear it afterwards if that matters (a claimed site's token stops working anyway).
 
 ## Renaming a site
 
@@ -220,6 +347,7 @@ kofra publish report.md                      # one file: served at the site root
 kofra publish site.zip                       # the instance unpacks it (one request, 25 MB by default)
 kofra publish ./dist --wait --json           # return only once the URL serves the new version
 kofra publish ./dist --dry-run               # list what would be uploaded; contacts nothing
+echo '<h1>Hi</h1>' | kofra publish --stdin index.html   # piped bytes as one file (see below)
 ```
 
 How it works: the CLI hashes every file (SHA-256), sends the list, uploads only the files the
@@ -258,9 +386,108 @@ local inventory of what the CLI would send: it does not validate server policy, 
 and it is not the server's dry run. ZIP dry-runs stay an opaque archive summary (`{zip: true,
 bytes}`); the CLI never unpacks the archive locally.
 
+### Publishing piped bytes
+
+`kofra publish --stdin <filename>` publishes the bytes piped on stdin as exactly one file named
+`<filename>`. It is the same publish as a path (same `--json` shape, `--wait`, `--dry-run`, secret
+scan, `--encrypt`, idempotency and exit codes), only the source of the bytes differs.
+
+```sh
+echo '<h1>Hello</h1>' | kofra publish --stdin index.html --site hello --wait
+weekly-report --format md | kofra publish --stdin assets/report.md --site weekly --json
+```
+
+- stdin is read once, as raw bytes (binary is byte-identical), up to **100 MiB**; more is refused
+  with `file_too_large` (exit 6) without contacting the instance. The server's own per-file limit
+  still applies.
+- `<filename>` is the site path: `__dropway/`, `..`, control characters and never-published names
+  such as `.env` are refused before any read or request (`reserved_path`, `invalid_path`,
+  `ignored_file`). A file named `index.html` is served at the site root.
+- `--stdin` and a `<path>` (including `-`) are mutually exclusive (exit 2). A terminal on stdin is
+  refused (exit 2) instead of waiting. A pipe that stays silent for 30 s is refused with
+  `stdin_timeout` (exit 2), even with `--allow-empty`: the producer may still be working.
+- **Empty input is refused** (`empty_stdin`, exit 2) so a failed producer never publishes a blank
+  page by accident; pass `--allow-empty` to publish a zero-byte file on purpose. Only a real EOF
+  with zero bytes counts as empty.
+- `--dry-run` runs the offline preflight over the piped bytes (size, SHA-256, secret scan) and
+  contacts nothing. Credential-looking text refuses with `possible_secrets` unless `--allow-secrets`.
+- A piped publish does not read or write `./dropway.json` (there is no path to remember): pass
+  `--site` to update the same site, otherwise each run creates a new one.
+- A piped `.zip` is stored as one file, not unpacked. Multi-file input is not supported: publish
+  a folder or `.zip` path instead.
+
 Anonymous publishing (`--anonymous`) works only on instances that turned it on. The site expires and
 the output includes a `claimToken`: keep it to update the site (`--key <claimToken> --site <name>`) or
 to claim it into an account.
+
+## Pulling a version
+
+```sh
+kofra pull my-site ./snapshot --json
+kofra pull my-site ./old-snapshot --version v1 --json
+kofra pull my-site ./snapshot --version ver_abc123 --force
+```
+
+The CLI resolves `live` (default), `vN`, `N` or an id directly to an immutable
+version id **before** listing any files. Every manifest continuation and file
+page uses that id: a concurrent republish cannot change the snapshot. Only the
+existing `list_files` and `read_file` operations are used; your key needs read
+access to the site. No project link or credentials are written.
+
+Files are downloaded as base64 pages of at most 1 MiB, decoded and hashed
+incrementally, then renamed from an exclusive temporary file only after the
+size and SHA-256 match the manifest. The temporary stays owner-only while
+unverified (POSIX modes; Windows does not enforce `0600`, so on Windows pull into a
+private destination or apply an ACL to it); the renamed file carries the normal umask-adjusted file mode. Binary, Unicode, empty, HTML and CSS files
+retain their original stored bytes, without viewer rendering or URL rewriting.
+A failed file is named in `failures`, never counted in `files`, and its temporary
+file is removed. An old same-path file is retained if its replacement fails.
+Other files continue; the first failure determines the exit code using the
+existing table. Failures before downloading (such as auth/version resolution or
+nonempty-directory refusal) use the normal error envelope instead.
+
+An existing non-empty directory is refused with `pull_directory_not_empty`
+(exit 2) unless `--force` is passed. `--force` replaces only pulled file paths;
+extra local files are **never deleted** and their names are reported on stderr
+(unless `--quiet`). Unsafe relative paths, symlinks and conflicting directories
+are refused rather than followed or removed, including a symlink in any parent of
+the destination below your working directory (`kofra pull site link/out` is
+refused when `link` is a symlink). Windows drive/alternate-stream
+syntax and reserved names are also refused, as is any `.git`, `.gitmodules`
+or `.gitattributes` path segment (case-insensitive): publishing never
+includes `.git`, and server bytes must not become trusted Git configuration
+on the local disk (`--force` into a worktree would otherwise let a manifest
+replace the submodule or attribute config later Git operations read). A path that aliases an earlier
+download or a differently named local extra on a case-insensitive filesystem
+fails with `pull_path_collision`, rather than overwriting it. The same code
+refuses a parent directory that differs only in case or normalization
+(manifest `a/two.txt` alongside an existing `A/`), which would otherwise
+write the file under the wrong name. Use a case-sensitive
+destination for manifests containing such names. Do not modify the destination
+concurrently while pulling; this is not a filesystem sandbox against concurrent
+local changes. A pull is atomic per file, not across the whole directory.
+
+`--json` writes exactly one object on stdout, **without** an `ok` wrapper:
+
+```json
+{
+  "site": "my-site",
+  "versionId": "ver_abc123",
+  "dir": "/absolute/path/to/snapshot",
+  "files": [{ "path": "index.html", "size": 12, "sha256": "<64 lowercase hex characters>" }],
+  "failures": []
+}
+```
+
+Failure rows are `{ "path": "file.bin", "code": "pull_integrity_mismatch",
+"message": "..." }`. Progress and extra-file notices stay on stderr; human
+output summarizes pulled/failed counts and the exact pinned version.
+
+Disposable local integration check (no deploy):
+
+```sh
+npm run test:cli -- test/pull.acceptance.test.ts test/pull-worker.acceptance.test.ts
+```
 
 ## Reading files
 

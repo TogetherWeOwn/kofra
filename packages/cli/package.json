@@ -40,7 +40,7 @@
     "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/dropway.mjs --legal-comments=none",
     "prepack": "npm run build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run -c vitest.config.ts"
+    "test": "npm run build && vitest run -c vitest.config.ts"
   },
   "devDependencies": {
     "@dropway/client": "^0.1.0",

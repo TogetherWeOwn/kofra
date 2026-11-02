@@ -13,6 +13,9 @@ export async function storedBlobKey(dc: DropwayContext, sha256: string): Promise
 
 const IMMUTABLE = "public, max-age=31536000, immutable";
 
+/** Files above this size are streamed from R2 and never touch the Cache API. */
+export const BLOB_CACHE_MAX_BYTES = 25 * 1024 * 1024;
+
 /** Scope that owns blobs for dedupe: the tenant, or the anonymous site itself. */
 export function blobScope(owner: { tenantId: string | null; siteId: string }): string {
   return owner.tenantId ? `t:${owner.tenantId}` : `s:${owner.siteId}`;
@@ -31,10 +34,11 @@ export interface BlobBody {
 
 /**
  * Read a whole blob: Cache API first (edge, free), then R2; fills the cache in the background.
- * The Cache API is a no-op on *.workers.dev hostnames and starts working on custom domains.
+ * Blobs over BLOB_CACHE_MAX_BYTES skip the cache in both directions. Whether the Cache API works
+ * on *.workers.dev hostnames is recorded in docs/SELF_HOST.md.
  */
 export async function readBlob(dc: DropwayContext, sha256: string, size: number): Promise<BlobBody | null> {
-  const cache = typeof caches !== "undefined" ? caches.default : null;
+  const cache = typeof caches !== "undefined" && size <= BLOB_CACHE_MAX_BYTES ? caches.default : null;
   const key = edgeCacheKey(dc.requestUrl, sha256);
   if (cache) {
     const hit = await cache.match(key).catch(() => undefined);
@@ -44,7 +48,7 @@ export async function readBlob(dc: DropwayContext, sha256: string, size: number)
   if (!storageKey) return null;
   const obj = await dc.env.FILES.get(storageKey);
   if (!obj) return null;
-  if (!cache || obj.size > 50 * 1024 * 1024) return { body: obj.body, size: obj.size };
+  if (!cache || obj.size > BLOB_CACHE_MAX_BYTES) return { body: obj.body, size: obj.size };
   const [a, b] = obj.body.tee();
   dc.waitUntil(
     cache.put(key, new Response(b, { headers: { "Cache-Control": IMMUTABLE, "Content-Length": String(obj.size), ETag: `"${sha256}"` } })).catch(() => {}),

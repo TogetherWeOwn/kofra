@@ -260,6 +260,7 @@ const SPEC: Record<string, AritySpec> = {
   duplicate: { min: ["source-site", "copy-site"], max: ["source-site", "copy-site"], flags: ["--dry-run"] },
   list: { min: [], max: [] },
   site: { min: ["my-site"], max: ["my-site"] },
+  settings: { min: ["my-site"], max: ["my-site"], flags: ["--spa", "false", "--dry-run"] },
   files: { min: ["my-site"], max: ["my-site"] },
   "read-file": { min: ["my-site", "index.html"], max: ["my-site", "index.html"] },
   versions: { min: ["my-site"], max: ["my-site", "v1"] },
@@ -338,6 +339,10 @@ describe("the command registry itself is enumerated, not a hand-copied list", ()
 // ---------------------------------------------------------------- per-command surplus refusal
 
 describe("one surplus positional is refused, for every command, before any side effect", () => {
+  it("settings refuses two sites before displaying help", async () => {
+    const ran = await cli(["settings", "my-site", "other-site", "--help"], { frozen: true });
+    expectTooManyHuman(ran, "settings");
+  });
   it.each(SPEC_ENTRIES)("%s refuses max+1 positionals (human output)", async (name, spec) => {
     const ran = await cli([name, ...spec.max, "surplus-arg", ...(spec.flags ?? [])], { frozen: true });
     expectTooManyHuman(ran, name);

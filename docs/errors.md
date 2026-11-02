@@ -24,6 +24,7 @@ Extension adapters can add codes and override guidance without changing built-in
 | `blob_missing` | 502 | true | Retry shortly; report the requestId if the contents remain unavailable. |
 | `blob_not_expected` | 404 | false | Create a pending deploy first, then upload only the SHA-256 values it reports as missing. |
 | `bootstrap_key_required` | 403 | false | Send the bootstrap key in Authorization: Bearer for setup or recovery only. |
+| `cache_refresh_failed` | 502 | true | Retry the identical publish shortly; it re-attempts the serving refresh. |
 | `claim_token_required` | 400 | false | Send the claimToken returned when the anonymous site was created. |
 | `confirm_mismatch` | 400 | false | Set confirm to the exact value in details.expected, then call again. |
 | `deploy_not_found` | 404 | false | Start a version with POST /api/v1/sites/:slug/versions (alias: /deploys), or use a returned version ID. |

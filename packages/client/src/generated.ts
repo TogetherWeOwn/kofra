@@ -56,12 +56,18 @@ export interface PublishSiteInput {
   title?: string | null;
   /** One or two sentences about the site. */
   description?: string | null;
-  /** SPA: unknown paths serve index.html instead of 404. */
+  /** Unknown paths serve index.html. */
   spa?: boolean;
-  /** Render .md files as pages for browsers (default true); false serves raw. */
+  /** Render .md as pages (default true). */
   renderMarkdown?: boolean;
-  /** Send COOP/COEP headers (for SharedArrayBuffer/threaded WASM). */
+  /** Send COOP/COEP headers. */
   crossOriginIsolation?: boolean;
+  /** Skip search indexing. */
+  noindex?: boolean;
+  /** false serves all files raw. */
+  viewers?: boolean;
+  /** Keyed-site expiry seconds; null clears. */
+  ttlSeconds?: number | null;
   /** Optional visitor password (see set_site_access). */
   password?: string;
   /** Short note about this version, like a commit message. */
@@ -78,6 +84,7 @@ export interface PublishSiteOutput {
   /** 24 h signed preview; bearer capability. */
   versionUrl?: string;
   site?: {
+    id?: string;
     slug: string;
     url: string;
     currentVersionId?: string | null;
@@ -142,6 +149,7 @@ export interface UpdateSiteFilesOutput {
   /** 24 h signed preview; bearer capability. */
   versionUrl?: string;
   site?: {
+    id?: string;
     slug?: string;
     /** Share this URL as returned; never construct it. */
     url?: string;
@@ -168,7 +176,6 @@ export interface UpdateSiteFilesOutput {
     createdAt?: string;
     updatedAt?: string;
     links?: Record<string, unknown>;
-    id?: string;
     [key: string]: unknown;
   };
   version?: {
@@ -228,6 +235,7 @@ export interface GetSiteInput {
 
 export interface GetSiteOutput {
   site?: {
+    id?: string;
     slug?: string;
     /** Share this URL as returned; never construct it. */
     url?: string;
@@ -267,6 +275,7 @@ export interface ListSitesInput {
 
 export interface ListSitesOutput {
   sites?: ({
+    id?: string;
     slug?: string;
     /** Share this URL as returned; never construct it. */
     url?: string;
@@ -365,6 +374,12 @@ export interface UpdateSiteSettingsInput {
   renderMarkdown?: boolean;
   /** Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM). */
   crossOriginIsolation?: boolean;
+  /** Ask crawlers not to index this site (X-Robots-Tag: noindex, generated robots.txt). */
+  noindex?: boolean;
+  /** false serves every file raw and skips viewers. */
+  viewers?: boolean;
+  /** Keyed-site expiry in seconds, renewed at each publish; null clears it. */
+  ttlSeconds?: number | null;
   /** Visitor password; null removes it. Needs an API key. */
   password?: string | null;
   slug: string;
@@ -373,6 +388,7 @@ export interface UpdateSiteSettingsInput {
 
 export interface UpdateSiteSettingsOutput {
   site?: {
+    id?: string;
     slug?: string;
     /** Share this URL as returned; never construct it. */
     url?: string;
@@ -413,6 +429,7 @@ export interface SetSiteAccessInput {
 
 export interface SetSiteAccessOutput {
   site?: {
+    id?: string;
     slug?: string;
     /** Share this URL as returned; never construct it. */
     url?: string;
@@ -480,6 +497,12 @@ export interface CreateSiteInput {
   renderMarkdown?: boolean;
   /** Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM). */
   crossOriginIsolation?: boolean;
+  /** Ask crawlers not to index this site (X-Robots-Tag: noindex, generated robots.txt). */
+  noindex?: boolean;
+  /** false serves every file raw and skips viewers. */
+  viewers?: boolean;
+  /** Keyed-site expiry in seconds, renewed at each publish; null clears it. */
+  ttlSeconds?: number | null;
   /** Visitor password; null removes it. Needs an API key. */
   password?: string | null;
   [key: string]: unknown;
@@ -487,6 +510,7 @@ export interface CreateSiteInput {
 
 export interface CreateSiteOutput {
   site?: {
+    id?: string;
     slug?: string;
     /** Share this URL as returned; never construct it. */
     url?: string;
@@ -564,6 +588,7 @@ export interface RenameSiteOutput {
   url?: string;
   redirectUntil?: string | null;
   site?: {
+    id?: string;
     slug?: string;
     /** Share this URL as returned; never construct it. */
     url?: string;
@@ -608,6 +633,7 @@ export interface DuplicateSiteOutput {
   slug: string;
   url: string;
   site?: {
+    id?: string;
     slug: string;
     url: string;
     currentVersionId?: string | null;
@@ -900,6 +926,10 @@ export interface PublishUploadInput {
   renderMarkdown?: boolean;
   /** Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM). */
   crossOriginIsolation?: boolean;
+  /** false serves every file raw and skips viewers. */
+  viewers?: boolean;
+  /** Keyed-site expiry in seconds, renewed at each publish; null clears it. */
+  ttlSeconds?: number | null;
   /** Visitor password; null removes it. Needs an API key. */
   password?: string | null;
   path?: string;
@@ -913,6 +943,7 @@ export type PublishUploadOutput = {
   /** 24 h signed preview; bearer capability. */
   versionUrl?: string;
   site?: {
+    id?: string;
     slug?: string;
     /** Share this URL as returned; never construct it. */
     url?: string;
@@ -939,7 +970,6 @@ export type PublishUploadOutput = {
     createdAt?: string;
     updatedAt?: string;
     links?: Record<string, unknown>;
-    id?: string;
     [key: string]: unknown;
   };
   version?: {
@@ -990,6 +1020,7 @@ export type PublishUploadOutput = {
   created?: boolean;
   unchanged?: boolean;
   site?: {
+    id?: string;
     slug?: string;
     /** Share this URL as returned; never construct it. */
     url?: string;
@@ -1068,6 +1099,10 @@ export interface CreateVersionInput {
   renderMarkdown?: boolean;
   /** Send COOP/COEP headers (needed for SharedArrayBuffer, threaded WASM). */
   crossOriginIsolation?: boolean;
+  /** false serves every file raw and skips viewers. */
+  viewers?: boolean;
+  /** Keyed-site expiry in seconds, renewed at each publish; null clears it. */
+  ttlSeconds?: number | null;
   /** Visitor password; null removes it. Needs an API key. */
   password?: string | null;
   slug: string;

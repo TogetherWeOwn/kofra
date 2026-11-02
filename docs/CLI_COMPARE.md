@@ -1,11 +1,10 @@
 # `kofra compare`: local directory vs pinned remote manifest (spec, v1)
 
-Status: spec only, not implemented. This document is the source of truth for a
-future `compare` command. It authorizes design alignment only: no runtime code,
-no new endpoints, and no behaviour change to any existing command.
+Status: implemented. This document remains the source of truth for the
+`compare` command. The implementation adds no new endpoints and changes no
+existing command behavior beyond adding this read-only command.
 
-Tags: **P2** (beyond parity). No milestone is claimed; see `docs/ROADMAP.md`
-for ordering.
+Tags: **P2** (beyond parity; now implemented).
 
 ## 1. Problem
 
@@ -341,12 +340,19 @@ invalid-input mapping (exit 6).
   (section 3); there is no flag combination that writes, deletes, restores,
   or publishes.
 
-## 10. Future acceptance matrix (for the implementation card)
+## 10. Acceptance matrix (implemented)
 
-Each row is a fixture recipe an agent can run against a local Worker (the
-same harness as `packages/cli/test` and `test/publish.test.ts`). No
-acceptance-test code is written in this spec card; a future approved
-implementation pairs with a fresh Test Author.
+Each row is covered against disposable fixtures or the local Worker harness in
+`packages/cli/test`. The main contract lives in
+`test/compare.acceptance.test.ts`; filesystem interruption boundaries live in
+`test/compare-process.acceptance.test.ts` and
+`test/compare-stat-boundary.test.ts`; OS-signal termination is covered in
+`test/compare-double-sigint.test.ts`; and behavior against real Worker
+manifests is covered in `test/compare-worker.acceptance.test.ts`. The matrix
+also covers the implementation-only guards added with it: metadata redirects
+are refused, torn manifests are rejected when their row count disagrees with
+the pinned version, and hostile filenames remain escaped at the human output
+boundary.
 
 | # | Case | Recipe | Expect |
 |---|---|---|---|
@@ -371,20 +377,19 @@ implementation pairs with a fresh Test Author.
 | 19 | Truncation honesty | `--limit 1` on a 3-record diff | `truncated=true`, 1 record, counts still exact over all 3 |
 | 20 | Incomplete metadata | Manifest row with empty/missing sha256 (fault-injection) | Path classified `changed` with `reason=incomplete_metadata`; never `unchanged` |
 
-Docs-only checks performed for this spec (no code ran beyond them): every
-`--json` field traces to an existing primitive or documented CLI-side
-computation (section 7.1 table); all three `GET` shapes exist on current
-main (`list_files` raw REST form, `get_version`, and the versions list
-behind `main.ts` `listAllVersions`); error codes follow the
-`ApiError`/`CliError` snake_case convention; `publish --dry-run` is
-referenced but untouched.
+Design checks retained from the spec: every `--json` field traces to an
+existing primitive or documented CLI-side computation (section 7.1 table);
+all three `GET` shapes exist on current main (`list_files` raw REST form,
+`get_version`, and the versions list behind `main.ts` `listAllVersions`);
+error codes follow the `ApiError`/`CliError` snake_case convention;
+`publish --dry-run` is referenced but untouched.
 
 ## 11. Alignment and rollout
 
-This spec is submitted for CEO/host intent alignment as-is; any new trust or
-permission boundary found in review goes to the CISO. Completing this design
-authorizes no build child: the implementation is a separate card with its
-own alignment/security disposition and a fresh Test Author pair.
+This design was approved and implemented as a read-only command. Any future
+trust or permission boundary found in review goes to the CISO. Behavior
+changes still need the same alignment/security disposition as the original
+implementation.
 
 Skills used: verification-before-completion (enabled); documentation-and-adrs
 is installed but not enabled for this agent and was skipped.

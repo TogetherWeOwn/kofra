@@ -31,6 +31,7 @@ export * from "./services/live";
 export * from "./services/previews";
 export * from "./services/blobs";
 export * from "./services/sites";
+export * from "./services/site-config";
 export * from "./services/deploys";
 export * from "./services/version-actions";
 export * from "./services/publish";

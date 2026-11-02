@@ -323,6 +323,46 @@ Keep `"workers_dev": true`, set `APP_ORIGIN` to the new origin and list the old 
   Other methods (webhooks, form posts) are served in place.
 - Browser sessions are per host: people sign in again on the new origin.
 
+## Caching and freshness
+
+What a request reads, in order: isolate memory (5 s), the Cache API pointer memo (10 s, shared by
+every isolate in the data center), then KV (which has its own edge cache, 30 s minimum), then D1.
+File bytes come from the Cache API keyed by SHA-256 (immutable), then R2. Files over 25 MB and
+Range requests go straight to R2 and never touch the Cache API. A publish, settings change or
+delete drops the memo in the data center that handled it (the next read refills it from KV); other data centers pick the
+change up within the memo's 10 s plus KV's cache TTL.
+
+Measure how long a change takes to appear on your own deployment. Point it at an existing site:
+each sample updates `measure.txt` in place with a partial file update, leaving the rest of the
+site untouched:
+
+```sh
+KOFRA_API_KEY=<owner key> node scripts/measure-freshness.mjs \
+  --api https://<worker>.<you>.workers.dev --site freshness --samples 20 --json
+```
+
+It prints `p50Ms` and `p95Ms` from "publish returned" to "the live URL served the new bytes".
+
+### Measured on workers.dev
+
+Measured 2026-11-01 against a throwaway test worker with 20 samples
+(`scripts/measure-freshness.mjs --samples 20 --json`): p50 163 ms, p95 235 ms
+(min 128 ms, max 517 ms). Requests were served from EU colos (LHR, CDG, AMS).
+Acceptance (p95 ≤ 60 s) passes. The test worker's Analytics Engine binding wrote
+to the shared `dropway_hits` dataset; filter by worker name when reading it.
+
+Cache probe: no `cf-cache-status` header is present on `*.workers.dev` responses.
+The Cache API is internal to the Workers runtime, not the CDN cache, so there is
+nothing to emit that header. Repeat reads of the same file from the same colo return
+identical bytes and ETag (`cache-control: immutable` on fingerprinted assets), but
+from outside a Cache API hit is indistinguishable from another R2 read, so this probe
+verifies byte stability and cache headers, not hit rate. The [backup runbook](BACKUP.md)
+conservatively calls the edge Cache API a no-op on `*.workers.dev`; confirming or
+revising that needs Worker-side instrumentation (for example a debug hit/miss header
+or an analytics counter) and is out of scope here. Cross-colo propagation of a new
+version was observed within seconds: immediately after a publish one colo served the
+new version while another still served the previous one, converging on the next reads.
+
 ## Upgrades, backups, removal
 
 - **Upgrade**: pull the latest code (or sync your copy on GitHub), then `npm run deploy` (pushing

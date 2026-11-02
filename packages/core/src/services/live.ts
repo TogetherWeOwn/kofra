@@ -1,4 +1,5 @@
 import type { DropwayContext } from "../context";
+import { emptySiteConfig, parseSiteConfigJson, type SiteConfig } from "./site-config";
 
 /**
  * The "live manifest": everything the edge needs to serve a site, cached in KV
@@ -10,7 +11,9 @@ import type { DropwayContext } from "../context";
  * v4: adds the live version's number and go-live time (the embeddable badge reads
  * them from this entry, so it costs no extra D1 or R2 read); v3 entries are rebuilt.
  * v5: read fills are verified against D1 (fillLive); v4 entries may hold an unverified
- * fill that overwrote a later change, so they are rebuilt too.
+ * fill that overwrote a later change, so they are rebuilt too. The live version's
+ * parsed _redirects/_headers travel in the entry (SRV-09); v5 entries written
+ * without them default to no rules on read.
  */
 export interface LiveSite {
   /** Older versions are stale (rebuilt on read); fresh writes are LIVE_VERSION. */
@@ -26,6 +29,12 @@ export interface LiveSite {
   spa: boolean;
   renderMarkdown: boolean;
   crossOriginIsolation: boolean;
+  /** Per-site crawler opt-out (SRV-12). Optional so fixtures built against older entries keep compiling; undefined = false. */
+  noindex?: boolean;
+  /** Per-site viewers switch (VIEW-06). Optional like noindex; undefined = on. */
+  viewers?: boolean;
+  /** Parsed _redirects/_headers of the live version (SRV-09). Optional as above; undefined = no rules. */
+  config?: SiteConfig;
   passwordHash: string | null;
   expiresAt: number | null;
   files: Record<string, [sha256: string, size: number, contentType: string]>;
@@ -62,6 +71,55 @@ function remember(slug: string, live: LiveSite | null) {
   memory.set(slug, { at: Date.now(), live });
 }
 
+/**
+ * Cache API pointer memo (R-14): a 10 s copy of the live manifest shared by every isolate in the
+ * data center, in front of KV. It is keyed by slug alone, so a publish, settings
+ * change or delete in this data center drops it (the next read refills it from KV); other data centers see a change within
+ * the TTL (plus KV's own cacheTtl on a miss).
+ */
+const POINTER_TTL_SECONDS = 10;
+
+function pointerRequest(slug: string): Request {
+  // A fixed synthetic host, not the request's: the API host that publishes and the site host that
+  // serves differ in subdomain and second-Worker setups, and both must reach the same entry.
+  return new Request(`https://dropway.invalid/__dropway/ptr/${encodeURIComponent(slug)}`);
+}
+
+async function readPointer(dc: DropwayContext, slug: string): Promise<LiveSite | null> {
+  if (typeof caches === "undefined") return null;
+  try {
+    const hit = await caches.default.match(pointerRequest(slug));
+    return hit ? await hit.json<LiveSite>() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writePointer(dc: DropwayContext, live: LiveSite): Promise<void> {
+  if (typeof caches === "undefined") return;
+  try {
+    await caches.default.put(
+      pointerRequest(live.slug),
+      new Response(JSON.stringify(live), { headers: { "Content-Type": "application/json", "Cache-Control": `public, max-age=${POINTER_TTL_SECONDS}` } }),
+    );
+  } catch {
+    // the memo is an optimisation; KV stays the source
+  }
+}
+
+async function dropPointer(dc: DropwayContext, slug: string): Promise<void> {
+  if (typeof caches !== "undefined") await caches.default.delete(pointerRequest(slug)).catch(() => {});
+}
+
+/**
+ * Per-slug pointer generation, bumped by refreshLive/dropLive in this isolate.
+ * A KV-hit read schedules its pointer memo fill in the background (waitUntil);
+ * the fill re-checks this generation just before the put, so a delayed fill can
+ * never overwrite the drop that a publish, settings change or delete wrote after
+ * the read started. (Cross-isolate fills stay bounded by the 10 s memo TTL.)
+ */
+const pointerGen = new Map<string, number>();
+
 /** For tests. */
 export function clearLiveMemoryCache() {
   memory.clear();
@@ -80,10 +138,27 @@ export async function getLiveSite(dc: DropwayContext, slug: string): Promise<Liv
   reading.set(slug, fence);
   fence.active++;
   try {
+    const memo = await readPointer(dc, slug);
+    if (memo && memo.v === LIVE_VERSION && memo.files && typeof memo.files === "object") {
+      memo.files = ownFiles(memo.files);
+      memo.config ??= emptySiteConfig();
+      if (reading.get(slug) === fence) remember(slug, memo);
+      return memo;
+    }
     const cached = await dc.env.CACHE.get<LiveSite>(liveKey(slug), { type: "json", cacheTtl: dc.config.liveCacheTtlSeconds }).catch(() => null);
     if (cached && cached.v === LIVE_VERSION && cached.files && typeof cached.files === "object") {
       cached.files = ownFiles(cached.files);
-      if (reading.get(slug) === fence) remember(slug, cached);
+      cached.config ??= emptySiteConfig();
+      if (reading.get(slug) === fence) {
+        remember(slug, cached);
+        const gen = pointerGen.get(slug) ?? 0;
+        dc.waitUntil(
+          (async () => {
+            if ((pointerGen.get(slug) ?? 0) !== gen) return;
+            await writePointer(dc, cached);
+          })().catch(() => {}),
+        );
+      }
       return cached;
     }
     const live = await loadLiveSiteFromD1(dc, { slug });
@@ -121,19 +196,21 @@ async function fillLive(dc: DropwayContext, live: LiveSite): Promise<void> {
   if (!now || !sameSettings(now, live)) await dropLive(dc, live.slug);
 }
 
-/** Field-by-field equality of everything but the file map. */
+/** Field-by-field equality of everything but the file map. The parsed site config is compared by value. */
 function sameSettings(a: LiveSite, b: LiveSite): boolean {
-  const { files: _af, ...ar } = a;
-  const { files: _bf, ...br } = b;
+  const { files: _af, config: _ac, ...ar } = a;
+  const { files: _bf, config: _bc, ...br } = b;
   const keys = Object.keys(ar) as (keyof typeof ar)[];
-  return keys.length === Object.keys(br).length && keys.every((k) => ar[k] === br[k]);
+  return keys.length === Object.keys(br).length
+    && keys.every((k) => ar[k] === br[k])
+    && JSON.stringify(_ac ?? null) === JSON.stringify(_bc ?? null);
 }
 
 /** withFiles = false skips the version_files query and returns an empty file map. */
 export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string; siteId?: string }, withFiles = true): Promise<LiveSite | null> {
   const site = await dc.env.DB.prepare(
-    `SELECT s.id, s.slug, s.tenant_id, s.current_version_id, s.spa, s.render_markdown, s.cross_origin_isolation, s.password_hash, s.expires_at,
-            v.number AS version_number, COALESCE(v.finalized_at, v.created_at) AS version_at
+    `SELECT s.id, s.slug, s.tenant_id, s.current_version_id, s.spa, s.render_markdown, s.cross_origin_isolation, s.noindex, s.viewers, s.password_hash, s.expires_at,
+            v.number AS version_number, COALESCE(v.finalized_at, v.created_at) AS version_at, v.config_json
        FROM sites s LEFT JOIN versions v ON v.id = s.current_version_id WHERE s.${by.siteId ? "id" : "slug"} = ? AND s.deleted_at IS NULL`,
   )
     .bind(by.siteId ?? by.slug)
@@ -147,8 +224,11 @@ export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string
       spa: number;
       render_markdown: number;
       cross_origin_isolation: number;
+      noindex: number;
+      viewers: number;
       password_hash: string | null;
       expires_at: number | null;
+      config_json: string | null;
     }>();
   if (!site) return null;
   const files: LiveSite["files"] = Object.create(null);
@@ -169,6 +249,9 @@ export async function loadLiveSiteFromD1(dc: DropwayContext, by: { slug?: string
     spa: site.spa === 1,
     renderMarkdown: site.render_markdown === 1,
     crossOriginIsolation: site.cross_origin_isolation === 1,
+    noindex: site.noindex === 1,
+    viewers: site.viewers !== 0,
+    config: parseSiteConfigJson(site.config_json),
     passwordHash: site.password_hash,
     expiresAt: site.expires_at,
     files,
@@ -192,6 +275,8 @@ export async function refreshLive(dc: DropwayContext, siteId: string): Promise<L
     reading.delete(live.slug);
     remember(live.slug, live);
     await putLive(dc, live);
+    pointerGen.set(live.slug, (pointerGen.get(live.slug) ?? 0) + 1);
+    await dropPointer(dc, live.slug);
   }
   return live;
 }
@@ -200,4 +285,6 @@ export async function dropLive(dc: DropwayContext, slug: string): Promise<void> 
   reading.delete(slug);
   memory.delete(slug);
   await dc.env.CACHE.delete(liveKey(slug));
+  pointerGen.set(slug, (pointerGen.get(slug) ?? 0) + 1);
+  await dropPointer(dc, slug);
 }

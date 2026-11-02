@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### CLI
+
+- `kofra publish --stdin <filename>` publishes piped bytes as one file through the same publish
+  path as a folder or file (same `--json`, `--wait`, `--dry-run`, secret scan, `--encrypt` and exit
+  codes). Stdin is read once, as raw bytes, up to 100 MiB; empty input and a terminal on stdin are
+  refused (exit 2, `--allow-empty` opts in to a zero-byte file); it cannot be combined with a
+  `<path>`. See the CLI guide, "Publishing piped bytes".
+
 ### Signing secret fails closed
 
 - With neither `SIGNING_SECRET` nor `ADMIN_BOOTSTRAP_KEY` set, signed capabilities
@@ -69,6 +77,12 @@
   existing site's settings, password or live cache.
 
 ### Sites
+
+- Hot-path caching (R-14): the live manifest has a 10-second Cache API memo (`__dropway/ptr/<slug>`)
+  between the isolate memory and KV, rewritten or dropped by a publish, settings change or delete in
+  the same data center. Blobs are cached by SHA-256 only up to 25 MB (neither read nor written above
+  it); Range requests already bypass the cache. `scripts/measure-freshness.mjs` publishes a change and
+  times how long the live URL takes to serve it.
 
 - Every site serves an embeddable live-version badge at `<site URL>badge.svg` (path and
   subdomain mode): a flat SVG with the live version and a coarse age for public sites, and one

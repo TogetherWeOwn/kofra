@@ -27,7 +27,7 @@ Milestones:
 
 Feature status lives in the Status column of `docs/SPEC.md`. That column is updated in the same pull request
 as the code (definition of done, item 6), so it is the source of truth. The table below only tracks the M0
-items. It was checked against `main` on 2026-11-01.
+items. It was checked against `main` on 2026-11-02.
 
 | Item | State | What is left |
 |---|---|---|
@@ -39,16 +39,16 @@ items. It was checked against `main` on 2026-11-01.
 | R-06 | Done | |
 | R-07 | Done | |
 | R-08 | Done | |
-| R-09 | Partial | The CLI is not published to npm yet (Goal 4, v0.1.0). |
-| R-10 | Partial | `pull`, `claim`, `settings`, `publish --stdin` and comparing with a pinned version are open PRs (#84, #115, #57, #114, #101). `watch` is specified only (`docs/CLI_WATCH.md`). `keys create` and `revoke` and the golden `--json` tests are not done. |
-| R-11 | Done | |
+| R-09 | Partial | The CLI is not published to npm yet (v0.1.0 release work). |
+| R-10 | Partial | The management set has landed: `pull` (#84), `settings` (#57), `claim` (#115), `publish --stdin` (#114) and `compare` against a pinned version (#163, replacing #101). Left: `watch` is specified only (`docs/CLI_WATCH.md`), and the remaining management commands in SPEC AX-04. |
+| R-11 | Partial | The discovery set has landed (`/llms.txt`, `/llms-full.txt`, `/skill.md`, `/.well-known/agent-skills`, `/.well-known/api-catalog`, `/connect`, `/robots.txt`). Left: `GET /api/v1/skill/version` (SPEC section 8.2) has no route yet. |
 | R-12 | Done | |
 | R-13 | Done | |
-| R-14 | Partial | The live-pointer cache and the 25 MB blob cap are in #113. Still to do: `scripts/measure-freshness.mjs` and the p50/p95 numbers in `docs/SELF_HOST.md` (kofra Goal 3). |
+| R-14 | Done | Live-pointer cache and the 25 MiB blob-cache cap (#113); `scripts/measure-freshness.mjs` and the p50/p95 numbers in `docs/SELF_HOST.md`. |
 | R-15 | Partial | The report-abuse link and 6-character slugs are done. `Origin` and `Sec-Fetch-Site` checks cover the cookie-authenticated transfer and preview paths. The `__Host-` app cookies wait for sessions (R-21). |
 | R-16 | Partial | The browser setup page is done. `/health` does not report `version` and `build` yet (OBS-05). The fresh-account check is not recorded in `docs/SELF_HOST.md`. The M0 exit week has not run. |
 
-No M0 item has been dropped. R-27 (M1) is being split out of the closed PR #97 into small PRs under kofra Goal 3.
+No M0 item has been dropped. R-27 (M1) is being split out of the closed PR #97 into small PRs.
 
 ### Post-release backlog from closed PRs
 
