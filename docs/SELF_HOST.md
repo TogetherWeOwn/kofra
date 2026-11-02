@@ -194,9 +194,10 @@ password and existing unlocks stop mattering):
 npx kofra access my-site --mode public --yes
 ```
 
-Password protection needs the instance's `SIGNING_SECRET` (see [Configuration](#configuration)):
-without a signing secret, setting a password is refused with `503 signing_secret_missing` instead
-of creating a gate that could never unlock.
+Password protection needs a signing secret: `SIGNING_SECRET` when set, otherwise one derived
+from `ADMIN_BOOTSTRAP_KEY` (see [Configuration](#configuration)). With neither configured,
+setting a password is refused with `503 signing_secret_missing` instead of creating a gate
+that could never unlock.
 
 ## Configuration
 

@@ -1,11 +1,11 @@
 # v0.1.0 deployment verification checklist
 
-Evidence record for the v0.1.0 verification deploy. Run this script verbatim **after** the pre-tag
-fix cards land — step 2b (crypto A/B/C) and step 2c (first-run D–G) — because steps 2, 5–6, 9–10 and
-Part B3 assert their fixed behaviour. Running it before them only records known failures.
+Evidence record for the v0.1.0 verification deploy. Run this script verbatim against the
+release candidate: steps 2, 5–6, 9–10 and Part B assert the shipped first-run and
+secret-hardening behaviour, so run it on the exact build being tagged, not an older one.
 
-Run Part A on a **fresh Cloudflare account** (or the dedicated test account from TWO-62 — never the
-account that runs a hosted Kofra). Record for every step: pass/fail, elapsed time, and the exact
+Run Part A on a **fresh Cloudflare account** (or a dedicated test account — never an account
+that runs a hosted Kofra). Record for every step: pass/fail, elapsed time, and the exact
 output on failure. Total budget for Part A steps 1–8: **under 15 minutes** excluding Cloudflare
 account creation. A stranger can follow most steps from the README + `docs/SELF_HOST.md`; steps 7–10
 also need `packages/cli/README.md` and steps 6/9/10/12 need `docs/errors.md` — record any *further*
@@ -142,7 +142,7 @@ under `%APPDATA%\dropway` and the mode-0600 check in step 5 does not apply.
 
 ## Part B — extended verification (same instance, after Part A)
 
-For the TWO-62 smoke checklist; a first-time self-hoster does not need these on day one.
+Extended release verification; a first-time self-hoster does not need these on day one.
 
 - [ ] **B1 — Upload links (dwu_ tokens).** How: JSON-publish a file by `sha256`+`size` only, then `PUT` the bytes to the returned upload URL with the returned curl line, then finalize. Expected: publish completes; the token cannot read files or finalize a *different* version (403).
   - Result:
