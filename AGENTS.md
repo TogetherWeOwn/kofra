@@ -26,4 +26,10 @@ Read `docs/ARCHITECTURE.md` first. The short version:
   put`, or otherwise touch Cloudflare with the root `wrangler.jsonc` (worker
   names collide with hosted Kofra on the same account, and standing credentials
   can touch production). R2 object writes use wrangler/S3 paths, not raw REST.
+  The one sanctioned exception is the release verification deploy:
+  `.github/workflows/verification-deploy.yml` (manual dispatch, `verification`
+  GitHub environment, `wrangler.verification.jsonc` with dedicated
+  `kofra-verification*` resource names, short-lived account-scoped token).
+  It exists for `docs/RELEASE_CHECKLIST.md` runs; it is not a general deploy
+  path, and its config must never be used with standing local credentials.
 - PRs follow the org contract in `TogetherWeOwn/.github` CONTRIBUTING + this repo's overrides; the PR template's Attestation is mandatory.

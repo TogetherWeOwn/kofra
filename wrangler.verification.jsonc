@@ -1,0 +1,44 @@
+// Kofra: disposable verification deployment (release checklist only).
+//
+// Used ONLY by .github/workflows/verification-deploy.yml against a dedicated
+// Cloudflare test account. Resource names are deliberately distinct from the
+// root wrangler.jsonc (`dropway`, `dropway-files`) so this config can never
+// address a self-hosted or hosted instance's resources, even on a shared
+// account. Never deploy this file by hand with standing credentials.
+//
+// Resource IDs are omitted on purpose, exactly as in the root config: the
+// first `wrangler deploy` creates the D1 database, R2 bucket and KV namespace
+// in the token's account, then the workflow applies the D1 migrations.
+//
+// The optional ANALYTICS binding from the root config is omitted: the
+// verification token is scoped to Workers/D1/KV/R2, and the binding is
+// optional in code (hit recording is skipped when it is not bound).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "kofra-verification",
+  "main": "apps/worker/src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  "vars": {
+    // Same defaults as the root self-host config: path mode on this Worker,
+    // anonymous publishing off. The checklist asserts these defaults.
+    "APP_ORIGIN": "",
+    "SITES_MODE": "path",
+    "SITES_ORIGIN": "",
+    "SITES_DOMAIN": "",
+    "ANONYMOUS_PUBLISH": "false"
+  },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "kofra-verification", "migrations_dir": "packages/core/migrations" }
+  ],
+  "r2_buckets": [
+    { "binding": "FILES", "bucket_name": "kofra-verification-files" }
+  ],
+  "kv_namespaces": [
+    { "binding": "CACHE" }
+  ],
+  // Hourly cleanup; nightly usage true-up and storage snapshots (UTC).
+  "triggers": { "crons": ["17 * * * *", "0 0 * * *"] }
+}

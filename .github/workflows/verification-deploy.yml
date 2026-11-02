@@ -1,0 +1,147 @@
+# Verification deploy: release-checklist environment on Cloudflare.
+#
+# Manual dispatch only. Deploys wrangler.verification.jsonc (Worker
+# `kofra-verification`, dedicated D1/KV/R2 names) to the Cloudflare account
+# behind the `verification` GitHub environment secrets — never the root
+# wrangler.jsonc and never an account that runs a hosted Kofra. This is the
+# environment docs/RELEASE_CHECKLIST.md is run against; it is disposable and
+# holds no user data.
+#
+# Operator one-time setup (GitHub: Settings > Environments > verification):
+#   CLOUDFLARE_API_TOKEN   Account-scoped, short-lived: Workers Scripts,
+#                          D1, Workers KV Storage and Workers R2 Storage
+#                          write access on the dedicated test account only.
+#   CLOUDFLARE_ACCOUNT_ID  That account's ID. Stored as an environment
+#                          secret so both values live behind the same gate.
+# The app's own ADMIN_BOOTSTRAP_KEY / SIGNING_SECRET are generated per run
+# inside the job and put on the Worker as secrets. The signing secret never
+# leaves the job. The bootstrap key is written only to the run's artifact
+# (1-day retention, authenticated download, masked in logs) so whoever runs
+# the release checklist can perform first setup; it protects nothing beyond
+# this throwaway instance, and teardown invalidates it.
+#
+# Teardown (action=teardown) deletes the Worker, D1 database and KV
+# namespace, then tries the R2 bucket. R2 refuses to delete a non-empty
+# bucket and wrangler has no bulk object delete, so a leftover bucket is
+# reported in the step summary for a one-click dashboard empty+delete.
+name: verification-deploy
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Deploy the verification environment, or tear it down"
+        type: choice
+        options: [deploy, teardown]
+        default: deploy
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: verification-deploy
+  cancel-in-progress: false
+jobs:
+  verification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: verification
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WRANGLER_CONFIG: wrangler.verification.jsonc
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - name: Environment secrets are set
+        run: |
+          missing=0
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Environment secret $name is not set on the 'verification' environment (see workflow header)."
+              missing=1
+            fi
+          done
+          exit "$missing"
+      - name: Generate per-run app secrets
+        if: inputs.action == 'deploy'
+        run: |
+          umask 077
+          mkdir -p "$RUNNER_TEMP/verification"
+          printf '%s' "$(openssl rand -hex 32)" > "$RUNNER_TEMP/verification/bootstrap-key"
+          printf '%s' "$(openssl rand -hex 32)" > "$RUNNER_TEMP/verification/signing-secret"
+          echo "::add-mask::$(cat "$RUNNER_TEMP/verification/bootstrap-key")"
+          echo "::add-mask::$(cat "$RUNNER_TEMP/verification/signing-secret")"
+      # Same sequence as root `npm run deploy`, pinned to the verification
+      # config: migrations first, deploy first instead while the database
+      # does not exist yet (first deploy provisions D1/R2/KV), then
+      # migrations again and a final deploy on the migrated schema.
+      - name: Deploy verification Worker
+        if: inputs.action == 'deploy'
+        run: |
+          set -o pipefail
+          npx wrangler d1 migrations apply DB --remote -c "$WRANGLER_CONFIG" \
+            || npx wrangler deploy -c "$WRANGLER_CONFIG"
+          npx wrangler d1 migrations apply DB --remote -c "$WRANGLER_CONFIG"
+          npx wrangler deploy -c "$WRANGLER_CONFIG" | tee "$RUNNER_TEMP/verification/deploy.log"
+          url="$(grep -oE 'https://kofra-verification\.[A-Za-z0-9.-]+\.workers\.dev' "$RUNNER_TEMP/verification/deploy.log" | head -n 1)"
+          if [ -z "$url" ]; then
+            echo "::error::Could not read the workers.dev URL from the wrangler deploy output."
+            exit 1
+          fi
+          echo "WORKER_URL=$url" >> "$GITHUB_ENV"
+          echo "Deployed: $url"
+      - name: Set Worker secrets
+        if: inputs.action == 'deploy'
+        run: |
+          npx wrangler secret put ADMIN_BOOTSTRAP_KEY -c "$WRANGLER_CONFIG" < "$RUNNER_TEMP/verification/bootstrap-key"
+          npx wrangler secret put SIGNING_SECRET -c "$WRANGLER_CONFIG" < "$RUNNER_TEMP/verification/signing-secret"
+          rm -f "$RUNNER_TEMP/verification/signing-secret"
+      - name: Smoke the deployed instance
+        if: inputs.action == 'deploy'
+        run: |
+          ok=0
+          for attempt in $(seq 1 30); do
+            if curl -fsS "$WORKER_URL/health" | grep -q '"ok":true'; then ok=1; break; fi
+            sleep 5
+          done
+          if [ "$ok" != 1 ]; then
+            echo "::error::GET $WORKER_URL/health did not return ok:true within 150s of the deploy."
+            exit 1
+          fi
+          curl -fsS "$WORKER_URL/openapi.json" | head -c 400 | grep -q '"openapi":"3.1' \
+            || { echo "::error::GET $WORKER_URL/openapi.json did not return an OpenAPI 3.1 document."; exit 1; }
+          {
+            echo "## Verification environment deployed"
+            echo "- Instance URL: $WORKER_URL"
+            echo "- Git SHA: $GITHUB_SHA"
+            echo "- Next: download this run's \`verification-env\` artifact (holds the bootstrap key for first setup; expires in 1 day), run docs/RELEASE_CHECKLIST.md, then dispatch action=teardown."
+          } >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p verification-artifact
+          printf 'instance_url: %s\ngit_sha: %s\nrun_id: %s\n' "$WORKER_URL" "$GITHUB_SHA" "$GITHUB_RUN_ID" > verification-artifact/verification-info.txt
+          cp "$RUNNER_TEMP/verification/bootstrap-key" verification-artifact/ADMIN_BOOTSTRAP_KEY.txt
+      - name: Upload bootstrap key for the checklist runner
+        if: inputs.action == 'deploy'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verification-env
+          path: verification-artifact/
+          retention-days: 1
+          if-no-files-found: error
+      - name: Tear down verification environment
+        if: inputs.action == 'teardown'
+        run: |
+          npx wrangler delete -c "$WRANGLER_CONFIG" --force
+          npx wrangler d1 delete kofra-verification -c "$WRANGLER_CONFIG" -y
+          npx wrangler kv namespace delete --binding CACHE -c "$WRANGLER_CONFIG" -y
+          if npx wrangler r2 bucket delete kofra-verification-files; then
+            echo "Worker, D1, KV and R2 bucket deleted." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::R2 bucket kofra-verification-files was not deleted (non-empty buckets cannot be deleted and wrangler has no bulk object delete). Empty and delete it in the Cloudflare dashboard of the verification account. Worker, D1 and KV are deleted."
+            echo "Worker, D1 and KV deleted. R2 bucket \`kofra-verification-files\` still exists (non-empty): empty and delete it in the Cloudflare dashboard of the verification account." >> "$GITHUB_STEP_SUMMARY"
+          fi
