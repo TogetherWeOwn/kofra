@@ -139,7 +139,7 @@ bearer_token_env_var = "KOFRA_API_KEY"
 ```
 
 Claude Desktop and other clients that only start local servers, through
-[`mcp-remote`](https://github.com/geelen/mcp-remote):
+[`mcp-remote`](https://github.com/punkpeye/mcp-remote):
 
 ```json
 {
@@ -160,7 +160,9 @@ through the model.
 
 1. Click **Deploy to Cloudflare** above. Cloudflare copies this repository to your GitHub account,
    creates the D1 database, R2 bucket and KV namespace, applies the database migrations and deploys
-   the Worker. Set `ADMIN_BOOTSTRAP_KEY` to a long random string (`openssl rand -hex 32`) when asked.
+   the Worker. Set `ADMIN_BOOTSTRAP_KEY` and `SIGNING_SECRET` to long random strings, at least
+   32 characters each and different from each other (`openssl rand -hex 32` twice works well),
+   when asked.
    (Your account needs R2 enabled once in the dashboard.)
 2. Create the owner and save their key:
 
@@ -187,7 +189,7 @@ Every instance describes itself:
 
 - [Self-hosting and configuration](docs/SELF_HOST.md)
 - [CLI reference](packages/cli/README.md)
-- [Site recovery spec: `kofra pull`](docs/CLI_PULL.md) (proposed, design only)
+- [Site recovery: `kofra pull`](docs/CLI_PULL.md)
 - [Architecture and extension points](docs/ARCHITECTURE.md)
 - [Agents: MCP server, REST twins, skill](docs/MCP.md)
 - [Embeddable live-version badge](docs/SITE_BADGE.md)

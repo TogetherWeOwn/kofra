@@ -160,6 +160,46 @@ a new one. Add people with `POST /api/v1/members` (each gets their own key) and 
 (for CI or an MCP client) with `POST /api/v1/keys`, e.g.
 `npx kofra api POST /keys --data '{"name":"ci","scopes":["sites:read","sites:write"]}'`.
 
+## Password-protecting a site
+
+Any site can require a visitor password instead of being public. You need an owner, admin or member
+key with `sites:write` for the site.
+
+With the CLI (the password comes from piped stdin, or from one no-echo prompt in a terminal; only
+the trailing newline is removed, so surrounding spaces are part of the password):
+
+```sh
+printf 'correct horse battery staple\n' | npx kofra access my-site --mode password --yes
+```
+
+With curl, or through the MCP `set_site_access` tool (same operation, `PUT /api/v1/sites/{slug}/access`):
+
+```sh
+curl -X PUT "$KOFRA_API/api/v1/sites/my-site/access" \
+  -H "Authorization: Bearer $KOFRA_API_KEY" -H "Content-Type: application/json" \
+  -d '{"mode":"password","password":"correct horse battery staple"}'
+```
+
+New passwords need at least 8 characters. Changing a password signs everyone out immediately.
+
+Visitors to a protected site get an unlock form headed "This site is password protected" — none of
+the site's content is in that page. A wrong password re-renders the form with "That password is not
+right."; the right password unlocks the site, and the unlock cookie expires server-side after at
+most 7 days, after which the visitor enters the password again.
+
+To make the site public again (this needs the same explicit confirmation; visitors stop needing a
+password and existing unlocks stop mattering):
+
+```sh
+npx kofra access my-site --mode public --yes
+```
+
+Password protection needs a signing secret: `SIGNING_SECRET` when set; otherwise one derived
+from `ADMIN_BOOTSTRAP_KEY` (see [Configuration](#configuration)). With neither configured —
+and without the local-development `ALLOW_INSECURE_DEV_SECRET` override — setting a password
+is refused with `503 signing_secret_missing` instead of creating a gate that could never
+unlock.
+
 ## Configuration
 
 Variables go in `vars` in `wrangler.jsonc`; secrets with `npx wrangler secret put <NAME>`.
@@ -168,7 +208,7 @@ Variables go in `vars` in `wrangler.jsonc`; secrets with `npx wrangler secret pu
 |---|---|---|
 | `ADMIN_BOOTSTRAP_KEY` (secret) | none | Creates the owner on first run; mints recovery owner keys |
 | `SIGNING_SECRET` (secret) | derived from bootstrap key | HMAC secret for signed capabilities (site password cookies, upload and version preview tokens, delivery grants) and IP hashing. When unset, the signing key is derived from `ADMIN_BOOTSTRAP_KEY` instead of reusing it: set its own value so rotating or removing `ADMIN_BOOTSTRAP_KEY` does not invalidate them. With neither set, those features answer `503 signing_secret_missing`; unsigned routes keep working |
-| `ALLOW_INSECURE_DEV_SECRET` | `false` | Local development only: with no secret set, sign with a fixed public value. Never set it on a reachable instance |
+| `ALLOW_INSECURE_DEV_SECRET` | `false` | Local development only: with no secret set, sign with a fixed public value. Refused at startup when any configured origin is non-loopback; never set it on a reachable instance |
 | `INSTANCE_NAME` | `Kofra` | Shown in pages and API responses |
 | `APP_ORIGIN` | request origin | Public origin of the app and API |
 | `LEGACY_APP_ORIGINS` | empty | Former app origins (comma-separated), after a move to a new `APP_ORIGIN`. See [Moving the app](#moving-the-app-to-a-new-origin) |
