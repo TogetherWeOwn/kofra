@@ -141,15 +141,22 @@ async function visit(options: Options = {}) {
   let response: any;
   try {
     if (options.state !== "anonymous") {
-      await page.goto(`${api}/login?next=${encodeURIComponent(target)}`, { waitUntil: "networkidle" });
+      await page.goto(`${api}/login?next=${encodeURIComponent(target)}`, { waitUntil: "domcontentloaded" });
+      // Navigate on shell parse, not network quiet: CI load keeps background
+      // requests in flight and a short `networkidle` goto flakes the navigation
+      // itself. Readiness is the app-rendered state each branch asserts on below.
+      await page.locator('input[name="key"]').waitFor();
       await page.locator('input[name="key"]').fill(key);
       await page.getByRole("button", { name: /^sign in$/i }).click();
-      await page.waitForURL((url: URL) => url.pathname.startsWith(`/v/${slug}/`));
-      await page.waitForLoadState("networkidle");
+      // The sign-in redirect lands before the `load` event fires under CI load,
+      // so wait for the URL on DOM parse instead of the full load event.
+      await page.waitForURL((url: URL) => url.pathname.startsWith(`/v/${slug}/`), { waitUntil: "domcontentloaded" });
     }
     // A real navigation also exposes the actual shell's response headers.
-    response = await page.goto(`${api}${target}`, { waitUntil: "networkidle" });
+    response = await page.goto(`${api}${target}`, { waitUntil: "domcontentloaded" });
     if (!options.state) await expect.poll(() => page.locator("a[data-kind]").count()).toBe((options.rows ?? mixed).length);
+    else if (options.state === "anonymous") await page.getByRole("link", { name: /sign in/i }).first().waitFor();
+    else await expect.poll(() => page.locator("body").innerText()).toMatch(options.state === "forbidden" ? /not authorized|forbidden/i : /unavailable|try again|error/i);
     return {
       context, page, requests, external, errors, response,
       manifestLoads: () => manifestLoads,
