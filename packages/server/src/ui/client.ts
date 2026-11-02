@@ -1729,6 +1729,15 @@ export function dropwayClient() {
           add(
             out,
             secretBlock(label, k, "Shown once. Store it in your password manager; agents use it as Authorization: Bearer <key>."),
+            id === "dw-recover"
+              ? h(
+                "p",
+                { class: "dw-small dw-muted" },
+                "Older owner keys still work. If you recovered because a key was lost or shared, revoke it under ",
+                h("a", { href: "/dashboard/keys", text: "API keys" }),
+                ".",
+              )
+              : null,
             h("button", {
               type: "button",
               class: "dw-btn primary",

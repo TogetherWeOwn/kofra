@@ -1,5 +1,5 @@
 import type { DropwayContext } from "../context";
-import { ApiError, badRequest, conflict, forbidden, notFound } from "../errors";
+import { ApiError, BOOTSTRAP_MISMATCH_HINT, badRequest, bootstrapKeyMismatch, conflict, forbidden, notFound } from "../errors";
 import { newId } from "../lib/crypto";
 import { stringField } from "../lib/input";
 import { ALL_SCOPES, ROLES, ROLE_SCOPES, parseScopes, requireMember, type Principal, type Role } from "../principal";
@@ -150,7 +150,10 @@ export async function isSetUp(dc: DropwayContext): Promise<boolean> {
  */
 export async function setupInstance(dc: DropwayContext, p: Principal, input: { email?: unknown; name?: unknown; tenantName?: unknown; keyName?: unknown }) {
   if (p.kind !== "bootstrap") {
-    throw forbidden("Setup needs the bootstrap key.", "Send `Authorization: Bearer <ADMIN_BOOTSTRAP_KEY>` (the secret set on the Worker).", "bootstrap_key_required");
+    if (p.kind === "anonymous") {
+      throw new ApiError(403, "bootstrap_key_required", "Setup needs the bootstrap key.", BOOTSTRAP_MISMATCH_HINT);
+    }
+    throw bootstrapKeyMismatch();
   }
   if (!dc.config.multiTenant && (await isSetUp(dc))) {
     throw conflict(
@@ -171,7 +174,12 @@ export async function setupInstance(dc: DropwayContext, p: Principal, input: { e
 
 /** Break-glass: the bootstrap key mints a fresh full-scope key for the (first) owner. */
 export async function recoverOwnerKey(dc: DropwayContext, p: Principal) {
-  if (p.kind !== "bootstrap") throw forbidden("Recovery needs the bootstrap key.", undefined, "bootstrap_key_required");
+  if (p.kind !== "bootstrap") {
+    if (p.kind === "anonymous") {
+      throw new ApiError(403, "bootstrap_key_required", "Recovery needs the bootstrap key.", BOOTSTRAP_MISMATCH_HINT);
+    }
+    throw bootstrapKeyMismatch();
+  }
   if (dc.config.multiTenant) throw forbidden("Owner recovery is disabled on multi-tenant instances.", undefined, "not_available");
   const owner = await dc.env.DB.prepare("SELECT * FROM members WHERE role = 'owner' AND disabled_at IS NULL ORDER BY created_at LIMIT 1").first<MemberRow>();
   if (!owner) throw notFound("not_set_up", "This instance has no owner yet.", "POST /api/v1/setup with the bootstrap key first.");

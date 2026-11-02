@@ -47,7 +47,7 @@ export const ERROR_CODES: Readonly<Record<string, ErrorCode>> = {
   invalid_authorization: { status: 401, retryable: false, hint: "Send Authorization: Bearer <token>, using an API key or applicable claim token." },
   invalid_claim_token: { status: 401, retryable: false, hint: "Anonymous sites expire; publish again to obtain a new site and claim token." },
   unauthorized: { status: 401, retryable: false, hint: "Send Authorization: Bearer dw_...; the instance owner creates keys through /api/v1/keys or /api/v1/members." },
-  bootstrap_key_required: { status: 403, retryable: false, hint: "Send the bootstrap key in Authorization: Bearer for setup or recovery only." },
+  bootstrap_key_required: { status: 403, retryable: false, hint: "Paste the exact ADMIN_BOOTSTRAP_KEY secret set on the Worker at deploy time. It is the value you generated during setup (for example with openssl rand -hex 32) — not an API key." },
   forbidden: { status: 403, retryable: false, hint: "Use a member API key authorized for this action; claim tokens control only their own site." },
   insufficient_scope: { status: 403, retryable: false, hint: "Use a member API key with the required scopes; ask the instance owner to create one." },
   key_site_restricted: { status: 403, retryable: false, hint: "Use a key without a single-site restriction to create additional sites." },
