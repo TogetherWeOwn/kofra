@@ -3,22 +3,35 @@
 # Manual dispatch only. Deploys wrangler.verification.jsonc (Worker
 # `kofra-verification`, dedicated D1/KV/R2 names) to the Cloudflare account
 # behind the `verification` GitHub environment secrets — never the root
-# wrangler.jsonc and never an account that runs a hosted Kofra. This is the
-# environment docs/RELEASE_CHECKLIST.md is run against; it is disposable and
-# holds no user data.
+# wrangler.jsonc. There is no separate Cloudflare test account: the hosted
+# Kofra (`dropway*` Workers) lives in the same account, so isolation is by
+# resource names only (`kofra-verification*`, teardown by explicit name).
+# The token is therefore account-wide by necessity, and this workflow must
+# never run wrangler against any other name — the guard step below fails
+# the job before any wrangler call if the config does not declare exactly
+# the `kofra-verification*` names. This is the environment
+# docs/RELEASE_CHECKLIST.md is run against; it is disposable and holds no
+# user data.
 #
 # Operator one-time setup (GitHub: Settings > Environments > verification):
-#   CLOUDFLARE_API_TOKEN   Account-scoped, short-lived: Workers Scripts,
-#                          D1, Workers KV Storage and Workers R2 Storage
-#                          write access on the dedicated test account only.
+#   CLOUDFLARE_API_TOKEN   Account-scoped, short-lived (3 h): Workers
+#                          Scripts, D1, Workers KV Storage and Workers R2
+#                          Storage write access.
 #   CLOUDFLARE_ACCOUNT_ID  That account's ID. Stored as an environment
 #                          secret so both values live behind the same gate.
-# The app's own ADMIN_BOOTSTRAP_KEY / SIGNING_SECRET are generated per run
-# inside the job and put on the Worker as secrets. The signing secret never
-# leaves the job. The bootstrap key is written only to the run's artifact
-# (1-day retention, authenticated download, masked in logs) so whoever runs
-# the release checklist can perform first setup; it protects nothing beyond
-# this throwaway instance, and teardown invalidates it.
+#   ADMIN_BOOTSTRAP_KEY    The app bootstrap key for first setup (at least
+#                          32 characters), minted by the operator. This
+#                          repository is public, so the key must never be
+#                          written to a workflow artifact, log or summary:
+#                          public-repo artifacts are downloadable by any
+#                          signed-in GitHub user, and this instance sits on
+#                          a public workers.dev URL. The checklist runner
+#                          receives the same value out of band (operator-
+#                          provisioned secret), never from this workflow.
+# The app's SIGNING_SECRET is generated per run inside the job, put on the
+# Worker as a secret, and never leaves the job. ADMIN_BOOTSTRAP_KEY is
+# read from the environment secret above and likewise only ever passed to
+# `wrangler secret put` over stdin (masked in logs).
 #
 # Teardown (action=teardown) deletes the Worker, D1 database and KV
 # namespace, then tries the R2 bucket. R2 refuses to delete a non-empty
@@ -54,6 +67,25 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      # The token is account-wide (no separate test account) and the hosted
+      # Kofra shares that account, so fail before any wrangler call unless
+      # the config addresses exactly the kofra-verification* resources.
+      - name: Guard — config targets only kofra-verification resources
+        run: |
+          if [ "$WRANGLER_CONFIG" != "wrangler.verification.jsonc" ]; then
+            echo "::error::WRANGLER_CONFIG is '$WRANGLER_CONFIG', expected wrangler.verification.jsonc. Refusing to run."
+            exit 1
+          fi
+          name="$(grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "$WRANGLER_CONFIG" | head -n 1 | sed -E 's/.*"([^"]*)"$/\1/')"
+          if [ "$name" != "kofra-verification" ]; then
+            echo "::error::$WRANGLER_CONFIG declares Worker name '$name', expected exactly 'kofra-verification'. Refusing to run wrangler against any other name."
+            exit 1
+          fi
+          grep -qE '"database_name"[[:space:]]*:[[:space:]]*"kofra-verification"' "$WRANGLER_CONFIG" \
+            || { echo "::error::$WRANGLER_CONFIG does not declare D1 database_name 'kofra-verification'. Refusing to run."; exit 1; }
+          grep -qE '"bucket_name"[[:space:]]*:[[:space:]]*"kofra-verification-files"' "$WRANGLER_CONFIG" \
+            || { echo "::error::$WRANGLER_CONFIG does not declare R2 bucket_name 'kofra-verification-files'. Refusing to run."; exit 1; }
+          echo "Guard ok: $WRANGLER_CONFIG targets kofra-verification (Worker, D1) and kofra-verification-files (R2)."
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
@@ -62,25 +94,39 @@ jobs:
       - run: npm ci
       - name: Environment secrets are set
         env:
+          ACTION: ${{ inputs.action }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ADMIN_BOOTSTRAP_KEY: ${{ secrets.ADMIN_BOOTSTRAP_KEY }}
         run: |
+          # Mask the bootstrap key before anything could echo it, and never
+          # print its value (only presence/length failures are reported).
+          if [ -n "${ADMIN_BOOTSTRAP_KEY:-}" ]; then
+            echo "::add-mask::$ADMIN_BOOTSTRAP_KEY"
+          fi
           missing=0
-          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
+          required="CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID"
+          # Teardown needs no app secrets; only a deploy sets them.
+          if [ "$ACTION" = "deploy" ]; then
+            required="$required ADMIN_BOOTSTRAP_KEY"
+          fi
+          for name in $required; do
             if [ -z "${!name:-}" ]; then
               echo "::error::Environment secret $name is not set on the 'verification' environment (see workflow header)."
               missing=1
             fi
           done
+          if [ "$ACTION" = "deploy" ] && [ -n "${ADMIN_BOOTSTRAP_KEY:-}" ] && [ "${#ADMIN_BOOTSTRAP_KEY}" -lt 32 ]; then
+            echo "::error::Environment secret ADMIN_BOOTSTRAP_KEY is shorter than the app's 32-character minimum (see workflow header); the instance would refuse it."
+            missing=1
+          fi
           exit "$missing"
-      - name: Generate per-run app secrets
+      - name: Generate per-run signing secret
         if: inputs.action == 'deploy'
         run: |
           umask 077
           mkdir -p "$RUNNER_TEMP/verification"
-          printf '%s' "$(openssl rand -hex 32)" > "$RUNNER_TEMP/verification/bootstrap-key"
           printf '%s' "$(openssl rand -hex 32)" > "$RUNNER_TEMP/verification/signing-secret"
-          echo "::add-mask::$(cat "$RUNNER_TEMP/verification/bootstrap-key")"
           echo "::add-mask::$(cat "$RUNNER_TEMP/verification/signing-secret")"
       # Same sequence as root `npm run deploy`, pinned to the verification
       # config: migrations first, deploy first instead while the database
@@ -109,8 +155,13 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ADMIN_BOOTSTRAP_KEY: ${{ secrets.ADMIN_BOOTSTRAP_KEY }}
         run: |
-          npx wrangler secret put ADMIN_BOOTSTRAP_KEY -c "$WRANGLER_CONFIG" < "$RUNNER_TEMP/verification/bootstrap-key"
+          set -o pipefail
+          echo "::add-mask::$ADMIN_BOOTSTRAP_KEY"
+          # Pass the bootstrap key over stdin only; it is never written to
+          # disk, an artifact, the step summary or a log line.
+          printf '%s' "$ADMIN_BOOTSTRAP_KEY" | npx wrangler secret put ADMIN_BOOTSTRAP_KEY -c "$WRANGLER_CONFIG"
           npx wrangler secret put SIGNING_SECRET -c "$WRANGLER_CONFIG" < "$RUNNER_TEMP/verification/signing-secret"
           rm -f "$RUNNER_TEMP/verification/signing-secret"
       - name: Smoke the deployed instance
@@ -131,19 +182,8 @@ jobs:
             echo "## Verification environment deployed"
             echo "- Instance URL: $WORKER_URL"
             echo "- Git SHA: $GITHUB_SHA"
-            echo "- Next: download this run's \`verification-env\` artifact (holds the bootstrap key for first setup; expires in 1 day), run docs/RELEASE_CHECKLIST.md, then dispatch action=teardown."
+            echo "- Next: run docs/RELEASE_CHECKLIST.md against the instance URL, using the bootstrap key from the operator-provisioned secret (the same value as the \`verification\` environment's ADMIN_BOOTSTRAP_KEY secret — it is never published by this workflow), then dispatch action=teardown."
           } >> "$GITHUB_STEP_SUMMARY"
-          mkdir -p verification-artifact
-          printf 'instance_url: %s\ngit_sha: %s\nrun_id: %s\n' "$WORKER_URL" "$GITHUB_SHA" "$GITHUB_RUN_ID" > verification-artifact/verification-info.txt
-          cp "$RUNNER_TEMP/verification/bootstrap-key" verification-artifact/ADMIN_BOOTSTRAP_KEY.txt
-      - name: Upload bootstrap key for the checklist runner
-        if: inputs.action == 'deploy'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: verification-env
-          path: verification-artifact/
-          retention-days: 1
-          if-no-files-found: error
       - name: Tear down verification environment
         if: inputs.action == 'teardown'
         env:
@@ -161,6 +201,6 @@ jobs:
           if npx wrangler r2 bucket delete kofra-verification-files; then
             echo "Worker, D1, KV and R2 bucket deleted." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "::warning::R2 bucket kofra-verification-files was not deleted (non-empty buckets cannot be deleted and wrangler has no bulk object delete). Empty and delete it in the Cloudflare dashboard of the verification account. Worker, D1 and KV are deleted."
-            echo "Worker, D1 and KV deleted. R2 bucket \`kofra-verification-files\` still exists (non-empty): empty and delete it in the Cloudflare dashboard of the verification account." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::R2 bucket kofra-verification-files was not deleted (non-empty buckets cannot be deleted and wrangler has no bulk object delete). Empty and delete that bucket (by that exact name) in the Cloudflare dashboard. Worker, D1 and KV are deleted."
+            echo "Worker, D1 and KV deleted. R2 bucket \`kofra-verification-files\` still exists (non-empty): empty and delete that bucket (by that exact name) in the Cloudflare dashboard." >> "$GITHUB_STEP_SUMMARY"
           fi

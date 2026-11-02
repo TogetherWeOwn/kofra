@@ -1,10 +1,13 @@
 // Kofra: disposable verification deployment (release checklist only).
 //
-// Used ONLY by .github/workflows/verification-deploy.yml against a dedicated
-// Cloudflare test account. Resource names are deliberately distinct from the
-// root wrangler.jsonc (`dropway`, `dropway-files`) so this config can never
-// address a self-hosted or hosted instance's resources, even on a shared
-// account. Never deploy this file by hand with standing credentials.
+// Used ONLY by .github/workflows/verification-deploy.yml. There is no
+// separate Cloudflare test account — the hosted Kofra shares the account —
+// so isolation is by resource names only: these `kofra-verification*` names
+// are deliberately distinct from the root wrangler.jsonc (`dropway`,
+// `dropway-files`) so this config can never address a self-hosted or hosted
+// instance's resources. The workflow's guard step fails before any wrangler
+// call if these names change. Never deploy this file by hand with standing
+// credentials.
 //
 // Resource IDs are omitted on purpose, exactly as in the root config: the
 // first `wrangler deploy` creates the D1 database, R2 bucket and KV namespace
