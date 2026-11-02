@@ -16,7 +16,10 @@ Read `docs/ARCHITECTURE.md` first. The short version:
 - `scripts/guard-open-core.mjs` fails CI on billing/pricing/payment code, payment SDKs or anything
   from a hosted layer. Do not work around it; an unrelated word match goes in
   `scripts/open-core-allowlist.txt` with a reason.
-- Before committing: `npm run check` (guard, typecheck, all tests).
+- Before committing: `npm run check` (guard, typecheck, all tests). `check` bootstraps
+  the encrypted browser-test deps itself via `scripts/ensure-encrypted-test-deps.mjs`
+  (installs `packages/cli/test/encrypted` and its Chromium build when missing or stale,
+  fast no-op otherwise): never install them by hand.
 - Cloudflare test deploys go through the `cf-test-env` plugin only: `provision`
   a per-card disposable `pct-*` env, test against its short-lived per-Worker
   token, then `teardown`. D1 goes through `d1_execute`. Never deploy, `secret
