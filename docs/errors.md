@@ -23,7 +23,7 @@ Extension adapters can add codes and override guidance without changing built-in
 | `api_key_expired` | 401 | false | Ask the instance owner to create a new API key. |
 | `blob_missing` | 502 | true | Retry shortly; report the requestId if the contents remain unavailable. |
 | `blob_not_expected` | 404 | false | Create a pending deploy first, then upload only the SHA-256 values it reports as missing. |
-| `bootstrap_key_required` | 403 | false | Send the bootstrap key in Authorization: Bearer for setup or recovery only. |
+| `bootstrap_key_required` | 403 | false | Paste the exact ADMIN_BOOTSTRAP_KEY secret set on the Worker at deploy time. It is the value you generated during setup (for example with openssl rand -hex 32) — not an API key. |
 | `cache_refresh_failed` | 502 | true | Retry the identical publish shortly; it re-attempts the serving refresh. |
 | `claim_token_required` | 400 | false | Send the claimToken returned when the anonymous site was created. |
 | `confirm_mismatch` | 400 | false | Set confirm to the exact value in details.expected, then call again. |

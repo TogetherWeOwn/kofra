@@ -1,7 +1,7 @@
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { cors } from "hono/cors";
 import { cloneRawRequest } from "hono/request";
-import { ApiError, appOrigin, badRequest } from "@dropway/core";
+import { ApiError, appOrigin, badRequest, bootstrapKeyMismatch, defaultIdentity } from "@dropway/core";
 import { withLegacyHeaderNames } from "../legacy-brand";
 import type { DropwayEnv } from "../env";
 
@@ -72,6 +72,17 @@ export function apiErrorResponse(c: Context<DropwayEnv>, err: unknown): Response
   );
 }
 
+/**
+ * Setup and owner recovery (plus the legacy accounts alias for the same
+ * operation): the only routes where a principal-resolution failure is
+ * re-read as a bootstrap mismatch.
+ */
+function isBootstrapRoute(c: Context<DropwayEnv>): boolean {
+  if (c.req.method !== "POST") return false;
+  const path = c.req.path;
+  return path === "/api/v1/setup" || path === "/api/v1/setup/recover" || path === "/api/v1/accounts";
+}
+
 /** CORS, principal resolution, error shaping, then extension middleware. */
 export function installApiMiddleware(api: Hono<DropwayEnv>, middleware: MiddlewareHandler<DropwayEnv>[]) {
   api.use(
@@ -86,7 +97,26 @@ export function installApiMiddleware(api: Hono<DropwayEnv>, middleware: Middlewa
   );
   api.use("*", async (c, next) => {
     const dw = c.get("dw");
-    c.set("principal", await dw.adapters.identity.resolve(c.req.raw, dw));
+    try {
+      c.set("principal", await dw.adapters.identity.resolve(c.req.raw, dw));
+    } catch (err) {
+      // Setup and recovery answer every wrong credential with
+      // bootstrap_key_required: a typo in the hex secret must never surface
+      // as invalid_api_key. A malformed Authorization header keeps its
+      // syntax error, and every other route keeps today's errors. Deploys
+      // with a custom identity adapter keep that adapter's errors untouched:
+      // the remap only interprets the built-in credential shapes.
+      if (
+        isBootstrapRoute(c) &&
+        dw.adapters.identity === defaultIdentity &&
+        err instanceof ApiError &&
+        (err.status === 401 || err.status === 403) &&
+        err.code !== "invalid_authorization"
+      ) {
+        throw bootstrapKeyMismatch();
+      }
+      throw err;
+    }
     await next();
     c.header("X-Request-Id", c.get("requestId"));
   });

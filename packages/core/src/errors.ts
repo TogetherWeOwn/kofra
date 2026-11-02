@@ -77,6 +77,17 @@ export const unauthorized = (message = "This endpoint needs an API key.", hint?:
 
 export const forbidden = (message: string, hint?: string, code = "forbidden") => new ApiError(403, code, message, hint);
 
+/**
+ * First-run setup and owner recovery share one answer for every wrong
+ * credential: a mistyped hex secret must read the same as a wrong API key,
+ * so neither the format nor the value of the attempt is distinguished.
+ */
+export const BOOTSTRAP_MISMATCH_MESSAGE = "That bootstrap secret doesn't match this instance.";
+export const BOOTSTRAP_MISMATCH_HINT =
+  "Paste the exact ADMIN_BOOTSTRAP_KEY secret set on the Worker at deploy time. It is the value you generated during setup (for example with openssl rand -hex 32) — not an API key.";
+
+export const bootstrapKeyMismatch = () => new ApiError(403, "bootstrap_key_required", BOOTSTRAP_MISMATCH_MESSAGE, BOOTSTRAP_MISMATCH_HINT);
+
 export const notFound = (code: string, message: string, hint?: string, details?: Record<string, unknown>) =>
   new ApiError(404, code, message, hint, details);
 

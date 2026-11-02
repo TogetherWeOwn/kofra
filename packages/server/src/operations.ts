@@ -2,6 +2,8 @@ import { z } from "zod";
 import type { Context, Hono } from "hono";
 import {
   ApiError,
+  BOOTSTRAP_MISMATCH_HINT,
+  bootstrapKeyMismatch,
   requireMember,
   requireCapability,
   requireConfirm,
@@ -170,7 +172,12 @@ function authorizeOperation(op: OperationDefinition, ctx: OperationContext): voi
   }
   if (op.bootstrap) {
     if (ctx.principal.kind !== "bootstrap") {
-      throw new ApiError(403, "bootstrap_key_required", "This operation needs the bootstrap key.", "Send Authorization: Bearer <ADMIN_BOOTSTRAP_KEY> for setup or recovery only.");
+      // A missing credential keeps its historical message; any credential that
+      // is not the bootstrap secret shares one answer, whatever its format.
+      if (ctx.principal.kind === "anonymous") {
+        throw new ApiError(403, "bootstrap_key_required", "This operation needs the bootstrap key.", BOOTSTRAP_MISMATCH_HINT);
+      }
+      throw bootstrapKeyMismatch();
     }
     return;
   }

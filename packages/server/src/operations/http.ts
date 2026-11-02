@@ -149,7 +149,7 @@ export const HTTP_OPERATIONS = [
         c.json(
           {
             ...(await recoverOwnerKey(D(c), P(c))),
-            note: "Store apiKey.key now; it is shown only once.",
+            note: "Store apiKey.key now; it is shown only once. Older owner keys still work. Revoke older keys with DELETE /api/v1/keys/:id if one was lost or shared.",
           },
           201,
         ),
