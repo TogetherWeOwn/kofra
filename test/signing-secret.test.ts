@@ -78,6 +78,13 @@ describe("signing secret", () => {
     expect(resolveConfig({ ...dev, APP_ORIGIN: "http://localhost:8787" }).signingSecret).toBeTruthy();
     expect(resolveConfig({ ...dev, APP_ORIGIN: "http://127.0.0.1:8787", SITES_ORIGIN: "http://[::1]:8787" }).signingSecret).toBeTruthy();
     expect(resolveConfig({ ...dev, APP_ORIGIN: "https://app.localhost" }).signingSecret).toBeTruthy();
+    // A loopback SITES_DOMAIN keeps working: bare, subdomain-style, wildcard and IP-literal forms.
+    expect(resolveConfig({ ...dev, SITES_DOMAIN: "localhost" }).signingSecret).toBeTruthy();
+    expect(resolveConfig({ ...dev, SITES_MODE: "subdomain", SITES_DOMAIN: "sites.localhost" }).signingSecret).toBeTruthy();
+    expect(resolveConfig({ ...dev, SITES_MODE: "subdomain", SITES_DOMAIN: "*.localhost" }).signingSecret).toBeTruthy();
+    expect(resolveConfig({ ...dev, SITES_MODE: "subdomain", SITES_DOMAIN: "127.0.0.1" }).signingSecret).toBeTruthy();
+    expect(resolveConfig({ ...dev, SITES_MODE: "subdomain", SITES_DOMAIN: "::1" }).signingSecret).toBeTruthy();
+    expect(resolveConfig(dev, { sitesMode: "subdomain", sitesDomain: "sites.localhost" }).signingSecret).toBeTruthy();
     // Any configured non-loopback origin refuses at startup.
     for (const vars of [
       { ...dev, APP_ORIGIN: "https://example.com" },
@@ -85,9 +92,15 @@ describe("signing secret", () => {
       { ...dev, APP_ORIGIN: "http://localhost:8787", SITES_ORIGIN: "https://sites.example.com" },
       { ...dev, APP_ORIGIN: "http://localhost:8787", LEGACY_APP_ORIGINS: "https://old.example.com" },
       { ...dev, APP_ORIGIN: "http://localhost:8787", LEGACY_SITES_ORIGINS: "https://old-sites.example.com" },
+      // A non-loopback SITES_DOMAIN refuses too, as does an unparseable one (fail closed).
+      { ...dev, SITES_DOMAIN: "example.com" },
+      { ...dev, APP_ORIGIN: "http://localhost:8787", SITES_DOMAIN: "sites.example.com" },
+      { ...dev, APP_ORIGIN: "http://localhost:8787", SITES_DOMAIN: "[::1" },
     ]) {
       expect(() => resolveConfig(vars)).toThrow(/Invalid ALLOW_INSECURE_DEV_SECRET: configured origin \S+ is not loopback\./);
     }
+    expect(() => resolveConfig(dev, { sitesMode: "subdomain", sitesDomain: "sites.example.com" }))
+      .toThrow(/Invalid ALLOW_INSECURE_DEV_SECRET: configured origin \S+ is not loopback\./);
     // A real secret takes precedence over the flag: no refusal.
     expect(resolveConfig({ ...dev, APP_ORIGIN: "https://example.com", ADMIN_BOOTSTRAP_KEY: BOOTSTRAP }).signingSecret).toBe(BOOTSTRAP);
     expect(resolveConfig({ ...dev, APP_ORIGIN: "https://example.com", SIGNING_SECRET: "explicit-strong-secret-0123456789" }).signingSecret)
