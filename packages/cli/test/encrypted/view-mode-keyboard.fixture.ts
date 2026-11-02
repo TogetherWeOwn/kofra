@@ -97,7 +97,10 @@ export async function visit(fixture: Fixture, path = "index.html", width = 1100,
   const page = await context.newPage(); page.setDefaultTimeout(2500);
   page.on("pageerror", error => errors.push(error.message));
   try {
-    const response = await page.goto(`${fixture.origin}${viewerPath(path)}${mode ? `?mode=${mode}` : ""}`, { waitUntil: "networkidle" });
+    // Navigate on shell parse, not network quiet: background subresource timing
+    // flakes a short `networkidle` goto under CI load. Readiness is the
+    // asserted View-mode tablist plus its preview iframe, awaited below.
+    const response = await page.goto(`${fixture.origin}${viewerPath(path)}${mode ? `?mode=${mode}` : ""}`, { waitUntil: "domcontentloaded" });
     expect(response?.status(), "real app-origin viewer shell").toBe(200);
     await page.getByRole("tablist", { name: "View mode", exact: true }).getByRole("tab").first().waitFor();
     await page.locator("iframe").waitFor();

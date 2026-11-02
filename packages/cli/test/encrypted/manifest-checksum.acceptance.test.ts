@@ -131,13 +131,25 @@ async function visit(options: { route?: (route: Route) => Promise<void>; clipboa
   page.setDefaultTimeout(3000);
   const consoleErrors: string[] = [];
   page.on("console", message => { if (message.type() === "error") consoleErrors.push(message.text()); });
-  await page.goto(`${origin}/login`, { waitUntil: "networkidle" });
+  await page.goto(`${origin}/login`, { waitUntil: "domcontentloaded" });
+  // Navigate on shell parse, not network quiet: CI load keeps background
+  // requests in flight and a short `networkidle` goto flakes the navigation
+  // itself. Readiness is the app-rendered state each branch asserts on below.
+  await page.getByLabel(/api key/i).waitFor();
   if (!options.anonymous) {
     await page.getByLabel(/api key/i).fill(ownerKey);
     await page.getByRole("button", { name: /^sign in$/i }).click();
     await page.waitForURL("**/dashboard");
   }
-  const response = await page.goto(`${origin}/dashboard/sites/${options.site ?? slug}`, { waitUntil: "networkidle" });
+  const response = await page.goto(`${origin}/dashboard/sites/${options.site ?? slug}`, { waitUntil: "domcontentloaded" });
+  if (options.anonymous) {
+    // Unauthenticated management redirects to /login?next=..., so match the pathname.
+    await page.waitForURL(url => new URL(url).pathname === "/login");
+  } else {
+    // The site shell renders this heading only after the site + versions
+    // bootstrap resolves, for populated and empty sites alike.
+    await page.getByRole("heading", { name: "Versions" }).waitFor();
+  }
   const csp = response!.headers()["content-security-policy"] ?? "";
   expect(wire.filter(request => request.method !== "GET"), "dashboard bootstrap is read-only").toEqual([]);
   expect(wire.filter(request => new URL(request.url).pathname.startsWith(`/api/v1/sites/${slug}/files/`) || isArtifactPath(new URL(request.url).pathname)), "opening the dashboard must not prefetch artifact bytes").toEqual([]);
