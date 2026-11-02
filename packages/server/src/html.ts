@@ -24,6 +24,15 @@ export function htmlPage(opts: { title: string; body: string; css?: string; head
   return `<!doctype html><html lang="${opts.lang ?? "en"}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(opts.title)}</title><style>${BASE_CSS}${opts.css ?? ""}</style>${opts.head ?? ""}</head><body>${opts.body}</body></html>`;
 }
 
+/**
+ * Visitor-facing wait for a freshly computed Retry-After: whole minutes,
+ * rounded up, with a one-minute floor ("about a minute", never "about 0 minutes").
+ */
+export function retryWaitPhrase(retryAfterSeconds: number): string {
+  const minutes = Math.max(1, Math.ceil(retryAfterSeconds / 60));
+  return minutes <= 1 ? "about a minute" : `about ${minutes} minutes`;
+}
+
 /** Small system page (404, expired, password) served on site origins. `message` is trusted HTML. */
 export function systemPage(opts: { code: string; title: string; message: string; extra?: string }): string {
   return htmlPage({

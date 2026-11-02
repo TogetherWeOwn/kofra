@@ -26,7 +26,7 @@ import {
   type DropwayContext,
   type LiveSite,
 } from "@dropway/core";
-import { escapeHtml, systemPage } from "./html";
+import { escapeHtml, retryWaitPhrase, systemPage } from "./html";
 import { findViewer, toViewerFile, VIEWER_CHROME_VERSION, VIEWER_CSP, VIEWERS, type ViewMode, type Viewer } from "./viewers";
 import { renderListing } from "./viewers/listing";
 import { MAX_CSS_REWRITE_BYTES, rewriteCss, rewriteHtml, type PathRewrite } from "./path-rewrite";
@@ -299,9 +299,13 @@ async function handlePassword(dw: DropwayContext, req: Request, live: LiveSite, 
       await spendSitePasswordAttempt(dw, live.siteId, passwordVisitor(req));
     } catch (error) {
       const limited = isApiError(error) && error.status === 429;
-      const response = systemResponse(dw, req, mode, live, limited ? 429 : 503, limited ? "429" : "503",
-        limited ? "Too many password attempts" : "Password unlock unavailable", "Please try again later.");
-      response.headers.set("Retry-After", String(limited ? error.retryAfterSeconds : 1));
+      const retryAfter = (limited ? error.retryAfterSeconds : null) ?? 1;
+      const response = limited
+        ? systemResponse(dw, req, mode, live, 429, "429", "Too many attempts for now",
+          `This site is pausing password attempts for ${retryWaitPhrase(retryAfter)}. Wait, then reload this page and try again. If you don't know the password, ask whoever sent you the link.`)
+        : systemResponse(dw, req, mode, live, 503, "503", "Password check unavailable",
+          "This instance can't check passwords right now. Try again in a few minutes; if it keeps happening, let the site owner know.");
+      response.headers.set("Retry-After", String(retryAfter));
       return response;
     }
     const form = await req.formData().catch(() => null);

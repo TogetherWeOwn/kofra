@@ -5,7 +5,7 @@ import {
 } from "@dropway/core";
 import type { Hono } from "hono";
 import type { DropwayEnv } from "./env";
-import { APP_PAGE_CSP, escapeHtml, htmlPage } from "./html";
+import { APP_PAGE_CSP, escapeHtml, htmlPage, retryWaitPhrase } from "./html";
 import { attachmentDisposition } from "./content-disposition";
 
 const headers = {
@@ -23,15 +23,20 @@ function passwordPage(dc: DropwayContext, slug: string, recipient?: string, erro
 }
 const HTML_UNLOCK_ERRORS: Record<string, { status: number; message: string }> = {
   transfer_locked: { status: 403, message: "Incorrect password. Try again or ask the sender for the delivery password." },
-  rate_limited: { status: 429, message: "Too many password attempts. Wait a moment, then try again." },
 };
 export function transferPageError(dc: DropwayContext, request: Request, slug: string, recipient: string | undefined, error: unknown): Response {
   if (request.method === "POST" && (request.headers.get("Accept") ?? "").includes("text/html") && error instanceof ApiError) {
+    if (error.code === "rate_limited") {
+      const retryAfter = typeof error.details?.retryAfterSeconds === "number" ? error.details.retryAfterSeconds : 60;
+      const res = passwordPage(dc, slug, recipient, {
+        status: 429, message: `Too many password attempts. Wait ${retryWaitPhrase(retryAfter)}, then try again.`,
+      });
+      res.headers.set("Retry-After", String(retryAfter));
+      return res;
+    }
     const mapped = HTML_UNLOCK_ERRORS[error.code];
     if (mapped) {
-      const res = passwordPage(dc, slug, recipient, mapped);
-      if (mapped.status === 429) res.headers.set("Retry-After", String(error.details?.retryAfterSeconds ?? 60));
-      return res;
+      return passwordPage(dc, slug, recipient, mapped);
     }
     if (error.code === "transfer_unlock_unavailable") {
       return page(`<p>Password unlock is unavailable. Try again later.</p><p><a href="${escapeHtml(transferPageUrl(dc, slug, recipient))}">Back to this delivery</a></p>`, 503);
