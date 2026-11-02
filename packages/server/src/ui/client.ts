@@ -1734,7 +1734,8 @@ export function dropwayClient() {
                 "p",
                 { class: "dw-small dw-muted" },
                 "Older owner keys still work. If you recovered because a key was lost or shared, revoke it under ",
-                h("a", { href: "/dashboard/keys", text: "API keys" }),
+                // New tab: the shown-once key above stays on screen until Continue stores it.
+                h("a", { href: "/dashboard/keys", target: "_blank", rel: "noopener", text: "API keys" }),
                 ".",
               )
               : null,

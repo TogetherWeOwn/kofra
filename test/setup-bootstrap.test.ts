@@ -1,7 +1,7 @@
 import { applyD1Migrations, createExecutionContext, env, reset, waitOnExecutionContext } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { clearLiveMemoryCache } from "@dropway/core";
-import { createDropway, type ServerBindings } from "@dropway/server";
+import { ApiError, clearLiveMemoryCache, type IdentityAdapter } from "@dropway/core";
+import { createDropway, type CreateDropwayOptions, type ServerBindings } from "@dropway/server";
 import { BOOTSTRAP, ORIGIN, freshInstance, jsonBody, type Instance } from "./helpers";
 import { CLIENT_SCRIPT } from "../packages/server/src/ui/assets";
 
@@ -17,7 +17,7 @@ const GARBAGE = "definitely-not-a-credential";
 const WRONG = [WRONG_HEX, WRONG_DW, GARBAGE];
 
 /** A Kofra that has not run setup yet, mirroring freshInstance without the setup call. */
-async function bareInstance(): Promise<Instance> {
+async function bareInstance(extra: Omit<CreateDropwayOptions, "config"> = {}): Promise<Instance> {
   await env.DB.prepare("SELECT 1").first();
   await env.FILES.list({ limit: 1 });
   await env.CACHE.list({ limit: 1 });
@@ -25,7 +25,7 @@ async function bareInstance(): Promise<Instance> {
   await reset();
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
   clearLiveMemoryCache();
-  const dropway = createDropway({});
+  const dropway = createDropway({ ...extra });
 
   const call: Instance["call"] = async (path, init = {}) => {
     const { key, origin, ...rest } = init;
@@ -147,5 +147,23 @@ describe("setup and recovery bootstrap errors", () => {
   it("the recover success state tells the browser older keys still work", async () => {
     expect(CLIENT_SCRIPT).toContain("Older owner keys still work. If you recovered because a key was lost or shared, revoke it under ");
     expect(CLIENT_SCRIPT).toContain('href: "/dashboard/keys"');
+    // The keys link must not navigate the success state away: the shown-once
+    // key above it is stored only when Continue is clicked.
+    expect(CLIENT_SCRIPT).toContain('target: "_blank"');
+  });
+
+  it("a custom identity adapter keeps its own errors on setup routes", async () => {
+    const custom: IdentityAdapter = {
+      async resolve(request) {
+        if (!request.headers.get("authorization")) return { kind: "anonymous", ip: "0.0.0.0" };
+        throw new ApiError(401, "custom_denied", "Custom adapter says no.", "Use the custom credential.");
+      },
+    };
+    const dw = await bareInstance({ adapters: { identity: custom } });
+    for (const path of ["/api/v1/setup", "/api/v1/setup/recover"]) {
+      const res = await dw.json(path, { key: GARBAGE, ...jsonBody({}) });
+      expect(res.status, path).toBe(401);
+      expect(res.body.error.code, path).toBe("custom_denied");
+    }
   });
 });

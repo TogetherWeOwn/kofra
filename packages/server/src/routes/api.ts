@@ -1,7 +1,7 @@
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { cors } from "hono/cors";
 import { cloneRawRequest } from "hono/request";
-import { ApiError, appOrigin, badRequest, bootstrapKeyMismatch } from "@dropway/core";
+import { ApiError, appOrigin, badRequest, bootstrapKeyMismatch, defaultIdentity } from "@dropway/core";
 import { withLegacyHeaderNames } from "../legacy-brand";
 import type { DropwayEnv } from "../env";
 
@@ -103,9 +103,12 @@ export function installApiMiddleware(api: Hono<DropwayEnv>, middleware: Middlewa
       // Setup and recovery answer every wrong credential with
       // bootstrap_key_required: a typo in the hex secret must never surface
       // as invalid_api_key. A malformed Authorization header keeps its
-      // syntax error, and every other route keeps today's errors.
+      // syntax error, and every other route keeps today's errors. Deploys
+      // with a custom identity adapter keep that adapter's errors untouched:
+      // the remap only interprets the built-in credential shapes.
       if (
         isBootstrapRoute(c) &&
+        dw.adapters.identity === defaultIdentity &&
         err instanceof ApiError &&
         (err.status === 401 || err.status === 403) &&
         err.code !== "invalid_authorization"
