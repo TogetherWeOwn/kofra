@@ -1,6 +1,6 @@
 // rebrand:keep-file (intentional DROPWAY_* legacy fixtures; scripts/rebrand.mjs never edits this file.)
 /**
- * Acceptance contract: docs/CLI_DIAGNOSTICS.md, matrix rows 1–36.
+ * Acceptance contract: docs/CLI_DIAGNOSTICS.md, matrix rows 1–37.
  * Security bounds tighten the document: custom config selectors never expose
  * paths, userinfo is presence-only, and remediation never embeds caller values.
  *
@@ -82,6 +82,7 @@ const CHECKS = [
   ["key.selected", "info", "source_selected", null],
   ["key.absent", "error", "not_logged_in", "kofra login --api <effective-origin>"],
   ["key.kind_noted", "info", "key_kind", null],
+  ["key.env_to_link_host_refused", "error", "env_key_to_link_host", "Pass --api <your-instance> or run `kofra login` once (or remove dropway.json)."],
   ["credentials_file.malformed", "error", "malformed_credentials", "kofra login --api https://<your-instance>"],
   ["credentials_file.unreadable", "error", "unreadable_credentials", "Check the permissions of <path>."],
   ["project_link.malformed", "error", "malformed_project_link", "Delete or fix ./dropway.json."],
@@ -461,6 +462,16 @@ describe("key presence, saved-origin lookup and legacy provenance (14–16, 28, 
     expect(b.key).toEqual({ present: false, source: null, kind: null });
     summary(b, "absent", null, [false, 0, false]);
     check(b, "key.absent");
+  });
+
+  it.each([["KOFRA_API_KEY", false], ["DROPWAY_API_KEY", true]] as const)("37: a project-link origin with an env key (%s) is refused with exit 2, not ready", async (name, legacy) => {
+    await putLink({ api: PROJECT_API });
+    const b = data(await invoke(["--json"], { env: { KOFRA_CONFIG_DIR: config, [name]: API_KEY } }), "unconfigured");
+    expect(b.api).toEqual({ origin: PROJECT_API, source: source("project") });
+    expect(b.key.source).toEqual(source("env", name, legacy));
+    const found = check(b, "key.env_to_link_host_refused");
+    expect(found).toMatchObject({ severity: "error", code: "env_key_to_link_host" });
+    absentCheck(b, "key.absent");
   });
 
   it("saved lookup uses the effective origin, never another instance's key", async () => {

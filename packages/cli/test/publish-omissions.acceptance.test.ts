@@ -255,6 +255,55 @@ describe("publish omission inventory: additive command-level goldens", () => {
     const preview = await dry();
     expect(preview.json.files).toEqual(mixedManifest);
   });
+
+  it("warns on real publish when a file link points outside the folder", async () => {
+    await tree({ "index.html": "ok" });
+    await tree({ "public.txt": "OUTSIDE_CONTENT_SENTINEL" }, join(work, "outside"));
+    await symlink(join(work, "outside/public.txt"), join(cwd, "alias.txt"));
+    const version = { id: "ver_synthetic", number: 1 };
+    const r = await command(["publish", ".", "--json", "--site", "inventory", "--no-save", ...authenticated], {
+      fetch: async (request) => {
+        const url = new URL(request.url);
+        if (request.method === "POST" && url.pathname === "/api/v1/sites/inventory/deploys") {
+          const manifest = await request.json() as { files: { path: string }[] };
+          expect(manifest.files.map((f) => f.path)).toEqual(["index.html"]);
+          return Response.json({ unchanged: true, deploy: version, missing: [], uploads: [], finalizeUrl: null });
+        }
+        if (request.method === "GET" && url.pathname === "/api/v1/sites/inventory") {
+          return Response.json({ site: { slug: "inventory", url: "https://inventory.invalid/s/inventory/", currentVersion: version } });
+        }
+        throw new Error("unexpected request to injected transport");
+      },
+    });
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain("Skipped link outside the folder alias.txt");
+    expect(r.stdout + r.stderr).not.toContain("OUTSIDE_CONTENT_SENTINEL");
+    expect(r.stdout + r.stderr).not.toContain(work);
+  });
+
+  it("escapes terminal controls in the outside-root note instead of emitting them", async () => {
+    await tree({ "index.html": "ok" });
+    await tree({ "public.txt": "OUTSIDE_CONTENT_SENTINEL" }, join(work, "outside"));
+    const evil = "evil\u001b[2K.txt";
+    await symlink(join(work, "outside/public.txt"), join(cwd, evil));
+    const version = { id: "ver_synthetic", number: 1 };
+    const r = await command(["publish", ".", "--json", "--site", "inventory", "--no-save", ...authenticated], {
+      fetch: async (request) => {
+        const url = new URL(request.url);
+        if (request.method === "POST" && url.pathname === "/api/v1/sites/inventory/deploys") {
+          return Response.json({ unchanged: true, deploy: version, missing: [], uploads: [], finalizeUrl: null });
+        }
+        if (request.method === "GET" && url.pathname === "/api/v1/sites/inventory") {
+          return Response.json({ site: { slug: "inventory", url: "https://inventory.invalid/s/inventory/", currentVersion: version } });
+        }
+        throw new Error("unexpected request to injected transport");
+      },
+    });
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain("Skipped link outside the folder evil\\u001b[2K.txt");
+    expect(r.stdout + r.stderr).not.toContain("\u001b");
+    expect(r.stdout + r.stderr).not.toContain("OUTSIDE_CONTENT_SENTINEL");
+  });
 });
 
 describe("special files and human-readable output", () => {
@@ -359,15 +408,61 @@ describe("existing offline and fail-closed safety contracts", () => {
     expect(r.stdout + r.stderr).not.toContain("../");
   });
 
-  it("preserves regular-file symlink eligibility even when its target is outside the publish root", async () => {
-    await tree({ "public.txt": "public external file" }, join(work, "outside"));
+  it("skips file symlinks that resolve outside the publish root without reading them", async () => {
+    await tree({ "index.html": "ok" });
+    await tree({ "public.txt": "OUTSIDE_CONTENT_SENTINEL" }, join(work, "outside"));
     await symlink(join(work, "outside/public.txt"), join(cwd, "alias.txt"));
     const r = await dry();
     expect(r.code).toBe(0);
-    expect(r.json.files).toEqual([manifestFile("alias.txt", "public external file")]);
+    expect(r.json.files).toEqual([manifestFile("index.html", "ok")]);
     expect(r.json.ignored).toEqual([]);
+    expect(r.json.omissions).toEqual([{ path: "alias.txt", reason: "symlink_outside_root" }]);
     expect(r.stdout + r.stderr).not.toContain(work);
-    expect(r.stdout + r.stderr).not.toContain("public external file");
+    expect(r.stdout + r.stderr).not.toContain("OUTSIDE_CONTENT_SENTINEL");
+  });
+
+  it("keeps publishing file symlinks that resolve inside the publish root", async () => {
+    await tree({ "index.html": "<h1>hi</h1>" });
+    await symlink(join(cwd, "index.html"), join(cwd, "file-alias.html"));
+    const r = await dry();
+    expect(r.code).toBe(0);
+    expect(r.json.files).toEqual([
+      manifestFile("file-alias.html", "<h1>hi</h1>"),
+      manifestFile("index.html", "<h1>hi</h1>"),
+    ]);
+    expect(r.json.omissions).toEqual([]);
+  });
+
+  it("does not mistake a sibling directory for the publish root", async () => {
+    await tree({ "index.html": "ok" });
+    await tree({ "secret.txt": "SIBLING_CONTENT_SENTINEL" }, `${cwd}-backup`);
+    await symlink(join(`${cwd}-backup`, "secret.txt"), join(cwd, "sibling-alias.txt"));
+    const r = await dry();
+    expect(r.code).toBe(0);
+    expect(r.json.files).toEqual([manifestFile("index.html", "ok")]);
+    expect(r.json.omissions).toEqual([{ path: "sibling-alias.txt", reason: "symlink_outside_root" }]);
+    expect(r.stdout + r.stderr).not.toContain("SIBLING_CONTENT_SENTINEL");
+  });
+
+  it("names the outside-root omission in the human dry-run summary", async () => {
+    await tree({ "index.html": "ok" });
+    await tree({ "public.txt": "outside" }, join(work, "outside"));
+    await symlink(join(work, "outside/public.txt"), join(cwd, "alias.txt"));
+    const r = await command(["publish", ".", "--dry-run"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("Omitted: alias.txt (link points outside the folder)");
+    expect(r.stdout + r.stderr).not.toContain(work);
+  });
+
+  it("leaves directory-symlink behaviour unchanged", async () => {
+    await tree({ "index.html": "ok" });
+    await tree({ "hidden.txt": "OUTSIDE_CONTENT_SENTINEL" }, join(work, "outside"));
+    await symlink(join(work, "outside"), join(cwd, "external-dir"));
+    const r = await dry();
+    expect(r.code).toBe(0);
+    expect(r.json.files).toEqual([manifestFile("index.html", "ok")]);
+    expect(r.json.omissions).toEqual([{ path: "external-dir", reason: "symlink_directory" }]);
+    expect(r.stdout + r.stderr).not.toContain("OUTSIDE_CONTENT_SENTINEL");
   });
 
   it("keeps a single ordinary file rooted at its basename", async () => {

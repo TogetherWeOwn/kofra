@@ -5,7 +5,7 @@
  */
 import { createHash } from "node:crypto";
 import { createReadStream, openAsBlob } from "node:fs";
-import { lstat, readdir, readFile, stat } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
 import { CliError, EXIT } from "./client.ts";
 import { IgnoreMatcher } from "./ignore.ts";
@@ -32,7 +32,7 @@ export interface CollectOptions {
 }
 
 /** Why one relative path was left out of the publish payload. Stable wire values. */
-export type OmissionReason = "ignored" | "excluded" | "symlink_directory" | "broken_symlink" | "special_file";
+export type OmissionReason = "ignored" | "excluded" | "symlink_directory" | "symlink_outside_root" | "broken_symlink" | "special_file";
 
 export interface Omission {
   /** Relative POSIX path as walked (directories carry a trailing slash). */
@@ -105,8 +105,23 @@ function invalidFilename(dirRel: string, raw: Buffer): never {
   });
 }
 
+/**
+ * True when an already-resolved absolute path stays inside an already-resolved
+ * root. Exact equality covers the root itself; otherwise the target must start
+ * with the root plus a separator, so a sibling like `<root>-backup` does not
+ * match. Comparison is byte-exact (no case folding): Linux paths are
+ * case-sensitive, and realpath returns canonical paths without trailing
+ * slashes (except `/`, which contains everything).
+ */
+function withinRoot(targetReal: string, rootReal: string): boolean {
+  if (targetReal === rootReal) return true;
+  if (rootReal === sep) return targetReal.startsWith(sep);
+  return targetReal.startsWith(rootReal + sep);
+}
+
 async function walk(
   root: string,
+  rootReal: string,
   matcher: IgnoreMatcher,
   exclude: Set<string>,
   out: Entry[],
@@ -191,6 +206,20 @@ async function walk(
         omissions.push({ path: rel, reason: "symlink_directory" });
         continue;
       }
+      // A committed file link can point anywhere on the publisher's machine
+      // (e.g. `ln -s ~/.ssh/id_rsa asset.txt`): only publish it when its
+      // resolved target stays inside the publish root.
+      let targetReal: string;
+      try {
+        targetReal = await realpath(abs);
+      } catch (error) {
+        if (asErrno(error)?.code === "ENOENT") sourceChanged(rel);
+        throw error;
+      }
+      if (!withinRoot(targetReal, rootReal)) {
+        omissions.push({ path: rel, reason: "symlink_outside_root" });
+        continue;
+      }
       isFile = s.isFile();
       isDir = false;
     }
@@ -200,7 +229,7 @@ async function walk(
       omissions.push({ path: shown, reason: "ignored" });
       continue;
     }
-    if (isDir) await walk(root, matcher, exclude, out, ignored, links, omissions, seen, signal, rel);
+    if (isDir) await walk(root, rootReal, matcher, exclude, out, ignored, links, omissions, seen, signal, rel);
     else if (isFile) out.push({ abs, rel });
     else omissions.push({ path: rel, reason: "special_file" }); // FIFO, socket or device (or a link to one)
   }
@@ -300,7 +329,11 @@ export async function collectFiles(path: string, opts: CollectOptions = {}): Pro
       return "";
     });
     const matcher = new IgnoreMatcher(ignoreFile.split("\n"));
-    await walk(root, matcher, exclude, entries, ignored, links, omissions, new Set(), opts.signal);
+    // Canonicalize once so every file-link containment check below compares
+    // resolved paths. The walk root itself is trusted (the user named it), so
+    // a failure here is unexpected I/O, not an omission.
+    const rootReal = await realpath(root);
+    await walk(root, rootReal, matcher, exclude, entries, ignored, links, omissions, new Set(), opts.signal);
   } else if (st.isFile()) {
     kind = "file";
     const name = basename(root);

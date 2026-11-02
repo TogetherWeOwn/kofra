@@ -333,11 +333,14 @@ describe("bounded-list and read-only CLI compatibility", () => {
     expect(r.seen.some((request) => request.path.endsWith("/versions"))).toBe(false);
   });
 
-  it("resolves saved-instance config and env-key precedence without persisting either", async () => {
+  it("refuses an env key to the link-only host without sending anything", async () => {
+    // The committed ./dropway.json names the origin, so an ambient env key
+    // must not be sent there: pass --api or log in instead. The harness
+    // already proves no request, no persistence and no credential leak.
     const r = await cli(["versions", SITE, "v1", "--json"], { auth: "env" });
-    expect(r.code, r.stdout + r.stderr).toBe(0);
-    directRequests(r, "v1");
-    expect(machine(r)).toMatchObject({ version: { id: "ver_archive_opaque-A_z9" } });
+    expect(r.code, r.stdout + r.stderr).toBe(2);
+    expect(r.seen).toEqual([]);
+    expect(machine(r)).toMatchObject({ ok: false, exitCode: 2, error: { code: "env_key_to_link_host", hint: expect.any(String) } });
   });
 
   it("does not create absent credential directories for explicit reads with --api and an env key", async () => {
