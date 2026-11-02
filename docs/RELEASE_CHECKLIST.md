@@ -138,7 +138,7 @@ under `%APPDATA%\dropway` and the mode-0600 check in step 5 does not apply.
   - Result:
   - Evidence:
 
-**Part A pass bar:** steps 1–12 pass with no undocumented manual step; every failure becomes a filed follow-up with the verbatim output. Passing Part A is what moves the "deployment verification pending" SPEC rows (PUB-03, PUB-04, ID-05) to Done.
+**Part A pass bar:** steps 1–12 pass with no undocumented manual step; every failure becomes a filed follow-up with the verbatim output. Passing Part A is what moves the "deployment verification pending" SPEC row PUB-03 to Done. PUB-04 and ID-05 move to Done only after B1 passes — Part A does not exercise upload links or `dwu_` token boundaries.
 
 ## Part B — extended verification (same instance, after Part A)
 
@@ -147,7 +147,7 @@ Extended release verification; a first-time self-hoster does not need these on d
 - [ ] **B1 — Upload links (dwu_ tokens).** How: JSON-publish a file by `sha256`+`size` only, then `PUT` the bytes to the returned upload URL with the returned curl line, then finalize. Expected: publish completes; the token cannot read files or finalize a *different* version (403).
   - Result:
   - Evidence:
-- [ ] **B2 — Resumable multipart.** How: CLI-publish a generated file > 95 MiB (e.g. `dd if=/dev/urandom bs=1M count=120`). Expected: round-trips with matching SHA-256 (compare `?raw=1` download); interrupted retry resumes from acknowledged parts. This verifies PUB-13/PUB-14.
+- [ ] **B2 — Resumable multipart.** How: CLI-publish a generated file between 95 MiB and the default 100 MiB per-file cap (e.g. `dd if=/dev/urandom bs=1M count=98` — the CLI selects multipart above ~95 MiB, and a larger file is refused by the default `MAX_FILE_BYTES` before multipart starts; or raise `MAX_FILE_BYTES` on the scratch deployment and record that you did). Expected: round-trips with matching SHA-256 (compare `?raw=1` download); interrupted retry resumes from acknowledged parts. This verifies PUB-13.
   - Result:
   - Evidence:
 - [ ] **B3 — File deliveries (transfers), incl. dead-delivery pages.** How: requires an isolated sites origin: first do `docs/SELF_HOST.md` option B (second `-sites` Worker) or C (subdomain mode). Then create a transfer with password + 1-hour expiry via `kofra api` / MCP `create_transfer`. Expected: on the default shared-origin setup, creation is refused with `409 transfer_origin_required` (expected behaviour, not a failure). With a sites origin, walk the full lifecycle **in a browser** (or with `Accept: text/html`): locked → password form; wrong password → form re-renders with an error; right password → file list and the file downloads as an attachment. Then the terminal states: after **revoke** or **expiry** the page *and* the direct file URL return **410** with the system page "This delivery is no longer available"; after **takedown**, **451** "This delivery is unavailable"; a **mangled link** returns **404** "We couldn't find that delivery"; submitting the unlock form after revocation renders the page too. None of these browser responses is raw JSON, shows an error code, or uses the word "transfer". The same URLs *without* `text/html` still return the JSON errors unchanged (`transfer_gone` 410, `transfer_unavailable` 451, `transfer_not_found` 404). This verifies XFR-01…04.
@@ -165,20 +165,23 @@ Extended release verification; a first-time self-hoster does not need these on d
 - [ ] **B7 — PR preview action (optional, needs a GitHub repo).** How: add the composite action per `docs/PR_PREVIEWS.md` to a test repo. Expected: PR gets one preview comment with a working URL; closing the PR removes the preview.
   - Result:
   - Evidence:
-- [ ] **B8 — Secret-hardening negative tests (scratch instance or local run — not the Part A instance).** How: start a throwaway instance three ways: (a) `SIGNING_SECRET` shorter than 32 characters; (b) `ALLOW_INSECURE_DEV_SECRET` enabled with a non-loopback origin configured; (c) no signing secret configured at all. On (c), also try setting a site password, and try a site password shorter than 8 characters on a correctly configured instance. Expected: (a) and (b) refuse to start/serve with an operator-facing error naming the problem (the 32-character minimum / the insecure dev secret) — never a silent fallback to a weak or public key. (c) signed features answer `503 signing_secret_missing`, and setting a site password is refused at write time with the same code (no unlockable gate is created); a password under 8 characters is rejected on the healthy instance (site minimum raised to match transfers; record the error code).
+- [ ] **B8 — Secret-hardening negative tests (scratch instance or local run — not the Part A instance).** How: start a throwaway instance three ways: (a) `SIGNING_SECRET` shorter than 32 characters; (b) `ALLOW_INSECURE_DEV_SECRET` enabled with a non-loopback origin configured; (c) **both** `SIGNING_SECRET` and `ADMIN_BOOTSTRAP_KEY` unset — unsetting only `SIGNING_SECRET` does not test this, because the signing key is then derived from the bootstrap key and signed features keep working. For the password-setting attempt on (c), first initialize the scratch instance with the secrets set and create an owner key, then restart it with both secrets removed. On (c), also try setting a site password, and try a site password shorter than 8 characters on a correctly configured instance. Expected: (a) and (b) refuse to start/serve with an operator-facing error naming the problem (the 32-character minimum / the insecure dev secret) — never a silent fallback to a weak or public key. (c) signed features answer `503 signing_secret_missing`, and setting a site password is refused at write time with the same code (no unlockable gate is created); a password under 8 characters is rejected on the healthy instance (site minimum raised to match transfers; record the error code).
+  - Result:
+  - Evidence:
+- [ ] **B9 — Archive and attachment sources.** How: JSON- or MCP-publish with a top-level `archiveUrl` (instead of `files`) pointing at a public https `.zip`; then publish one file from a `{download_url, file_name}` attachment source. Expected: the server downloads and unpacks the zip like an uploaded zip, the attachment is stored at `file_name`, and the live URLs serve the published contents. A non-https or private-address source URL is refused (SSRF guard). This verifies PUB-14.
   - Result:
   - Evidence:
 
 ## Outcome → SPEC mapping
 
-After the run, mark each row Done, or link the filed follow-up if it failed. Passing Part A moves the
-"deployment verification pending" rows to Done; Part B verifies the rows named below.
+After the run, mark each row Done, or link the filed follow-up if it failed. Passing Part A moves PUB-03
+to Done; the remaining rows move only when the Part B step named beside each one passes.
 
 - PUB-03 — Done / follow-up:
-- PUB-04 — Done / follow-up:
+- PUB-04 — Done / follow-up: (Part B1)
 - PUB-13 — Done / follow-up: (Part B2)
-- PUB-14 — Done / follow-up: (Part B2)
-- ID-05 — Done / follow-up:
+- PUB-14 — Done / follow-up: (Part B9)
+- ID-05 — Done / follow-up: (Part B1)
 - XFR-01 — Done / follow-up: (Part B3)
 - XFR-02 — Done / follow-up: (Part B3)
 - XFR-03 — Done / follow-up: (Part B3)
