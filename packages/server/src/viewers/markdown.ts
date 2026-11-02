@@ -118,7 +118,7 @@ export const markdownViewer: Viewer = {
       print: true,
       tabs: standardTabs(vc, { source: true }),
       css: MD_CSS + HIGHLIGHT_CSS,
-      body: `<article class="dw-md">${m ? r.html.slice(m[0].length) : r.html}</article>`,
+      body: `<main class="dw-md">${m ? r.html.slice(m[0].length) : r.html}</main>`,
       headers: { "X-Kofra-Render-Cache": r.cache },
     });
   },

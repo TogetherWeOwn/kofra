@@ -10,8 +10,10 @@ import type { Viewer } from "./index";
 export const htmlFrameViewer: Viewer = {
   id: "html-frame",
   // 3 was issued separately for the shared-link head tags and for the Phone
-  // disclosure, so the merged render moves to 4.
-  version: 4,
+  // disclosure, so the merged render moves to 4; 5 wraps the frame in the
+  // content landmark (the shared skip-link target) without shrinking it to
+  // iframe height: the wrap is the flex child now, growing as the frame did.
+  version: 5,
   maxBytes: Number.MAX_SAFE_INTEGER,
   matches: (file, _live, mode) => file.kind === "html" && mode === "view",
   async render(vc) {
@@ -20,8 +22,8 @@ export const htmlFrameViewer: Viewer = {
     return viewerPage(vc, {
       tabs,
       barExtra: `<a href="${escapeHtml(vc.fileUrl)}" rel="nofollow" title="Open the page without the bar">Open</a>`,
-      css: `html,body{height:100%}body{display:flex;flex-direction:column}.dw-frame{flex:1;width:100%;border:0;background:#fff}`,
-      body: `<iframe class="dw-frame" src="${escapeHtml(vc.fileUrl)}" title="${escapeHtml(vc.file.path)}"></iframe>`,
+      css: `html,body{height:100%}body{display:flex;flex-direction:column}.dw-frame-wrap{display:flex;flex-direction:column;flex:1;min-height:0}.dw-frame{flex:1;width:100%;border:0;background:#fff}`,
+      body: `<main class="dw-frame-wrap"><iframe class="dw-frame" src="${escapeHtml(vc.fileUrl)}" title="${escapeHtml(vc.file.path)}"></iframe></main>`,
       csp: viewerCsp({ frameSrc: [vc.url.origin] }),
     });
   },

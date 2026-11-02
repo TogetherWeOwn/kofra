@@ -135,5 +135,9 @@ export async function sanitizeHtml(html: string): Promise<string> {
       },
       doctype() {},
     });
-  return rewriter.transform(new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } })).text();
+  const clean = await rewriter.transform(new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } })).text();
+  // The viewer page already provides the content landmark, so an authored
+  // <main> would nest landmarks (invalid HTML, confusing to assistive
+  // tech). Demote it to a div, keeping attributes and content.
+  return clean.replace(/<main(?=[\s>])/gi, "<div").replace(/<\/main(?=[\s>])/gi, "</div>");
 }

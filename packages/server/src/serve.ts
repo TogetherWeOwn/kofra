@@ -336,7 +336,7 @@ async function passwordForm(dw: DropwayContext, req: Request, live: LiveSite, mo
   const extra = `<form method="post" action="${escapeHtml(action)}" style="display:flex;gap:.5rem">
 <input type="hidden" name="next" value="${escapeHtml(next)}">
 <input type="password" name="password" placeholder="Password" required autofocus style="flex:1;padding:.6rem .8rem;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--fg)">
-<button style="padding:.6rem 1rem;border:0;border-radius:8px;background:var(--accent);color:#fff;cursor:pointer">Open</button></form>
+<button style="padding:.6rem 1rem;border:0;border-radius:8px;background:var(--accent);color:var(--bg);cursor:pointer">Open</button></form>
 ${failed ? '<p style="color:var(--accent)">That password is not right.</p>' : ""}`;
   const r = systemResponse(dw, req, mode, live, 401, "PASSWORD", "This site is password protected", "Enter the password to view it.", extra);
   // Only the app (its file viewer) may frame the form; X-Frame-Options covers browsers without CSP 2.

@@ -153,7 +153,7 @@ describe("viewer Phone: served public-file contract", () => {
   // the merged Phone/unfurl render; historical pre-Phone validators stay fixed.
   it.each([
     ["notes.md", "markdown", 3, 5], ["data.json", "json", 2, 5], ["data.json", "json", 3, 5],
-    ["table.csv", "csv", 3, 5], ["plain.txt", "code", 3, 5], ["page.html", "html-frame", 1, 4],
+    ["table.csv", "csv", 3, 5], ["plain.txt", "code", 3, 5], ["page.html", "html-frame", 1, 5],
     ["vector/shape.svg", "svg", 3, 5], ["raster/pixel.png", "image", 3, 5],
   ] as const)("invalidates the pre-Phone %s %s@%i validator, then correctly revalidates refreshed markup", async (path, id, oldVersion, newVersion) => {
     const hash = await sha256Hex(new TextEncoder().encode(fixtures[path]));
@@ -172,15 +172,15 @@ describe("viewer Phone: served public-file contract", () => {
   // Preserve the manifest-dependent suffix from the actual response: old
   // validators included it, so a suffix-free synthetic tag cannot prove a refresh.
   it.each([
-    ["page.html", "html-frame"], ["sample.pdf", "pdf"],
-    ["sample.mp4", "video"], ["sample.mp3", "audio"],
-    ["sample.woff2", "font"], ["sample.zip", "archive"],
-  ] as const)("refreshes the actual pre-Phone %s %s@2 validator", async (path, id) => {
+    ["page.html", "html-frame", 5], ["sample.pdf", "pdf", 4],
+    ["sample.mp4", "video", 4], ["sample.mp3", "audio", 4],
+    ["sample.woff2", "font", 4], ["sample.zip", "archive", 4],
+  ] as const)("refreshes the actual pre-Phone %s %s@2 validator", async (path, id, currentVersion) => {
     const first = await dw.call(`${root}${path}?view=1`, { headers: NAV });
     expect(first.status).toBe(200);
     const current = first.headers.get("etag")!;
-    expect(current).toMatch(new RegExp(`^W/"${id}@4-`));
-    const legacy = current.replace(`${id}@4-`, `${id}@2-`);
+    expect(current).toMatch(new RegExp(`^W/"${id}@${currentVersion}-`));
+    const legacy = current.replace(`${id}@${currentVersion}-`, `${id}@2-`);
     const refreshed = await dw.call(`${root}${path}?view=1`, { headers: { ...NAV, "If-None-Match": legacy } });
     expect(refreshed.status).toBe(200);
     await expectPhone(await refreshed.text(), `${ORIGIN}${root}${path}`);
@@ -297,7 +297,7 @@ describe("viewer Phone: validator versions", () => {
   // Reverting a bump could strand cached pages from either parent on a 304.
   it("pins every built-in viewer at its exact post-Phone version", () => {
     const expected: Record<string, number> = {
-      source: 5, "html-frame": 4, markdown: 5, notebook: 4, json: 5, csv: 5,
+      source: 5, "html-frame": 5, markdown: 5, notebook: 4, json: 5, csv: 5,
       svg: 5, image: 5, pdf: 4, video: 4, audio: 4, font: 4, archive: 4,
       code: 5, binary: 5,
     };
