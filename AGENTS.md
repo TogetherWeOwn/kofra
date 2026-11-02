@@ -29,7 +29,12 @@ Read `docs/ARCHITECTURE.md` first. The short version:
   The one sanctioned exception is the release verification deploy:
   `.github/workflows/verification-deploy.yml` (manual dispatch, `verification`
   GitHub environment, `wrangler.verification.jsonc` with dedicated
-  `kofra-verification*` resource names, short-lived account-scoped token).
-  It exists for `docs/RELEASE_CHECKLIST.md` runs; it is not a general deploy
-  path, and its config must never be used with standing local credentials.
+  `kofra-verification*` resource names, short-lived account-scoped token;
+  there is no separate test account, so isolation is by those names only and
+  the workflow guards them before any wrangler call). It exists for
+  `docs/RELEASE_CHECKLIST.md` runs; it is not a general deploy path, and its
+  config must never be used with standing local credentials. This repo is
+  public: never put the verification bootstrap key (or any secret) in a
+  workflow artifact, log or summary — it comes from a `verification`
+  environment secret and reaches the checklist runner out of band.
 - PRs follow the org contract in `TogetherWeOwn/.github` CONTRIBUTING + this repo's overrides; the PR template's Attestation is mandatory.
