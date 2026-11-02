@@ -255,6 +255,31 @@ describe("publish omission inventory: additive command-level goldens", () => {
     const preview = await dry();
     expect(preview.json.files).toEqual(mixedManifest);
   });
+
+  it("warns on real publish when a file link points outside the folder", async () => {
+    await tree({ "index.html": "ok" });
+    await tree({ "public.txt": "OUTSIDE_CONTENT_SENTINEL" }, join(work, "outside"));
+    await symlink(join(work, "outside/public.txt"), join(cwd, "alias.txt"));
+    const version = { id: "ver_synthetic", number: 1 };
+    const r = await command(["publish", ".", "--json", "--site", "inventory", "--no-save", ...authenticated], {
+      fetch: async (request) => {
+        const url = new URL(request.url);
+        if (request.method === "POST" && url.pathname === "/api/v1/sites/inventory/deploys") {
+          const manifest = await request.json() as { files: { path: string }[] };
+          expect(manifest.files.map((f) => f.path)).toEqual(["index.html"]);
+          return Response.json({ unchanged: true, deploy: version, missing: [], uploads: [], finalizeUrl: null });
+        }
+        if (request.method === "GET" && url.pathname === "/api/v1/sites/inventory") {
+          return Response.json({ site: { slug: "inventory", url: "https://inventory.invalid/s/inventory/", currentVersion: version } });
+        }
+        throw new Error("unexpected request to injected transport");
+      },
+    });
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain("Skipped link outside the folder alias.txt");
+    expect(r.stdout + r.stderr).not.toContain("OUTSIDE_CONTENT_SENTINEL");
+    expect(r.stdout + r.stderr).not.toContain(work);
+  });
 });
 
 describe("special files and human-readable output", () => {

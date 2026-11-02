@@ -212,6 +212,12 @@ export async function explainConfig(input: ExplainInput): Promise<ConfigExplanat
   if (key.present) add("key.selected", "info", "source_selected", "A key source is present; authorization was not checked.", null, { source: key.source! });
   if (origin && !key.present) add("key.absent", "error", "not_logged_in", "No key is configured. Callers using --anonymous may treat exit 3 as OK; never auto-login on exit 3.", "kofra login --api <effective-origin>");
   if (key.present && key.kind !== "api_key") add("key.kind_noted", "info", "key_kind", "Key kind is derived from its prefix only, not validated.");
+  // Mirror resolveInstance's refusal: an environment key is never sent to a
+  // host taken only from the committed project link, so this combination is
+  // diagnosed, not ready. Legacy twin names count as env (main.ts wraps every
+  // other command with withLegacyEnv, so the refusal sees them too).
+  const envKeyToLinkHost = selectedSource?.kind === "project" && key.present && key.source?.kind === "env";
+  if (envKeyToLinkHost) add("key.env_to_link_host_refused", "error", "env_key_to_link_host", "Authenticated commands refuse to send an environment key to the project-link origin.", "Pass --api <your-instance> or run `kofra login` once (or remove dropway.json).");
   if (credentialsHealth.state === "malformed") add("credentials_file.malformed", "error", "malformed_credentials", "Credentials file is malformed; effective resolution remains permissive.", "kofra login --api https://<your-instance>", { detail: credentialsHealth.detail });
   if (credentialsHealth.state === "unreadable") add("credentials_file.unreadable", "error", "unreadable_credentials", "Credentials file could not be read.", "Check the permissions of <path>.", { detail: credentialsHealth.detail });
   if (linkHealth.state === "malformed") add("project_link.malformed", "error", "malformed_project_link", "Project link is malformed; diagnostic mappings are unavailable.", "Delete or fix ./dropway.json.", { detail: linkHealth.detail });
@@ -225,7 +231,7 @@ export async function explainConfig(input: ExplainInput): Promise<ConfigExplanat
   const dirSource = envSource(env, "CONFIG_DIR");
   const selector = dirSource?.detail ?? (env.XDG_CONFIG_HOME ? "XDG_CONFIG_HOME" : process.platform === "win32" && env.APPDATA ? "APPDATA" : "default");
   const defaultPath = selector === "default" && configDir(withLegacyEnv(env)) === configDir({}) ? "~/.config/dropway" : null;
-  const exitCode = !origin ? 2 : key.present ? 0 : 3;
+  const exitCode = envKeyToLinkHost ? 2 : !origin ? 2 : key.present ? 0 : 3;
   return {
     schema: "kofra.explain-config/v1", ok: exitCode === 0,
     status: exitCode === 0 ? "ready" : exitCode === 3 ? "needs_key" : "unconfigured", exitCode,

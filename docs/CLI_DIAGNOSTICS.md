@@ -329,6 +329,7 @@ real values) or `null`. Hints and templates contain no caller values.
 | `key.selected` | info | `source_selected` | a key source won | null |
 | `key.absent` | error | `not_logged_in` | API resolved but no key selected | `kofra login --api <effective-origin>` |
 | `key.kind_noted` | info | `key_kind` | selected key kind is `claim_token` or `other` | null |
+| `key.env_to_link_host_refused` | error | `env_key_to_link_host` | the origin came only from the project link and the key from the environment, so authenticated commands refuse before any request (mirrors `resolveInstance`'s refusal, including legacy twin names) | `Pass --api <your-instance>` or run `kofra login` once (or remove dropway.json) |
 | `credentials_file.malformed` | error | `malformed_credentials` | see States (`detail` set) | `kofra login --api https://<your-instance>` (rewrites the file) |
 | `credentials_file.unreadable` | error | `unreadable_credentials` | see States (`detail` set) | `Check the permissions of <path>.` |
 | `project_link.malformed` | error | `malformed_project_link` | see States (`detail` set) | `Delete or fix ./dropway.json.` |
@@ -433,7 +434,7 @@ each one with a sentinel:
 |------|----------|---------|
 | 0 | `ready` | an API origin resolved and a key was selected |
 | 3 | `needs_key` | an API origin resolved, no key selected |
-| 2 | `unconfigured` | no API origin resolved |
+| 2 | `unconfigured` | no API origin resolved, or an environment key was selected for a project-link-only origin and authenticated commands would refuse it (`key.env_to_link_host_refused`) |
 | 1 | — | unexpected internal failure only; never a diagnosed state |
 
 In the data envelope `ok` is `true` exactly when `exitCode` is `0`:
@@ -540,6 +541,7 @@ config dir via `KOFRA_CONFIG_DIR`, synthetic cwd, controlled env):
 | 34 | valid credentials `{}`; then empty string default, two instances, one with a truthy key | first: `defaultPresent: false`, `instanceCount: 0`; second: `defaultPresent: true`, `instanceCount: 2`; each has `hasEntryForEffectiveApi: null` without a resolved API; with explicit valid `--api`, lookup is `true` only for the truthy-key entry, otherwise `false` |
 | 35 | credentials with a valid string default, a matching entry containing a synthetic key, and an unrelated `null` instance entry | file is `malformed` / `invalid_shape` with all three summary fields `null`, yet effective default and saved key still win, exit 0 `ready`; diagnostic classification must not tighten the resolver |
 | 36 | `[path]` lookup across link states: absent link; valid link matching the effective origin with and without an entry; valid link with a different `api`; valid link with no `api` | absent: `apiMatchesEffective: false`, `sitesEntryCount: 0`, `{key, slug: null}`; matching with entry: `slug` set, `mapping_found`; matching without entry: `slug: null`, `mapping_missing`; different or missing `api`: `apiMatchesEffective: false`, `slug: null` even when an entry exists, `mapping_missing`; no effective origin: `apiMatchesEffective: false` |
+| 37 | link `api` as the only origin with an env key (modern or legacy twin) | exit 2, `status: unconfigured`, `ok: false`, `key.env_to_link_host_refused` error with code `env_key_to_link_host`; `--api` or `--key` flag combinations stay ready |
 
 ## Security-review disposition
 
