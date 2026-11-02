@@ -100,7 +100,7 @@ under `%APPDATA%\dropway` and the mode-0600 check in step 5 does not apply.
   npx kofra restore hello v1                                      # v1 live again
   curl -s https://<worker>/s/hello/                               # "Hello from Kofra" again
   ```
-  Expected: each command exits 0; the unchanged republish creates **no** v3 (`versions` still lists exactly two versions); after restore, the live URL serves v1 content. The version-preview address for v2 (`/s/hello--v2/` path form) is private: `curl -s -o /dev/null -w '%{http_code}' https://<worker>/s/hello--v2/` returns **404** with no credentials; with owner credentials or the signed preview link from the publish result it returns 200 and serves "Second version".
+  Expected: each command exits 0; the unchanged republish creates **no** v3 (`versions` still lists exactly two versions); after restore, the live URL serves v1 content. The version-preview address for v2 (`/s/hello--v2/` path form) is private: `curl -s -o /dev/null -w '%{http_code}' https://<worker>/s/hello--v2/` returns **404** with no credentials; with owner credentials (`-H "Authorization: Bearer <owner key>"`) it returns 200 and serves "Second version". (The CLI publish result carries no signed preview link; signed `versionUrl`s come from REST/MCP publish responses — if you take one from a step-11 response instead, the signed link also returns 200 without credentials.)
   - Result:
   - Evidence:
 - [ ] **Step 9 — Password gate.**
