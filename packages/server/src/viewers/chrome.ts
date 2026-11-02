@@ -18,7 +18,7 @@ import { unfurlHead } from "./unfurl";
  * extension viewers using viewerPage() too, not just the built-ins whose own
  * `version` is bumped by hand. Bump it whenever the shared output changes.
  */
-export const VIEWER_CHROME_VERSION = 2;
+export const VIEWER_CHROME_VERSION = 4;
 
 /** CSP for viewer pages: no scripts, so user-authored markup inside e.g. Markdown cannot execute. */
 export const VIEWER_CSP =
@@ -150,7 +150,15 @@ export const VIEWER_CSS = `
 .dw-checker{background-color:var(--card);background-image:linear-gradient(45deg,var(--code) 25%,transparent 25%),linear-gradient(-45deg,var(--code) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,var(--code) 75%),linear-gradient(-45deg,transparent 75%,var(--code) 75%);background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0}
 .dw-meta{color:var(--muted);font-size:.85rem;text-align:center;margin:.75rem 0}
 @media (max-width:640px){.dw-vmeta{display:none}.dw-vbar{padding:.4rem .6rem}}
+.dw-skip{position:absolute;left:-999px;top:0;background:var(--accent);color:#fff;padding:.5rem .75rem;z-index:100}
+.dw-skip:focus{left:.5rem;top:.5rem}
+@media (prefers-color-scheme:dark){.dw-skip{color:#141312}}
 `;
+
+/** An opening <main> tag (quoted attribute values may hold `>`); group 1 is the attribute text. */
+const MAIN_OPEN = /<main(?=[\s>/])((?:[^>"']|"[^"]*"|'[^']*')*)>/;
+/** The id attribute of an opening tag's attribute text (group 1 of MAIN_OPEN, so `data-id` and friends cannot match). */
+const MAIN_ID = /(?:\s|^)id\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/;
 
 /** A complete viewer page response. `body` is trusted HTML (escape user content before passing it). */
 export function viewerPage(
@@ -158,6 +166,24 @@ export function viewerPage(
   opts: { title?: string; body: string; css?: string; print?: boolean; tabs: ViewerTab[]; barExtra?: string; csp?: string; script?: string; headers?: Record<string, string> },
 ): Response {
   const title = opts.title ?? `${vc.file.path.split("/").pop()} · ${vc.live.slug}`;
+  // Every viewer page starts with a skip link (the app shell's pattern)
+  // that lands on the content landmark. A body that already renders its own
+  // <main> keeps it: the landmark gains the skip target (its own id when it
+  // sets one, so extension fragment links and styles keep working) and is
+  // made focusable so keyboard focus follows the skip link; anything else
+  // is wrapped in a fresh landmark.
+  const open = MAIN_OPEN.exec(opts.body);
+  const attrs = open?.[1] ?? "";
+  let target = "dw-content";
+  let content: string;
+  if (!open) {
+    content = `<main id="dw-content" tabindex="-1">${opts.body}</main>`;
+  } else if (MAIN_ID.test(attrs)) {
+    target = MAIN_ID.exec(attrs)![1]!.replace(/^["']|["']$/g, "");
+    content = opts.body.replace(MAIN_OPEN, '<main tabindex="-1"$1>');
+  } else {
+    content = opts.body.replace(MAIN_OPEN, '<main id="dw-content" tabindex="-1"$1>');
+  }
   const page = htmlPage({
     title,
     css: VIEWER_CSS + (opts.css ?? "") + (opts.print ? REPORT_PRINT_CSS : ""),
@@ -169,7 +195,7 @@ export function viewerPage(
       image: vc.file.kind === "image",
     }),
     // File path only: never copy request/capability URLs into printed context, even when embedded.
-    body: viewerBar(vc, opts.tabs, opts.barExtra) + (opts.print ? `<p class="dw-print-title">${escapeHtml(vc.file.path)}</p>` : "") + opts.body + (opts.script ? `<script>${opts.script}</script>` : ""),
+    body: `<a class="dw-skip" href="#${escapeHtml(target)}">Skip to content</a>` + viewerBar(vc, opts.tabs, opts.barExtra) + (opts.print ? `<p class="dw-print-title">${escapeHtml(vc.file.path)}</p>` : "") + content + (opts.script ? `<script>${opts.script}</script>` : ""),
   });
   const headers: Record<string, string> = { "Content-Type": "text/html; charset=utf-8", ...opts.headers };
   if (opts.csp) headers["Content-Security-Policy"] = opts.csp;

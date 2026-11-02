@@ -24,7 +24,7 @@
  *   Past the entry cap: "Showing the first 1,000 of N entries".
  * - Cache like every viewer: cachedRender keyed with id + version
  *   ("archive@4/..."), X-Kofra-Render-Cache header; ETag
- *   W/"archive@4-<sha>-folder<manifest>-chrome2" (with -e before the closing
+ *   W/"archive@4-<sha>-folder<manifest>-chrome4" (with -e before the closing
  *   quote for &embed=1) so a version bump invalidates old renders.
  * - Escape entry names as text; make no external requests (relative links
  *   plus the absolute app-origin Files link only).
@@ -583,7 +583,7 @@ describe("archive viewer pages", () => {
       expect((await get("archives/version-probe.zip", { ...NAV, "If-None-Match": bumpedWarm.headers.get("etag")! })).status).toBe(304);
       const embed = await get("archives/version-probe.zip?view=1&embed=1", { ...NAV, "If-None-Match": `W/"archive@${version}-${sha}-chrome1-e"` });
       expect(embed.status).toBe(200);
-      expect(embed.headers.get("etag")).toBe(`W/"archive@${version + 1}-${sha}-folder${manifestVersion}-chrome2-e"`);
+      expect(embed.headers.get("etag")).toBe(`W/"archive@${version + 1}-${sha}-folder${manifestVersion}-chrome4-e"`);
 
       // Drop only isolate memory: the bumped version must also have its own edge-cache fragment.
       clearRenderMemoryCache();

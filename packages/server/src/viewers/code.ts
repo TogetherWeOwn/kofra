@@ -45,7 +45,7 @@ export const CODE_CSS = `
 .dw-ln>a::before{content:attr(data-n)}
 .dw-ln>a:hover{opacity:1;color:var(--accent)}
 .dw-ln>.c{display:table-cell;padding:0 1em;white-space:pre}
-.dw-ln:target,.dw-ln.dw-hl{background:color-mix(in srgb,var(--accent) 14%,transparent)}
+.dw-ln:target,.dw-ln.dw-hl{background:color-mix(in srgb,var(--accent) 6%,transparent)}
 .dw-ln:target>a,.dw-ln.dw-hl>a{opacity:1;color:var(--accent)}
 #dw-wrap:checked~.dw-src .c{white-space:pre-wrap;overflow-wrap:anywhere}
 #dw-wrap:checked~.dw-codehead label{border-color:var(--accent);color:var(--accent)}

@@ -24,6 +24,9 @@ const LISTING_CSS = `
 .dw-gal a{display:block;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--card);text-decoration:none}
 .dw-gal img{display:block;width:100%;aspect-ratio:1;object-fit:cover;background:var(--code)}
 .dw-gal span{display:block;padding:.3rem .5rem;font-size:.75rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dw-skip{position:absolute;left:-999px;top:0;background:var(--accent);color:#fff;padding:.5rem .75rem;z-index:100}
+.dw-skip:focus{left:.5rem;top:.5rem}
+@media (prefers-color-scheme:dark){.dw-skip{color:#141312}}
 `;
 
 const GALLERY_MAX = 60;
@@ -99,7 +102,7 @@ export function renderListing(live: LiveSite, dir: string, mode: ServeMode, appV
       description: `Folder listing · ${summary}`,
       url: origin + base,
     }),
-    body: `<main class="dw-ls"><header><h1>${crumb} /</h1><span class="sum">${summary}${appViewerUrl ? `<a href="${escapeHtml(appViewerUrl)}" rel="nofollow">Browse files</a>` : ""}</span>${sortLinks}</header><ul>${items.join("")}</ul>${gallery}</main>`,
+    body: `<a class="dw-skip" href="#dw-content">Skip to content</a><main class="dw-ls" id="dw-content" tabindex="-1"><header><h1>${crumb} /</h1><span class="sum">${summary}${appViewerUrl ? `<a href="${escapeHtml(appViewerUrl)}" rel="nofollow">Browse files</a>` : ""}</span>${sortLinks}</header><ul>${items.join("")}</ul>${gallery}</main>`,
   });
   return new Response(page, {
     status: 200,

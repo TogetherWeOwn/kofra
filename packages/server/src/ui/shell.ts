@@ -177,7 +177,7 @@ h1.dw-h1{font-size:1.5rem;line-height:1.2;letter-spacing:-.01em;margin:0}
 .dw-btn:hover,.dw-btn-link:hover{border-color:color-mix(in srgb,var(--accent) 60%,var(--line));color:var(--accent)}
 .dw-btn[disabled]{opacity:.55;cursor:not-allowed}
 .dw-btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-.dw-btn.primary:hover{filter:brightness(1.07);color:#fff}
+.dw-btn.primary:hover{filter:brightness(.93);color:#fff}
 .dw-btn.danger{color:var(--danger)}.dw-btn.danger:hover{border-color:var(--danger)}
 .dw-btn.small{padding:.25rem .55rem;font-size:.8rem}
 .dw-btn.ghost{border-color:transparent;background:transparent}
@@ -250,4 +250,6 @@ dialog.dw-dialog .dw-row{justify-content:flex-end;margin-top:1rem}
 .dw-tabs button[aria-selected=true]{color:var(--fg);border-bottom-color:var(--accent);font-weight:600}
 pre.dw-snippet{position:relative;margin:0;background:var(--code);border-radius:8px;padding:.85rem 1rem;overflow:auto;font-size:.82rem;line-height:1.55;white-space:pre-wrap;word-break:break-all}
 @media (max-width:720px){.dw-top{gap:.6rem;padding:0 .75rem}.dw-account .who{display:none}.dw-main{padding:1.25rem .85rem 3rem}.dw-table th,.dw-table td{padding:.5rem .6rem}.dw-hide-sm{display:none}}
+/* Dark scheme: near-black text on the bright accent keeps primary buttons and the skip link at AA contrast. */
+@media (prefers-color-scheme:dark){.dw-btn.primary{color:#141312}.dw-btn.primary:hover{color:#141312}.dw-skip{color:#141312}}
 `;

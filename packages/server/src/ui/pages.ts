@@ -256,7 +256,7 @@ body.dw-wide{height:100vh;min-height:0;overflow:hidden}
 .dw-treebox details[open]>summary::before{content:"▾"}
 .dw-treebox summary:hover,.dw-treebox a:hover{background:var(--code)}
 .dw-treebox a{display:block;padding:.22rem .35rem .22rem 1.35rem;border-radius:5px;color:var(--fg);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dw-treebox a[aria-current]{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);font-weight:600}
+.dw-treebox a[aria-current]{background:color-mix(in srgb,var(--accent) 6%,transparent);color:var(--accent);font-weight:600}
 .dw-viewer{flex:1;min-width:0;display:flex;flex-direction:column}
 .dw-vtools{display:flex;flex-wrap:wrap;gap:.5rem .75rem;align-items:center;justify-content:space-between;padding:.5rem .9rem;border-bottom:1px solid var(--line);background:var(--bg);font-size:.85rem}
 .dw-vtools #dw-fileinfo{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
