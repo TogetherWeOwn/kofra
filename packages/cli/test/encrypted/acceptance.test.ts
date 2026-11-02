@@ -331,7 +331,11 @@ describe("encrypted publish acceptance against a real local Worker and Chromium"
     const view = await visit(result.json.url);
     try {
       await restored(view);
-      await authenticatedRecords(view, key.bytes);
+      const loaderRecords = await authenticatedRecords(view, key.bytes);
+      for (const record of loaderRecords) {
+        expect(record.aad, "the shipped loader must bind the container magic as AES-GCM additional data").not.toBeNull();
+        expect(Buffer.from(record.aad!).toString(), "loader additional data must be the container magic").toBe("DWENC001");
+      }
       assertPrivate([...result.wire, ...view.wire], key);
       expect(view.response.headers()["content-security-policy"], "first-party loader must retain a CSP").toBeTruthy();
       // An app-origin first-party loader may mount an opaque sandboxed content

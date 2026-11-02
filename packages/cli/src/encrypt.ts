@@ -57,9 +57,12 @@ export async function encryptFiles(files: SourceFile[]): Promise<{ files: Source
   const rawKey = randomBytes(32);
   const iv = randomBytes(12);
   const key = await webcrypto.subtle.importKey("raw", rawKey, "AES-GCM", false, ["encrypt"]);
-  const ciphertext = new Uint8Array(await webcrypto.subtle.encrypt({ name: "AES-GCM", iv, tagLength: 128 }, key, plaintext));
+  // The container magic is authenticated data: it binds the header to the
+  // ciphertext so the prefix cannot be swapped without failing decryption.
+  const magic = new TextEncoder().encode("DWENC001");
+  const ciphertext = new Uint8Array(await webcrypto.subtle.encrypt({ name: "AES-GCM", iv, tagLength: 128, additionalData: magic }, key, plaintext));
   // Versioned magic + 96-bit nonce + ciphertext with its full 128-bit authentication tag.
-  const bytes = Buffer.concat([Buffer.from("DWENC001"), iv, ciphertext]);
+  const bytes = Buffer.concat([Buffer.from(magic), iv, ciphertext]);
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   return {
     files: [{ path: "encrypted.bin", size: bytes.byteLength, sha256, body: async () => bytes }],
