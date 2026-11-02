@@ -465,7 +465,7 @@ describe("password-gated sites gain no new access path (path mode)", () => {
       method: "PUT",
       key: dw.ownerKey,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: "password", password: "secret1" }),
+      body: JSON.stringify({ mode: "password", password: "secret12" }),
     });
     expect(lock.status).toBe(200);
   });
@@ -483,7 +483,7 @@ describe("password-gated sites gain no new access path (path mode)", () => {
     const unlock = await dw.call(`${BASE}__dropway/password`, {
       method: "POST",
       headers: { ...NAV, "Content-Type": "application/x-www-form-urlencoded", "Sec-Fetch-Site": "same-origin" },
-      body: `password=secret1&next=${encodeURIComponent(`${BASE}pics/b.png`)}`,
+      body: `password=secret12&next=${encodeURIComponent(`${BASE}pics/b.png`)}`,
     });
     expect(unlock.status).toBe(303);
     const cookie = unlock.headers.get("set-cookie")!.split(";")[0]!;

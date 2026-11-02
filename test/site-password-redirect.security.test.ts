@@ -31,7 +31,7 @@ async function locked(dw: Instance, slug: string): Promise<void> {
   expect(pub.status).toBe(201);
   const lock = await dw.json(`/api/v1/sites/${slug}/access`, {
     method: "PUT", key: dw.ownerKey, headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode: "password", password: "secret1" }),
+    body: JSON.stringify({ mode: "password", password: "secret12" }),
   });
   expect(lock.status).toBe(200);
 }
@@ -40,7 +40,7 @@ function unlock(dw: Instance, url: string, next: string): Promise<Response> {
   return dw.call(url, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", "Sec-Fetch-Site": "same-origin" },
-    body: new URLSearchParams({ password: "secret1", next }),
+    body: new URLSearchParams({ password: "secret12", next }),
   });
 }
 

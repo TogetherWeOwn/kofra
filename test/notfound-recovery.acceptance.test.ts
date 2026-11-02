@@ -369,7 +369,7 @@ describe("password gate: recovery links only after the gate", () => {
       method: "PUT",
       key: dw.ownerKey,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: "password", password: "secret1" }),
+      body: JSON.stringify({ mode: "password", password: "secret12" }),
     });
     expect(lock.status).toBe(200);
 
@@ -387,7 +387,7 @@ describe("password gate: recovery links only after the gate", () => {
     const unlock = await dw.call("/s/locked-recovery/__dropway/password", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: "password=secret1",
+      body: "password=secret12",
     });
     expect(unlock.status).toBe(303);
     const cookie = unlock.headers.get("set-cookie")!.split(";")[0]!;
@@ -410,7 +410,7 @@ describe("password gate: recovery links only after the gate", () => {
       method: "PUT",
       key: dw.ownerKey,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: "password", password: "secret1" }),
+      body: JSON.stringify({ mode: "password", password: "secret12" }),
     });
     expect(lock.status).toBe(200);
 

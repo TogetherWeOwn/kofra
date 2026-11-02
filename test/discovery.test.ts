@@ -90,7 +90,7 @@ describe("REST twins of the agent tools", () => {
 
   it("PUT /access, POST /rename and GET /versions/{version}", async () => {
     await pub("rest-site", { "index.html": "hi" });
-    const pw = await dw.json("/api/v1/sites/rest-site/access", { method: "PUT", key: dw.ownerKey, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "password", password: "secret1" }) });
+    const pw = await dw.json("/api/v1/sites/rest-site/access", { method: "PUT", key: dw.ownerKey, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "password", password: "secret12" }) });
     expect(pw.body.access.mode).toBe("password");
     const v = await dw.json("/api/v1/sites/rest-site/versions/v1", { key: dw.ownerKey });
     expect(v.body.version).toMatchObject({ number: 1, live: true });

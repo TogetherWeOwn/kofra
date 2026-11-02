@@ -3,7 +3,7 @@ import { ApiError, defaultIdentity, type ConfigOverrides, type PolicyAdapter } f
 import { freshInstance, jsonBody, manifestEntry, ORIGIN, type Instance } from "./helpers";
 import { create as createTransfer, op } from "./transfer-fixtures";
 import { request } from "./delivery-review-fixtures";
-import { attempt, freezePasswordClock, lockedSite, passwordForm, postForm, type PasswordForm } from "./site-password-fixtures";
+import { attempt, freezePasswordClock, lockedSite, passwordForm, postForm, SITE_PASSWORD, type PasswordForm } from "./site-password-fixtures";
 
 // R-13: public Worker boundaries, without minting tokens or mocking authorization/storage.
 const DAY = 24 * 60 * 60 * 1000;
@@ -465,8 +465,8 @@ for (const topology of topologies) {
         expect(refusedHtml).not.toContain(link.searchParams.get("dw_preview")!);
       }
       // Probe the IP on another site, independently of the attacked site's 30-attempt bucket.
-      for (let n = 0; n < 10; n++) expect((await attempt(dw, other, n === 0 ? "1234" : "wrong", PREVIEW_IP)).status).toBe(n === 0 ? 303 : 401);
-      expect((await attempt(dw, other, "1234", PREVIEW_IP)).status).toBe(429);
+      for (let n = 0; n < 10; n++) expect((await attempt(dw, other, n === 0 ? SITE_PASSWORD : "wrong", PREVIEW_IP)).status).toBe(n === 0 ? 303 : 401);
+      expect((await attempt(dw, other, SITE_PASSWORD, PREVIEW_IP)).status).toBe(429);
       for (let n = 0; n < 30; n++) expect((await attempt(dw, liveUrl, "wrong-preview-password", `198.51.100.${n + 1}`)).status).toBe(401);
       expect((await attempt(dw, liveUrl, PREVIEW_PASSWORD, "203.0.113.1")).status).toBe(429);
     });
@@ -499,7 +499,7 @@ for (const topology of topologies) {
       // Visitor budget: the ten admitted preview attempts (one success,
       // nine failures) exhaust this visitor on an unrelated ordinary site
       // and on further preview submissions alike.
-      const ipLimited = await attempt(dw, other, "1234", PREVIEW_IP);
+      const ipLimited = await attempt(dw, other, SITE_PASSWORD, PREVIEW_IP);
       expect(ipLimited.status, "preview attempts must debit the shared visitor budget").toBe(429);
       expect(ipLimited.headers.get("retry-after")).toBe("600");
       expect(ipLimited.headers.get("set-cookie")).toBeNull();

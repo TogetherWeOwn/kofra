@@ -233,8 +233,30 @@ export function systemResponse(
   return new Response(body, { status, headers: h });
 }
 
-async function passwordCookieValue(dw: DropwayContext, live: LiveSite): Promise<string> {
-  return (await hmacHex(signingSecret(dw.config), `${live.siteId}:${live.passwordHash}`)).slice(0, 40);
+/**
+ * Site-password unlock cookies expire server-side after seven days. The shape
+ * mirrors the transfer-download grant (`until + "." + HMAC(...)`): `until` is
+ * an absolute millisecond timestamp, it never exceeds now + 7 days, and the
+ * MAC binds the site, the current password hash and the expiry, so rotating
+ * the password revokes outstanding cookies. The browser's Max-Age is only a
+ * hint; every request rechecks `until` and the MAC. Pre-change cookies (bare
+ * truncated HMAC, no `until`) fail the shape check and ask the visitor to
+ * enter the password once more.
+ */
+const SITE_PASSWORD_COOKIE_TTL = 7 * 24 * 60 * 60_000;
+const SITE_PASSWORD_COOKIE_MAX_LENGTH = 100;
+
+async function passwordCookieValue(dw: DropwayContext, live: LiveSite, until: number): Promise<string> {
+  return `${until}.${await hmacHex(signingSecret(dw.config), `site-pw:${live.siteId}:${live.passwordHash}:${until}`)}`;
+}
+
+async function passwordCookieValid(dw: DropwayContext, live: LiveSite, cookie: string | null): Promise<boolean> {
+  if (!cookie || cookie.length > SITE_PASSWORD_COOKIE_MAX_LENGTH) return false;
+  const [until, signature] = cookie.split(".");
+  if (!until || !signature || !/^\d+$/.test(until)) return false;
+  const expires = Number(until);
+  if (expires < Date.now() || expires > Date.now() + SITE_PASSWORD_COOKIE_TTL) return false;
+  return timingSafeEqualStr(cookie, await passwordCookieValue(dw, live, expires));
 }
 
 /**
@@ -288,8 +310,8 @@ async function passwordSubmissionAllowed(dw: DropwayContext, req: Request, live:
 
 async function handlePassword(dw: DropwayContext, req: Request, live: LiveSite, mode: ServeMode, filePath: string): Promise<Response | null> {
   if (!live.passwordHash) return null;
-  const expected = await passwordCookieValue(dw, live);
-  if (readCookie(req, cookieName(live, mode)) === expected || readCookie(req, cookieName(live, mode, true)) === expected) return null;
+  if (await passwordCookieValid(dw, live, readCookie(req, cookieName(live, mode)))) return null;
+  if (await passwordCookieValid(dw, live, readCookie(req, cookieName(live, mode, true)))) return null;
 
   if (req.method === "POST" && filePath === PASSWORD_PATH) {
     if (!await passwordSubmissionAllowed(dw, req, live, mode)) {
@@ -313,18 +335,19 @@ async function handlePassword(dw: DropwayContext, req: Request, live: LiveSite, 
     const next = String(form?.get("next") ?? mode.base);
     const safeNext = localRedirectPath(next, new URL(req.url).origin, mode.base) ?? mode.base;
     if (typeof password === "string" && (await verifyPassword(password, live.passwordHash))) {
+      const value = await passwordCookieValue(dw, live, Date.now() + SITE_PASSWORD_COOKIE_TTL);
       const h = new Headers({ Location: safeNext, "Cache-Control": "no-store" });
       const dest = req.headers.get("sec-fetch-dest");
       const attrs = `Path=${mode.base}; Max-Age=604800; HttpOnly; Secure`;
       if (mode.sandbox) {
         // Sandboxed pages have an opaque origin, so their sub-resource requests count as cross-site.
-        h.append("Set-Cookie", `${cookieName(live, mode)}=${expected}; ${attrs}; SameSite=None`);
+        h.append("Set-Cookie", `${cookieName(live, mode)}=${value}; ${attrs}; SameSite=None`);
       } else if (dest === "iframe" || dest === "frame") {
         // Entered in the app's file viewer, a cross-site frame once sites have their own domain:
         // a Lax cookie would not be sent there, so use a cookie partitioned to that top-level site.
-        h.append("Set-Cookie", `${cookieName(live, mode, true)}=${expected}; ${attrs}; SameSite=None; Partitioned`);
+        h.append("Set-Cookie", `${cookieName(live, mode, true)}=${value}; ${attrs}; SameSite=None; Partitioned`);
       } else {
-        h.append("Set-Cookie", `${cookieName(live, mode)}=${expected}; ${attrs}; SameSite=Lax`);
+        h.append("Set-Cookie", `${cookieName(live, mode)}=${value}; ${attrs}; SameSite=Lax`);
       }
       return new Response(null, { status: 303, headers: h });
     }
