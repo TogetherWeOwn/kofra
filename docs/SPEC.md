@@ -12,9 +12,9 @@ Tags used in this document:
   scoped API keys; optional anonymous publish with claim; file viewers with a rendered/raw toggle.
 - **P1**: feature parity with here.now's public API and product.
 - **P2**: beyond parity.
-- **Done**: in `main` at commit `866ca07` (the baseline). Items delivered by the MVP merge after that
-  (MCP server, viewers, dashboard, CLI, discovery files) are tracked in `docs/ROADMAP.md`, "Progress". **Partial**: part of it is in `main`. **R-NN**: the
-  `docs/ROADMAP.md` item that delivers it.
+- **Done**: in `main`. This status column is the source of truth and is updated in the same pull
+  request as the code; `docs/ROADMAP.md` only tracks the M0 item states. **Partial**: part of it is
+  in `main`. **R-NN**: the `docs/ROADMAP.md` item that delivers it.
 
 Placeholders: `<app>` is the app origin (app, REST API, MCP), for example
 `https://dropway.<you>.workers.dev`. `<sites>` is where sites are served (section 11.2).
@@ -221,11 +221,11 @@ the local filter.
 | ID | Feature | Pri | Status |
 |---|---|---|---|
 | AX-01 | REST API v1 and OpenAPI 3.1, generated from one operation registry | P0 | Done (R-02); legacy wire adapters preserved |
-| AX-02 | Remote MCP server, Streamable HTTP, stateless, API-key auth, `core` toolset | P0 | R-06 |
+| AX-02 | Remote MCP server, Streamable HTTP, stateless, API-key auth, `core` toolset | P0 | Done (R-06) |
 | AX-03 | MCP: OAuth, every toolset, `?toolsets=`, read-only mode, single-site scope, resources, prompts, an MCP Apps site card | P1 | R-24, R-25 |
 | AX-04 | CLI `npx kofra`: `publish --json --wait`, management commands, exit codes, `kofra api` escape hatch | P0 | Partial (R-09, R-10): explicit `rename <source> <new-slug> --yes`, explicit `settings <site>` inspect/PATCH/offline `--dry-run`, `claim <site> --token`, offline plan, neutral retry receipts and unchanged local mappings; verified immutable-version `pull <site> <dir>` (bounded pages, safe local replacement, per-file JSON receipts); `publish --stdin <filename>` pipes one raw file through the same publish path; verified read-only `compare <path> --site <name>` against a pinned version (two manifest reads, no downloads, redirect refusal, manifest row-count validation, escaped human output and cancellation/source-change handling); remaining management commands pending |
 | AX-05 | Local stdio MCP (`npx kofra mcp`) with local-path sources | P1 | R-26 |
-| AX-06 | Discovery: `llms.txt` v2, a skill templated with the instance's own URLs, `/.well-known/agent-skills/index.json`, `/.well-known/api-catalog`, `/connect` | P0 | Partial (`llms.txt`, OpenAPI); R-11 |
+| AX-06 | Discovery: `llms.txt` v2, a skill templated with the instance's own URLs, `/.well-known/agent-skills/index.json`, `/.well-known/api-catalog`, `/connect` | P0 | Done (R-11) |
 | AX-07 | Error envelope with `code`, `hint`, `retryable`, `retryAfterSeconds`, `docs`, `next`, `details.fields` | P0 | Done (manifest and schema validation; legacy service validators retain stable codes) |
 | AX-08 | `whoami` reports principal, instance, capabilities, limits and usage | P0 | R-17 policy/usage done; extended instance metadata in R-06 |
 | AX-09 | `check_site`: broken links, missing assets, path-mode traps, optional screenshot | P1 | R-20 |
@@ -1345,13 +1345,13 @@ App origin:
 | `/` | Landing (or `uiSlots.landing`); first-run setup form when not set up (R-16) | P0 | Done |
 | `/health` | `{ ok, service, version, build }` | P0 | Done |
 | `/openapi.json` | OpenAPI 3.1 for this instance (servers = its own origin) | P0 | Done |
-| `/llms.txt`, `/llms-full.txt`, `/docs/*.md` | Agent docs (llms.txt v2; `Link: rel="describedby"` headers) | P0 / P1 | Partial; R-11 |
-| `/skill.md`, `/.well-known/agent-skills/index.json` (+ legacy `/.well-known/skills/index.json`) | Skill templated with this instance's URLs; `npx skills add <app>` works | P0 | R-11 |
-| `/.well-known/api-catalog` | RFC 9727 linkset to OpenAPI, docs, MCP | P0 | R-11 |
-| `/connect`, `/connect.md` | Copy-paste setup per agent client | P0 | R-11 |
-| `/robots.txt` | App crawler policy | P0 | R-11 |
+| `/llms.txt`, `/llms-full.txt`, `/docs/errors.md` | Agent docs (llms.txt v2; the error catalog under `/docs/`) | P0 / P1 | Done (R-11) |
+| `/skill.md`, `/.well-known/agent-skills/index.json` (+ legacy `/.well-known/skills/index.json`) | Skill templated with this instance's URLs (skill responses carry `Link: rel="describedby"` headers); `npx skills add <app>` works | P0 | Done (R-11) |
+| `/.well-known/api-catalog` | RFC 9727 linkset to OpenAPI, docs, MCP | P0 | Done (R-11) |
+| `/connect`, `/connect.md` | Copy-paste setup per agent client | P0 | Done (R-11) |
+| `/robots.txt` | App crawler policy | P0 | Done (R-11) |
 | `/claim` | Claim page (token in fragment) | P0 | Done |
-| `/mcp` | Remote MCP (section 9) | P0 | R-06 (501 today) |
+| `/mcp` | Remote MCP (section 9) | P0 | Done (R-06) |
 | `/mcp/server-card`, `/mcp/code` | MCP server card; Code Mode | P1 / P2 | R-25 / R-43 |
 | `/oauth/authorize`, `/oauth/token`, `/oauth/register`, `/oauth/device` | OAuth 2.1 | P1 | R-24 |
 | `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource/mcp` | OAuth discovery | P1 | R-24 |
