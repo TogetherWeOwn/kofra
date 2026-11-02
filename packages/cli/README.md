@@ -373,7 +373,9 @@ tokens, Kofra keys) stop the publish with exit code 2 unless you pass `--allow-s
 `--dry-run --json` explains every skipped path in an `omissions` array (`{path, reason}`, sorted by
 relative path; pruned directories appear once): `ignored` (built-in or `.dropwayignore` rules),
 `excluded` (explicitly excluded, e.g. the `./dropway.json` project link), `symlink_directory`
-(directory links are never followed), `broken_symlink`, and `special_file` (FIFOs, sockets and
+(directory links are never followed), `symlink_outside_root` (file links that resolve outside
+the published folder are skipped; file links staying inside are published), `broken_symlink`,
+and `special_file` (FIFOs, sockets and
 devices are never published). An offline agent check, needing no URL
 or key:
 
@@ -669,7 +671,9 @@ usable immutable id fails (`bad_read_file_version`, exit 1) instead of guessing.
 
 Config dir: `$KOFRA_CONFIG_DIR`, else `$XDG_CONFIG_HOME/dropway`, else `~/.config/dropway`
 (`%APPDATA%\dropway` on Windows). `KOFRA_API_KEY` applies to whichever instance you target, so set
-it per instance in CI. The CLI never prompts when stdin is not a terminal: pipe keys on stdin
+it per instance in CI. An env key is never sent to a host taken only from `./dropway.json`
+(which is safe to commit and may name someone else's instance): pass `--api <your-instance>`
+or run `kofra login` once instead. The CLI never prompts when stdin is not a terminal: pipe keys on stdin
 (`echo "$KEY" | kofra login --api <url>`), and pass `--yes` for deletions.
 
 ## Development

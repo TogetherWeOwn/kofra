@@ -59,7 +59,9 @@ interface Command {
 
 const HELP_FOOTER = `Global options:
   --api <url>      Instance URL (default: $KOFRA_API, then ./dropway.json, then your last login)
-  --key <key>      API key or claim token (default: $KOFRA_API_KEY, then the saved key for the instance)
+  --key <key>      API key or claim token (default: $KOFRA_API_KEY, then the saved key for the instance).
+                   An env key is never sent to a host taken only from ./dropway.json:
+                   pass --api <your-instance> or run kofra login once instead
   --json           Print exactly one JSON object on stdout (for scripts and agents)
   -q, --quiet      No progress output
   -h, --help       Help for a command
@@ -139,6 +141,8 @@ class Output {
 
 interface Instance {
   api: string;
+  /** Which configuration layer named the effective origin (mirrors keySource). */
+  apiSource: "flag" | "env" | "link" | "saved";
   key: string | null;
   keySource: "flag" | "env" | "saved" | null;
   link: ProjectLink | null;
@@ -147,7 +151,9 @@ interface Instance {
 async function resolveInstance(p: Parsed, io: Io, opts: { projectLink?: boolean } = {}): Promise<Instance> {
   const link = opts.projectLink === false ? null : await readLink(io.cwd);
   const creds = await readCredentials(io.env);
-  const raw = str(p, "api") ?? (io.env.KOFRA_API || io.env.KOFRA_URL || undefined) ?? link?.api ?? creds.default ?? undefined;
+  const flagApi = str(p, "api");
+  const envApi = (io.env.KOFRA_API || io.env.KOFRA_URL || undefined);
+  const raw = flagApi ?? envApi ?? link?.api ?? creds.default ?? undefined;
   if (!raw) {
     throw new CliError({
       code: "no_instance",
@@ -157,11 +163,30 @@ async function resolveInstance(p: Parsed, io: Io, opts: { projectLink?: boolean 
     });
   }
   const api = normaliseApi(raw);
+  const apiSource: Instance["apiSource"] = flagApi !== undefined ? "flag" : envApi !== undefined ? "env" : link?.api !== undefined && raw === link.api ? "link" : "saved";
   const flagKey = str(p, "key");
-  if (flagKey) return { api, key: flagKey, keySource: "flag", link };
-  if (io.env.KOFRA_API_KEY) return { api, key: io.env.KOFRA_API_KEY, keySource: "env", link };
+  if (flagKey) return { api, apiSource, key: flagKey, keySource: "flag", link };
+  if (io.env.KOFRA_API_KEY) return { api, apiSource, key: io.env.KOFRA_API_KEY, keySource: "env", link };
   const saved = creds.instances[api]?.key;
-  return { api, key: saved ?? null, keySource: saved ? "saved" : null, link };
+  return { api, apiSource, key: saved ?? null, keySource: saved ? "saved" : null, link };
+}
+
+/**
+ * Refuse to send an environment key to a host taken only from the committed
+ * project link: running inside someone else's repo must not leak your key to
+ * their instance. Explicit `--key` names both endpoint and credential, and
+ * saved keys are already scoped per origin, so only the env combination is
+ * refused. Called before any authenticated request is built or sent.
+ */
+function assertKeyTargetSafe(inst: Instance): void {
+  if (inst.apiSource === "link" && inst.keySource === "env") {
+    throw new CliError({
+      code: "env_key_to_link_host",
+      message: `Refusing to send $KOFRA_API_KEY to ${inst.api}, which comes only from ./dropway.json.`,
+      hint: "Pass --api <your-instance> or run `kofra login` once (or remove dropway.json) instead.",
+      exitCode: EXIT.usage,
+    });
+  }
 }
 
 function clientName(env: NodeJS.ProcessEnv): string {
@@ -185,7 +210,10 @@ function makeClient(io: Io, api: string, token: string | null): DropwayClient {
 }
 
 function requireKey(inst: Instance, what = "This command", hint = "Run `kofra login`, set KOFRA_API_KEY, or pass --key. (To publish without a key, use --anonymous if the instance allows it.)"): string {
-  if (inst.key) return inst.key;
+  if (inst.key) {
+    assertKeyTargetSafe(inst);
+    return inst.key;
+  }
   throw new CliError({
     code: "not_logged_in",
     message: `${what} needs an API key for ${inst.api}.`,
@@ -390,10 +418,13 @@ Never published: .git, .hg/, .svn/, node_modules/, .wrangler/, .dropway/, .env, 
 .dev.vars*, .npmrc, *.pem, *.key, *.p12, *.pfx, id_rsa*, id_ecdsa, id_ed25519*,
 .DS_Store, Thumbs.db, plus patterns in <path>/.dropwayignore ("!" re-includes).
 A .zip file is unpacked by the instance (one request, up to 25 MB by default).
+File links that resolve outside the published folder are skipped; links staying
+inside are published as their target's content.
 After a publish with a key, ./dropway.json remembers the site for <path>, so
 running the same command again updates that site.
 With --dry-run --json the result also lists "omissions": every skipped path
-with its reason (ignored, excluded, symlink_directory, broken_symlink), sorted
+with its reason (ignored, excluded, symlink_directory, symlink_outside_root,
+broken_symlink, special_file), sorted
 by path. Nothing publishable is refused with no_files (exit 2) before anything
 is contacted. Fully offline agent check (no URL or key needed):
   kofra publish ./dist --dry-run --json | jq '{files: [.files[].path], omissions}'
@@ -496,7 +527,7 @@ A piped .zip is stored as one file named <filename>, not unpacked.
           { dryRun: true, path: target, files: collected.files.map((f) => ({ path: f.path, size: f.size, sha256: f.sha256 })), totalBytes: collected.totalBytes, ignored: collected.ignored, omissions: collected.omissions },
           () => {
             const extras = collected.omissions.filter((o) => o.reason !== "ignored");
-            const label = (reason: string) => (reason === "excluded" ? "explicitly excluded" : reason === "symlink_directory" ? "symlinked folder" : reason === "special_file" ? "not a regular file" : "broken link");
+            const label = (reason: string) => (reason === "excluded" ? "explicitly excluded" : reason === "symlink_directory" ? "symlinked folder" : reason === "symlink_outside_root" ? "link points outside the folder" : reason === "special_file" ? "not a regular file" : "broken link");
             return [
               ...collected.files.map((f) => `${f.path}  ${formatBytes(f.size)}`),
               `Would publish ${plural(collected.files.length, "file")} (${formatBytes(collected.totalBytes)}).${collected.ignored.length ? ` Ignored: ${collected.ignored.join(", ")}` : ""}${extras.length ? ` Omitted: ${extras.map((o) => `${o.path} (${label(o.reason)})`).join(", ")}` : ""}`,
@@ -1165,6 +1196,7 @@ const whoamiCmd: Command = {
   flags: {},
   async run(p, io, out) {
     const inst = await resolveInstance(p, io);
+    if (inst.key) assertKeyTargetSafe(inst);
     const client = makeClient(io, inst.api, inst.key);
     const { data } = await client.get<Record<string, any>>("/me");
     const signedIn = data.principal === "member" || data.principal === "claim_token";
@@ -1556,6 +1588,7 @@ const apiCmd: Command = {
     method = method.toUpperCase();
     if (!/^(GET|HEAD|POST|PUT|PATCH|DELETE)$/.test(method)) throw new UsageError(`Unknown method ${method}.`);
     const inst = await resolveInstance(p, io);
+    if (inst.key) assertKeyTargetSafe(inst);
     const client = makeClient(io, inst.api, inst.key);
     let json: unknown;
     const d = str(p, "data");
