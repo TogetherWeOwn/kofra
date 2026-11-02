@@ -47,6 +47,20 @@ const NOT_FOUND_JSON = {
   hint: "Check the transfer reference and use its sender's key.",
 };
 
+/** Exact serialized bodies: the byte-identical JSON contract, pinned end to end. */
+const GONE_JSON_BYTES =
+  `{"error":{"code":"transfer_gone","message":"This delivery is no longer available.",` +
+  `"hint":"Ask the sender for a new delivery.","retryable":false,"retryAfterSeconds":null,` +
+  `"docs":"/docs/errors#transfer_gone","next":[]}}`;
+const TAKEN_DOWN_JSON_BYTES =
+  `{"error":{"code":"transfer_unavailable","message":"This delivery is unavailable.",` +
+  `"hint":"Contact the sender.","retryable":false,"retryAfterSeconds":null,` +
+  `"docs":"/docs/errors#transfer_unavailable","next":[]}}`;
+const NOT_FOUND_JSON_BYTES =
+  `{"error":{"code":"transfer_not_found","message":"No transfer available to this caller.",` +
+  `"hint":"Check the transfer reference and use its sender's key.","retryable":false,` +
+  `"retryAfterSeconds":null,"docs":"/docs/errors#transfer_not_found","next":[]}}`;
+
 let dw: Instance;
 beforeEach(async () => { dw = await instance(); });
 
@@ -203,5 +217,25 @@ describe("non-HTML callers keep byte-identical JSON", () => {
       headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: ORIGIN, "CF-Connecting-IP": "192.0.2.78" },
       body: new URLSearchParams({ password: "delivery-page-passphrase" }),
     });
+  });
+
+  it("serializes the exact same bytes as before, on both routes", async () => {
+    const gone = await create(dw, { slug: "terminal-json-bytes-gone" });
+    expect((await revoke(dw, gone)).status).toBe(200);
+    const takenDown = await create(dw, { slug: "terminal-json-bytes-takedown" });
+    await state(takenDown, { takedown_at: Date.now() });
+
+    for (const [url, bytes] of [
+      [gone.url, GONE_JSON_BYTES],
+      [siteFile(gone), GONE_JSON_BYTES],
+      [takenDown.url, TAKEN_DOWN_JSON_BYTES],
+      [siteFile(takenDown), TAKEN_DOWN_JSON_BYTES],
+      [`${ORIGIN}/t/never-created-delivery`, NOT_FOUND_JSON_BYTES],
+      [siteFile(takenDown, "nope.txt"), NOT_FOUND_JSON_BYTES],
+    ] as const) {
+      const res = await dw.call(url, { headers: { Accept: "application/json" } });
+      expect(res.headers.get("content-type")).toContain("application/json");
+      expect(await res.text()).toBe(bytes);
+    }
   });
 });
