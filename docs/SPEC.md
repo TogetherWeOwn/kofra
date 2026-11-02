@@ -1720,7 +1720,7 @@ allow-orientation-lock`), never `allow-same-origin`.
 | Session | random cookie `__Host-dw_session` | SHA-256 in `sessions` | 30 days, sliding; revocable |
 | OAuth tokens | issued by `workers-oauth-provider` | hashed in `OAUTH_KV` | access 1 h, refresh rotates, grant 30 days |
 | Bootstrap secret | `ADMIN_BOOTSTRAP_KEY` secret | Worker secret | setup and recovery only |
-| Signing secret | `SIGNING_SECRET` secret (falls back to `ADMIN_BOOTSTRAP_KEY`) | Worker secret | signs upload, preview and password capabilities and salts IP hashes; with neither set they fail closed with `503 signing_secret_missing` |
+| Signing secret | `SIGNING_SECRET` secret (derived from `ADMIN_BOOTSTRAP_KEY` when unset) | Worker secret | signs upload, preview and password capabilities and keys IP hashes; with neither set they fail closed with `503 signing_secret_missing` |
 
 Scopes: `sites:read`, `sites:write`, `keys:write`, `members:write`, `sites:delete`, `data:write`,
 `secrets:write`, `admin` (implemented; migration `0003_scopes_usage.sql` gives `sites:delete` to existing `sites:write` keys after the transfer schema in `0002_transfers.sql`).
@@ -1747,7 +1747,7 @@ grant more than they hold. Keys can be limited to one site and, for drives, a pa
   from opaque sandboxes. Signed links and cookies expire at the same absolute 24-hour deadline.
   Link issuance requires HTTPS except on loopback development origins; non-loopback HTTP
   omits `versionUrl` without failing publication.
-- **IPs.** Only salted hashes (`SIGNING_SECRET`) are stored. Analytics visitors are daily salted hashes.
+- **IPs.** Only keyed hashes (HMAC with the signing key) are stored. Analytics visitors are daily salted hashes.
 - **SSRF.** URL sources, proxy routes and webhooks fetch `https` only, refuse private, loopback,
   link-local and Cloudflare-internal addresses, follow at most 3 redirects (re-checking each), time out at
   30 s, and cap bodies (100 MB for sources, 10 MB for proxy bodies). URL-source caller headers survive

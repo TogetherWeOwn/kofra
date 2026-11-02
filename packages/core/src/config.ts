@@ -4,6 +4,7 @@
  */
 
 import { ApiError } from "./errors";
+import { hmacHex } from "./lib/crypto";
 import { QUOTA_KEYS, type QuotaKey, type Quotas } from "./policy";
 
 const MB = 1024 * 1024;
@@ -101,11 +102,19 @@ export interface DropwayConfig {
   /** Secret that may create the owner (first run) and mint recovery owner keys. */
   adminBootstrapKey: string | null;
   /**
-   * HMAC secret for capabilities (cookies, upload and preview tokens) and IP hashing. null when
-   * neither SIGNING_SECRET nor ADMIN_BOOTSTRAP_KEY is set: read it through signingSecret(), which
-   * refuses with 503 then.
+   * Explicit SIGNING_SECRET (or the fixed dev secret), else the raw ADMIN_BOOTSTRAP_KEY when no
+   * explicit secret is set. Services must not HMAC with this field directly for the bootstrap
+   * case: read the effective key through effectiveSigningSecret(), which derives
+   * HMAC-SHA-256(bootstrapKey, "dw-signing-v1") so the bearer credential itself never signs.
+   * null when nothing is set: signingSecret() refuses with 503 then.
    */
   signingSecret: string | null;
+  /**
+   * True when signingSecret holds the raw ADMIN_BOOTSTRAP_KEY and the effective key must be
+   * derived (see effectiveSigningSecret). An explicit SIGNING_SECRET is single-purpose and used
+   * directly, unchanged.
+   */
+  signingSecretFromBootstrap: boolean;
   /** KV edge-cache TTL for live site manifests, seconds (KV minimum is 30). */
   liveCacheTtlSeconds: number;
   /** How long freed site names are held (R-59). */
@@ -202,6 +211,51 @@ export function signingSecret(config: Pick<DropwayConfig, "signingSecret">): str
     "The operator must set SIGNING_SECRET (or ADMIN_BOOTSTRAP_KEY) as a Worker secret.", undefined, { retryable: false });
 }
 
+/** Minimum length for operator-configured secrets (SIGNING_SECRET, ADMIN_BOOTSTRAP_KEY). */
+const MIN_SECRET_LENGTH = 32;
+
+/** Label binding a bootstrap-derived key to capability signing, so the bearer itself never signs. */
+const SIGNING_DERIVATION_LABEL = "dw-signing-v1";
+
+/** Derivations cached per resolved config object (configs are cached per env in createDropway). */
+const derivedSigningSecrets = new WeakMap<object, Promise<string>>();
+
+/**
+ * The effective HMAC key for signed capabilities and IP hashing. An explicit SIGNING_SECRET is
+ * single-purpose and used directly, unchanged; with only ADMIN_BOOTSTRAP_KEY set, the key is
+ * HMAC-SHA-256(bootstrapKey, "dw-signing-v1"), so tokens signed before this derivation stop
+ * verifying. Unset still fails closed with 503, like signingSecret().
+ */
+export async function effectiveSigningSecret(dc: {
+  config: Pick<DropwayConfig, "signingSecret" | "adminBootstrapKey" | "signingSecretFromBootstrap">;
+}): Promise<string> {
+  const config = dc.config;
+  if (config.signingSecret && !config.signingSecretFromBootstrap) return config.signingSecret;
+  if (config.signingSecretFromBootstrap && config.adminBootstrapKey) {
+    let derived = derivedSigningSecrets.get(config);
+    if (!derived) {
+      derived = hmacHex(config.adminBootstrapKey, SIGNING_DERIVATION_LABEL);
+      derivedSigningSecrets.set(config, derived);
+    }
+    return derived;
+  }
+  return signingSecret(config);
+}
+
+/** True for loopback origins only: localhost, *.localhost, 127.0.0.0/8 and ::1. */
+function isLoopbackOrigin(origin: string): boolean {
+  let hostname = "";
+  try {
+    hostname = new URL(origin).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  // WHATWG URLs keep IPv6 brackets on hostname ("[::1]").
+  const host = hostname.replace(/^\[(.*)\]$/, "$1");
+  if (host === "localhost" || host.endsWith(".localhost") || host === "::1") return true;
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
+
 export function resolveConfig(vars: DropwayVars, overrides: ConfigOverrides = {}): DropwayConfig {
   const sitesDomain = overrides.sitesDomain !== undefined ? overrides.sitesDomain : normaliseDomain(vars.SITES_DOMAIN);
   const requestedMode = (overrides.sitesMode ?? vars.SITES_MODE ?? "").trim().toLowerCase();
@@ -249,12 +303,30 @@ export function resolveConfig(vars: DropwayVars, overrides: ConfigOverrides = {}
     },
   };
   const adminBootstrapKey = overrides.adminBootstrapKey !== undefined ? overrides.adminBootstrapKey : vars.ADMIN_BOOTSTRAP_KEY?.trim() || null;
+  const configuredSigningSecret = (overrides.signingSecret !== undefined ? (overrides.signingSecret ?? "") : (vars.SIGNING_SECRET ?? "")).trim();
+  if (configuredSigningSecret.length > 0 && configuredSigningSecret.length < MIN_SECRET_LENGTH) {
+    throw new Error(`Invalid SIGNING_SECRET: expected at least ${MIN_SECRET_LENGTH} characters.`);
+  }
+  if (adminBootstrapKey && adminBootstrapKey.length < MIN_SECRET_LENGTH) {
+    throw new Error(`Invalid ADMIN_BOOTSTRAP_KEY: expected at least ${MIN_SECRET_LENGTH} characters.`);
+  }
   const slugHolds: SlugHolds = {
     renameMs: num(vars.SLUG_REDIRECT_DAYS, 365) * 86400_000,
     chosenMs: num(vars.SLUG_HOLD_CHOSEN_DAYS, 365) * 86400_000,
     generatedMs: num(vars.SLUG_HOLD_GENERATED_DAYS, 90) * 86400_000,
     ...overrides.slugHolds,
   };
+  const signingSecretValue = overrides.signingSecret !== undefined ? (overrides.signingSecret ?? "").trim() || null
+    : vars.SIGNING_SECRET?.trim() || adminBootstrapKey || (bool(vars.ALLOW_INSECURE_DEV_SECRET, false) ? INSECURE_DEV_SECRET : null);
+  if (signingSecretValue === INSECURE_DEV_SECRET) {
+    const offending = [appOrigin, ...legacyAppOrigins, sitesOrigin, ...legacySitesOrigins]
+      .find((o) => o !== null && !isLoopbackOrigin(o));
+    if (offending !== undefined) {
+      throw new Error(`Invalid ALLOW_INSECURE_DEV_SECRET: configured origin ${offending} is not loopback. ` +
+        "The fixed dev secret is public, so it is refused with any non-loopback origin; use loopback origins " +
+        "(localhost, 127.0.0.0/8, ::1) only, or set SIGNING_SECRET for anything reachable.");
+    }
+  }
   return {
     instanceName: overrides.instanceName ?? (vars.INSTANCE_NAME?.trim() || "Kofra"),
     urlFetchMaxBytes: overrides.urlFetchMaxBytes ?? num(vars.URL_FETCH_MAX_BYTES, 100 * MB),
@@ -279,8 +351,8 @@ export function resolveConfig(vars: DropwayVars, overrides: ConfigOverrides = {}
       return [key, n];
     })) as Quotas,
     adminBootstrapKey,
-    signingSecret: overrides.signingSecret !== undefined ? overrides.signingSecret
-      : vars.SIGNING_SECRET?.trim() || adminBootstrapKey || (bool(vars.ALLOW_INSECURE_DEV_SECRET, false) ? INSECURE_DEV_SECRET : null),
+    signingSecret: signingSecretValue,
+    signingSecretFromBootstrap: overrides.signingSecret === undefined && !vars.SIGNING_SECRET?.trim() && adminBootstrapKey !== null,
     liveCacheTtlSeconds: Math.max(30, overrides.liveCacheTtlSeconds ?? 30),
     slugHolds,
   };

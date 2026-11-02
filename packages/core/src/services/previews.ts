@@ -1,4 +1,4 @@
-import { signingSecret } from "../config";
+import { effectiveSigningSecret } from "../config";
 import type { DropwayContext } from "../context";
 import { siteUrl } from "../context";
 import { hmacHex, timingSafeEqualStr } from "../lib/crypto";
@@ -19,7 +19,7 @@ export async function versionPreviewUrl(dc: DropwayContext, principal: Principal
     if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) return undefined;
     if (!(await capabilityDecision(dc, principal, "version_previews", { siteId: site.id, tenantId: site.tenant_id })).allowed) return undefined;
     const expiresAt = Date.now() + PREVIEW_TTL_MS;
-    const signature = await hmacHex(signingSecret(dc.config), payload(site.id, version.id, expiresAt));
+    const signature = await hmacHex(await effectiveSigningSecret(dc), payload(site.id, version.id, expiresAt));
     url.searchParams.set("dw_preview", `${expiresAt}.${signature}`);
     return url.toString();
   } catch {
@@ -73,7 +73,7 @@ export async function readVersionPreview(
     if (!match) return null;
     expiresAt = Number(match[1]);
     if (Date.now() >= expiresAt || expiresAt > Date.now() + PREVIEW_TTL_MS || !timingSafeEqualStr(
-      await hmacHex(signingSecret(dc.config), payload(site.id, version.id, expiresAt)), match[2]!,
+      await hmacHex(await effectiveSigningSecret(dc), payload(site.id, version.id, expiresAt)), match[2]!,
     )) return null;
   } else if (!canAccess(principal, site, "sites:read")) return null;
 
