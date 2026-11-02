@@ -1800,7 +1800,7 @@ export function dropwayClient() {
     renderAccount();
     var root = d.getElementById("dw-sites");
     var count = d.getElementById("dw-sites-count");
-    var search = h("input", { class: "dw-input", type: "search", placeholder: "Filter loaded sites by name or title", "aria-label": "Filter loaded sites" });
+    var search = h("input", { class: "dw-input", type: "search", placeholder: "Filter loaded sites by name or title", "aria-label": "Filter loaded sites", hidden: true });
     var tbody = h("tbody");
     var more = h("button", { type: "button", class: "dw-btn", text: "Load more", hidden: true });
     var table = h(
@@ -1856,13 +1856,22 @@ export function dropwayClient() {
       if (more.getAttribute("aria-busy")) more.removeAttribute("aria-busy");
       if (more.textContent !== "Load more") more.textContent = "Load more";
     }
+    function showSearch() {
+      search.hidden = false;
+      // The hidden IDL attribute reflects to the content attribute in browsers;
+      // test doubles need the explicit removal.
+      if (search.removeAttribute) search.removeAttribute("hidden");
+    }
     function emptySites() {
+      var cmd = "npx kofra publish ./my-folder --api " + (boot.origin || location.origin);
       return h(
         "div",
         { class: "dw-empty", role: "status" },
         h("h3", { text: "No sites yet" }),
-        h("p", { text: "Publish a folder from this browser, or let an agent publish with the API, CLI or MCP." }),
-        h("a", { class: "dw-btn primary", href: "/dashboard/publish", text: "Publish a folder" }),
+        h("p", { text: "Publish your first folder from a terminal:" }),
+        h("div", { class: "dw-secret" }, h("code", { text: cmd }), copyButton(cmd, "Copy publish command")),
+        h("p", {}, "— or ", h("a", { href: "/dashboard/publish", text: "publish from this browser" }), " instead."),
+        h("p", {}, "Publishing with an AI agent instead? ", h("a", { href: "/connect", text: "Connect one" }), "."),
       );
     }
     async function load() {
@@ -1897,6 +1906,7 @@ export function dropwayClient() {
           clear(body);
           add(body, table);
           tableShown = true;
+          showSearch();
         }
         res.sites.forEach(function (s) {
           if (seenSlugs.indexOf(s.slug) >= 0) return;
