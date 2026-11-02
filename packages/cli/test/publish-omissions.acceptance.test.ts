@@ -280,6 +280,30 @@ describe("publish omission inventory: additive command-level goldens", () => {
     expect(r.stdout + r.stderr).not.toContain("OUTSIDE_CONTENT_SENTINEL");
     expect(r.stdout + r.stderr).not.toContain(work);
   });
+
+  it("escapes terminal controls in the outside-root note instead of emitting them", async () => {
+    await tree({ "index.html": "ok" });
+    await tree({ "public.txt": "OUTSIDE_CONTENT_SENTINEL" }, join(work, "outside"));
+    const evil = "evil\u001b[2K.txt";
+    await symlink(join(work, "outside/public.txt"), join(cwd, evil));
+    const version = { id: "ver_synthetic", number: 1 };
+    const r = await command(["publish", ".", "--json", "--site", "inventory", "--no-save", ...authenticated], {
+      fetch: async (request) => {
+        const url = new URL(request.url);
+        if (request.method === "POST" && url.pathname === "/api/v1/sites/inventory/deploys") {
+          return Response.json({ unchanged: true, deploy: version, missing: [], uploads: [], finalizeUrl: null });
+        }
+        if (request.method === "GET" && url.pathname === "/api/v1/sites/inventory") {
+          return Response.json({ site: { slug: "inventory", url: "https://inventory.invalid/s/inventory/", currentVersion: version } });
+        }
+        throw new Error("unexpected request to injected transport");
+      },
+    });
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain("Skipped link outside the folder evil\\u001b[2K.txt");
+    expect(r.stdout + r.stderr).not.toContain("\u001b");
+    expect(r.stdout + r.stderr).not.toContain("OUTSIDE_CONTENT_SENTINEL");
+  });
 });
 
 describe("special files and human-readable output", () => {

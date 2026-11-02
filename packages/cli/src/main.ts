@@ -503,12 +503,14 @@ A piped .zip is stored as one file named <filename>, not unpacked.
           ? await collectFiles(resolve(io.cwd, target), { exclude: [linkPath(io.cwd)], allowSecrets })
           : collectStdinFile(stdinPath, await readPiped(io, bool(p, "allow-empty") === true), { allowSecrets });
       out.progress(null);
-      for (const l of collected.skippedLinks) out.note(`Skipped symlinked folder ${l}/`);
+      // Link names come from the walked tree, so escape terminal controls at
+      // this presentation boundary (same as human errors in output.ts).
+      for (const l of collected.skippedLinks) out.note(`Skipped symlinked folder ${escapeControl(l)}/`);
       // File links that used to publish now omit when they resolve outside the
       // folder; say so on real publish too, or the new version silently drops
       // files the previous version served. Older silent omissions (broken
       // links, special files) are unchanged.
-      for (const o of collected.omissions) if (o.reason === "symlink_outside_root") out.note(`Skipped link outside the folder ${o.path}`);
+      for (const o of collected.omissions) if (o.reason === "symlink_outside_root") out.note(`Skipped link outside the folder ${escapeControl(o.path)}`);
       if (collected.secrets.length) {
         throw new CliError({
           code: "possible_secrets",
