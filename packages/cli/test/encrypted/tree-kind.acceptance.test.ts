@@ -154,7 +154,14 @@ async function visit(options: Options = {}) {
     }
     // A real navigation also exposes the actual shell's response headers.
     response = await page.goto(`${api}${target}`, { waitUntil: "domcontentloaded" });
-    if (!options.state) await expect.poll(() => page.locator("a[data-kind]").count()).toBe((options.rows ?? mixed).length);
+    if (!options.state) {
+      await expect.poll(() => page.locator("a[data-kind]").count()).toBe((options.rows ?? mixed).length);
+      // The viewer boots renderAccount() without awaiting it: /me resolves after
+      // first paint and caches into sessionStorage (dropway.me). Snapshot tests
+      // below compare storage digests, so wait for that write to land — otherwise
+      // it races the `before` snapshot under CI load and the digests differ.
+      await expect.poll(() => page.evaluate(() => (globalThis as any).sessionStorage.getItem("dropway.me"))).toBeTruthy();
+    }
     else if (options.state === "anonymous") await page.getByRole("link", { name: /sign in/i }).first().waitFor();
     else await expect.poll(() => page.locator("body").innerText()).toMatch(options.state === "forbidden" ? /not authorized|forbidden/i : /unavailable|try again|error/i);
     return {
