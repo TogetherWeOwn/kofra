@@ -141,15 +141,45 @@ async function visit(options: Options = {}) {
   let response: any;
   try {
     if (options.state !== "anonymous") {
-      await page.goto(`${api}/login?next=${encodeURIComponent(target)}`, { waitUntil: "networkidle" });
+      await page.goto(`${api}/login?next=${encodeURIComponent(target)}`, { waitUntil: "domcontentloaded" });
+      // Navigate on shell parse, not network quiet: CI load keeps background
+      // requests in flight and a short `networkidle` goto flakes the navigation
+      // itself. Readiness is the app-rendered state each branch asserts on below.
+      await page.locator('input[name="key"]').waitFor();
       await page.locator('input[name="key"]').fill(key);
       await page.getByRole("button", { name: /^sign in$/i }).click();
-      await page.waitForURL((url: URL) => url.pathname.startsWith(`/v/${slug}/`));
-      await page.waitForLoadState("networkidle");
+      // The sign-in redirect lands before the `load` event fires under CI load,
+      // so wait for the URL on DOM parse instead of the full load event.
+      await page.waitForURL((url: URL) => url.pathname.startsWith(`/v/${slug}/`), { waitUntil: "domcontentloaded" });
     }
     // A real navigation also exposes the actual shell's response headers.
-    response = await page.goto(`${api}${target}`, { waitUntil: "networkidle" });
-    if (!options.state) await expect.poll(() => page.locator("a[data-kind]").count()).toBe((options.rows ?? mixed).length);
+    response = await page.goto(`${api}${target}`, { waitUntil: "domcontentloaded" });
+    if (!options.state) {
+      // The kind selector is created only after the manifest renders — even for
+      // an empty inventory, where a zero row count is vacuously true before the
+      // file-list request finishes. Gate on it first: the /me cache write below
+      // rides an independent request and cannot synchronize the tree.
+      await page.getByRole("combobox", { name: /(?:file\s*)?kind|file type/i }).waitFor();
+      // Polls keep the file's navigation budget: vitest's poll timeout defaults
+      // to 1s and ignores page.setDefaultTimeout, so state it explicitly.
+      await expect.poll(() => page.locator("a[data-kind]").count(), { timeout: 2500 }).toBe((options.rows ?? mixed).length);
+      // The viewer boots renderAccount() without awaiting it: /me resolves after
+      // first paint and caches into sessionStorage (dropway.me). Snapshot tests
+      // below compare storage digests, so wait for that write to land — otherwise
+      // it races the `before` snapshot under CI load and the digests differ.
+      await expect.poll(() => page.evaluate(() => (globalThis as any).sessionStorage.getItem("dropway.me")), { timeout: 2500 }).toBeTruthy();
+      if (options.mode) {
+        // The mode-filtering tests count framenavigated after visit returns. The
+        // shell iframe navigates from page load (and go() may replace it once the
+        // manifest resolves), so settle its load here — a CDP-level wait, safe for
+        // the sandboxed opaque-origin frame, unlike a contentDocument probe.
+        const preview = page.frame({ name: "dw-frame" });
+        expect(preview, "viewer preview frame must exist before mode filtering").toBeTruthy();
+        await preview!.waitForLoadState("load", { timeout: 2500 });
+      }
+    }
+    else if (options.state === "anonymous") await page.getByRole("link", { name: /sign in/i }).first().waitFor();
+    else await expect.poll(() => page.locator("body").innerText(), { timeout: 2500 }).toMatch(options.state === "forbidden" ? /not authorized|forbidden/i : /unavailable|try again|error/i);
     return {
       context, page, requests, external, errors, response,
       manifestLoads: () => manifestLoads,

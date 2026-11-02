@@ -83,7 +83,10 @@ async function open(surface: Surface, options: {
     return route.continue();
   });
   try {
-    const response = await page.goto(origin + paths[surface], { waitUntil: "networkidle" });
+    // Navigate on shell parse, not network quiet: CI load keeps background
+    // requests in flight and a short `networkidle` goto flakes the navigation
+    // itself. Readiness is the app-rendered container rows awaited below.
+    const response = await page.goto(origin + paths[surface], { waitUntil: "domcontentloaded" });
     expect(response!.status()).toBe(200);
     expect(response!.headers()["content-security-policy"]).toContain("script-src 'self'");
     const container = page.locator(`#${roots[surface]}`);

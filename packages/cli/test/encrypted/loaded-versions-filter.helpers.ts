@@ -139,16 +139,26 @@ export async function startHistoryFixture() {
         }
         return route.continue();
       });
-      await page.goto(`${origin}/login`);
+      // Navigate on shell parse, not network quiet: CI load keeps background
+      // requests in flight and a short `networkidle` goto flakes the navigation
+      // itself. Readiness is the app-rendered state awaited below.
+      await page.goto(`${origin}/login`, { waitUntil: "domcontentloaded" });
       await page.getByLabel(/api key/i).fill(ownerKey);
       await page.getByRole("button", { name: /^sign in$/i }).click();
-      await page.waitForURL("**/dashboard");
+      // The sign-in redirect lands before the `load` event fires under CI load,
+      // so wait for the URL on DOM parse instead of the full load event.
+      await page.waitForURL("**/dashboard", { waitUntil: "domcontentloaded" });
       const linked = options.linked === undefined ? "" : `?version=${encodeURIComponent(id(options.linked))}`;
-      const response = await page.goto(`${origin}/dashboard/sites/${slug}${linked}`, { waitUntil: "networkidle" });
+      const response = await page.goto(`${origin}/dashboard/sites/${slug}${linked}`, { waitUntil: "domcontentloaded" });
       expect(response!.status()).toBe(200);
       expect(response!.headers()["content-security-policy"]).toContain("script-src 'self'");
-      await expect.poll(() => view.wire.filter(call => call.path === `${base}/versions`).length).toBe(1);
-      if (options.linked !== undefined) await expect.poll(() => page.locator("#files").innerText()).toContain(artifact(options.linked));
+      // The Versions section renders only after the site + versions bootstrap
+      // resolves, for populated and empty histories alike.
+      await page.getByRole("heading", { name: /^versions$/i }).waitFor();
+      // Polls keep this helper's navigation budget: vitest's poll timeout
+      // defaults to 1s and ignores page.setDefaultTimeout, so state it explicitly.
+      await expect.poll(() => view.wire.filter(call => call.path === `${base}/versions`).length, { timeout: 2000 }).toBe(1);
+      if (options.linked !== undefined) await expect.poll(() => page.locator("#files").innerText(), { timeout: 2000 }).toContain(artifact(options.linked));
       initialDashboardLoad = false;
       return view;
     };
