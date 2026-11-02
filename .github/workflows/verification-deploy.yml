@@ -44,9 +44,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment: verification
+    # Cloudflare credentials are deliberately NOT job-level env: they are set
+    # only on the steps that call wrangler (and the step that checks they
+    # exist), so dependency install scripts (`npm ci`) and other steps never
+    # run with the verification account token in their environment.
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       WRANGLER_CONFIG: wrangler.verification.jsonc
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -59,6 +61,9 @@ jobs:
           cache-dependency-path: package-lock.json
       - run: npm ci
       - name: Environment secrets are set
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           missing=0
           for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
@@ -83,6 +88,9 @@ jobs:
       # migrations again and a final deploy on the migrated schema.
       - name: Deploy verification Worker
         if: inputs.action == 'deploy'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -o pipefail
           npx wrangler d1 migrations apply DB --remote -c "$WRANGLER_CONFIG" \
@@ -98,6 +106,9 @@ jobs:
           echo "Deployed: $url"
       - name: Set Worker secrets
         if: inputs.action == 'deploy'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           npx wrangler secret put ADMIN_BOOTSTRAP_KEY -c "$WRANGLER_CONFIG" < "$RUNNER_TEMP/verification/bootstrap-key"
           npx wrangler secret put SIGNING_SECRET -c "$WRANGLER_CONFIG" < "$RUNNER_TEMP/verification/signing-secret"
@@ -135,10 +146,18 @@ jobs:
           if-no-files-found: error
       - name: Tear down verification environment
         if: inputs.action == 'teardown'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           npx wrangler delete -c "$WRANGLER_CONFIG" --force
           npx wrangler d1 delete kofra-verification -c "$WRANGLER_CONFIG" -y
-          npx wrangler kv namespace delete --binding CACHE -c "$WRANGLER_CONFIG" -y
+          # Delete KV by namespace title, not --binding: the committed config
+          # carries no KV id (the first deploy auto-provisions it under
+          # wrangler's <script>-<binding-lowercase> title), so --binding has
+          # nothing to resolve from this fresh checkout — and the Worker
+          # whose settings could resolve it was just deleted above.
+          npx wrangler kv namespace delete kofra-verification-cache -c "$WRANGLER_CONFIG" -y
           if npx wrangler r2 bucket delete kofra-verification-files; then
             echo "Worker, D1, KV and R2 bucket deleted." >> "$GITHUB_STEP_SUMMARY"
           else
