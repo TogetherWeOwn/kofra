@@ -25,17 +25,51 @@ const HTML_UNLOCK_ERRORS: Record<string, { status: number; message: string }> = 
   transfer_locked: { status: 403, message: "Incorrect password. Try again or ask the sender for the delivery password." },
   rate_limited: { status: 429, message: "Too many password attempts. Wait a moment, then try again." },
 };
-export function transferPageError(dc: DropwayContext, request: Request, slug: string, recipient: string | undefined, error: unknown): Response {
-  if (request.method === "POST" && (request.headers.get("Accept") ?? "").includes("text/html") && error instanceof ApiError) {
-    const mapped = HTML_UNLOCK_ERRORS[error.code];
-    if (mapped) {
-      const res = passwordPage(dc, slug, recipient, mapped);
-      if (mapped.status === 429) res.headers.set("Retry-After", String(error.details?.retryAfterSeconds ?? 60));
-      return res;
+function terminalPage(title: string, message: string, status: number) {
+  return new Response(htmlPage({ title, body: `<main class="dw-system"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p></main>` }), {
+    status, headers: { ...headers, "Content-Type": "text/html; charset=utf-8" },
+  });
+}
+/** Browser page for a terminal delivery state. Null when the error stays JSON. */
+async function transferTerminalPage(dc: DropwayContext, slug: string, error: ApiError): Promise<Response | null> {
+  switch (error.code) {
+    case "transfer_gone": {
+      // The 410 code covers expiry, revocation and the download limit alike,
+      // so re-read the row to pick the page. Anything unknown keeps the
+      // generic expired-or-revoked copy; the 410 status never changes.
+      let limited = false;
+      try {
+        const t = await publicTransfer(dc, slug);
+        limited = t.download_limit !== null && t.downloads >= t.download_limit;
+      } catch { limited = false; }
+      if (limited) {
+        return terminalPage("This delivery has reached its download limit", "Ask the sender to send the files again if you still need them.", 410);
+      }
+      return terminalPage("This delivery is no longer available", "It has expired or the sender withdrew it. Ask the sender to send the files again — this link can't be reopened.", 410);
     }
-    if (error.code === "transfer_unlock_unavailable") {
-      return page(`<p>Password unlock is unavailable. Try again later.</p><p><a href="${escapeHtml(transferPageUrl(dc, slug, recipient))}">Back to this delivery</a></p>`, 503);
+    case "transfer_unavailable":
+      return terminalPage("This delivery is unavailable", "Contact the sender if you expected to receive files here.", 451);
+    case "transfer_not_found":
+      return terminalPage("We couldn't find that delivery", "Check that you opened the complete link the sender gave you — it is long, and mail apps sometimes break it across lines. If it still doesn't work, ask the sender for a new link.", 404);
+    default:
+      return null;
+  }
+}
+export async function transferPageError(dc: DropwayContext, request: Request, slug: string, recipient: string | undefined, error: unknown): Promise<Response> {
+  if ((request.headers.get("Accept") ?? "").includes("text/html") && error instanceof ApiError) {
+    if (request.method === "POST") {
+      const mapped = HTML_UNLOCK_ERRORS[error.code];
+      if (mapped) {
+        const res = passwordPage(dc, slug, recipient, mapped);
+        if (mapped.status === 429) res.headers.set("Retry-After", String(error.details?.retryAfterSeconds ?? 60));
+        return res;
+      }
+      if (error.code === "transfer_unlock_unavailable") {
+        return page(`<p>Password unlock is unavailable. Try again later.</p><p><a href="${escapeHtml(transferPageUrl(dc, slug, recipient))}">Back to this delivery</a></p>`, 503);
+      }
     }
+    const terminal = await transferTerminalPage(dc, slug, error);
+    if (terminal) return terminal;
   }
   return transferError(error);
 }
@@ -118,5 +152,9 @@ export async function serveTransfer(request: Request, dc: DropwayContext, slug: 
       "Content-Length": String(out.length), "Accept-Ranges": "bytes",
       ...(out.ranged ? { "Content-Range": `bytes ${out.offset}-${out.offset + out.length - 1}/${out.file.size}` } : {}),
     } });
-  } catch (error) { return transferError(error); }
+  } catch (error) {
+    // Terminal delivery states render as pages for browsers; API callers keep
+    // the byte-identical JSON via transferError below.
+    return transferPageError(dc, request, slug, new URL(request.url).searchParams.get("recipient") ?? undefined, error);
+  }
 }
