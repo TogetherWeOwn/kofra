@@ -64,7 +64,7 @@ under `%APPDATA%\dropway` and the mode-0600 check in step 5 does not apply.
   KOFRA_BOOTSTRAP_KEY=<bootstrap key from step 2> npx kofra setup --api https://<worker> --email you@example.com
   npx kofra whoami
   ```
-  Expected: setup prints the owner key **once** (starts `dw_`) and saves it to the CLI config dir's `credentials.json` (default `~/.config/dropway/credentials.json`, mode 0600 — check with `ls -l`; `$KOFRA_CONFIG_DIR` / `$XDG_CONFIG_HOME/dropway` / `%APPDATA%\dropway` per `packages/cli/README.md`). `whoami` exits 0 and shows the instance URL, your owner identity and full scopes. Fail signal: setup succeeds but `whoami` fails → credential save/keying bug; record both outputs (redact the key). Optional browser check (only possible **before** step 7): sign in at `https://<worker>/` with the owner key — the empty dashboard shows **one copyable publish command pre-filled with this instance's origin** (`npx kofra publish ./my-folder --api https://<worker>`) and no site-search box.
+  Expected: setup saves the owner key (starts `dw_`) to the CLI config dir's `credentials.json` (default `~/.config/dropway/credentials.json`, mode 0600 — check with `ls -l`; `$KOFRA_CONFIG_DIR` / `$XDG_CONFIG_HOME/dropway` / `%APPDATA%\dropway` per `packages/cli/README.md`) and reports that it did — **by design it does not print the key**: the output states the key is not printed, which `--show-key` would print it. Do not pass `--show-key`; for steps 10–11, read the key from `credentials.json` once and note that you did (never paste it into the evidence record). `whoami` exits 0 and shows the instance URL, your owner identity and full scopes. Fail signal: setup succeeds but `whoami` fails → credential save/keying bug; record both outputs (redact the key). Optional browser check (only possible **before** step 7): sign in at `https://<worker>/` with the owner key — the empty dashboard shows **one copyable publish command pre-filled with this instance's origin** (`npx kofra publish ./my-folder --api https://<worker>`) and no site-search box.
   - Result:
   - Evidence:
 - [ ] **Step 6 — Setup works exactly once; curl path agrees.**
@@ -73,7 +73,7 @@ under `%APPDATA%\dropway` and the mode-0600 check in step 5 does not apply.
     -H "Authorization: Bearer <bootstrap key>" -H "Content-Type: application/json" \
     -d '{"email":"second@example.com"}'
   ```
-  Expected: HTTP **409** with error `code` **`already_set_up`** and a `hint` in the JSON body — no second owner is created. Optional browser variant (fresh instance only): `/login#setup` with bootstrap secret + email shows the owner key once and lands on `/connect`.
+  Expected: HTTP **409** with error `code` **`already_set_up`** and a `hint` in the JSON body — no second owner is created. Optional browser variant (fresh instance only): `/login#setup` with bootstrap secret + email creates the owner, displays the new owner key once ("Shown once…") with an "I saved it. Continue" button, and lands on the dashboard.
   - Result:
   - Evidence:
 - [ ] **Step 7 — First publish.**
@@ -138,7 +138,7 @@ under `%APPDATA%\dropway` and the mode-0600 check in step 5 does not apply.
   - Result:
   - Evidence:
 
-**Part A pass bar:** steps 1–12 pass with no undocumented manual step; every failure becomes a filed follow-up with the verbatim output. Passing Part A is what moves the "deployment verification pending" SPEC row PUB-03 to Done. PUB-04 and ID-05 move to Done only after B1 passes — Part A does not exercise upload links or `dwu_` token boundaries.
+**Part A pass bar:** steps 1–12 pass with no undocumented manual step; every failure becomes a filed follow-up with the verbatim output. PUB-03 moves to Done only after B10 passes — Part A publishes through the CLI deploys path, a multipart curl publish and one MCP inline file, which never exercises the JSON/MCP `url`, base64, `sha256`+`size` or `copyFrom` sources. PUB-04 and ID-05 move to Done only after B1 passes — Part A does not exercise upload links or `dwu_` token boundaries.
 
 ## Part B — extended verification (same instance, after Part A)
 
@@ -171,13 +171,16 @@ Extended release verification; a first-time self-hoster does not need these on d
 - [ ] **B9 — Archive and attachment sources.** How: JSON- or MCP-publish with a top-level `archiveUrl` (instead of `files`) pointing at a public https `.zip`; then publish one file from a `{download_url, file_name}` attachment source. Expected: the server downloads and unpacks the zip like an uploaded zip, the attachment is stored at `file_name`, and the live URLs serve the published contents. A non-https or private-address source URL is refused (SSRF guard). This verifies PUB-14.
   - Result:
   - Evidence:
+- [ ] **B10 — JSON/MCP file sources.** How: JSON-publish one site with one file from **each** of the remaining sources — `url` (a public https file the server fetches), `content`+`encoding:"base64"` (a small binary), `sha256`+`size` (bytes already stored from an earlier publish), and `copyFrom` (a file from the `hello` site). Then repeat the `url` file with an `https://169.254.169.254/…` address. Expected: all four files serve at the live URL with the expected bytes (`?raw=1` + `diff`); the private/link-local URL is refused with `fetch_blocked` (SSRF guard) and nothing is published for that attempt. This verifies PUB-03.
+  - Result:
+  - Evidence:
 
 ## Outcome → SPEC mapping
 
-After the run, mark each row Done, or link the filed follow-up if it failed. Passing Part A moves PUB-03
-to Done; the remaining rows move only when the Part B step named beside each one passes.
+After the run, mark each row Done, or link the filed follow-up if it failed. Each row moves only
+when the Part B step named beside it passes; Part A alone moves none of them.
 
-- PUB-03 — Done / follow-up:
+- PUB-03 — Done / follow-up: (Part B10)
 - PUB-04 — Done / follow-up: (Part B1)
 - PUB-13 — Done / follow-up: (Part B2)
 - PUB-14 — Done / follow-up: (Part B9)
