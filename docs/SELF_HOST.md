@@ -160,6 +160,44 @@ a new one. Add people with `POST /api/v1/members` (each gets their own key) and 
 (for CI or an MCP client) with `POST /api/v1/keys`, e.g.
 `npx kofra api POST /keys --data '{"name":"ci","scopes":["sites:read","sites:write"]}'`.
 
+## Password-protecting a site
+
+Any site can require a visitor password instead of being public. You need an owner, admin or member
+key with `sites:write` for the site.
+
+With the CLI (the password comes from piped stdin, or from one no-echo prompt in a terminal; only
+the trailing newline is removed, so surrounding spaces are part of the password):
+
+```sh
+printf 'correct horse battery staple\n' | npx kofra access my-site --mode password --yes
+```
+
+With curl, or through the MCP `set_site_access` tool (same operation, `PUT /api/v1/sites/{slug}/access`):
+
+```sh
+curl -X PUT "$KOFRA_API/api/v1/sites/my-site/access" \
+  -H "Authorization: Bearer $KOFRA_API_KEY" -H "Content-Type: application/json" \
+  -d '{"mode":"password","password":"correct horse battery staple"}'
+```
+
+New passwords need at least 8 characters. Changing a password signs everyone out immediately.
+
+Visitors to a protected site get an unlock form headed "This site is password protected" — none of
+the site's content is in that page. A wrong password re-renders the form with "That password is not
+right."; the right password unlocks the site, and the unlock cookie expires server-side after at
+most 7 days, after which the visitor enters the password again.
+
+To make the site public again (this needs the same explicit confirmation; visitors stop needing a
+password and existing unlocks stop mattering):
+
+```sh
+npx kofra access my-site --mode public --yes
+```
+
+Password protection needs the instance's `SIGNING_SECRET` (see [Configuration](#configuration)):
+without a signing secret, setting a password is refused with `503 signing_secret_missing` instead
+of creating a gate that could never unlock.
+
 ## Configuration
 
 Variables go in `vars` in `wrangler.jsonc`; secrets with `npx wrangler secret put <NAME>`.

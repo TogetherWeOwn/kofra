@@ -138,7 +138,7 @@ Full matrix in section 10.
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
-| VIEW-01 | Browser navigations to a file get a rendered view chosen by file type, with a bar offering Rendered, Source, Raw and Download. `?raw=1` returns the stored bytes (text types as `text/plain`), `?download=1` downloads, `?view=1` forces the viewer, `?view=source` shows highlighted source. Sub-resource requests always get raw bytes | P0 | Partial (Markdown, listing, raw, download done); R-07 |
+| VIEW-01 | Browser navigations to a file get a rendered view chosen by file type, with a bar offering Rendered, Source, Raw and Download. `?raw=1` returns the stored bytes (text types as `text/plain`), `?download=1` downloads, `?view=1` forces the viewer, `?view=source` shows highlighted source. Sub-resource requests always get raw bytes | P0 | Done (R-07) |
 | VIEW-02 | P0 types: HTML (real page, plus a viewer frame and source view), Markdown, images, SVG, PDF, video, audio, JSON, CSV/TSV, code (60+ languages), plain text, folder listing with image gallery and README | P0 | R-07, R-08 |
 | VIEW-03 | P1 types: Jupyter notebooks, Mermaid and math inside Markdown, YAML/TOML tree, sortable and filterable CSV, JSON search, font specimens, diffs and patches, binary info page | P1 | R-34 |
 | VIEW-04 | P2 types: Office documents (via Markdown conversion), archives (entry list), 3D models, GeoJSON maps, EPUB | P2 | R-51 |
