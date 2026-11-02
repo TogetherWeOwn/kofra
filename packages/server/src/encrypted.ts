@@ -30,8 +30,11 @@ async function encryptedLoader() {
     const bytes = new Uint8Array(size);
     let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-    if (size < 36 || new TextDecoder().decode(bytes.subarray(0, 8)) !== "DWENC001") throw new Error("Invalid encrypted site format.");
-    const plaintext = await w.crypto.subtle.decrypt({ name: "AES-GCM", iv: bytes.subarray(8, 20), tagLength: 128 }, key, bytes.subarray(20));
+    // Self-contained: this function is stringified into the served page, so the
+    // magic lives in one local constant used for both the prefix check and decryption.
+    const magic = "DWENC001";
+    if (size < 36 || new TextDecoder().decode(bytes.subarray(0, 8)) !== magic) throw new Error("Invalid encrypted site format.");
+    const plaintext = await w.crypto.subtle.decrypt({ name: "AES-GCM", iv: bytes.subarray(8, 20), tagLength: 128, additionalData: new TextEncoder().encode(magic) }, key, bytes.subarray(20));
     const bundle = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(plaintext));
     if (bundle.format !== "dropway-encrypted-v1" || !Array.isArray(bundle.files) || !bundle.files.length || bundle.files.length > 10000 || typeof bundle.entry !== "string") throw new Error("Invalid encrypted site contents.");
     const paths = new Set<string>();
