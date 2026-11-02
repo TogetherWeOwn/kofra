@@ -1,8 +1,8 @@
-import { signingSecret } from "../config";
+import { effectiveSigningSecret } from "../config";
 import type { DropwayContext } from "../context";
 import { appOrigin, siteUrl } from "../context";
 import { ApiError, badRequest, conflict, forbidden, notFound, rateLimited, unauthorized } from "../errors";
-import { hashPassword, newId, newSecret, sha256Hex } from "../lib/crypto";
+import { hashPassword, hmacHex, newId, newSecret, sha256Hex } from "../lib/crypto";
 import { generateSlug, validateSlug } from "../lib/slug";
 import { stringField } from "../lib/input";
 import { hasScope, type Principal, type Scope } from "../principal";
@@ -212,9 +212,9 @@ export function parseSettings(body: Record<string, unknown>): SiteSettingsInput 
   return out;
 }
 
-/** Salted hash of the caller IP, for anonymous rate limits without storing raw IPs. */
+/** Keyed hash of the caller IP, for anonymous rate limits without storing raw IPs. */
 export async function ipHash(dc: DropwayContext, ip: string): Promise<string> {
-  return (await sha256Hex(`${signingSecret(dc.config)}:${ip}`)).slice(0, 32);
+  return (await hmacHex(await effectiveSigningSecret(dc), `ip:${ip}`)).slice(0, 32);
 }
 
 export function anonymousDisabled(): ApiError {
@@ -274,7 +274,7 @@ export async function createSite(
   if (input.password) await requireCapability(dc, p, "site_password", owner);
   // A password gate is unenforceable without the signing secret (cookies and
   // form proofs would be forgeable): refuse before creating a gate nobody can pass.
-  if (input.password) signingSecret(dc.config);
+  if (input.password) await effectiveSigningSecret(dc);
   const siteQuota = tenantId === null ? null : await requireQuota(dc, p, "sites", owner, (await getUsage(dc, tenantId)).sites, 1);
   await dc.adapters.policy.beforeCreateSite?.(p, { slug: wanted, tenantId }, dc);
   await opts.beforeInsert?.({ tenantId });
@@ -413,7 +413,7 @@ export async function updateSite(dc: DropwayContext, p: Principal, slug: string,
   }
   if (input.password) await requireCapability(dc, p, "site_password", { siteId: site.id, tenantId: site.tenant_id });
   // Clearing a password needs no secret; setting one does (see createSite).
-  if (input.password) signingSecret(dc.config);
+  if (input.password) await effectiveSigningSecret(dc);
   const sets: string[] = [];
   const binds: unknown[] = [];
   const set = (col: string, val: unknown) => {
