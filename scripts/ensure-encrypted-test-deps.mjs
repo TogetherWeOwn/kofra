@@ -100,13 +100,46 @@ function dirIsPopulated(dir) {
   }
 }
 
+function headlessShellPresent(shellDir) {
+  // Match the headless-shell binary itself, not just any file in its folder:
+  // a half-pruned cache (binary deleted, stray files left behind) must still
+  // trigger a reinstall. Binary filenames come from the pinned Playwright's
+  // EXECUTABLE_PATHS table for chromium-headless-shell (its server registry:
+  // chrome-headless-shell[.exe]); only the parent folder varies by platform,
+  // so match the filename at any depth instead of assuming the layout.
+  const names = process.platform === "win32" ? ["chrome-headless-shell.exe"] : ["chrome-headless-shell"];
+  try {
+    const stack = [shellDir];
+    while (stack.length > 0) {
+      const dir = stack.pop();
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isDirectory()) stack.push(join(dir, entry.name));
+        else if (names.includes(entry.name)) return true;
+      }
+    }
+    return false;
+  } catch {
+    // Unreadable layout: keep the old any-file check rather than forcing a
+    // reinstall (fail open, same as headlessShellDir returning null).
+    return dirIsPopulated(shellDir);
+  }
+}
+
 const wanted = fingerprint();
 const stamp = existsSync(STAMP) ? readFileSync(STAMP, "utf8") : "";
-// Windows ships npm as npm.cmd, which execFileSync cannot launch directly.
-const NPM = process.platform === "win32" ? "npm.cmd" : "npm";
+function runNpm(args) {
+  // Windows ships npm as a .cmd batch file, which execFileSync cannot launch
+  // without a shell, so route it through cmd.exe there. Other platforms run
+  // npm directly. Either way argv stays separated and stdio is inherited.
+  if (process.platform === "win32") {
+    execFileSync("cmd.exe", ["/d", "/s", "/c", "npm", ...args], { stdio: "inherit" });
+  } else {
+    execFileSync("npm", args, { stdio: "inherit" });
+  }
+}
 if (stamp !== wanted || !installedPackagesComplete()) {
   console.log("encrypted test deps: installing packages/cli/test/encrypted (not covered by root npm ci) ...");
-  execFileSync(NPM, ["ci", "--prefix", ENCRYPTED_DIR, "--no-audit", "--no-fund"], { stdio: "inherit" });
+  runNpm(["ci", "--prefix", ENCRYPTED_DIR, "--no-audit", "--no-fund"]);
   writeFileSync(STAMP, wanted);
 } else {
   console.log("encrypted test deps: up to date, skipping install.");
@@ -133,14 +166,23 @@ if (override) {
     process.exit(1);
   }
   const shellDir = headlessShellDir();
-  const shellMissing = shellDir !== null && !dirIsPopulated(shellDir);
+  const shellMissing = shellDir !== null && !headlessShellPresent(shellDir);
   if (!existsSync(executable) || shellMissing) {
-    if (shellMissing) console.log(`encrypted test deps: headless shell missing (${shellDir}), downloading ...`);
-    else console.log(`encrypted test deps: Chromium missing, downloading (${executable}) ...`);
-    execFileSync(process.execPath,
-      [join(ENCRYPTED_MODULES, "playwright", "cli.js"), "install", "chromium"], { stdio: "inherit" });
+    // --force: Playwright skips downloads whose INSTALLATION_COMPLETE marker
+    // survived, so a half-pruned cache (binary deleted, marker intact) needs
+    // a forced reinstall — otherwise the post-install check below would fail
+    // with no way to recover. --only-shell keeps a shell-only repair small.
+    const installArgs = [join(ENCRYPTED_MODULES, "playwright", "cli.js"), "install", "--force"];
+    if (!existsSync(executable)) {
+      console.log(`encrypted test deps: Chromium missing, downloading (${executable}) ...`);
+      installArgs.push("chromium");
+    } else {
+      console.log(`encrypted test deps: headless shell missing (${shellDir}), downloading ...`);
+      installArgs.push("--only-shell", "chromium");
+    }
+    execFileSync(process.execPath, installArgs, { stdio: "inherit" });
     const shellDirAfter = headlessShellDir();
-    if (!existsSync(chromiumExecutablePath()) || (shellDirAfter !== null && !dirIsPopulated(shellDirAfter))) {
+    if (!existsSync(chromiumExecutablePath()) || (shellDirAfter !== null && !headlessShellPresent(shellDirAfter))) {
       console.error("encrypted test deps: Chromium still missing after `playwright install chromium`.");
       console.error("On Linux without system browser libraries, run with OS packages instead:");
       console.error("  packages/cli/test/encrypted/node_modules/.bin/playwright install --with-deps chromium");
