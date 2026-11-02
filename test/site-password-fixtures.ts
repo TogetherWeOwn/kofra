@@ -4,7 +4,7 @@ import { form, type Instance } from "./helpers";
 import { attributeUrl, type Transfer } from "./transfer-fixtures";
 
 export const WINDOW_MS = 15 * 60_000;
-export const SITE_PASSWORD = "1234";
+export const SITE_PASSWORD = "gate-fixture-password";
 
 export function freezePasswordClock(): number {
   const start = Math.floor(Date.now() / WINDOW_MS) * WINDOW_MS;

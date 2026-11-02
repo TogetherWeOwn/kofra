@@ -100,7 +100,7 @@ describe("F1 REST deploy and create-site coercions", () => {
     });
   }
 
-  for (const value of [1234, "release text"]) {
+  for (const value of [12345678, "release text"]) {
     it(`preserves create-site and deploy coercion for ${typeof value}`, async () => {
       const instance = await freshInstance();
       const created = await instance.json("/api/v1/sites", {

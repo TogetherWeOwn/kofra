@@ -205,7 +205,7 @@ export function parseSettings(body: Record<string, unknown>): SiteSettingsInput 
     if (body.password === null || body.password === "") out.password = null;
     else {
       const pw = stringField(body.password, "password");
-      if (pw.length < 4 || pw.length > 200) throw badRequest("invalid_password", "Passwords must be 4-200 characters.");
+      if (pw.length < 8 || pw.length > 200) throw badRequest("invalid_password", "Passwords must be 8-200 characters.");
       out.password = pw;
     }
   }

@@ -20,7 +20,7 @@ beforeEach(async () => {
     });
     expect(pub.status).toBe(201);
   }
-  const lock = await dw.json("/api/v1/sites/locked-site/access", { method: "PUT", key: dw.ownerKey, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "password", password: "secret1" }) });
+  const lock = await dw.json("/api/v1/sites/locked-site/access", { method: "PUT", key: dw.ownerKey, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "password", password: "secret12" }) });
   expect(lock.status).toBe(200);
 });
 
@@ -29,7 +29,7 @@ async function unlock(headers: Record<string, string> = NAV) {
   const res = await dw.call(`${site("locked-site")}/__dropway/password`, {
     method: "POST",
     headers: { ...headers, "Content-Type": "application/x-www-form-urlencoded", "Sec-Fetch-Site": "same-origin" },
-    body: "password=secret1&next=%2F",
+    body: "password=secret12&next=%2F",
   });
   expect(res.status).toBe(303);
   const setCookie = res.headers.get("set-cookie")!;
@@ -144,7 +144,7 @@ describe("preview label length (P4)", () => {
 describe("password gate in subdomain mode (P3, P7, viewer)", () => {
   it("sets a __Host- Lax cookie at top level and serves the site with it", async () => {
     const { setCookie, cookie } = await unlock();
-    expect(setCookie).toMatch(/^__Host-dw_pw_locked_site=[a-f0-9]{40}; Path=\/; Max-Age=604800; HttpOnly; Secure; SameSite=Lax$/);
+    expect(setCookie).toMatch(/^__Host-dw_pw_locked_site=\d+\.[a-f0-9]{64}; Path=\/; Max-Age=604800; HttpOnly; Secure; SameSite=Lax$/);
     const page = await dw.call(`${site("locked-site")}/`, { headers: { ...NAV, Cookie: cookie } });
     expect(page.status).toBe(200);
     // The old, unprefixed name is not accepted in subdomain mode.
@@ -157,7 +157,7 @@ describe("password gate in subdomain mode (P3, P7, viewer)", () => {
     expect(form401.status).toBe(401);
     expect(form401.headers.get("content-security-policy")).toContain(`frame-ancestors ${APP}`);
     const { setCookie, cookie } = await unlock(FRAME);
-    expect(setCookie).toMatch(/^__Host-dw_pwe_locked_site=[a-f0-9]{40}; Path=\/; Max-Age=604800; HttpOnly; Secure; SameSite=None; Partitioned$/);
+    expect(setCookie).toMatch(/^__Host-dw_pwe_locked_site=\d+\.[a-f0-9]{64}; Path=\/; Max-Age=604800; HttpOnly; Secure; SameSite=None; Partitioned$/);
     const framed = await dw.call(`${site("locked-site")}/?view=1&embed=1`, { headers: { ...FRAME, Cookie: cookie } });
     expect(framed.status).toBe(200);
     // The framed page's own sub-resources are same-origin.
@@ -210,11 +210,11 @@ describe("password gate in path mode", () => {
     const path = await freshInstance();
     const pub = await path.json("/api/v1/publish", { method: "POST", key: path.ownerKey, body: form({ "index.html": "x", "app.js": "y" }, { slug: "path-locked" }) });
     expect(pub.status).toBe(201);
-    await path.json("/api/v1/sites/path-locked/access", { method: "PUT", key: path.ownerKey, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "password", password: "secret1" }) });
-    const res = await path.call("/s/path-locked/__dropway/password", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "password=secret1" });
+    await path.json("/api/v1/sites/path-locked/access", { method: "PUT", key: path.ownerKey, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "password", password: "secret12" }) });
+    const res = await path.call("/s/path-locked/__dropway/password", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "password=secret12" });
     expect(res.status).toBe(303);
     const setCookie = res.headers.get("set-cookie")!;
-    expect(setCookie).toMatch(/^dw_pw_path_locked=[a-f0-9]{40}; Path=\/s\/path-locked\/; Max-Age=604800; HttpOnly; Secure; SameSite=None$/);
+    expect(setCookie).toMatch(/^dw_pw_path_locked=\d+\.[a-f0-9]{64}; Path=\/s\/path-locked\/; Max-Age=604800; HttpOnly; Secure; SameSite=None$/);
     // Shared-origin sites are sandboxed (opaque origin): their own requests are cross-site, so no 403 and CORP stays cross-origin.
     const js = await path.call("/s/path-locked/app.js", { headers: { "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Dest": "script", Cookie: setCookie.split(";")[0]! } });
     expect(js.status).toBe(200);

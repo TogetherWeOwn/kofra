@@ -62,7 +62,7 @@ Extension adapters can add codes and override guidance without changing built-in
 | `invalid_manifest` | 400 | false | Give each manifest entry an object containing path, size and sha256. |
 | `invalid_operation_output` | 500 | false | Report the requestId to the instance operator. |
 | `invalid_part` | 400 | false | Use a one-based part number the session expects and send exactly that part's bytes with Content-Length. |
-| `invalid_password` | 400 | false | Use a password of 4–200 characters; use null to remove password protection. |
+| `invalid_password` | 400 | false | Use a password of 8–200 characters; use null to remove password protection. |
 | `invalid_path` | 400 | false | Use a non-empty site-relative path of at most 1,024 characters, without .. or control characters. |
 | `invalid_policy_quota` | 500 | false | Ask the instance administrator to return null or a non-negative integer. |
 | `invalid_range` | 400 | false | Use an offset no greater than the file size; use nextOffset from the preceding read. |
@@ -92,7 +92,7 @@ Extension adapters can add codes and override guidance without changing built-in
 | `not_set_up` | 404 | false | Call POST /api/v1/setup with the bootstrap key first. |
 | `part_busy` | 409 | true | Retry after the in-flight PUT finishes; identical acknowledged bytes replay without another storage write. |
 | `part_conflict` | 409 | false | Resume with the acknowledged bytes, or publish again to create a new pending version if they must change. |
-| `password_required` | 400 | false | Call again with a password of 4–200 characters. |
+| `password_required` | 400 | false | Call again with a password of 8–200 characters. |
 | `path_required` | 400 | false | Add a path query parameter or X-Kofra-Path header to name the raw file. |
 | `rate_limited` | 429 | true | Wait retryAfterSeconds before retrying; update an existing anonymous site using its claim token. |
 | `reason_required` | 400 | false | Provide a non-empty reason for releasing the held name, such as a trademark dispute reference. |

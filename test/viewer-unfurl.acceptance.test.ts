@@ -864,7 +864,7 @@ describe("unfurl head tags: password-gated sites leak nothing new", () => {
       method: "PUT",
       key: dw.ownerKey,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: "password", password: "secret1" }),
+      body: JSON.stringify({ mode: "password", password: "secret12" }),
     });
     expect(lock.status).toBe(200);
   });
@@ -889,7 +889,7 @@ describe("unfurl head tags: password-gated sites leak nothing new", () => {
     const unlock = await dw.call(`/s/${slug}/__dropway/password`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: "password=secret1&next=%2Fsecret-notes.txt",
+      body: "password=secret12&next=%2Fsecret-notes.txt",
     });
     expect(unlock.status).toBe(303);
     const cookie = (unlock.headers.get("set-cookie") ?? "").split(";")[0]!;

@@ -58,8 +58,15 @@ export async function hashPassword(password: string, iterations = 100_000): Prom
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const [scheme, iter, saltHex, hashHex] = stored.split("$");
   if (scheme !== "pbkdf2" || !iter || !saltHex || !hashHex) return false;
+  // Bound every parameter before touching PBKDF2: malformed or out-of-range
+  // hashes fail closed without throwing and without burning CPU.
+  if (!/^\d+$/.test(iter)) return false;
+  const iterations = Number(iter);
+  if (!Number.isInteger(iterations) || iterations < 1 || iterations > 100_000) return false;
+  if (!/^[a-f0-9]{32}$/.test(saltHex)) return false;
+  if (!/^[a-f0-9]{64}$/.test(hashHex)) return false;
   const salt = new Uint8Array((saltHex.match(/../g) ?? []).map((h) => parseInt(h, 16)));
-  const hash = await pbkdf2(password, salt, Number(iter));
+  const hash = await pbkdf2(password, salt, iterations);
   return timingSafeEqualStr(hash, hashHex);
 }
 

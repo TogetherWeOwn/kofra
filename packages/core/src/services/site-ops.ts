@@ -321,7 +321,7 @@ export async function setSiteAccess(dc: DropwayContext, p: Principal, ref: unkno
   }
   const site = await getSiteByRef(dc, p, ref, "sites:write");
   if (mode === "password" && (typeof input.password !== "string" || !input.password)) {
-    throw badRequest("password_required", 'mode "password" needs a password (4-200 characters).', 'Call again with password: "<4-200 characters>".');
+    throw badRequest("password_required", 'mode "password" needs a password (8-200 characters).', 'Call again with password: "<8-200 characters>".');
   }
   const settings = parseSettings({ password: mode === "public" ? null : input.password });
   const updated = await updateSite(dc, p, site.slug, settings);
