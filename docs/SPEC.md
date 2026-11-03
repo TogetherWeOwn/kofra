@@ -104,7 +104,7 @@ What Kofra is not:
 | PUB-10 | Version message (like a commit message, up to 200 chars) | P0 | Done |
 | PUB-11 | Pending versions expire after 1 hour; finalizing with missing bytes returns `409 missing_blobs` with fresh upload links | P0 | Done |
 | PUB-12 | Publish warnings: root-absolute paths in path mode, SPA without a base path, browser storage on a sandboxed origin, `.wasm` without cross-origin isolation, possible secrets, invalid config files | P0 | Done (R-12) |
-| PUB-13 | Files larger than one request (above about 95 MB): multipart upload through the Worker, resumable | P1 | Implemented (R-35); verified on workers.dev 2026-11-02: 98 MiB file round-trips byte-identical (`docs/RELEASE_CHECKLIST.md` B2) |
+| PUB-13 | Files larger than one request (above about 95 MB): multipart upload through the Worker, resumable | P1 | Implemented (R-35); 98 MiB round-trip byte-identical on workers.dev 2026-11-02 (`docs/RELEASE_CHECKLIST.md` B2); resume-from-acknowledged-parts verification pending (issue #193) |
 | PUB-14 | `archiveUrl` (publish a zip from a URL) and chat-client attachments (`{download_url, file_name}`) as sources | P1 | Implemented (R-35); verified on a deployed instance 2026-11-02 (`docs/RELEASE_CHECKLIST.md` B9) |
 | PUB-15 | Duplicate a site server-side (immediately live) | P1 | Done |
 | PUB-16 | TTL for keyed sites (`ttlSeconds`, `null` clears) | P1 | Done |
