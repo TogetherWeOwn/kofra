@@ -60,6 +60,33 @@ merits a finding", "Test rigor" and "Skip"; they never make an item
 reportable. Most of the Not Severe items are skipped outright, and any
 that is still reported is Non-severe.
 
+## Before you flag a security issue
+
+- Require a concrete exploit path at the exact reviewed commit: identify the
+  attacker, the input they control, and what they gain. Name the file and lines
+  where protection is missing; a security Warning must still trace this path
+  and identify any unverified step.
+- First check documented design: ADRs, README, module docs and the PR body.
+  Explicitly intended behavior is not a security finding; raise disagreement
+  with that design as a non-blocking question instead.
+- Trace the call path for existing protections before flagging: middleware,
+  size caps, signature checks, server-only creation and allowlists. A check
+  outside the changed handler is not a missing check.
+- Hypothetical hardening without an exploit path ("could log", "might leak",
+  defence in depth) is Non-severe at most, categorized as analysis, not security.
+
+Examples grounded in this repo:
+
+- **Real security finding, conditional regression (not a current defect):** if
+  `canAccess` in `packages/core/src/services/sites.ts` lost its site-id restriction,
+  a member holding a site-scoped API key could supply another same-tenant site's
+  slug and settings to `updateSite`, gaining unauthorized changes to that site.
+  The current `getSiteFor` → `canAccess` checks prevent this.
+- **False alarm:** a thin site-settings operation has no inline ownership check.
+  `docs/ARCHITECTURE.md` deliberately puts authorization in services; `updateSite`
+  calls `getSiteFor` with `sites:write` before writing, checking tenant, scope and
+  key site restriction. The handler alone does not establish a bypass.
+
 ## Disproof pass (before posting any finding)
 
 Try to prove your own candidate wrong first:
