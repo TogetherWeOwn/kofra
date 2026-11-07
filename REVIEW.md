@@ -87,6 +87,14 @@ Examples grounded in this repo:
   calls `getSiteFor` with `sites:write` before writing, checking tenant, scope and
   key site restriction. The handler alone does not establish a bypass.
 
+## Dependency-bump PRs
+
+For dependency version-bump PRs (including Dependabot-style updates):
+
+- Evaluate the bump against the dependency's own changelog and this repository's actual usage.
+- Do not flag lockfile or transitive-dependency churn unless it affects a changed API this repository calls, or introduces or leaves unfixed a known security advisory. Identify the affected call site or advisory and its concrete impact.
+- Follow this repository's existing dependency policy for pins versus ranges; do not substitute reviewer preference.
+
 ## Disproof pass (before posting any finding)
 
 Try to prove your own candidate wrong first:
