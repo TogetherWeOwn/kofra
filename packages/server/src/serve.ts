@@ -117,6 +117,45 @@ function nearestManifestAncestor(files: LiveSite["files"], filePath: string): st
  * Find which manifest entry answers a request path ("" = site root).
  * With fallbacks=false (used for Referer resolution) SPA and 404.html fallbacks are skipped.
  */
+/**
+ * True when a non-navigation request in unsandboxed path mode is initiated
+ * from a different site's path prefix than the target (`mode.base`).
+ *
+ * In path mode every site shares one origin, so `Sec-Fetch-Site: same-origin`
+ * cannot tell sites apart, while the victim site's path-scoped cookie is sent
+ * to any same-origin fetch under its prefix. The Referer is the browser's
+ * initiator signal: it must point under the target site's own base. A
+ * cross-origin or unparsable Referer also counts as a different initiator.
+ * Requests without Fetch Metadata (programmatic clients, which cannot be
+ * ambient browser fetches) and browser-initiated requests (`Sec-Fetch-Site:
+ * none`) are not page fetches and are left alone, whatever their Referer.
+ * Only a browser fetch (`Sec-Fetch-Site: same-origin`) is checked against
+ * its Referer. When `requireReferer` is set, such a fetch with no Referer is
+ * refused too, because a page on the site itself sends one — a missing
+ * Referer then means the initiator suppressed it. Callers leave previews off
+ * that option: preview pages set `Referrer-Policy: no-referrer`, so their
+ * own sub-resources legitimately arrive without one; sandboxing (the default
+ * on a separate sites origin) is their isolation, and the mismatched-Referer
+ * refusal here is defence in depth for the explicit unsandboxed opt-out.
+ */
+export function crossSitePathRequest(req: Request, mode: ServeMode, opts: { requireReferer?: boolean } = {}): boolean {
+  if (mode.kind !== "path" || mode.sandbox || isNavigation(req)) return false;
+  const fetchSite = req.headers.get("sec-fetch-site");
+  if (fetchSite === "same-site" || fetchSite === "cross-site") return true;
+  if (fetchSite !== "same-origin") return false;
+  const referer = req.headers.get("referer");
+  if (!referer) return opts.requireReferer === true;
+  let ref: URL;
+  try {
+    ref = new URL(referer);
+  } catch {
+    return true;
+  }
+  if (ref.origin !== new URL(req.url).origin) return true;
+  const pathname = ref.pathname;
+  return !(pathname.startsWith(mode.base) || pathname === mode.base.slice(0, -1));
+}
+
 export function resolvePath(live: LiveSite, p: string, req: Request, mode: ServeMode, fallbacks = true): Resolved {
   const files = live.files;
   const search = new URL(req.url).search;
@@ -512,9 +551,16 @@ export async function serveSiteContent(
   // <a>.<domain> and <b>.<domain> are the same site, so a Lax gate cookie alone would let one
   // site load another's unlocked scripts with <script src>. Sandboxed pages are opaque origins
   // whose own requests count as cross-site, so they are left to the cookie.
-  if (live.passwordHash && !mode.sandbox && !isNavigation(req)) {
+  if (live.passwordHash && !mode.sandbox && !isNavigation(req) && filePath !== PASSWORD_PATH) {
     const site = req.headers.get("sec-fetch-site");
-    if (site === "same-site" || site === "cross-site") {
+    // In path mode a different site's page is same-origin, so it passes the
+    // Fetch Metadata check above: refuse it by its path prefix instead. The
+    // site's own pages send a Referer under their own base, so same-site
+    // fetches keep working; a browser fetch with no Referer suppressed it.
+    // Previews are exempt from the missing-Referer refusal: their pages set
+    // Referrer-Policy: no-referrer, so their own assets legitimately arrive
+    // without one (the mismatched-Referer refusal still applies there).
+    if (site === "same-site" || site === "cross-site" || crossSitePathRequest(req, mode, { requireReferer: mode.preview !== true })) {
       return systemResponse(dw, req, mode, live, 403, "403", "Not available here", "This site is password protected, so other sites cannot load it.");
     }
   }

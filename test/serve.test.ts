@@ -184,7 +184,7 @@ describe("path mode: run-time shim for sandboxed pages (no Referer from an opaqu
     expect(await (await dw.call(`/s/${s}/index.html?view=1`, { headers: BROWSER_NAV })).text()).not.toContain(SHIM);
     expect(await (await dw.call(`/s/${s}/s.css`)).text()).toBe("a{}");
 
-    const two = await freshInstance({ appOrigin: ORIGIN, sitesOrigin: "https://sites.example" });
+    const two = await freshInstance({ appOrigin: ORIGIN, sitesOrigin: "https://sites.example", sitesSandbox: false });
     const keyed = await publish(two, { "index.html": "<head></head><script>fetch('/x')</script>" });
     const page = await two.call(`https://sites.example/${keyed.body.slug}/`, { headers: BROWSER_NAV });
     expect(page.headers.get("content-security-policy")).toBeNull();
@@ -204,7 +204,7 @@ describe("path mode: run-time shim for sandboxed pages (no Referer from an opaqu
     const data = await two.call(`https://sites.example/${anon.body.slug}/data.json`);
     expect(data.headers.get("content-security-policy")).toContain("sandbox allow-scripts");
 
-    const off = await freshInstance({ appOrigin: ORIGIN, sitesOrigin: "https://sites.example", anonymous: { enabled: true }, sitesSandboxAnonymous: false });
+    const off = await freshInstance({ appOrigin: ORIGIN, sitesOrigin: "https://sites.example", anonymous: { enabled: true }, sitesSandbox: false, sitesSandboxAnonymous: false });
     const anon2 = await off.json("/api/v1/publish", { method: "POST", body: form({ "index.html": "<head></head><p>x</p>" }) });
     const page2 = await off.call(`https://sites.example/${anon2.body.slug}/`, { headers: BROWSER_NAV });
     expect(page2.headers.get("content-security-policy")).toBeNull();
@@ -227,8 +227,8 @@ describe("path mode: run-time shim for sandboxed pages (no Referer from an opaqu
       const c = resolveConfig(vars);
       return [c.sitesSandbox, c.sitesSandboxAnonymous];
     };
-    expect(pick(sitesOrigin)).toEqual([false, true]);
-    expect(pick({ ...sitesOrigin, SITES_SANDBOX: "auto" })).toEqual([false, true]);
+    expect(pick(sitesOrigin)).toEqual([true, true]);
+    expect(pick({ ...sitesOrigin, SITES_SANDBOX: "auto" })).toEqual([true, true]);
     expect(pick({ ...sitesOrigin, SITES_SANDBOX: "true" })).toEqual([true, false]);
     expect(pick({ ...sitesOrigin, SITES_SANDBOX: "false" })).toEqual([false, false]);
     expect(pick({})).toEqual([true, true]);
@@ -288,8 +288,8 @@ describe("other serving topologies", () => {
     expect(pub.body.url).toBe(`https://sites.example/${pub.body.slug}/`);
     const page = await two.call(`https://sites.example/${pub.body.slug}/`);
     expect(await page.text()).toContain(`src="/${pub.body.slug}/img/logo.png"`);
-    // A separate sites origin is not sandboxed by default (so Referer works); SITES_SANDBOX=true opts in.
-    expect(page.headers.get("content-security-policy")).toBeNull();
+    // A separate sites origin is sandboxed by default; SITES_SANDBOX=false opts out.
+    expect(page.headers.get("content-security-policy")).toContain("sandbox allow-scripts");
     const viaApp = await two.call(`/s/${pub.body.slug}/`);
     expect(viaApp.status).toBe(301);
     expect(viaApp.headers.get("location")).toBe(`https://sites.example/${pub.body.slug}/`);

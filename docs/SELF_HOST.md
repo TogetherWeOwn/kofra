@@ -217,7 +217,7 @@ Variables go in `vars` in `wrangler.jsonc`; secrets with `npx wrangler secret pu
 | `SITES_DOMAIN` | empty | Subdomain mode: sites at `https://<name>.<SITES_DOMAIN>/` |
 | `SITES_ORIGIN` | empty | Path mode: origin of a second, sites-only deployment of the same Worker. Ignored in subdomain mode |
 | `LEGACY_SITES_ORIGINS` | empty | Former path-mode sites origins (comma-separated): `<origin>/<name>/<path>` answers `308` to the site's current URL, path and query kept (not cached) |
-| `SITES_SANDBOX` | `auto` | `auto`: on a separate sites origin, sandbox anonymous sites only. `true`: sandbox every site. `false`: none. Always on when sites share the app origin |
+| `SITES_SANDBOX` | `auto` | `auto`: every site on a separate sites origin, and anonymous sites elsewhere in path mode. `true`: sandbox every site. `false`: none. Always on when sites share the app origin |
 | `ANONYMOUS_PUBLISH` | `false` | Allow publishing without a key (sites expire; a claim token is returned) |
 | `ANON_TTL_HOURS` | `24` | Lifetime of anonymous sites |
 | `ANON_SITES_PER_HOUR` | `60` | New anonymous sites per IP per hour |
@@ -274,7 +274,7 @@ and does not charge the site's usage twice.
 | Site URL | `https://<worker>/s/<name>/` | `https://<worker>-sites.<you>.workers.dev/<name>/` | `https://<name>.<your-sites-domain>/` |
 | Setup | none | one extra deploy | a domain on Cloudflare, one DNS record, one route |
 | Isolation | sites share the app origin, so they are always sandboxed | sites are separated from the app, not from each other | every site is its own origin |
-| Limits for pages | no cookies, `localStorage` or service workers (sandbox); root-relative import specifiers and `location.href = "/x"` do not resolve | sites share one origin's storage (anonymous sites are sandboxed) | none |
+| Limits for pages | no cookies, `localStorage` or service workers (sandbox); root-relative import specifiers and `location.href = "/x"` do not resolve | no shared storage, cookies or service workers (sandboxed by default: opaque origin per page) | none |
 | Use when | trying it out, personal use | a team that trusts its publishers, before buying a domain | untrusted publishers, or as soon as you have a domain |
 
 ### A. Path mode

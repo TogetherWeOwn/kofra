@@ -13,7 +13,7 @@ type Publication = { versionUrl: string; version: { id: string; number: number }
 type Topology = { name: string; config: ConfigOverrides; root(slug: string): string; sandboxed: boolean };
 const topologies: Topology[] = [
   { name: "path on app origin", config: { appOrigin: ORIGIN }, root: (slug) => `${ORIGIN}/s/${slug}/`, sandboxed: true },
-  { name: "path on dedicated sites origin", config: { appOrigin: ORIGIN, sitesOrigin: "https://sites.example" }, root: (slug) => `https://sites.example/${slug}/`, sandboxed: false },
+  { name: "path on dedicated sites origin", config: { appOrigin: ORIGIN, sitesOrigin: "https://sites.example", sitesSandbox: false }, root: (slug) => `https://sites.example/${slug}/`, sandboxed: false },
   { name: "subdomain", config: { appOrigin: ORIGIN, sitesMode: "subdomain", sitesDomain: "sites.test" }, root: (slug) => `https://${slug}.sites.test/`, sandboxed: false },
 ];
 
