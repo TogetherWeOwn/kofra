@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { clearLiveMemoryCache, forbidden, runCleanup } from "@kofra/core";
 import type { ServerBindings } from "@kofra/server";
-import { form, freshInstance, jsonBody } from "./helpers";
+import { form, freshInstance, jsonBody, type Instance } from "./helpers";
 
 describe("anonymous publishing (opt-in)", () => {
   it("expires after 24h, returns a claim token that can update the site, and can be claimed", async () => {
@@ -76,6 +76,55 @@ describe("anonymous publishing (opt-in)", () => {
     expect(third.res.headers.get("retry-after")).toBe("3600");
     const other = await dw.json("/api/v1/publish", { method: "POST", headers: { "CF-Connecting-IP": "203.0.113.10" }, body: form({ "index.html": "4" }) });
     expect(other.status).toBe(201);
+  });
+
+  it("a parallel burst from one IP commits at most the per-IP cap, even when every create passes the pre-check", async () => {
+    const CAP = 3;
+    const BURST = 10;
+    let arrived = 0;
+    let armed = true;
+    let releaseGate!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseGate = resolve; });
+    const dw = await freshInstance({ anonymous: { enabled: true, sitesPerHourPerIp: CAP } }, { adapters: { policy: {
+      limits: (_p, _o, dc) => dc.config.limits,
+      async beforeCreateSite(p) {
+        if (!armed || p.kind !== "anonymous") return;
+        // Rendezvous AFTER the per-IP pre-check: all BURST creates have counted 0
+        // and are parked here, so only an in-batch fence can keep the burst at CAP.
+        arrived++;
+        if (arrived === BURST) releaseGate();
+        await gate;
+      },
+    } } });
+    const headers = { "CF-Connecting-IP": "203.0.113.21", "Content-Type": "application/json" };
+    const pending = Array.from({ length: BURST }, () => dw.json("/api/v1/sites", { method: "POST", headers, body: "{}" }));
+    let results: Awaited<ReturnType<Instance["json"]>>[] = [];
+    try {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`burst barrier timed out: only ${arrived}/${BURST} creates arrived`)), 5000);
+      });
+      results = await Promise.race([Promise.all(pending), timeout]);
+      if (timer !== undefined) clearTimeout(timer);
+    } finally {
+      armed = false;
+      releaseGate();
+      await Promise.allSettled(pending);
+    }
+    expect(arrived, "every burst create must pass the pre-check before racing the insert batch").toBe(BURST);
+    const created = results.filter((r) => r.status === 201);
+    const denied = results.filter((r) => r.status === 429);
+    expect(created).toHaveLength(CAP);
+    expect(denied).toHaveLength(BURST - CAP);
+    for (const r of denied) expect((r.body as { error: { code: string } }).error.code).toBe("rate_limited");
+    const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM sites").first<{ n: number }>();
+    expect(row?.n).toBe(CAP);
+    // Sequential creates under the cap from another IP are unaffected, and the
+    // capped IP is still capped sequentially.
+    const other = await dw.json("/api/v1/sites", { method: "POST", headers: { "CF-Connecting-IP": "203.0.113.22", "Content-Type": "application/json" }, body: "{}" });
+    expect(other.status).toBe(201);
+    const stillCapped = await dw.json("/api/v1/sites", { method: "POST", headers, body: "{}" });
+    expect(stillCapped.status).toBe(429);
   });
 
   it("anonymous uploads never dedupe against tenant files (no cross-owner probing)", async () => {
