@@ -93,6 +93,57 @@ describe("cross-site-path fetch on a separate sites origin (unsandboxed opt-out)
     expect(await nav.text()).toContain("home");
   });
 
+  it("refuses a cross-site GET of the password path on an unlocked SPA; the POST exemption still unlocks", async () => {
+    const dw = await freshInstance({ appOrigin: ORIGIN, sitesOrigin: SITES, sitesSandbox: false });
+    const pub = await dw.json("/api/v1/publish", {
+      key: dw.ownerKey,
+      ...jsonBody({ site: "victim-site", spa: true, files: [{ path: "index.html", content: "<p>spa-home-body</p>" }] }),
+    });
+    expect(pub.status).toBe(201);
+    const lock = await dw.json("/api/v1/sites/victim-site/access", {
+      method: "PUT",
+      key: dw.ownerKey,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "password", password: "secret12" }),
+    });
+    expect(lock.status).toBe(200);
+    // The POST submission is the only exempt method: it still unlocks.
+    const unlock = await dw.call(`${SITES}/victim-site/__dropway/password`, {
+      method: "POST",
+      headers: { ...NAV, "Content-Type": "application/x-www-form-urlencoded", "Sec-Fetch-Site": "same-origin" },
+      body: "password=secret12&next=%2F",
+    });
+    expect(unlock.status).toBe(303);
+    const cookie = unlock.headers.get("set-cookie")!.split(";")[0]!;
+
+    // Attacker page context: same-origin GET of the password path with victim
+    // cookie and foreign Referer must be refused, not served via SPA fallback.
+    const attack = await dw.call(`${SITES}/victim-site/__dropway/password`, {
+      headers: {
+        Cookie: cookie,
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        Referer: `${SITES}/attacker-site/index.html`,
+      },
+    });
+    expect(attack.status).toBe(403);
+    expect(await attack.text()).not.toContain("spa-home-body");
+
+    // Same-site GET of the password path still resolves through the SPA fallback.
+    const own = await dw.call(`${SITES}/victim-site/__dropway/password`, {
+      headers: {
+        Cookie: cookie,
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        Referer: `${SITES}/victim-site/index.html`,
+      },
+    });
+    expect(own.status).toBe(200);
+    expect(await own.text()).toContain("spa-home-body");
+  });
+
   it("refuses a cross-site-path fetch of a version preview asset", async () => {
     const dw = await freshInstance({ appOrigin: ORIGIN, sitesOrigin: SITES, sitesSandbox: false });
     const pub = await dw.json<{ versionUrl: string }>("/api/v1/publish", {

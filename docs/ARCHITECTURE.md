@@ -155,7 +155,9 @@ When sandboxed serving is explicitly opted out (`SITES_SANDBOX=false`), a
 non-navigation request to a gated or preview asset whose Referer points at a
 different site's path prefix is refused, and a browser fetch of a gated
 non-preview asset with no Referer at all is refused as well; direct
-navigations still work. Requests without Fetch Metadata are left alone.
+navigations still work. This Referer-prefix refusal is defence in depth in
+this opt-out only, not an isolation boundary — a sibling page controls its
+fetch referrer, gated sites included. Requests without Fetch Metadata are left alone.
 Previews cannot use the missing-Referer refusal (their pages send
 `no-referrer`), so in this opt-out a sibling page that suppresses its Referer
 can still reach opt-out preview assets — gated previews included, where the

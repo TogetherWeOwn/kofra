@@ -550,8 +550,9 @@ export async function serveSiteContent(
   // viewer) and their own pages' requests. Until the sites domain is on the Public Suffix List,
   // <a>.<domain> and <b>.<domain> are the same site, so a Lax gate cookie alone would let one
   // site load another's unlocked scripts with <script src>. Sandboxed pages are opaque origins
-  // whose own requests count as cross-site, so they are left to the cookie.
-  if (live.passwordHash && !mode.sandbox && !isNavigation(req) && filePath !== PASSWORD_PATH) {
+  // whose own requests count as cross-site, so they are left to the cookie. The password
+  // submission path is exempt for POST only; GET/HEAD to it stay guarded.
+  if (live.passwordHash && !mode.sandbox && !isNavigation(req) && !(filePath === PASSWORD_PATH && method === "POST")) {
     const site = req.headers.get("sec-fetch-site");
     // In path mode a different site's page is same-origin, so it passes the
     // Fetch Metadata check above: refuse it by its path prefix instead. The
