@@ -148,11 +148,23 @@ path-mode limitations still apply. Live unsandboxed pages keep their Referer fal
 Site passwords still apply; a preview capability is not a password unlock.
 
 As with password sites, path-scoped cookies are routing scope, **not origin isolation**.
-Path-mode sites share an origin; hostile content there can cause ambient-cookie requests
-(including classic-script inclusions from opaque sandbox origins). Use subdomain mode
-for sensitive previews or mutually untrusted sites. Its host-only `__Host-` cookie and
-same-site/cross-site subresource refusal isolate sibling sites. Removing CORS permission
-in path mode does not make different paths different origins.
+Path-mode sites share an origin; hostile content there can cause ambient-cookie
+requests, including classic-script inclusions from opaque sandbox origins.
+For unsandboxed serving on a separate sites origin, a
+non-navigation request to a gated or preview asset whose Referer points at a
+different site's path prefix is refused, and a browser fetch of a gated
+non-preview asset with no Referer at all is refused as well; direct
+navigations still work. This Referer-prefix refusal is defence in depth in
+unsandboxed mode only, not an isolation boundary — a sibling page controls its
+fetch referrer, gated sites included. Requests without Fetch Metadata are left alone.
+Previews cannot use the missing-Referer refusal (their pages send
+`no-referrer`), so in unsandboxed mode a sibling page that suppresses its Referer
+can still reach preview assets — gated previews included, where the
+browser holds the unlock — which are not sibling-isolated.
+Use subdomain mode for sensitive previews or mutually untrusted sites. Its
+host-only `__Host-` cookie and same-site/cross-site subresource refusal
+isolate sibling sites. Removing CORS permission in path mode does not make
+different paths different origins.
 
 ### Public site password attempts
 

@@ -1,5 +1,5 @@
 import { ApiError, readVersionPreview, requestIp, type KofraContext, type Principal } from "@kofra/core";
-import { isNavigation, serveSiteContent, systemResponse, type ServeMode } from "./serve";
+import { crossSitePathRequest, isNavigation, serveSiteContent, systemResponse, type ServeMode } from "./serve";
 import type { Viewer } from "./viewers";
 
 /** Preview responses must not outlive their authorization or leak the bearer URL through a Referer. */
@@ -43,7 +43,8 @@ export async function serveVersionPreview(
   if (!preview) return deny();
   if (!mode.sandbox && preview.live.tenantId === null && dw.config.sitesSandboxAnonymous) mode = { ...mode, sandbox: true };
   // Sibling subdomains are same-site: a Lax cookie alone must not grant them readable scripts.
-  if (!mode.sandbox && !isNavigation(request) && ["same-site", "cross-site"].includes(request.headers.get("sec-fetch-site") ?? "")) return deny();
+  // In path mode a different site's page is same-origin, so refuse it by path prefix too.
+  if (!mode.sandbox && !isNavigation(request) && (["same-site", "cross-site"].includes(request.headers.get("sec-fetch-site") ?? "") || crossSitePathRequest(request, mode))) return deny();
   if (queryToken !== null) {
     url.searchParams.delete("dw_preview");
     if (url.pathname === mode.base.slice(0, -1)) url.pathname = mode.base;
