@@ -251,6 +251,8 @@ export async function createSite(
   const anonymous = p.kind === "anonymous";
   const now = Date.now();
   let creatorIp: string | null = null;
+  let anonCap: number | null = null;
+  const anonWindowStart = now - 3600_000;
 
   if (anonymous) {
     if (!dc.config.anonymous.enabled) throw anonymousDisabled();
@@ -259,12 +261,12 @@ export async function createSite(
     if (input.password) throw forbidden("Password protection needs an API key.");
     if (input.ttlSeconds !== undefined) throw forbidden("Anonymous sites already expire after 24 hours.", "Claim the site with an API key to set its own expiry.");
     creatorIp = await ipHash(dc, p.ip);
+    anonCap = dc.config.anonymous.sitesPerHourPerIp;
     const recent = await dc.env.DB.prepare("SELECT COUNT(*) AS n FROM sites WHERE creator_ip_hash = ? AND created_at > ?")
-      .bind(creatorIp, now - 3600_000)
+      .bind(creatorIp, anonWindowStart)
       .first<{ n: number }>();
-    const cap = dc.config.anonymous.sitesPerHourPerIp;
-    if ((recent?.n ?? 0) >= cap) {
-      throw rateLimited(`Anonymous publishing is limited to ${cap} new sites per hour per IP.`, "Wait and retry, update your existing site with its claim token, or use an API key.", 3600);
+    if ((recent?.n ?? 0) >= anonCap) {
+      throw rateLimited(`Anonymous publishing is limited to ${anonCap} new sites per hour per IP.`, "Wait and retry, update your existing site with its claim token, or use an API key.", 3600);
     }
   }
   const tenantId = p.kind === "member" ? p.tenantId : null;
@@ -322,6 +324,13 @@ export async function createSite(
         dc.env.DB.prepare(`SELECT CASE WHEN ? IS NULL OR
           (SELECT COUNT(*) FROM sites WHERE tenant_id = ? AND deleted_at IS NULL) < ?
           THEN 1 ELSE json_extract('{}', 'dropway_sites_quota') END`).bind(siteQuota, tenantId, siteQuota),
+        // Same in-batch fence for the anonymous per-IP hourly cap: the pre-check
+        // above counts before preparation, so parallel creates can all pass it
+        // while the tenant quota is NULL. Count again here, in the same atomic
+        // batch, so a burst's later batches see earlier commits and abort.
+        dc.env.DB.prepare(`SELECT CASE WHEN ? IS NULL OR
+          (SELECT COUNT(*) FROM sites WHERE creator_ip_hash = ? AND created_at > ?) < ?
+          THEN 1 ELSE json_extract('{}', 'dropway_anonymous_ip_cap') END`).bind(anonCap, creatorIp, anonWindowStart, anonCap),
         dc.env.DB.prepare(
           `INSERT INTO sites (id, slug, slug_chosen, tenant_id, created_by, title, description, spa, render_markdown, cross_origin_isolation,
              noindex, viewers, ttl_seconds, password_hash, claim_token_hash, creator_ip_hash, expires_at, created_at, updated_at)
@@ -334,6 +343,9 @@ export async function createSite(
       ], extension, (error) => {
         if (String(error).includes("JSON path") && String(error).includes("dropway_sites_quota")) {
           return quotaExceeded("sites", siteQuota!);
+        }
+        if (String(error).includes("JSON path") && String(error).includes("dropway_anonymous_ip_cap")) {
+          return rateLimited(`Anonymous publishing is limited to ${anonCap} new sites per hour per IP.`, "Wait and retry, update your existing site with its claim token, or use an API key.", 3600);
         }
         return siteSlugError(error, site.slug, "Pick another slug, or omit it to get a generated one.");
       });
