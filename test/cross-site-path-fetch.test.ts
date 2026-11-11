@@ -257,6 +257,19 @@ describe("sandbox default on a separate sites origin", () => {
     expect(pick({ SITES_MODE: "subdomain", SITES_DOMAIN: "sites.test" })).toEqual([false, false]);
   });
 
+  it("keeps explicitly sandboxed protected sites' own subresources working", async () => {
+    const dw = await freshInstance({ appOrigin: ORIGIN, sitesOrigin: SITES, sitesSandbox: true });
+    const cookie = await publishLocked(dw, "victim-site");
+    const page = await dw.call(`${SITES}/victim-site/`, { headers: { ...NAV, Cookie: cookie } });
+    expect(page.status).toBe(200);
+    expect(page.headers.get("content-security-policy")).toContain("sandbox allow-scripts");
+    const asset = await dw.call(`${SITES}/victim-site/data.txt`, {
+      headers: { Cookie: cookie, "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Dest": "empty" },
+    });
+    expect(asset.status).toBe(200);
+    expect(await asset.text()).toBe(SECRET);
+  });
+
   it("keeps keyed protected sites unsandboxed by default and refuses external subresources", async () => {
     const dw = await freshInstance({ appOrigin: ORIGIN, sitesOrigin: SITES });
     const cookie = await publishLocked(dw, "victim-site");
