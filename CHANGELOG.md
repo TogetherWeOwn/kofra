@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `ALLOW_INSECURE_DEV_SECRET` now fails closed when loopback-only serving is not positively
+  established: the instance refuses to start unless `APP_ORIGIN` is set to a loopback origin.
+  Previously an unset (per-request-derived) origin was treated as acceptable, so the stock
+  configuration could boot with the public dev secret.
+
 ## 0.1.0 — first release
 
 First public release of Kofra: single-tenant, self-hosted instant web hosting on Cloudflare (one Worker + D1 + R2 + KV), published from the CLI, REST API, MCP server or dashboard. Content-addressed deploys with immutable versions and restore; a browser viewer for every file type; scoped API keys; password-protected sites; file deliveries; encrypted CLI publishing; resumable large uploads. Packages: `kofra`, `@kofra/core`, `@kofra/server`, `@kofra/client`. Includes pre-release security hardening of operator secrets and site-password cookies — see the upgrade notes in the GitHub Release. Detailed changes since the start of the project are listed below under this version.

@@ -24,7 +24,7 @@ describe("signing secret", () => {
   it("has no built-in fallback unless the insecure dev flag is on", () => {
     expect(resolveConfig({}).signingSecret).toBeNull();
     expect(() => signingSecret(resolveConfig({}))).toThrow(expect.objectContaining({ status: 503, code: "signing_secret_missing", retryable: false }));
-    expect(resolveConfig({ ALLOW_INSECURE_DEV_SECRET: "true" }).signingSecret).toBeTruthy();
+    expect(resolveConfig({ ALLOW_INSECURE_DEV_SECRET: "true", APP_ORIGIN: "http://localhost:8787" }).signingSecret).toBeTruthy();
     expect(resolveConfig({ ADMIN_BOOTSTRAP_KEY: BOOTSTRAP }).signingSecret).toBe(BOOTSTRAP);
     expect(resolveConfig({ ADMIN_BOOTSTRAP_KEY: BOOTSTRAP, SIGNING_SECRET: " own-strong-secret-0123456789abcdef " }).signingSecret)
       .toBe("own-strong-secret-0123456789abcdef");
@@ -74,20 +74,27 @@ describe("signing secret", () => {
   it("refuses the insecure dev secret with any non-loopback configured origin", () => {
     const dev = { ALLOW_INSECURE_DEV_SECRET: "true" };
     // Loopback-only development keeps working.
-    expect(resolveConfig(dev).signingSecret).toBeTruthy();
     expect(resolveConfig({ ...dev, APP_ORIGIN: "http://localhost:8787" }).signingSecret).toBeTruthy();
     expect(resolveConfig({ ...dev, APP_ORIGIN: "http://127.0.0.1:8787", SITES_ORIGIN: "http://[::1]:8787" }).signingSecret).toBeTruthy();
     expect(resolveConfig({ ...dev, APP_ORIGIN: "https://app.localhost" }).signingSecret).toBeTruthy();
     // A loopback SITES_DOMAIN keeps working: bare, subdomain-style, wildcard and IP-literal forms.
-    expect(resolveConfig({ ...dev, SITES_DOMAIN: "localhost" }).signingSecret).toBeTruthy();
-    expect(resolveConfig({ ...dev, SITES_MODE: "subdomain", SITES_DOMAIN: "sites.localhost" }).signingSecret).toBeTruthy();
-    expect(resolveConfig({ ...dev, SITES_MODE: "subdomain", SITES_DOMAIN: "*.localhost" }).signingSecret).toBeTruthy();
-    expect(resolveConfig({ ...dev, SITES_MODE: "subdomain", SITES_DOMAIN: "127.0.0.1" }).signingSecret).toBeTruthy();
-    expect(resolveConfig({ ...dev, SITES_MODE: "subdomain", SITES_DOMAIN: "::1" }).signingSecret).toBeTruthy();
-    expect(resolveConfig(dev, { sitesMode: "subdomain", sitesDomain: "sites.localhost" }).signingSecret).toBeTruthy();
+    expect(resolveConfig({ ...dev, APP_ORIGIN: "http://localhost:8787", SITES_DOMAIN: "localhost" }).signingSecret).toBeTruthy();
+    expect(resolveConfig({ ...dev, APP_ORIGIN: "http://localhost:8787", SITES_MODE: "subdomain", SITES_DOMAIN: "sites.localhost" }).signingSecret).toBeTruthy();
+    expect(resolveConfig({ ...dev, APP_ORIGIN: "http://localhost:8787", SITES_MODE: "subdomain", SITES_DOMAIN: "*.localhost" }).signingSecret).toBeTruthy();
+    expect(resolveConfig({ ...dev, APP_ORIGIN: "http://localhost:8787", SITES_MODE: "subdomain", SITES_DOMAIN: "127.0.0.1" }).signingSecret).toBeTruthy();
+    expect(resolveConfig({ ...dev, APP_ORIGIN: "http://localhost:8787", SITES_MODE: "subdomain", SITES_DOMAIN: "::1" }).signingSecret).toBeTruthy();
+    expect(resolveConfig({ ...dev, APP_ORIGIN: "http://localhost:8787" }, { sitesMode: "subdomain", sitesDomain: "sites.localhost" }).signingSecret).toBeTruthy();
     // Path mode discards SITES_DOMAIN, so a leftover non-loopback domain does not refuse.
-    expect(resolveConfig({ ...dev, SITES_MODE: "path", SITES_DOMAIN: "example.com" }).signingSecret).toBeTruthy();
-    expect(resolveConfig(dev, { sitesMode: "path", sitesDomain: "sites.example.com" }).signingSecret).toBeTruthy();
+    expect(resolveConfig({ ...dev, APP_ORIGIN: "http://localhost:8787", SITES_MODE: "path", SITES_DOMAIN: "example.com" }).signingSecret).toBeTruthy();
+    expect(resolveConfig({ ...dev, APP_ORIGIN: "http://localhost:8787" }, { sitesMode: "path", sitesDomain: "sites.example.com" }).signingSecret).toBeTruthy();
+    // A missing APP_ORIGIN (per-request derivation, as in the stock config) does not positively
+    // establish loopback-only serving, so it refuses even with no non-loopback origin configured.
+    expect(() => resolveConfig(dev)).toThrow(/Invalid ALLOW_INSECURE_DEV_SECRET: APP_ORIGIN is not a loopback origin\./);
+    // Stock wrangler.jsonc-equivalent env (empty origins, workers_dev: true) with the flag refuses.
+    expect(() => resolveConfig({
+      APP_ORIGIN: "", SITES_MODE: "path", SITES_ORIGIN: "", SITES_DOMAIN: "", ANONYMOUS_PUBLISH: "false",
+      ALLOW_INSECURE_DEV_SECRET: "true",
+    })).toThrow(/Invalid ALLOW_INSECURE_DEV_SECRET: APP_ORIGIN is not a loopback origin\./);
     // Any configured non-loopback origin refuses at startup.
     for (const vars of [
       { ...dev, APP_ORIGIN: "https://example.com" },
