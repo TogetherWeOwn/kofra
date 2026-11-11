@@ -79,63 +79,17 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      # The token is account-wide (no separate test account) and the hosted
-      # Kofra shares that account, so fail before any wrangler call unless
-      # the config addresses exactly the kofra-verification* resources.
-      - name: Guard — config targets only kofra-verification resources
-        run: |
-          if [ "$WRANGLER_CONFIG" != "wrangler.verification.jsonc" ]; then
-            echo "::error::WRANGLER_CONFIG is '$WRANGLER_CONFIG', expected wrangler.verification.jsonc. Refusing to run."
-            exit 1
-          fi
-          # Escaped keys (e.g. "name" spelled with a \uXXXX escape) decode to a
-          # real key for wrangler's JSONC parser but are invisible to the
-          # greps below, and block comments could hide a fake name line, so
-          # this config (which needs neither) refuses both outright.
-          if grep -qF '\' "$WRANGLER_CONFIG" || grep -qF '/*' "$WRANGLER_CONFIG"; then
-            echo "::error::$WRANGLER_CONFIG contains a backslash escape or block comment; the verification config must stay plain JSONC so the guard sees every key wrangler sees. Refusing to run."
-            exit 1
-          fi
-          # Exactly-once checks: a first-match grep alone would let a comment
-          # or a second binding smuggle another resource name past the guard.
-          # Raw key counts too: an extracted match plus a second literal key
-          # the extraction pattern cannot see (split across lines, or with a
-          # comment between key and colon) must also refuse.
-          for key in '"name"' '"database_name"' '"bucket_name"'; do
-            count="$(grep -oF "$key" "$WRANGLER_CONFIG" | wc -l | tr -d ' ' || true)"
-            if [ "$count" -ne 1 ]; then
-              echo "::error::$WRANGLER_CONFIG must contain the key $key exactly once (found $count). Refusing to run."
-              exit 1
-            fi
-          done
-          names="$(grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "$WRANGLER_CONFIG" | sed -E 's/.*"([^"]*)"$/\1/' || true)"
-          if [ "$names" != "kofra-verification" ]; then
-            echo "::error::$WRANGLER_CONFIG must declare Worker name 'kofra-verification' exactly once (found: $(echo "$names" | tr '\n' ' ')). Refusing to run wrangler against any other name."
-            exit 1
-          fi
-          dbs="$(grep -oE '"database_name"[[:space:]]*:[[:space:]]*"[^"]*"' "$WRANGLER_CONFIG" | sed -E 's/.*"([^"]*)"$/\1/' || true)"
-          if [ "$dbs" != "kofra-verification" ]; then
-            echo "::error::$WRANGLER_CONFIG must declare D1 database_name 'kofra-verification' exactly once (found: $(echo "$dbs" | tr '\n' ' ')). Refusing to run."
-            exit 1
-          fi
-          buckets="$(grep -oE '"bucket_name"[[:space:]]*:[[:space:]]*"[^"]*"' "$WRANGLER_CONFIG" | sed -E 's/.*"([^"]*)"$/\1/' || true)"
-          if [ "$buckets" != "kofra-verification-files" ]; then
-            echo "::error::$WRANGLER_CONFIG must declare R2 bucket_name 'kofra-verification-files' exactly once (found: $(echo "$buckets" | tr '\n' ' ')). Refusing to run."
-            exit 1
-          fi
-          # ID-addressed resources would bypass the name checks above. Any
-          # literal occurrence refuses (no colon pattern: a key split across
-          # lines must not slip past either).
-          if grep -qE '"(database_id|preview_database_id|id|preview_id)"' "$WRANGLER_CONFIG"; then
-            echo "::error::$WRANGLER_CONFIG addresses a resource by ID (database_id / id / preview_id); verification resources must be addressed by the kofra-verification* names only. Refusing to run."
-            exit 1
-          fi
-          echo "Guard ok: $WRANGLER_CONFIG targets kofra-verification (Worker, D1) and kofra-verification-files (R2)."
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: package-lock.json
+      # The token is account-wide (no separate test account) and the hosted
+      # Kofra shares that account, so fail before any wrangler call unless
+      # the config is exactly the pinned verification shape. One script
+      # checks both times (below, after npm ci) so the copies cannot drift.
+      - name: Guard — config matches the pinned verification shape
+        run: node scripts/guard-verification-config.mjs "$WRANGLER_CONFIG"
       - run: npm ci --ignore-scripts
       - name: Environment secrets are set
         env:
@@ -175,60 +129,12 @@ jobs:
             missing=1
           fi
           exit "$missing"
-      # Same guard as after checkout, repeated inline on purpose: it re-runs
-      # after `npm ci`, so a config rewritten between checkout and deploy is
-      # still refused before any wrangler call, and the check itself comes
-      # from the workflow definition, not from a workspace file. Keep the
-      # two copies in sync.
-      - name: Guard (re-check after npm ci) — config targets only kofra-verification resources
-        run: |
-          if [ "$WRANGLER_CONFIG" != "wrangler.verification.jsonc" ]; then
-            echo "::error::WRANGLER_CONFIG is '$WRANGLER_CONFIG', expected wrangler.verification.jsonc. Refusing to run."
-            exit 1
-          fi
-          # Escaped keys (e.g. "name" spelled with a \uXXXX escape) decode to a
-          # real key for wrangler's JSONC parser but are invisible to the
-          # greps below, and block comments could hide a fake name line, so
-          # this config (which needs neither) refuses both outright.
-          if grep -qF '\' "$WRANGLER_CONFIG" || grep -qF '/*' "$WRANGLER_CONFIG"; then
-            echo "::error::$WRANGLER_CONFIG contains a backslash escape or block comment; the verification config must stay plain JSONC so the guard sees every key wrangler sees. Refusing to run."
-            exit 1
-          fi
-          # Exactly-once checks: a first-match grep alone would let a comment
-          # or a second binding smuggle another resource name past the guard.
-          # Raw key counts too: an extracted match plus a second literal key
-          # the extraction pattern cannot see (split across lines, or with a
-          # comment between key and colon) must also refuse.
-          for key in '"name"' '"database_name"' '"bucket_name"'; do
-            count="$(grep -oF "$key" "$WRANGLER_CONFIG" | wc -l | tr -d ' ' || true)"
-            if [ "$count" -ne 1 ]; then
-              echo "::error::$WRANGLER_CONFIG must contain the key $key exactly once (found $count). Refusing to run."
-              exit 1
-            fi
-          done
-          names="$(grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "$WRANGLER_CONFIG" | sed -E 's/.*"([^"]*)"$/\1/' || true)"
-          if [ "$names" != "kofra-verification" ]; then
-            echo "::error::$WRANGLER_CONFIG must declare Worker name 'kofra-verification' exactly once (found: $(echo "$names" | tr '\n' ' ')). Refusing to run wrangler against any other name."
-            exit 1
-          fi
-          dbs="$(grep -oE '"database_name"[[:space:]]*:[[:space:]]*"[^"]*"' "$WRANGLER_CONFIG" | sed -E 's/.*"([^"]*)"$/\1/' || true)"
-          if [ "$dbs" != "kofra-verification" ]; then
-            echo "::error::$WRANGLER_CONFIG must declare D1 database_name 'kofra-verification' exactly once (found: $(echo "$dbs" | tr '\n' ' ')). Refusing to run."
-            exit 1
-          fi
-          buckets="$(grep -oE '"bucket_name"[[:space:]]*:[[:space:]]*"[^"]*"' "$WRANGLER_CONFIG" | sed -E 's/.*"([^"]*)"$/\1/' || true)"
-          if [ "$buckets" != "kofra-verification-files" ]; then
-            echo "::error::$WRANGLER_CONFIG must declare R2 bucket_name 'kofra-verification-files' exactly once (found: $(echo "$buckets" | tr '\n' ' ')). Refusing to run."
-            exit 1
-          fi
-          # ID-addressed resources would bypass the name checks above. Any
-          # literal occurrence refuses (no colon pattern: a key split across
-          # lines must not slip past either).
-          if grep -qE '"(database_id|preview_database_id|id|preview_id)"' "$WRANGLER_CONFIG"; then
-            echo "::error::$WRANGLER_CONFIG addresses a resource by ID (database_id / id / preview_id); verification resources must be addressed by the kofra-verification* names only. Refusing to run."
-            exit 1
-          fi
-          echo "Guard ok: $WRANGLER_CONFIG targets kofra-verification (Worker, D1) and kofra-verification-files (R2)."
+      # Same guard as after checkout, via the same single script, re-run
+      # after `npm ci` so a config rewritten between checkout and deploy is
+      # still refused before any wrangler call. `npm ci` runs with
+      # --ignore-scripts above, so no lifecycle script runs during install.
+      - name: Guard (re-check after npm ci) — config matches the pinned verification shape
+        run: node scripts/guard-verification-config.mjs "$WRANGLER_CONFIG"
       - name: Generate per-run signing secret
         if: inputs.action == 'deploy'
         run: |
