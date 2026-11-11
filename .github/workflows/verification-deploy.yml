@@ -29,9 +29,10 @@
 #                          receives the same value out of band (operator-
 #                          provisioned secret), never from this workflow.
 # Before creating those secrets, restrict the `verification` environment's
-# deployment branches to `main` (and add a required reviewer if available):
-# masking protects logs, not against a modified workflow dispatched from
-# another branch. Mint ADMIN_BOOTSTRAP_KEY randomly (e.g.
+# deployment branches to `main` and add a required reviewer so each
+# dispatch waits for an approval before it proceeds: masking protects
+# logs, not against a modified workflow dispatched from another branch.
+# Mint ADMIN_BOOTSTRAP_KEY randomly (e.g.
 # `openssl rand -hex 32`, stored with no surrounding whitespace); the
 # workflow's length/padding check enforces the app's 32-character minimum
 # as the app applies it (after trimming), not entropy.
