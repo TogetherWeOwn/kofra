@@ -293,6 +293,6 @@ describe("transfer filename compatibility", () => {
     expect(resumed.status).toBe(206);
     expect(await bytes(resumed)).toEqual(new Uint8Array([13, 10, 65, 128]));
     expect.soft(safeHeader(resumed)).toBe(response.headers.get("content-disposition"));
-    expect((await get(transferDw, transfer)).files[0]!.downloads).toBe(1);
+    expect((await get(transferDw, transfer)).files[0]!.downloads).toBe(2);
   });
 });

@@ -308,8 +308,9 @@ further lowered by `PolicyAdapter.limits`. Download limits are 1–10,000.
 Recipient addresses attribute links; they do not authenticate recipients or
 prevent a recipient from forwarding a link. No email is sent by these operations.
 
-A counted download is a served GET without a Range, or a range starting at zero.
-Pages, HEAD, resumed ranges, invalid ranges and denied requests do not count.
+A counted download is a served GET that returns file bytes, with or without a
+Range (resumed ranges at any offset count, per file and per recipient).
+Pages, HEAD, invalid ranges and denied requests do not count.
 Unlock cookies live only on the app host; the app renders short-lived signed
 sites-host download links after unlock. Their grant is bound to the password
 digest, is checked against live transfer state and never bypasses revocation,

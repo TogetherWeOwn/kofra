@@ -143,7 +143,10 @@ export async function openTransferDownload(dc: KofraContext, request: Request, s
   const body = range ? await readBlobRange(dc, file.sha256, { offset, length }) : (await readBlob(dc, file.sha256, file.size))?.body;
   if (!body) throw transferMissing();
   try {
-    await recordTransferDownload(dc, t, file, recipient, request.method === "GET" && (!range || offset === 0));
+    // Every GET that serves file bytes counts, including resumed ranges: a
+    // nonzero-offset range would otherwise serve the file outside the limit.
+    // HEAD serves no bytes (its body is cancelled below) and stays uncounted.
+    await recordTransferDownload(dc, t, file, recipient, request.method === "GET");
   } catch (error) {
     await body.cancel();
     throw error;
