@@ -17,11 +17,13 @@
 #   publishing is enabled; manual dispatch never publishes (verify only).
 #
 # Pipeline split so dependency code never runs with the OIDC token:
-# `verify` runs the release gates and the full test suite (no `id-token`).
+# `verify` runs the release gates and the full test suite (no `id-token`;
+# its plain `npm ci` only runs the test suite).
 # `build` (no `id-token`) installs with `--ignore-scripts` (esbuild and the
 # other binary deps ship as platform packages, so the build works without
 # dependency lifecycle scripts), fails if the install dirtied the checkout,
-# builds, then packs the four tarballs and records their SHA-256 digests.
+# builds, then packs the four tarballs and records their SHA-256 digests
+# (artifact retained 30 days to span the reviewer-approval window).
 # `publish` holds `id-token: write`, runs no install and no build, verifies
 # the digests, and publishes only the digest-verified tarballs the build job
 # produced. (The first-party CLI `prepack` still runs at `npm pack` time in
@@ -122,12 +124,15 @@ jobs:
           sha256sum *.tgz > SHA256SUMS
           sha256sum -c SHA256SUMS
           ls -la
+      # Retain the tarballs across the reviewer-approval window: publish
+      # only starts after the `npm-publish` environment is approved, so a
+      # short retention could expire before approval.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: publish-tarballs
           path: ${{ runner.temp }}/publish
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 30
   publish:
     needs: [verify, build]
     if: github.event_name == 'push'
