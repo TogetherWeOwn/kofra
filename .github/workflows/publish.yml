@@ -15,6 +15,18 @@
 # - Publish job: behind the `npm-publish` environment (required reviewer).
 #   The environment must exist with required reviewers before trusted
 #   publishing is enabled; manual dispatch never publishes (verify only).
+#
+# Pipeline split so dependency code never runs with the OIDC token:
+# `verify` runs the release gates and the full test suite (no `id-token`).
+# `build` (no `id-token`) installs with `--ignore-scripts` (esbuild and the
+# other binary deps ship as platform packages, so the build works without
+# dependency lifecycle scripts), fails if the install dirtied the checkout,
+# builds, then packs the four tarballs and records their SHA-256 digests.
+# `publish` holds `id-token: write`, runs no install and no build, verifies
+# the digests, and publishes only the digest-verified tarballs the build job
+# produced. (The first-party CLI `prepack` still runs at `npm pack` time in
+# the non-OIDC build job; `--ignore-scripts` excludes dependency lifecycle
+# scripts, not that step.)
 name: publish
 on:
   push:
@@ -72,8 +84,52 @@ jobs:
       - run: packages/cli/test/encrypted/node_modules/.bin/playwright install --with-deps chromium
       - run: npm run check
       - run: npm run build -w kofra
-  publish:
+  build:
     needs: verify
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      # npm's OIDC exchange needs npm >= 11.5.1, hence Node 24 (publish job).
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      # Never run dependency lifecycle scripts in this workflow: nothing the
+      # build needs requires them, so `--ignore-scripts` removes the whole
+      # class of install-time code execution from a release job.
+      - run: npm ci --ignore-scripts
+      - name: Install left the checkout clean
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::npm ci modified the checkout; refusing to build or publish from a dirty tree:"
+            git status --porcelain
+            exit 1
+          fi
+      - run: npm run build -w kofra
+      - name: Pack tarballs and record digests
+        run: |
+          mkdir -p "$RUNNER_TEMP/publish"
+          npm pack -w @kofra/core --pack-destination="$RUNNER_TEMP/publish"
+          npm pack -w @kofra/server --pack-destination="$RUNNER_TEMP/publish"
+          npm pack -w @kofra/client --pack-destination="$RUNNER_TEMP/publish"
+          npm pack -w kofra --pack-destination="$RUNNER_TEMP/publish"
+          cd "$RUNNER_TEMP/publish"
+          sha256sum *.tgz > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          ls -la
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: publish-tarballs
+          path: ${{ runner.temp }}/publish
+          if-no-files-found: error
+          retention-days: 1
+  publish:
+    needs: [verify, build]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -82,17 +138,24 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
       # npm's OIDC exchange needs npm >= 11.5.1, hence Node 24.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org/
-      - run: npm ci
-      - run: npm run build -w kofra
-      - run: npm publish --provenance --access public -w @kofra/core
-      - run: npm publish --provenance --access public -w @kofra/server
-      - run: npm publish --provenance --access public -w @kofra/client
-      - run: npm publish --provenance -w kofra
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: publish-tarballs
+          path: ${{ runner.temp }}/publish
+      - name: Verify tarball digests
+        run: |
+          cd "$RUNNER_TEMP/publish"
+          sha256sum -c SHA256SUMS
+      # Publish the verified tarballs exactly as the build job packed them:
+      # no checkout, no install and no build run in this job, so nothing in
+      # this job can alter what was provenanced. `kofra-[0-9]*.tgz` matches
+      # only the unscoped CLI tarball, not the `kofra-*-*.tgz` scoped ones.
+      - run: npm publish --provenance --access public "$RUNNER_TEMP/publish"/kofra-core-*.tgz
+      - run: npm publish --provenance --access public "$RUNNER_TEMP/publish"/kofra-server-*.tgz
+      - run: npm publish --provenance --access public "$RUNNER_TEMP/publish"/kofra-client-*.tgz
+      - run: npm publish --provenance "$RUNNER_TEMP/publish"/kofra-[0-9]*.tgz
