@@ -189,6 +189,9 @@ export async function recoverOwnerKey(dc: KofraContext, p: Principal) {
 
 export async function listMembers(dc: KofraContext, p: Principal) {
   const caller = requireMember(p, "sites:read");
+  // Member listing is tenant-wide reach: a single-site key must not enumerate
+  // the whole tenant directory, even though it holds sites:read for its site.
+  if (caller.siteId) throw forbidden("A key restricted to one site cannot list members.", "Use a key without a site restriction.", "insufficient_scope");
   const { results } = await dc.env.DB.prepare("SELECT * FROM members WHERE tenant_id = ? AND disabled_at IS NULL ORDER BY created_at")
     .bind(caller.tenantId)
     .all<MemberRow>();

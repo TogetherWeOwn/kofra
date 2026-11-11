@@ -134,6 +134,19 @@ describe("scoped API keys and members", () => {
     expect(hasScope({ ...p, siteId: null }, "members:write")).toBe(true);
   });
 
+  it("a site-restricted key cannot list members, while tenant keys still can", async () => {
+    await dw.json("/api/v1/publish", { method: "POST", key: dw.ownerKey, body: form({ "index.html": "a" }, { slug: "site-one" }) });
+    const other = await dw.json("/api/v1/members", { key: dw.ownerKey, ...jsonBody({ email: "dev@example.com", role: "member" }) });
+    const k = await dw.json("/api/v1/keys", { key: dw.ownerKey, ...jsonBody({ name: "site-only", site: "site-one", scopes: ["sites:read"] }) });
+    expect(k.status).toBe(201);
+    const denied = await dw.json("/api/v1/members", { key: k.body.key });
+    expect(denied.status).toBe(403);
+    expect(denied.body.error.code).toBe("insufficient_scope");
+    // Owner and unrestricted member keys keep tenant-wide listing.
+    expect((await dw.json("/api/v1/members", { key: dw.ownerKey })).status).toBe(200);
+    expect((await dw.json("/api/v1/members", { key: other.body.apiKey.key })).status).toBe(200);
+  });
+
   it("revoked keys stop working", async () => {
     const k = await dw.json("/api/v1/keys", { key: dw.ownerKey, ...jsonBody({ name: "temp" }) });
     const del = await dw.json(`/api/v1/keys/${k.body.id}`, { method: "DELETE", key: dw.ownerKey });

@@ -543,6 +543,9 @@ describe("MCP tools: keys, members, scopes, idempotency", () => {
     expect((await scoped.call("list_sites")).data.sites.map((s: any) => s.slug)).toEqual(["only-this"]);
     expect((await scoped.call("get_site", { site: "not-that" })).data.error.code).toBe("site_not_found");
     expect((await scoped.call("update_site_files", { site: "only-this", files: [{ path: "x.txt", content: "ok" }] })).data.status).toBe("live");
+    const deniedMembers = await scoped.call("list_members");
+    expect(deniedMembers.isError).toBe(true);
+    expect(deniedMembers.data.error.code).toBe("insufficient_scope");
   });
 
   it("idempotencyKey replays the first result and rejects a reused key with other arguments", async () => {
