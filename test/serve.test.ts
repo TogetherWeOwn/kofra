@@ -227,8 +227,8 @@ describe("path mode: run-time shim for sandboxed pages (no Referer from an opaqu
       const c = resolveConfig(vars);
       return [c.sitesSandbox, c.sitesSandboxAnonymous];
     };
-    expect(pick(sitesOrigin)).toEqual([true, true]);
-    expect(pick({ ...sitesOrigin, SITES_SANDBOX: "auto" })).toEqual([true, true]);
+    expect(pick(sitesOrigin)).toEqual([false, true]);
+    expect(pick({ ...sitesOrigin, SITES_SANDBOX: "auto" })).toEqual([false, true]);
     expect(pick({ ...sitesOrigin, SITES_SANDBOX: "true" })).toEqual([true, false]);
     expect(pick({ ...sitesOrigin, SITES_SANDBOX: "false" })).toEqual([false, false]);
     expect(pick({})).toEqual([true, true]);
@@ -288,8 +288,8 @@ describe("other serving topologies", () => {
     expect(pub.body.url).toBe(`https://sites.example/${pub.body.slug}/`);
     const page = await two.call(`https://sites.example/${pub.body.slug}/`);
     expect(await page.text()).toContain(`src="/${pub.body.slug}/img/logo.png"`);
-    // A separate sites origin is sandboxed by default; SITES_SANDBOX=false opts out.
-    expect(page.headers.get("content-security-policy")).toContain("sandbox allow-scripts");
+    // A separate sites origin is not sandboxed by default; SITES_SANDBOX=true opts in.
+    expect(page.headers.get("content-security-policy")).toBeNull();
     const viaApp = await two.call(`/s/${pub.body.slug}/`);
     expect(viaApp.status).toBe(301);
     expect(viaApp.headers.get("location")).toBe(`https://sites.example/${pub.body.slug}/`);

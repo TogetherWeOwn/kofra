@@ -6,9 +6,8 @@ import { form, freshInstance, jsonBody, ORIGIN, type Instance } from "./helpers"
 // fetch from one site's page to another site's path is same-origin and carries
 // the victim site's path-scoped cookie. These tests pin the refusal of that
 // cross-site-path fetch for gated and preview assets, while same-site fetches
-// and direct navigations keep working. Sandboxed serving (the default there)
-// is the primary isolation; the Referer-prefix refusal covers the explicit
-// SITES_SANDBOX=false opt-out.
+// and direct navigations keep working. The Referer-prefix refusal is defense
+// in depth, not an isolation boundary between sites sharing an origin.
 const SITES = "https://sites.example";
 const NAV = { Accept: "text/html", "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "none" };
 const SECRET = "gated-secret-body";
@@ -245,30 +244,34 @@ describe("cross-site-path fetch on a separate sites origin (unsandboxed opt-out)
 });
 
 describe("sandbox default on a separate sites origin", () => {
-  it("SITES_SANDBOX=auto sandboxes every site in path mode on a separate sites origin", () => {
+  it("SITES_SANDBOX=auto sandboxes only anonymous sites on a separate sites origin", () => {
     const pick = (vars: Record<string, string>) => {
       const c = resolveConfig(vars);
       return [c.sitesSandbox, c.sitesSandboxAnonymous];
     };
     const sitesOrigin = { APP_ORIGIN: ORIGIN, SITES_ORIGIN: SITES };
-    expect(pick(sitesOrigin)).toEqual([true, true]);
-    expect(pick({ ...sitesOrigin, SITES_SANDBOX: "auto" })).toEqual([true, true]);
+    expect(pick(sitesOrigin)).toEqual([false, true]);
+    expect(pick({ ...sitesOrigin, SITES_SANDBOX: "auto" })).toEqual([false, true]);
     expect(pick({ ...sitesOrigin, SITES_SANDBOX: "true" })).toEqual([true, false]);
     expect(pick({ ...sitesOrigin, SITES_SANDBOX: "false" })).toEqual([false, false]);
     expect(pick({ SITES_MODE: "subdomain", SITES_DOMAIN: "sites.test" })).toEqual([false, false]);
   });
 
-  it("serves keyed sites sandboxed by default, with their own sub-resources working", async () => {
+  it("keeps keyed protected sites unsandboxed by default and refuses external subresources", async () => {
     const dw = await freshInstance({ appOrigin: ORIGIN, sitesOrigin: SITES });
     const cookie = await publishLocked(dw, "victim-site");
     const page = await dw.call(`${SITES}/victim-site/`, { headers: { ...NAV, Cookie: cookie } });
     expect(page.status).toBe(200);
-    expect(page.headers.get("content-security-policy")).toContain("sandbox allow-scripts");
-    // A sandboxed page's own requests are cross-site, so they are left to the cookie.
-    const js = await dw.call(`${SITES}/victim-site/data.txt`, {
-      headers: { Cookie: cookie, "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Dest": "empty" },
+    expect(page.headers.get("content-security-policy")).toBeNull();
+    const own = await dw.call(`${SITES}/victim-site/data.txt`, {
+      headers: { Cookie: cookie, "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Dest": "script", Referer: `${SITES}/victim-site/` },
     });
-    expect(js.status).toBe(200);
-    expect(await js.text()).toBe(SECRET);
+    expect(own.status).toBe(200);
+    expect(await own.text()).toBe(SECRET);
+    const external = await dw.call(`${SITES}/victim-site/data.txt`, {
+      headers: { Cookie: cookie, "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Dest": "script" },
+    });
+    expect(external.status).toBe(403);
+    expect(await external.text()).not.toContain(SECRET);
   });
 });

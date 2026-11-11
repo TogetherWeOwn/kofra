@@ -97,7 +97,7 @@ fetch(request)
 | Mode | Site URL | Isolation |
 |---|---|---|
 | `subdomain` | `https://<slug>.<SITES_DOMAIN>/` | Each site its own origin. Recommended once a domain exists |
-| `path` + `SITES_ORIGIN` | `<SITES_ORIGIN>/<slug>/` (second Worker deployment, same code) | Sites share one origin, separate from the app. By default (`SITES_SANDBOX=auto`) every site is sandboxed (opaque origin per page); `false` opts out of sandboxed serving for sites that need a shared origin |
+| `path` + `SITES_ORIGIN` | `<SITES_ORIGIN>/<slug>/` (second Worker deployment, same code) | Sites share one origin, separate from the app. By default (`SITES_SANDBOX=auto`) only anonymous sites are sandboxed; `true` sandboxes every site, `false` none |
 | `path` (self-host default) | `<APP_ORIGIN>/s/<slug>/` | Shares the app origin, so always served with a CSP `sandbox` (opaque origin: no cookies, storage or service workers) |
 
 Path mode is interim. Root-relative URLs (`/assets/app.js`) would escape the
@@ -148,19 +148,18 @@ path-mode limitations still apply. Live unsandboxed pages keep their Referer fal
 Site passwords still apply; a preview capability is not a password unlock.
 
 As with password sites, path-scoped cookies are routing scope, **not origin isolation**.
-Sites on a separate sites origin are sandboxed by default, so each page
-runs in an opaque origin and its fetch to another site's path is a
-cross-origin fetch that cannot read a gated or preview response.
-When sandboxed serving is explicitly opted out (`SITES_SANDBOX=false`), a
+Path-mode sites share an origin; hostile content there can cause ambient-cookie
+requests, including classic-script inclusions from opaque sandbox origins.
+For unsandboxed serving on a separate sites origin, a
 non-navigation request to a gated or preview asset whose Referer points at a
 different site's path prefix is refused, and a browser fetch of a gated
 non-preview asset with no Referer at all is refused as well; direct
 navigations still work. This Referer-prefix refusal is defence in depth in
-this opt-out only, not an isolation boundary — a sibling page controls its
+unsandboxed mode only, not an isolation boundary — a sibling page controls its
 fetch referrer, gated sites included. Requests without Fetch Metadata are left alone.
 Previews cannot use the missing-Referer refusal (their pages send
-`no-referrer`), so in this opt-out a sibling page that suppresses its Referer
-can still reach opt-out preview assets — gated previews included, where the
+`no-referrer`), so in unsandboxed mode a sibling page that suppresses its Referer
+can still reach preview assets — gated previews included, where the
 browser holds the unlock — which are not sibling-isolated.
 Use subdomain mode for sensitive previews or mutually untrusted sites. Its
 host-only `__Host-` cookie and same-site/cross-site subresource refusal

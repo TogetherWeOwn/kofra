@@ -79,18 +79,14 @@ export interface KofraConfig {
   sitesPathPrefix: string;
   /**
    * Serve user content with a CSP sandbox (opaque origin: no cookies, storage, workers or Referer).
-   * Always on when sites share the app origin. On by default (SITES_SANDBOX=auto)
-   * for a separate sites origin in path mode, where every site shares that one
-   * origin: an unsandboxed page could otherwise read another site's gated or
-   * preview bytes through the victim browser's path-scoped cookies. Off by
-   * default in subdomain mode (SITES_SANDBOX=true turns it on there).
+   * Always on when sites share the app origin. Off by default for a separate sites origin and for
+   * subdomain mode (SITES_SANDBOX=true turns it on there).
    */
   sitesSandbox: boolean;
   /**
    * Sandbox anonymous (unclaimed, expiring) sites even when sitesSandbox is off, so
    * untrusted pages on a shared sites origin cannot read other sites' storage.
-   * SITES_SANDBOX=auto (the default) sandboxes every site on a separate sites
-   * origin in path mode (see sitesSandbox), so this is then redundant;
+   * SITES_SANDBOX=auto (the default) turns this on for a separate sites origin;
    * subdomain mode gives every site its own origin and leaves it off.
    */
   sitesSandboxAnonymous: boolean;
@@ -297,13 +293,10 @@ export function resolveConfig(vars: KofraVars, overrides: ConfigOverrides = {}):
       (o): o is string => o !== null && o !== appOrigin && o !== sitesOrigin,
     );
   const sharedOrigin = sitesMode === "path" && !sitesOrigin;
-  // SITES_SANDBOX: true (every site), false (none, unless sites share the app origin),
-  // auto (default: every site on a separate sites origin in path mode, where sites
-  // share one origin; anonymous sites only elsewhere in path mode).
+  // SITES_SANDBOX: true (every site), false (none, unless sites share the app origin), auto (default: anonymous sites on a sites origin).
   const sandboxVar = (vars.SITES_SANDBOX ?? "").trim().toLowerCase();
   const sandboxAuto = sandboxVar === "" || sandboxVar === "auto";
-  const sandboxAutoDefault = sandboxAuto && sitesMode === "path" && !!sitesOrigin;
-  const sandboxRequested = overrides.sitesSandbox ?? (sandboxAuto ? sandboxAutoDefault : bool(sandboxVar, false));
+  const sandboxRequested = overrides.sitesSandbox ?? (sandboxAuto ? false : bool(sandboxVar, false));
   const limits: Limits = {
     maxFileBytes: num(vars.MAX_FILE_BYTES, 100 * MB),
     maxFiles: num(vars.MAX_FILES, 2500),
