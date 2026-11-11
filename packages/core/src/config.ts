@@ -351,6 +351,16 @@ export function resolveConfig(vars: KofraVars, overrides: ConfigOverrides = {}):
         "The fixed dev secret is public, so it is refused with any non-loopback origin; use loopback origins " +
         "(localhost, 127.0.0.0/8, ::1) only, or set SIGNING_SECRET for anything reachable.");
     }
+    // Fail closed: loopback-only serving must be positively established. A missing
+    // APP_ORIGIN means per-request derivation (the stock wrangler.jsonc leaves every
+    // origin empty with workers_dev: true), so the Worker may be reachable at a public
+    // address and the dev secret would sign forgeable capabilities there.
+    if (appOrigin === null || !isLoopbackOrigin(appOrigin)) {
+      throw new Error("Invalid ALLOW_INSECURE_DEV_SECRET: APP_ORIGIN is not a loopback origin. " +
+        "The fixed dev secret is public, so it is refused when loopback-only serving is not positively " +
+        "established: unset origins are treated as non-loopback. Set APP_ORIGIN to a loopback origin " +
+        "(localhost, 127.0.0.0/8, ::1) for local development, or set SIGNING_SECRET for anything reachable.");
+    }
   }
   return {
     instanceName: overrides.instanceName ?? (vars.INSTANCE_NAME?.trim() || "Kofra"),

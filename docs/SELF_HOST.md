@@ -208,7 +208,7 @@ Variables go in `vars` in `wrangler.jsonc`; secrets with `npx wrangler secret pu
 |---|---|---|
 | `ADMIN_BOOTSTRAP_KEY` (secret) | none | Creates the owner on first run; mints recovery owner keys |
 | `SIGNING_SECRET` (secret) | derived from bootstrap key | HMAC secret for signed capabilities (site password cookies, upload and version preview tokens, delivery grants) and IP hashing. When unset, the signing key is derived from `ADMIN_BOOTSTRAP_KEY` instead of reusing it: set its own value so rotating or removing `ADMIN_BOOTSTRAP_KEY` does not invalidate them. With neither set, those features answer `503 signing_secret_missing`; unsigned routes keep working |
-| `ALLOW_INSECURE_DEV_SECRET` | `false` | Local development only: with no secret set, sign with a fixed public value. Refused at startup when any configured origin is non-loopback; never set it on a reachable instance |
+| `ALLOW_INSECURE_DEV_SECRET` | `false` | Local development only: with no secret set, sign with a fixed public value. Refused at startup when any configured origin is non-loopback or when `APP_ORIGIN` is not set to a loopback origin (unset origins count as non-loopback); never set it on a reachable instance |
 | `INSTANCE_NAME` | `Kofra` | Shown in pages and API responses |
 | `APP_ORIGIN` | request origin | Public origin of the app and API |
 | `LEGACY_APP_ORIGINS` | empty | Former app origins (comma-separated), after a move to a new `APP_ORIGIN`. See [Moving the app](#moving-the-app-to-a-new-origin) |
