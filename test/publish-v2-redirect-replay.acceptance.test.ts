@@ -106,17 +106,24 @@ describe("URL source redirect header boundaries", () => {
 });
 
 describe("anonymous JSON publish idempotency", () => {
-  // Catches anonymous writes skipping replay, losing the first claim credential.
-  it("replays the entire first result including its usable claim token and creates only one site", async () => {
+  // Catches anonymous writes skipping replay, or re-serving the first claim
+  // credential: the first response delivers it once, replay returns a
+  // redacted receipt and creates only one site.
+  it("replays a redacted result with no claim credential and creates only one site", async () => {
     const body = { files: [{ path: "note.txt", content: "anonymous replay bytes" }] };
     const first = await anonymousPublish(body, "anonymous-replay", "203.0.113.9");
     expectAnonymousResult(first);
     const replay = await anonymousPublish(body, "anonymous-replay", "203.0.113.9");
     expect.soft(replay.status).toBe(first.status);
-    expect.soft(replay.body).toEqual({ ...first.body, replayed: true });
-    expect.soft(replay.body.claim.token).toBe(first.body.claim.token);
+    expect.soft(replay.body.replayed).toBe(true);
+    expect.soft(replay.body.claimToken).toBeNull();
+    expect.soft(replay.body.claim.token).toBeNull();
+    expect.soft(replay.body.claim.url).not.toContain("#token=");
+    expect.soft(replay.body.claimUrl).not.toContain("#token=");
+    expect.soft(JSON.stringify(replay.body)).not.toContain(first.body.claim.token);
+    expect.soft(replay.body.note).toContain("not re-issued");
     await expectAnonymousSites(1);
-    const stored = await dw.call(`/api/v1/sites/${first.body.site.id}/files/note.txt`, { key: replay.body.claim.token });
+    const stored = await dw.call(`/api/v1/sites/${first.body.site.id}/files/note.txt`, { key: first.body.claim.token });
     expect(stored.status).toBe(200);
     expect(await stored.text()).toBe("anonymous replay bytes");
   });
@@ -146,8 +153,13 @@ describe("anonymous JSON publish idempotency", () => {
     expect(other.body.claim.token).not.toBe(first.body.claim.token);
     const firstReplay = await anonymousPublish(body, "anonymous-isolation", "203.0.113.9");
     const otherReplay = await anonymousPublish(body, "anonymous-isolation", "203.0.113.10");
-    expect.soft(firstReplay.body).toEqual({ ...first.body, replayed: true });
-    expect.soft(otherReplay.body).toEqual({ ...other.body, replayed: true });
+    for (const [replay, original] of [[firstReplay, first], [otherReplay, other]] as const) {
+      expect.soft(replay.status).toBe(original.status);
+      expect.soft(replay.body.replayed).toBe(true);
+      expect.soft(replay.body.site.id).toBe(original.body.site.id);
+      expect.soft(replay.body.claimToken).toBeNull();
+      expect.soft(JSON.stringify(replay.body)).not.toContain(original.body.claim.token);
+    }
     await expectAnonymousSites(2);
   });
 });
