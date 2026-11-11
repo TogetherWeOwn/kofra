@@ -47,6 +47,34 @@ jobs:
           npm pack -w @kofra/server --dry-run
           npm pack -w @kofra/client --dry-run
 
+  # Exercise the release build without publishing or granting an OIDC token.
+  publish-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - name: Install left the checkout clean
+        run: test -z "$(git status --porcelain)"
+      - run: npm run build -w kofra
+      - name: Pack and verify tarballs
+        run: |
+          mkdir -p "$RUNNER_TEMP/publish"
+          npm pack -w @kofra/core --pack-destination="$RUNNER_TEMP/publish"
+          npm pack -w @kofra/server --pack-destination="$RUNNER_TEMP/publish"
+          npm pack -w @kofra/client --pack-destination="$RUNNER_TEMP/publish"
+          npm pack -w kofra --pack-destination="$RUNNER_TEMP/publish"
+          cd "$RUNNER_TEMP/publish"
+          sha256sum *.tgz > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
   # The slow suites of `npm test`, run in parallel instead of one after another: the
   # Workers-runtime tests (D1, R2, KV emulated) and the CLI and browser-code tests, which
   # drive Chromium through Playwright against a local Worker. The CLI suite is the slowest
@@ -142,7 +170,7 @@ jobs:
   # job above succeeded (a failed, cancelled or skipped dependency all count as failure).
   ci-ok:
     if: always()
-    needs: [check, test, open-core-guard, cli-node20]
+    needs: [check, publish-build, test, open-core-guard, cli-node20]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

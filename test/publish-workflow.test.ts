@@ -9,25 +9,41 @@ function workflow(): Record<string, any> {
 }
 
 describe("npm publish workflow gates", () => {
-  it("splits publish into verify and publish jobs behind ancestry, tests and review", () => {
-    const wf = workflow();
-    const jobs = wf.jobs as Record<string, any>;
-    expect(jobs.verify).toBeDefined();
-    expect(jobs.publish).toBeDefined();
-    expect(jobs.publish.needs).toBe("verify");
+  it("gates a separate build and tarball publish behind verification", () => {
+    const jobs = workflow().jobs as Record<string, any>;
+    expect(jobs.build.needs).toBe("verify");
+    expect(jobs.build.if).toBe("github.event_name == 'push'");
+    expect(jobs.publish.needs).toEqual(["verify", "build"]);
     expect(jobs.publish.environment).toBe("npm-publish");
-    expect(jobs.publish.if).toContain("push");
+    expect(jobs.publish.if).toBe("github.event_name == 'push'");
 
     const verifySteps = JSON.stringify(jobs.verify.steps);
     expect(verifySteps).toContain("merge-base --is-ancestor");
     expect(verifySteps).toContain("refs/heads/main:refs/remotes/origin/main");
     expect(verifySteps).toContain("github.ref_type == 'tag'");
+    expect(jobs.verify.steps.some((step: Record<string, any>) => step.run?.includes('test "v$v" = "$RELEASE_TAG"'))).toBe(true);
     expect(verifySteps).toContain("npm run check");
     expect(verifySteps).not.toContain("npm publish");
 
-    const publishSteps = JSON.stringify(jobs.publish.steps);
-    expect(publishSteps).toContain("npm publish --provenance --access public -w @kofra/core");
-    expect(publishSteps).toContain("npm publish --provenance -w kofra");
+    const buildSteps = jobs.build.steps as Record<string, any>[];
+    const buildCommands = buildSteps.map((step) => step.run ?? "").join("\n");
+    expect(buildCommands).toContain("npm ci --ignore-scripts");
+    expect(buildCommands).toContain("git status --porcelain");
+    expect(buildCommands.indexOf("git status --porcelain")).toBeLessThan(buildCommands.indexOf("npm run build"));
+    for (const pkg of ["@kofra/core", "@kofra/server", "@kofra/client", "kofra"]) {
+      expect(buildCommands).toContain(`npm pack -w ${pkg} `);
+    }
+    expect(buildCommands).toContain("sha256sum *.tgz > SHA256SUMS");
+    expect(buildSteps.some((step) => step.uses?.startsWith("actions/upload-artifact@") && step.with?.["retention-days"] === 30)).toBe(true);
+
+    const publishSteps = jobs.publish.steps as Record<string, any>[];
+    const publishCommands = publishSteps.map((step) => step.run ?? "").join("\n");
+    expect(publishSteps.some((step) => step.uses?.startsWith("actions/checkout@"))).toBe(false);
+    expect(publishCommands).not.toMatch(/npm (ci|install|run build|pack)\b/);
+    expect(publishCommands.indexOf("sha256sum -c SHA256SUMS")).toBeLessThan(publishCommands.indexOf("npm publish"));
+    for (const tarball of ["kofra-core-*.tgz", "kofra-server-*.tgz", "kofra-client-*.tgz", "kofra-[0-9]*.tgz"]) {
+      expect(publishCommands).toContain(tarball);
+    }
   });
 
   it("qualifies the main ref in the ancestry check", () => {
@@ -44,6 +60,7 @@ describe("npm publish workflow gates", () => {
     expect(wf.permissions).toEqual({ contents: "read" });
     const verifyPerms = jobs.verify.permissions ?? {};
     expect(verifyPerms["id-token"]).toBeUndefined();
+    expect(jobs.build.permissions).toEqual({ contents: "read" });
     const publishPerms = jobs.publish.permissions as Record<string, string>;
     expect(publishPerms["id-token"]).toBe("write");
     expect(publishPerms.contents).toBe("read");
