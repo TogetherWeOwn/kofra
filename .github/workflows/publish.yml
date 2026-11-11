@@ -6,17 +6,81 @@
 # per package name on npmjs.com: Settings > Trusted publisher > GitHub Actions,
 # with organization TogetherWeOwn, repository kofra, workflow publish.yml.
 # The four packages version in lockstep; push tag vX.Y.Z to release.
+#
+# Release gates (all must pass before any publish):
+# - Tag ruleset: `v*` tags are restricted (admin-only creation; update and
+#   deletion blocked for non-admin writers). Verified via the rulesets API.
+# - Verify job: the tagged commit must be an ancestor of `main`, the tag must
+#   match all four workspace versions, and the full test suite must pass.
+# - Publish job: behind the `npm-publish` environment (required reviewer).
+#   The environment must exist with required reviewers before trusted
+#   publishing is enabled; manual dispatch never publishes (verify only).
 name: publish
 on:
   push:
     tags: ["v[0-9]*"]
+  workflow_dispatch:
 permissions:
   contents: read
-  id-token: write
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Tagged commit must be an ancestor of main
+        env:
+          TAG_COMMIT: ${{ github.sha }}
+        run: |
+          git fetch --no-tags --force origin "+refs/heads/main:refs/remotes/origin/main"
+          if ! git rev-parse --verify -q "origin/main" >/dev/null 2>&1; then
+            echo "::error::origin/main not found; cannot verify ancestry"
+            exit 1
+          fi
+          if ! git rev-parse --verify -q "$TAG_COMMIT^{commit}" >/dev/null 2>&1; then
+            echo "::error::tagged commit $TAG_COMMIT not found locally"
+            exit 1
+          fi
+          if git merge-base --is-ancestor "$TAG_COMMIT" origin/main; then
+            echo "Tagged commit $TAG_COMMIT is an ancestor of origin/main"
+          else
+            echo "::error::Tagged commit $TAG_COMMIT is not an ancestor of origin/main. Refusing to publish."
+            exit 1
+          fi
+      - name: Tag matches the workspace versions
+        if: github.ref_type == 'tag'
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          for p in packages/core packages/server packages/client packages/cli; do
+            v=$(node -p "require('./$p/package.json').version")
+            test "v$v" = "$RELEASE_TAG" || { echo "tag $RELEASE_TAG does not match $p ($v)"; exit 1; }
+          done
+      # npm's OIDC exchange needs npm >= 11.5.1, hence Node 24.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/cli/test/encrypted/package-lock.json
+      - run: npm ci
+      - run: npm ci --prefix packages/cli/test/encrypted
+      - run: packages/cli/test/encrypted/node_modules/.bin/playwright install --with-deps chromium
+      - run: npm run check
+      - run: npm run build -w kofra
   publish:
+    needs: verify
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -27,14 +91,6 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org/
       - run: npm ci
-      - name: Tag matches the workspace versions
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          for p in packages/core packages/server packages/client packages/cli; do
-            v=$(node -p "require('./$p/package.json').version")
-            test "v$v" = "$RELEASE_TAG" || { echo "tag $RELEASE_TAG does not match $p ($v)"; exit 1; }
-          done
       - run: npm run build -w kofra
       - run: npm publish --provenance --access public -w @kofra/core
       - run: npm publish --provenance --access public -w @kofra/server

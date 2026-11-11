@@ -48,7 +48,10 @@ When that happens, before pushing the first `v*` tag the owner creates the `kofr
 organization (for the `@kofra/core`, `@kofra/server`, `@kofra/client` scope; the CLI is the
 unscoped `kofra` package) and registers each of the four package names as a trusted
 publisher for this repository's `publish.yml` (see the header of
-`.github/workflows/publish.yml`). Agent runs never publish, tag or announce.
+`.github/workflows/publish.yml`). The publish workflow is gated: the tagged commit
+must be an ancestor of `main`, the full test suite must pass, and the publish job
+needs approval in the `npm-publish` environment; `v*` tags are restricted by a tag
+ruleset. Agent runs never publish, tag or announce.
 
 ## Prerequisites
 
