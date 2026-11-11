@@ -774,7 +774,7 @@ export async function deployWarnings(dc: KofraContext, site: SiteRow, versionId:
           path: f.path,
           line: lineAt(text, m.index),
           message: `"${f.path}" uses browser storage (localStorage/sessionStorage/IndexedDB/cookies), but this site is served sandboxed with an opaque origin, so storage is unavailable and these calls will throw or lose data.`,
-          fix: "Guard storage access (try/catch with an in-memory fallback), or serve the site unsandboxed: subdomain mode, or SITES_SANDBOX=false on a dedicated sites origin for non-anonymous sites.",
+          fix: "Guard storage access (try/catch with an in-memory fallback), or serve the site unsandboxed: subdomain mode, or SITES_SANDBOX=false on a dedicated sites origin (sites then share one origin, so mutually untrusted sites must not share it).",
         });
       }
     }

@@ -361,7 +361,7 @@ for (const topology of topologies) {
       freezePasswordClock();
       const { link, session } = await protectedHistoricalPreview(dw, topology.root);
       const capability = link.searchParams.get("dw_preview")!;
-      const sandboxed = topology.name === "path on app origin";
+      const sandboxed = topology.name !== "subdomain";
       const getHeaders = { ...NAV, Cookie: session.cookie, "Sec-Fetch-Site": "same-origin" };
       const nullOrigin = { ...NAV, Origin: "null", "Sec-Fetch-Site": sandboxed ? "cross-site" : "same-origin" };
       scopedCookie(session.setCookie, topology.root);
@@ -478,7 +478,7 @@ for (const topology of topologies) {
       freezePasswordClock();
       const { session, liveUrl } = await protectedHistoricalPreview(dw, topology.root);
       const other = await lockedSite(dw, "unrelated-preview-budget");
-      const sandboxed = topology.name === "path on app origin";
+      const sandboxed = topology.name !== "subdomain";
       const getHeaders = { ...NAV, Cookie: session.cookie, "Sec-Fetch-Site": "same-origin" };
       const nullOrigin = { ...NAV, Origin: "null", "Sec-Fetch-Site": sandboxed ? "cross-site" : "same-origin" };
       const previewAttempt = async (password: string) => {
