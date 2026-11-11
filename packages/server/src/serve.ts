@@ -128,22 +128,23 @@ function nearestManifestAncestor(files: LiveSite["files"], filePath: string): st
  * cross-origin or unparsable Referer also counts as a different initiator.
  * Requests without Fetch Metadata (programmatic clients, which cannot be
  * ambient browser fetches) and browser-initiated requests (`Sec-Fetch-Site:
- * none`) are not page fetches and are left alone. When `requireReferer` is
- * set, a browser fetch (Fetch Metadata present) with no Referer is refused
- * too, because a page on the site itself sends one — a missing Referer then
- * means the initiator suppressed it. Callers leave previews off that option:
- * preview pages set `Referrer-Policy: no-referrer`, so their own sub-resources
- * legitimately arrive without one; sandboxing (the default on a separate
- * sites origin) is their isolation, and the mismatched-Referer refusal here
- * is defence in depth for the explicit unsandboxed opt-out.
+ * none`) are not page fetches and are left alone, whatever their Referer.
+ * Only a browser fetch (`Sec-Fetch-Site: same-origin`) is checked against
+ * its Referer. When `requireReferer` is set, such a fetch with no Referer is
+ * refused too, because a page on the site itself sends one — a missing
+ * Referer then means the initiator suppressed it. Callers leave previews off
+ * that option: preview pages set `Referrer-Policy: no-referrer`, so their
+ * own sub-resources legitimately arrive without one; sandboxing (the default
+ * on a separate sites origin) is their isolation, and the mismatched-Referer
+ * refusal here is defence in depth for the explicit unsandboxed opt-out.
  */
 export function crossSitePathRequest(req: Request, mode: ServeMode, opts: { requireReferer?: boolean } = {}): boolean {
   if (mode.kind !== "path" || mode.sandbox || isNavigation(req)) return false;
   const fetchSite = req.headers.get("sec-fetch-site");
   if (fetchSite === "same-site" || fetchSite === "cross-site") return true;
-  if (fetchSite !== "same-origin" && fetchSite !== null) return false;
+  if (fetchSite !== "same-origin") return false;
   const referer = req.headers.get("referer");
-  if (!referer) return opts.requireReferer === true && fetchSite !== null;
+  if (!referer) return opts.requireReferer === true;
   let ref: URL;
   try {
     ref = new URL(referer);
@@ -556,7 +557,10 @@ export async function serveSiteContent(
     // Fetch Metadata check above: refuse it by its path prefix instead. The
     // site's own pages send a Referer under their own base, so same-site
     // fetches keep working; a browser fetch with no Referer suppressed it.
-    if (site === "same-site" || site === "cross-site" || crossSitePathRequest(req, mode, { requireReferer: true })) {
+    // Previews are exempt from the missing-Referer refusal: their pages set
+    // Referrer-Policy: no-referrer, so their own assets legitimately arrive
+    // without one (the mismatched-Referer refusal still applies there).
+    if (site === "same-site" || site === "cross-site" || crossSitePathRequest(req, mode, { requireReferer: mode.preview !== true })) {
       return systemResponse(dw, req, mode, live, 403, "403", "Not available here", "This site is password protected, so other sites cannot load it.");
     }
   }

@@ -75,9 +75,15 @@ describe("cross-site-path fetch on a separate sites origin (unsandboxed opt-out)
     expect(suppressed.status).toBe(403);
     expect(await suppressed.text()).not.toContain(SECRET);
 
-    // Programmatic clients without Fetch Metadata keep working with the cookie.
+    // Programmatic clients without Fetch Metadata keep working with the cookie,
+    // even when they send a foreign Referer (only browser fetches are checked).
     const cli = await dw.call(asset, { headers: { Cookie: cookie } });
     expect(cli.status).toBe(200);
+    const cliForeignReferer = await dw.call(asset, {
+      headers: { Cookie: cookie, Referer: `${SITES}/attacker-site/index.html` },
+    });
+    expect(cliForeignReferer.status).toBe(200);
+    expect(await cliForeignReferer.text()).toBe(SECRET);
 
     // Top-level navigation with the cookie still serves, even from another site.
     const nav = await dw.call(`${SITES}/victim-site/`, {
@@ -126,6 +132,64 @@ describe("cross-site-path fetch on a separate sites origin (unsandboxed opt-out)
     });
     expect(nav.status).toBe(200);
     expect(await nav.text()).toContain("preview");
+  });
+
+  it("serves a password-gated preview's own no-Referer assets, still refusing a cross-site Referer", async () => {
+    const dw = await freshInstance({ appOrigin: ORIGIN, sitesOrigin: SITES, sitesSandbox: false });
+    const pub = await dw.json<{ versionUrl: string }>("/api/v1/publish", {
+      key: dw.ownerKey,
+      ...jsonBody({ site: "victim-site", files: [{ path: "index.html", content: "<p>preview</p>" }, { path: "data.txt", content: SECRET }] }),
+    });
+    expect(pub.status).toBe(201);
+    const lock = await dw.json("/api/v1/sites/victim-site/access", {
+      method: "PUT",
+      key: dw.ownerKey,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "password", password: "secret12" }),
+    });
+    expect(lock.status).toBe(200);
+    const redeem = await dw.call(pub.body.versionUrl);
+    expect(redeem.status).toBe(303);
+    const previewCookie = redeem.headers.get("set-cookie")!.split(";")[0]!;
+    const previewRoot = `${SITES}/victim-site--v1/`;
+
+    // The preview page is password-gated: unlock it through its own form.
+    const locked = await dw.call(previewRoot, { headers: { Cookie: previewCookie, Accept: "text/html" } });
+    expect(locked.status).toBe(401);
+    const formTag = (await locked.text()).match(/<form\b[^>]*>/i)?.[0] ?? "";
+    const action = formTag.match(/\baction=["']([^"']*)["']/i)?.[1] ?? "";
+    const unlockUrl = new URL(action.replace(/&amp;/g, "&"), previewRoot);
+    const unlocked = await dw.call(unlockUrl.href, {
+      method: "POST",
+      body: "password=secret12&next=%2F",
+      headers: { Origin: SITES, Cookie: previewCookie, "Content-Type": "application/x-www-form-urlencoded" },
+    });
+    expect(unlocked.status).toBe(303);
+    const passwordCookie = unlocked.headers.getSetCookie().map((v) => v.split(";")[0]!).join("; ");
+    expect(passwordCookie).toBeTruthy();
+    const cookies = `${previewCookie}; ${passwordCookie}`;
+    const asset = `${SITES}/victim-site--v1/data.txt`;
+
+    // Preview pages send no Referer, so their own same-origin asset fetch
+    // (Sec-Fetch-Site: same-origin, no Referer) must serve.
+    const own = await dw.call(asset, {
+      headers: { Cookie: cookies, "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Dest": "empty" },
+    });
+    expect(own.status).toBe(200);
+    expect(await own.text()).toBe(SECRET);
+
+    // A fetch initiated from another site's prefix is still refused (the
+    // preview guard answers 404 before the gated guard runs).
+    const attack = await dw.call(asset, {
+      headers: {
+        Cookie: cookies,
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-Dest": "empty",
+        Referer: `${SITES}/attacker-site/index.html`,
+      },
+    });
+    expect(attack.status).toBe(404);
+    expect(await attack.text()).not.toContain(SECRET);
   });
 });
 
