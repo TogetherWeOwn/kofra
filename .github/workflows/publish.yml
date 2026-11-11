@@ -36,18 +36,18 @@ jobs:
           TAG_COMMIT: ${{ github.sha }}
         run: |
           git fetch --no-tags --force origin "+refs/heads/main:refs/remotes/origin/main"
-          if ! git rev-parse --verify -q "origin/main" >/dev/null 2>&1; then
-            echo "::error::origin/main not found; cannot verify ancestry"
+          if ! git rev-parse --verify -q "refs/remotes/origin/main" >/dev/null 2>&1; then
+            echo "::error::refs/remotes/origin/main not found; cannot verify ancestry"
             exit 1
           fi
           if ! git rev-parse --verify -q "$TAG_COMMIT^{commit}" >/dev/null 2>&1; then
             echo "::error::tagged commit $TAG_COMMIT not found locally"
             exit 1
           fi
-          if git merge-base --is-ancestor "$TAG_COMMIT" origin/main; then
-            echo "Tagged commit $TAG_COMMIT is an ancestor of origin/main"
+          if git merge-base --is-ancestor "$TAG_COMMIT" refs/remotes/origin/main; then
+            echo "Tagged commit $TAG_COMMIT is an ancestor of refs/remotes/origin/main"
           else
-            echo "::error::Tagged commit $TAG_COMMIT is not an ancestor of origin/main. Refusing to publish."
+            echo "::error::Tagged commit $TAG_COMMIT is not an ancestor of refs/remotes/origin/main. Refusing to publish."
             exit 1
           fi
       - name: Tag matches the workspace versions

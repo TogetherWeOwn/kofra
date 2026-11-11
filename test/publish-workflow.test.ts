@@ -30,6 +30,14 @@ describe("npm publish workflow gates", () => {
     expect(publishSteps).toContain("npm publish --provenance -w kofra");
   });
 
+  it("qualifies the main ref in the ancestry check", () => {
+    const raw = publishYaml;
+    expect(raw).toContain('git rev-parse --verify -q "refs/remotes/origin/main"');
+    expect(raw).toContain('git merge-base --is-ancestor "$TAG_COMMIT" refs/remotes/origin/main');
+    expect(raw).not.toContain('"origin/main"');
+    expect(raw).not.toContain('"$TAG_COMMIT" origin/main');
+  });
+
   it("keeps the OIDC token out of the verify job", () => {
     const wf = workflow();
     const jobs = wf.jobs as Record<string, any>;
