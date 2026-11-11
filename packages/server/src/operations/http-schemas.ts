@@ -212,8 +212,8 @@ export const HTTP_PUBLISH_RESULT: Record<string, any> = {
       },
     },
     claimToken: {
-      type: "string",
-      description: "Anonymous publishes only; shown once.",
+      type: ["string", "null"],
+      description: "Anonymous publishes only; shown once. Null on an idempotency replay, where credentials are not re-issued.",
     },
     expiresAt: { type: ["string", "null"] },
   },
