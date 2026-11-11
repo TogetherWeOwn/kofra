@@ -74,21 +74,37 @@ describe("ordinary site operations preserve transfer sender privacy", () => {
 });
 
 describe("download accounting is not a management edit", () => {
-  it.each([
-    { name: "HEAD", init: { method: "HEAD" }, status: 200, body: "" },
-    { name: "resumed range", init: { headers: { Range: "bytes=8-" } }, status: 206, body: " sample bytes" },
-  ])("$name preserves the management revision and all stored transfer fields", async ({ init, status, body }) => {
+  it("HEAD preserves the management revision and all stored transfer fields", async () => {
     const t = await create(dw);
     const url = await recipientFile(dw, t, 0);
     const before = await transferRow(t.id);
     expect(before.revision, "management revision must be present for this regression").toEqual(expect.any(Number));
-    const response = await dw.call(url, init);
-    expect(response.status).toBe(status);
-    expect(await response.text()).toBe(body);
+    const response = await dw.call(url, { method: "HEAD" });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("");
     expect(await transferRow(t.id)).toEqual(before);
     const saved = await get(dw, t);
     expect(saved.files.map((f) => f.downloads)).toEqual([0, 0]);
     expect(saved.recipients.map((r) => r.downloads)).toEqual([0]);
+  });
+
+  it("a resumed range counts as a download without touching the management revision or settings", async () => {
+    const t = await create(dw);
+    const url = await recipientFile(dw, t, 0);
+    const before = await transferRow(t.id);
+    expect(before.revision, "management revision must be present for this regression").toEqual(expect.any(Number));
+    const response = await dw.call(url, { headers: { Range: "bytes=8-" } });
+    expect(response.status).toBe(206);
+    expect(await response.text()).toBe(" sample bytes");
+    const after = await transferRow(t.id);
+    expect(after.revision).toBe(before.revision);
+    expect(after.message).toBe(before.message);
+    expect(after.expires_at).toBe(before.expires_at);
+    expect(after.download_limit).toBe(before.download_limit);
+    expect(after.downloads).toBe((before.downloads as number) + 1);
+    const saved = await get(dw, t);
+    expect(saved.files.map((f) => f.downloads)).toEqual([1, 0]);
+    expect(saved.recipients.map((r) => r.downloads)).toEqual([1]);
   });
 });
 

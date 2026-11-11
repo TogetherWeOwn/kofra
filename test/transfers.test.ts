@@ -289,7 +289,7 @@ describe("download precedence and expiry boundary", () => {
 });
 
 describe("download counts", () => {
-  it("counts a GET and byte-zero range, but not a resumed range or HEAD, per file and recipient", async () => {
+  it("counts a GET and any byte range, but not HEAD, per file and recipient", async () => {
     const t = await create(dw, { recipients: ["one@example.net", "two@example.net"] });
     const a = await recipientFile(dw, t, 0);
     const b = await recipientFile(dw, t, 1);
@@ -304,9 +304,22 @@ describe("download counts", () => {
     expect((await dw.call(b)).status).toBe(200);
     expect((await dw.call(siteFile(t, "page.html"))).status).toBe(200);
     const saved = await get(dw, t);
-    expect(saved.files.find((f) => f.path === "notes.txt")!.downloads).toBe(3);
+    expect(saved.files.find((f) => f.path === "notes.txt")!.downloads).toBe(4);
     expect(saved.files.find((f) => f.path === "page.html")!.downloads).toBe(1);
-    expect(saved.recipients.map((r) => r.downloads)).toEqual([2, 1]);
+    expect(saved.recipients.map((r) => r.downloads)).toEqual([3, 1]);
+  });
+
+  it("charges a nonzero-offset range against the download limit", async () => {
+    const t = await create(dw, { downloadLimit: 1 });
+    const a = await recipientFile(dw, t, 0);
+    const ranged = await dw.call(a, { headers: { Range: "bytes=1-" } });
+    expect(ranged.status).toBe(206);
+    expect(await ranged.text()).toBe("ransfer sample bytes");
+    expect((await dw.call(a)).status).toBe(410);
+    expect((await dw.call(a, { headers: { Range: "bytes=1-" } })).status).toBe(410);
+    const saved = await get(dw, t);
+    expect(saved.files.map((f) => f.downloads)).toEqual([1, 0]);
+    expect(saved.recipients.map((r) => r.downloads)).toEqual([1]);
   });
 
   it("does not charge a download for reading the page or for an invalid range", async () => {

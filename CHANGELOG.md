@@ -7,6 +7,13 @@
   Previously an unset (per-request-derived) origin was treated as acceptable, so the stock
   configuration could boot with the public dev secret.
 
+### Delivery download accounting
+
+- Every GET that serves transfer file bytes now counts toward the transfer's
+  download limit and its per-file and per-recipient counts, including resumed
+  byte ranges at any offset. Previously a resumed range was served but not
+  counted. Pages, HEAD, invalid ranges and denied requests still do not count.
+
 ## 0.1.0 — first release
 
 First public release of Kofra: single-tenant, self-hosted instant web hosting on Cloudflare (one Worker + D1 + R2 + KV), published from the CLI, REST API, MCP server or dashboard. Content-addressed deploys with immutable versions and restore; a browser viewer for every file type; scoped API keys; password-protected sites; file deliveries; encrypted CLI publishing; resumable large uploads. Packages: `kofra`, `@kofra/core`, `@kofra/server`, `@kofra/client`. Includes pre-release security hardening of operator secrets and site-password cookies — see the upgrade notes in the GitHub Release. Detailed changes since the start of the project are listed below under this version.
