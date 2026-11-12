@@ -60,6 +60,13 @@ merits a finding", "Test rigor" and "Skip"; they never make an item
 reportable. Most of the Not Severe items are skipped outright, and any
 that is still reported is Non-severe.
 
+## Where bugs hide: CI and deploy wiring
+
+For new or tightened checks and workflow edits (for example `.github/workflows/ci.yml`, `publish.yml`, and `verification-deploy.yml`):
+- Trace each new input, environment variable, and output to its supplying job; verify `needs:` orders the producer before the consumer.
+- Judge the merge-commit and post-merge deploy path as well as PR-head checks; compare migration, history, and allowlist gates against current `main`, not the PR base.
+- For publish or artifact jobs, verify keys, tokens, and secrets cannot reach uploaded artifacts or public output. Report a violation as a **Severe** bug only with the exact job/line and failing path, subject to the existing severity and evidence rules.
+
 ## Before you flag a security issue
 
 - Require a concrete exploit path at the exact reviewed commit: identify the
