@@ -1074,8 +1074,8 @@ export type PublishUploadOutput = {
     fix?: string;
     [key: string]: unknown;
   }[];
-  /** Anonymous publishes only; shown once. */
-  claimToken?: string;
+  /** Anonymous publishes only; shown once. Null on an idempotency replay, where credentials are not re-issued. */
+  claimToken?: string | null;
   expiresAt?: string | null;
   [key: string]: unknown;
 };

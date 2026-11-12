@@ -365,6 +365,10 @@ through the list refresh after a successful publish.
   a live or interrupted operation's claim. Anonymous JSON publishing uses an
   IP-scoped key (no replay when the IP is unavailable), so clients must choose
   unpredictable keys and not share them with others behind the same network.
+  The first anonymous response is the only one carrying claim/upload
+  credentials: the stored and replayed result is redacted (null claim and
+  upload credentials plus a "not re-issued" note), so a repeated key from the
+  same network cannot recover them.
   Hourly cleanup deletes at most 500 expired records per invocation, oldest expiry
   first, including pending records; future-expiry owners and results remain intact.
   Large replay responses use bounded `idempotency_result_chunks` rows (migration

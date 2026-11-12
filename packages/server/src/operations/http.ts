@@ -32,6 +32,46 @@ import { readJson } from "../routes/api";
 import { defineOperation, rawRequestInput } from "../operations";
 import { fromSchema, RO, WRITE, P, D, clientOf } from "./shared";
 
+/**
+ * Strip one-shot credentials from the result stored for idempotency replay.
+ * Anonymous publishing is keyed by client IP, so a stored result must never
+ * carry a live claim token or upload capability: the first response delivers
+ * them once, and replays get the redacted shape below instead.
+ */
+function redactPublishCredentialsForReplay<T>(result: T): T {
+  const r = result as Record<string, any>;
+  const claim = r.claim as Record<string, any> | undefined;
+  const upload = r.upload as { items?: Array<Record<string, any>> } | undefined;
+  const hasCredentials = "claimToken" in r || claim !== undefined || (upload?.items?.length ?? 0) > 0;
+  if (!hasCredentials) return result;
+  const stripFragment = (v: unknown) => (typeof v === "string" ? v.split("#")[0] : v);
+  const redacted: Record<string, any> = {
+    ...r,
+    ...(claim === undefined ? {} : {
+      claim: {
+        ...claim,
+        token: null,
+        url: stripFragment(claim.url),
+        note: "Replayed: credentials are not re-issued; the claim token was shown only in the first response.",
+      },
+    }),
+    ...(upload?.items === undefined ? {} : {
+      upload: {
+        ...upload,
+        items: upload.items.map((item) => ({
+          ...item,
+          headers: { ...(item.headers ?? {}), Authorization: null },
+          curl: null,
+        })),
+      },
+    }),
+  };
+  if ("claimToken" in redacted) redacted.claimToken = null;
+  if ("claimUrl" in redacted) redacted.claimUrl = stripFragment(redacted.claimUrl);
+  redacted.note = "Replayed: credentials are not re-issued; claim and upload credentials were shown only in the first response.";
+  return redacted as T;
+}
+
 export const HTTP_OPERATIONS = [
   defineOperation({
     anonymous: true,
@@ -249,8 +289,11 @@ export const HTTP_OPERATIONS = [
         const body = parsed.body;
         const query = Object.fromEntries(new URL(c.req.url).searchParams);
         const input = { ...query, ...body };
-        const { result, replayed } = await withIdempotency(D(c), {
+        const { result, replayed } = await withIdempotency<Awaited<ReturnType<typeof publishSources>>>(D(c), {
           scope: idempotencyScope(P(c)), operation: "rest:publish_site", key: validateIdempotencyKey(c.req.header("idempotency-key")), input,
+          // Anonymous IP-scoped replay must never re-serve live claim or upload
+          // credentials; keyed callers replay their own result unchanged.
+          ...(P(c).kind === "anonymous" ? { redactForReplay: redactPublishCredentialsForReplay } : {}),
         }, () => publishSources(D(c), P(c), { ...input, site: input.site, files: input.files, source: "api", client: clientOf(c) }));
         return c.json(replayed ? { ...result, replayed: true } : result, result.status === "awaiting_upload" ? 202 : result.created ? 201 : 200);
       },
